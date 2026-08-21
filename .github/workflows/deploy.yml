@@ -1,0 +1,944 @@
+name: "Deploy: Staging + Prod"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Bypass deploy throttle (3h interval)'
+        required: false
+        default: false
+        type: boolean
+      skip_staging_e2e:
+        description: 'Skip staging E2E tests and deploy directly to production'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+
+  deploy-throttle:
+    name: Deploy throttle (batch deploys)
+    runs-on: ubicloud-standard-2
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Check last deploy attempt time
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          INTERVAL_HOURS: ${{ vars.DEPLOY_INTERVAL_HOURS || 3 }}
+        run: |
+          if [ "${{ github.event.inputs.force_deploy }}" = "true" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Force deploy requested — bypassing throttle."
+            exit 0
+          fi
+          # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
+          COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
+          if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy/CI-fix commit — bypassing throttle."
+            exit 0
+          fi
+          # Anchor the throttle on the most recent run that ACTUALLY deployed to
+          # production — the "Deploy to app.modulo.run" job concluded with success.
+          # A run that was itself throttled (all jobs skipped), failed pre-deploy or
+          # staging E2E, was cancelled, or is still in progress must NOT count as an
+          # attempt; using it as the anchor would push the window forward on every
+          # push and starve real deploys (observed 2026-08-08: prod stuck on the
+          # 10:52 build for 4h while every later run skipped against the previous
+          # skipped run).
+          LAST=""
+          for RID in $(gh run list --repo "${{ github.repository }}" \
+            --workflow "Deploy: Staging + Prod" \
+            --limit 50 \
+            --json databaseId --jq '.[].databaseId' 2>/dev/null || echo ""); do
+            [ "$RID" = "${{ github.run_id }}" ] && continue
+            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs" \
+              --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
+            if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
+              LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
+                --jq '.created_at' 2>/dev/null || echo "")"
+              break
+            fi
+          done
+          echo "last_deploy_attempt=${LAST:-none}"
+          if [ -z "$LAST" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "No previous deploy attempt - deploying."
+          else
+            LAST_TS=$(date -u -d "$LAST" +%s)
+            NOW_TS=$(date -u +%s)
+            DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))
+            echo "hours_since_deploy=${DIFF_H}"
+            if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
+            else
+              echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+              echo "Deploying (${DIFF_H}h since last deploy attempt)."
+            fi
+          fi
+
+  pre-deploy-tests:
+    name: Pre-deploy tests (fast + expensive)
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    # Explicit budget: this job runs the full unit + integration suites.
+    # Without a timeout the ephemeral runner can recycle mid-run.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # Fast tests (belt-and-braces re-run)
+      - name: Backend lint
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run --no-sync ruff check .
+          uv run --no-sync mypy src/modulo/
+          uv run --no-sync bandit -r src/modulo/ -ll
+          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .)
+          uv run --no-sync pip-audit
+
+      - name: Backend unit tests
+        working-directory: backend
+        run: uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run lint --quiet
+          pnpm run type-check
+          pnpm run test:unit
+          pnpm run build
+          pnpm audit --audit-level=critical
+
+      # Expensive tests
+      - name: Start Postgres
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            sleep 2
+          done
+
+      - name: Start Redis
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
+            sleep 2
+          done
+
+      - name: Integration tests
+        working-directory: backend
+        run: uv run --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+      - name: Security audit
+        working-directory: backend
+        run: |
+          uv run pip-audit
+          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --error .)
+        env:
+          SEMGREP_BASELINE_COMMIT: "HEAD^"
+
+      - name: Stop containers
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+
+  notify-deploy-failure:
+    name: Trigger Branch Fixer on deploy failure
+    needs: [deploy-throttle, pre-deploy-tests]
+    # Fires ONLY when the pre-deploy tests actually ran AND failed (result ==
+    # 'failure'), and only when the deploy was actually attempted
+    # (should_deploy was true). A throttled run skips pre-deploy-tests entirely
+    # (result == 'skipped'), so it can never look like a failure to fix.
+    # This job only sends the Branch Fixer webhook pointing at main
+    # (branchName: main, prNumber: 0). The Branch Fixer (running on
+    # app.modulo.run with the same GITHUB_TOKEN as the improve-* pipelines)
+    # creates its own fix branch from main, diagnoses the failure, fixes it,
+    # and raises the PR — exactly like the improve-* pipelines do. No checkout,
+    # no git, no branch creation happens here.
+    if: always() && needs.pre-deploy-tests.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Dispatch Branch Fixer webhook
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "Deploy pre-deploy tests failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR."
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          # Retry with exponential backoff on transient 429/5xx (mirrors
+          # branch-fixer.yml). Unlike branch-fixer.yml this job FAILS if the
+          # webhook is never accepted - a deploy failure must not be silently
+          # swallowed.
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed - deploy failure was not handed to the autonomous fix loop."
+            exit 1
+          fi
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: [pre-deploy-tests]
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Capture git metadata
+        id: git
+        uses: ./.github/actions/capture-git-metadata
+
+      - name: Deploy to staging-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --config fly.staging.toml \
+              --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+              --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+              --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+              --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
+              --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Deploy succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Deploy failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Verify deployment
+        uses: ./.github/actions/verify-deployment
+        with:
+          url: https://staging.modulo.run
+
+      - name: Check deployed SHA
+        shell: pwsh
+        run: |
+          $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
+          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          if (-not $info) { Write-Host "No deployment info"; exit 1 }
+          $deployInfo = $info | ConvertFrom-Json
+          $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
+          if ($deployedSha -ne $expectedSha) {
+            Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
+            exit 1
+          }
+          Write-Host "staging.modulo.run SHA match: $deployedSha"
+
+      - name: Self-report deployed PRs to Modulo (fail-open, best-effort)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+        run: |
+          # FAR-145 follow-up (workflow self-report): the Deploy Agent carries PRs
+          # to staging/prod but never emitted work_item_refs, so the deploy stage of
+          # a lifecycle-map journey never advanced autonomously. This step discovers
+          # the PRs this deploy carries from the squash-merge commit messages on
+          # main ("Title (#123)" / "Merge pull request #123") and emits a
+          # self-report payload matching the work-item-refs contract in self_report.py
+          # ({kind, ref, status?} — advisory operator claims, confirm/match only,
+          # never mint). The parser reads the payload's work_item_refs list directly.
+          #
+          # stage_id: "deploy" names the lifecycle-map stage this workflow completes.
+          # The deploy stage is EXTERNAL (a GitHub Actions workflow, not a Modulo
+          # pipeline), so it has no pipeline_id for the advancement service to
+          # resolve; the endpoint uses stage_id to advance the journey into it.
+          #
+          # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
+          # Modulo outage can NEVER fail the deploy. The payload is always recorded
+          # in the log; the POST only fires when MODULO_SELF_REPORT_URL is
+          # configured. No such ingestion endpoint exists yet — see the follow-up
+          # ticket for the required API.
+          COMMITS=$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=30" --jq '.[].commit.message' 2>/dev/null || echo "")
+          NUMS=$(echo "$COMMITS" | grep -oE 'Merge pull request #[0-9]+|\(#[0-9]+\)' | grep -oE '[0-9]+' | sort -un || true)
+          [ -z "$NUMS" ] && { echo "No PR numbers found in the deployed commit range - nothing to self-report."; exit 0; }
+
+          REFS="[]"
+          for NUM in $NUMS; do
+            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+          done
+          PAYLOAD=$(jq -n --argjson refs "$REFS" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "deploy", stage_id: "deploy", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"deploy","stage_id":"deploy","work_item_refs":[]}'
+
+          echo "=== Modulo self-report payload (deployed PRs) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - deployed PRs recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD" 2>/dev/null \
+            && echo "Self-report delivered to Modulo." \
+            || echo "::warning::Modulo self-report POST failed - deployed PRs recorded in log only (fail-open)."
+
+      - name: Ensure worker machine exists (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app staging-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          # Snapshot the machine IDs that exist BEFORE this step creates/clones
+          # anything. The "Clean up stray machines" step uses this list so it
+          # never destroys a machine this deploy just created/cloned.
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/predeploy-machine-ids.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
+          worker_id = ""
+          for m in machines:
+              if _pg(m) == "worker":
+                  worker_id = m.get("id") or ""
+                  break
+          image = ""
+          for m in machines:
+              if _pg(m) == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), worker_id, image)
+          ' || echo '0  ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            # Clone an existing (non-started) worker machine -- it already carries
+            # the correct process_group, so no --process-group flag is needed.
+            if [ -n "$WORKER_ID" ]; then
+              echo "No started worker machine -- cloning existing worker machine: $WORKER_ID"
+              fly machine clone "$WORKER_ID" --app staging-modulo --region lhr
+            elif [ -n "$IMAGE" ]; then
+              # No worker machine exists at all -- create one from the deployed
+              # image. The [processes] section of fly.staging.toml assigns the group.
+              echo "No worker machine exists -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app staging-modulo --region lhr -c fly.staging.toml
+            else
+              # Last resort: fresh build, still using the config for the worker group.
+              echo "No worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app staging-modulo --region lhr -c fly.staging.toml
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
+
+      - name: Wait for worker liveness check (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WORKER_HEALTH_TIMEOUT_MINUTES: "10"
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Post-deploy gate: the "Ensure worker machine exists" step only guarantees a
+          # STARTED worker machine exists -- it does not verify SAQ workers actually came
+          # up (the 2026-08-08 outage left both workers `stopped` and the deploy passed
+          # silently). Poll `fly checks list` until at least ONE worker machine reports
+          # the worker_health check (port 8082 liveness, ADR 021) as PASSING.
+          #
+          # Pass criterion is AT-LEAST-ONE, not ALL: `fly checks list --json` emits one
+          # worker_health row PER worker machine, and a machine mid-rollout or one that
+          # self-healed back to a warning state still shows non-passing rows even when
+          # the fleet is healthy. A deploy that cannot bring up ANY worker (the outage
+          # case) yields ZERO passing rows and fails here. A transient `fly checks list`
+          # API failure is treated as "not yet healthy" and retried (2>/dev/null || true,
+          # mirroring the worker-exists step) -- only the hard timeout fails the job.
+          TIMEOUT_MIN="${WORKER_HEALTH_TIMEOUT_MINUTES:-10}"
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            fly checks list --app staging-modulo --json > /tmp/worker-checks.json 2>/dev/null || true
+            PASSING_MACHINES="$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-checks.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          # flyctl emits a dict keyed by machine id -> [check,...]; tolerate a list shape.
+          entries = []
+          if isinstance(data, dict):
+              entries = [(mid, c) for mid, checks in data.items() for c in (checks or [])]
+          elif isinstance(data, list):
+              entries = [(c.get("machine_id") or c.get("machine") or "?", c) for c in data]
+          passing = sorted(
+              mid for mid, c in entries
+              if c.get("name") == "worker_health"
+              and str(c.get("status", "")).lower() == "passing"
+          )
+          print(" ".join(passing))
+          ' || true)"
+            if [ -n "$PASSING_MACHINES" ]; then
+              echo "worker_health: PASSING (machine ${PASSING_MACHINES}) - attempt ${attempt}/${ATTEMPTS}"
+              exit 0
+            fi
+            echo "worker_health: not passing yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
+          exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app staging-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "staging-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          # Only destroy strays that existed BEFORE this deploy run. The ensure
+          # step above may have just created/cloned a group-less machine via
+          # `fly machine run` (flyctl v0.4.x creates group-less machines even
+          # with the config); destroying it would leave the app with zero
+          # workers. Skip any machine id not in the predeploy snapshot.
+          try:
+              with open("/tmp/predeploy-machine-ids.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pre = set()
+          if not pre:
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+          else:
+              removed = 0
+              for m in machines:
+                  cfg = m.get("config") or {}
+                  meta = cfg.get("metadata") or {}
+                  env = cfg.get("env") or {}
+                  pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+                  mid = m.get("id")
+                  if not mid or pg != "" or mid not in pre:
+                      continue
+                  import subprocess
+                  try:
+                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                         capture_output=True, text=True, timeout=60)
+                  except subprocess.TimeoutExpired:
+                      print(f"  WARN destroy timed out for stray {mid}")
+                      continue
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+              print(f"stray machines destroyed: {removed}")
+          PYEOF
+
+  staging-e2e:
+    name: Staging E2E (smoke + WCAG + regression)
+    needs: [deploy-staging]
+    if: github.event.inputs.skip_staging_e2e != 'true'
+    timeout-minutes: 90
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Wait for staging health
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          Write-Host "Waiting for staging.modulo.run ..."
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = curl -s -f "https://staging.modulo.run/healthz/ready" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          exit 1
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+
+      - name: Run @regression Playwright tests against staging
+        id: regression-tests
+        run: pnpm exec playwright test --grep "@regression" --reporter=line
+        timeout-minutes: 90
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
+        continue-on-error: true # nosemgrep: continue-on-error-in-ci
+        # Deliberate: failures are surfaced by the "Fail on test failure"
+        # aggregate step below instead of hard-failing here, so artifacts
+        # always upload even when a suite fails.
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ github.run_id }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
+      - name: Fail on test failure
+        if: steps.regression-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Host "::error::One or more staging suites failed."
+          exit 1
+
+  deploy-production:
+    name: Deploy to app.modulo.run
+    needs: [pre-deploy-tests, staging-e2e]
+    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Capture git metadata
+        id: git
+        uses: ./.github/actions/capture-git-metadata
+
+      - name: Deploy to app-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --config fly.toml \
+              --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+              --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+              --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+              --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
+              --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Deploy succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Deploy failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Verify deployment
+        uses: ./.github/actions/verify-deployment
+        with:
+          url: https://app.modulo.run
+
+      - name: Check deployed SHA
+        shell: pwsh
+        run: |
+          $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
+          $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
+          if (-not $info) { Write-Host "No deployment info"; exit 1 }
+          $deployInfo = $info | ConvertFrom-Json
+          $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
+          if ($deployedSha -ne $expectedSha) {
+            Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
+            exit 1
+          }
+          Write-Host "app.modulo.run SHA match: $deployedSha"
+
+      - name: Ensure worker machine exists (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app app-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          # Snapshot the machine IDs that exist BEFORE this step creates/clones
+          # anything. The "Clean up stray machines" step uses this list so it
+          # never destroys a machine this deploy just created/cloned.
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/predeploy-machine-ids.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
+          worker_id = ""
+          for m in machines:
+              if _pg(m) == "worker":
+                  worker_id = m.get("id") or ""
+                  break
+          image = ""
+          for m in machines:
+              if _pg(m) == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), worker_id, image)
+          ' || echo '0  ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            # Clone an existing (non-started) worker machine -- it already carries
+            # the correct process_group, so no --process-group flag is needed.
+            if [ -n "$WORKER_ID" ]; then
+              echo "No started worker machine -- cloning existing worker machine: $WORKER_ID"
+              fly machine clone "$WORKER_ID" --app app-modulo --region lhr
+            elif [ -n "$IMAGE" ]; then
+              # No worker machine exists at all -- create one from the deployed
+              # image. The [processes] section of fly.toml assigns the group.
+              echo "No worker machine exists -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app app-modulo --region lhr -c fly.toml
+            else
+              # Last resort: fresh build, still using the config for the worker group.
+              echo "No worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app app-modulo --region lhr -c fly.toml
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
+
+      - name: Wait for worker liveness check (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WORKER_HEALTH_TIMEOUT_MINUTES: "10"
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Post-deploy gate: the "Ensure worker machine exists" step only guarantees a
+          # STARTED worker machine exists -- it does not verify SAQ workers actually came
+          # up (the 2026-08-08 outage left both workers `stopped` and the deploy passed
+          # silently). Poll `fly checks list` until at least ONE worker machine reports
+          # the worker_health check (port 8082 liveness, ADR 021) as PASSING.
+          #
+          # Pass criterion is AT-LEAST-ONE, not ALL: `fly checks list --json` emits one
+          # worker_health row PER worker machine, and a machine mid-rollout or one that
+          # self-healed back to a warning state still shows non-passing rows even when
+          # the fleet is healthy. A deploy that cannot bring up ANY worker (the outage
+          # case) yields ZERO passing rows and fails here. A transient `fly checks list`
+          # API failure is treated as "not yet healthy" and retried (2>/dev/null || true,
+          # mirroring the worker-exists step) -- only the hard timeout fails the job.
+          TIMEOUT_MIN="${WORKER_HEALTH_TIMEOUT_MINUTES:-10}"
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            fly checks list --app app-modulo --json > /tmp/worker-checks.json 2>/dev/null || true
+            PASSING_MACHINES="$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-checks.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          # flyctl emits a dict keyed by machine id -> [check,...]; tolerate a list shape.
+          entries = []
+          if isinstance(data, dict):
+              entries = [(mid, c) for mid, checks in data.items() for c in (checks or [])]
+          elif isinstance(data, list):
+              entries = [(c.get("machine_id") or c.get("machine") or "?", c) for c in data]
+          passing = sorted(
+              mid for mid, c in entries
+              if c.get("name") == "worker_health"
+              and str(c.get("status", "")).lower() == "passing"
+          )
+          print(" ".join(passing))
+          ' || true)"
+            if [ -n "$PASSING_MACHINES" ]; then
+              echo "worker_health: PASSING (machine ${PASSING_MACHINES}) - attempt ${attempt}/${ATTEMPTS}"
+              exit 0
+            fi
+            echo "worker_health: not passing yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
+          exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app app-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "app-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          # Only destroy strays that existed BEFORE this deploy run. The ensure
+          # step above may have just created/cloned a group-less machine via
+          # `fly machine run` (flyctl v0.4.x creates group-less machines even
+          # with the config); destroying it would leave the app with zero
+          # workers. Skip any machine id not in the predeploy snapshot.
+          try:
+              with open("/tmp/predeploy-machine-ids.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pre = set()
+          if not pre:
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+          else:
+              removed = 0
+              for m in machines:
+                  cfg = m.get("config") or {}
+                  meta = cfg.get("metadata") or {}
+                  env = cfg.get("env") or {}
+                  pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+                  mid = m.get("id")
+                  if not mid or pg != "" or mid not in pre:
+                      continue
+                  import subprocess
+                  try:
+                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                         capture_output=True, text=True, timeout=60)
+                  except subprocess.TimeoutExpired:
+                      print(f"  WARN destroy timed out for stray {mid}")
+                      continue
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+              print(f"stray machines destroyed: {removed}")
+          PYEOF
+
+  prod-smoke:
+    name: Prod smoke tests
+    needs: [deploy-production]
+    if: always() && needs.deploy-production.result == 'success'
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+
+      - name: Run @smoke Playwright tests against app.modulo.run
+        id: smoke-tests
+        run: pnpm run test:e2e:smoke -- --reporter=line
+        timeout-minutes: 10
+        env:
+          E2E_TARGET: app
+          E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
+        continue-on-error: true # nosemgrep: continue-on-error-in-ci
+        # Deliberate: failures are surfaced by the "Fail on smoke test failure"
+        # aggregate step below instead of hard-failing here.
+
+      - name: Fail on smoke test failure
+        if: steps.smoke-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Host "::error::Smoke tests against production failed."
+          exit 1

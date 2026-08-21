@@ -1,0 +1,207 @@
+---
+id: feat-evals-eval-gates
+prd: 8.17
+delivery-tasks: [task-nv2-conditional-hitl, task-nv2-eval-gate-enforcement]
+bdd:
+  - backend/tests/bdd/features/evals/conditional_hitl.feature
+  - backend/tests/bdd/features/evals/eval_block.feature
+  - backend/tests/bdd/features/hitl/approval_gate.feature
+code:
+  - backend/src/modulo/core/pipeline_engine/node_runner.py
+  - backend/src/modulo/core/pipeline_engine/executor.py
+  - backend/src/modulo/core/hitl_manager/__init__.py
+  - backend/src/modulo/core/hitl_manager/expiry_job.py
+  - backend/src/modulo/core/eval_engine/__init__.py
+  - backend/tests/unit/hitl_manager/test_hitl_manager.py
+  - backend/tests/unit/core/hitl_manager/test_hitl_jwt.py
+  - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/bdd/steps/test_hitl.py
+  - backend/tests/bdd/steps/test_eval.py
+unit-tests:
+  - backend/tests/unit/hitl_manager/test_hitl_manager.py
+  - backend/tests/unit/core/hitl_manager/test_hitl_jwt.py
+  - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/api/test_evals_endpoint.py
+depends-on: [feat-evals-eval-engine]
+status: covered
+---
+
+# Eval Gates
+
+Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gate can be made conditional via a JMESPath `condition` expression on the gate config. Additionally, node-scoped eval definitions are evaluated after the condition check but before the interrupt — block-level eval failures raise `EvalBlockedError`, preventing the interrupt entirely. Post-run, eval suites with `pass_threshold` are checked and can transition the run to `eval_failed`.
+
+**Standalone post-node evals (FAR-305):** node-scoped evals also run as a standalone post-node step in `executor.py` (`_run_post_node_evals`), not only within HITL gates (eval-before-interrupt). After a node completes, its eval definitions are evaluated against the node's inner output dict and results are persisted to the `eval_results` table, so plain nodes (no gate) get their node-scoped evals evaluated too. A `block` failure propagates `EvalBlockedError` → `eval_failed` (`error_code="eval_blocked"`). A node that also feeds a HITL gate with eval-before-interrupt runs its evals twice (once post-node, once in the gate).
+
+## Behaviours
+
+### Happy Path
+
+- [x] HITL gate with no condition and no evals fires NodeInterrupt at expected gate node
+- [x] Gate creates a `hitl_claims` row on first visit (idempotent on re-creation)
+- [x] Claim sets claimant, token, and TTL expiry; returns updated gate
+- [x] Approve with valid token records "approved" decision and clears claim fields
+- [x] Reject with valid token records "rejected" decision and clears claim fields
+- [x] Expiry job resets stale claims back to unclaimed (claimed_by=NULL, token=NULL, expires_at=NULL)
+- [x] Expiry job resets affected run status from "claimed" back to "awaiting_human"
+- [x] Expiry job runs per-org with RLS scope (handles multi-tenant correctly)
+- [x] Eval with `failure_behaviour="warn"` logs warning and continues — gate still fires
+- [x] Eval with `failure_behaviour="block"` raises `EvalBlockedError` instead of interrupt
+- [x] Eval block failure transitions run to `eval_failed` terminal state with `error_code="eval_blocked"`
+- [x] Suite-level pass_threshold check after run completion — suite passes, run stays "complete"
+- [x] Suite-level pass_threshold check — suite fails, run transitions to "failed" with `error_code="eval_suite_blocked"`
+- [x] Multiple evals on one node: all pass — gate proceeds normally
+- [x] Cancel during eval evaluation stops run with status "cancelled"
+- [x] `EvalBlockedError` includes eval name and detail in exception message
+- [x] `EvalSuiteBlockedError` includes suite_id, score, and threshold in exception message
+- [x] Block failure publishes `run_failed` broker event
+- [x] `standalone_evaluate()` runs an ad-hoc eval without a persisted EvalDefinition (for Feedback System)
+- [x] Resume from interrupt: gate detects `_hitl_decision` in state and does not re-evaluate condition or evals
+- [x] Resume from interrupt: rejected decision routes via reject edge if configured
+- [x] `list_pending` returns all unclaimed, undecided gates for an org
+- [x] `list_overdue` returns gates whose `claimed_at` exceeds the overdue threshold
+- [x] `count_overdue` returns count of overdue gates
+
+### Conditional Gating (8.17)
+- [x] JMESPath `condition` on gate config evaluated against LangGraph state
+- [x] Condition evaluates to truthy value → gate proceeds to autonomy check (may fire interrupt)
+- [x] Condition evaluates to falsy value → gate skipped with `condition_skipped` artifact
+- [x] Condition `null` or absent → gate proceeds normally (non-conditional)
+- [x] Eval-definitions evaluated after condition check but before interrupt
+- [x] Eval-definitions on node, not on gate — scoped to upstream node output
+- [x] Eval-definitions evaluated only on first visit, not on resume (`_hitl_decision` check is first)
+- [x] `llm_judge` eval in a gate resolves its judge callable from `config.model_backend_id` via the ModelBackendHub and passes it to `engine.evaluate` — the gate fires only when the judge scores low, not on every run (FAR-307)
+
+### Autonomy Integration
+- [x] `manual_approval` autonomy level: gate fires interrupt for human review
+- [x] `notify_on_complete` autonomy level: gate auto-approves without interrupt, records artifact
+- [x] `fully_autonomous` autonomy level: gate silently skipped
+- [x] `human_only` flag on gate config overrides autonomy — always interrupts
+- [x] Autonomy level read from `run_context._pipeline_default_autonomy` at runtime
+- [x] `should_skip_hitl_gate` returns true for `fully_autonomous`
+- [x] `should_notify_on_complete` returns true for `notify_on_complete`
+
+### HITL Claim Lifecycle
+- [x] Create gate with required_team_id — stored on HitlClaim row (used to scope claimants)
+- [x] Claim requires JWT or opaque token (secret_key at construction determines which)
+- [x] Claim pre-checks: gate exists, not already decided, not already claimed, team membership if team-scoped
+- [x] Claim race condition: concurrent claims on same gate — exactly one wins, others get `AlreadyClaimedError`
+- [x] Claim with custom `expiry_minutes` sets `expires_at` accordingly
+- [x] Claim with no `secret_key` generates opaque random token (alpha backwards compat)
+- [x] Claim with `secret_key` generates short-lived JWT (15-min default TTL) scoped to run_id + gate_id + claimant_id
+- [x] Approve validates JWT signature + scope, then checks DB token match + expiry
+- [x] Expired JWT → `ClaimTokenExpiredError`
+- [x] Invalid JWT (bad signature, scope mismatch) → `ClaimTokenInvalidError` (no opaque fallback for bad JWT)
+- [x] Non-JWT token on JWT-configured manager → opaque comparison fallback
+- [x] Approve/reject on non-existent gate → `GateNotFoundError`
+- [x] Approve/reject on already-decided gate → `GateAlreadyDecidedError`
+- [x] Approve/reject with wrong token → `ClaimTokenInvalidError`
+- [x] Approve/reject with expired token → `ClaimTokenExpiredError`
+- [x] Expire stale: resets claims with `expires_at < NOW()` and `decision IS NULL`
+- [x] Expire stale: returns list of `{run_id, gate_id}` for notification dispatch
+- [x] Gate with `expires_at=NULL` (defensive guard) → treated as expired on decide attempt
+
+### Eval Suite Post-Run Check
+- [x] Executor loads eval definitions with `suite_id` and `pass_threshold` after run completes
+- [x] Suite threshold check aggregates eval results by suite_id
+- [x] Suite aggregate score above threshold → run stays "complete"
+- [x] Suite aggregate score at threshold → run stays "complete"
+- [x] Suite aggregate score below threshold → run transitions to "failed" with `error_code="eval_suite_blocked"`
+- [x] No suite definitions with threshold → no post-run check
+- [x] Empty suite (no results) → passes (aggregate_score=1.0)
+- [x] Multiple suites with thresholds — first failing suite terminates check
+
+### Error States
+- [x] Gate not found on claim → `GateNotFoundError`
+- [x] Gate already claimed → `AlreadyClaimedError` (not idempotent)
+- [x] Gate already decided → `GateAlreadyDecidedError`
+- [x] Non-team-member tries to claim team-scoped gate → `NotTeamMemberError`
+- [x] Viewers/non-approvers cannot approve/reject → 403 response
+- [x] Expired claim token → `ClaimTokenExpiredError` (not silently accepted)
+- [x] `EvalSuiteBlockedError` is raised when suite fails threshold check
+- [x] Expiry job tick failure logged and recovered on next tick
+- [x] Cancelled expiry job stops cleanly
+- [x] DB session failure in expiry job does not crash the background loop
+
+### Routing Error Handling
+- [x] ProgrammingError on claim_gate → 501 Not Implemented
+- [x] ProgrammingError on approve_gate → 501 Not Implemented
+- [x] ProgrammingError on approve_gate_with_modification → 501 Not Implemented
+- [x] ProgrammingError on reject_gate → 501 Not Implemented
+- [x] ProgrammingError on deliver_manual → 501 Not Implemented
+- [x] ProgrammingError on submit_manual → 501 Not Implemented
+- [x] ProgrammingError on list_run_pending_gates → 501 Not Implemented
+- [x] ProgrammingError on list_org_pending_gates → 501 Not Implemented
+### Edge Cases
+- [x] Condition expression runtime error → JMESPath raises, percolates as node error (invalid expression → ValueError; runtime search error → JMESPathError)
+- [x] Eval definitions list is empty → no eval check performed (gate proceeds)
+- [x] Eval definition with no node_id (pipeline-level) → not loaded by executor for eval-before-interrupt
+- [x] Condition value is `False` literal → treated as falsy, gate skipped
+- [x] Condition value is `0` (int) → treated as falsy
+- [x] Condition value is empty string → treated as falsy
+- [x] Condition value is empty list/dict → treated as falsy
+- [x] Claim token: SQL UPDATE with WHERE clause provides atomicity (no TOCTOU)
+- [x] Approve/reject: JWT validation before SQL UPDATE to fail fast on bad token
+- [x] _decide(): DB WHERE clause checks `expires_at > now()` — DB is authoritative TTL source
+- [x] _decide(): scalar_one_or_none() returning None triggers diagnostic SELECT for precise error
+- [x] _looks_like_jwt heuristic: counts dots — avoids misidentifying opaque tokens as JWTs
+- [x] create_gate idempotent: duplicate run_id+gate_id returns existing row (no error)
+- [x] post-run suite check dedupes suite_ids (set comprehension) to avoid redundant per-suite queries
+- [x] Post-run suite check uses `pass_threshold` from any definition in suite (first found if multiple)
+
+### Concurrency
+- [x] Claim uses atomic `UPDATE ... WHERE claimed_by IS NULL AND decision IS NULL RETURNING`
+- [x] Race between pre-check SELECT and UPDATE → second claimant gets `AlreadyClaimedError` from RETURNING
+- [x] HITLManager is stateless — safe for concurrent use with separate sessions
+- [x] Expiry job uses per-org transactions with RLS `SET LOCAL` — no cross-org data leaks
+- [x] Expiry job iterates orgs sequentially, not in parallel — safe but potentially slow with many orgs
+- [x] Expiry job batch-resets run status via `UPDATE ... WHERE status = "claimed"` — avoids lost updates
+- [ ] Pipeline executor loads eval definitions before claiming capacity slot — stale definitions possible if definition added during capacity wait (ordering is by-design; stale-definition window is a known limitation — see Known Gaps)
+- [x] _check_eval_suites reads committed results from a fresh session after the streaming session closes (Fix A persists eval results during the gate function, committed independently before suite check runs)
+
+### Security
+- [x] Admin role required for eval definition CRUD (403 for runner/operator roles)
+- [x] Unauthenticated requests to eval API endpoints are rejected (401 or 403; HTTPBearer auto-error → 403 without credentials)
+- [x] RLS scopes all hitl_claims queries by organisation_id
+- [x] RLS scopes all eval_results and eval_definitions queries by organisation_id
+- [x] JWT claim_token scoped to specific run_id + gate_id + client_id — replay restricted
+- [x] Opaque claim_token is cryptographically random (secrets.token_urlsafe, 32 bytes)
+- [x] Expired JWT is rejected — no silent acceptance of stale tokens
+- [x] Bad signature / scope mismatch raises `ClaimTokenInvalidError` without opaque fallback
+- [x] Non-JWT token on secret_key-configured manager falls through to opaque comparison (backwards compat)
+- [x] Expiry job sets RLS per session — each org's claims scoped correctly
+- [x] Eval-before-interrupt: evaluate output against state before human sees it (no data leak on block)
+
+### Backward Compatibility
+- [x] Opaque claim tokens accepted alongside JWTs during migration period
+- [x] create_gate returns existing row if run_id+gate_id already exists — no breaking change for idempotent callers
+- [x] HitlClaim model columns stable across migrations (expires_at, claim_token, etc.)
+- [x] Claim without secret_key still generates valid token (alpha mode)
+- [x] `list_pending` and `list_overdue` API shape unchanged
+- [x] `_looks_like_jwt` heuristic avoids breaking opaque token consumers
+- [x] EvalEngine.evaluate() signature stable — `llm_judge_callable` remains optional kwarg
+- [x] `standalone_evaluate()` provides non-persisted path for backwards compatibility with Feedback System
+
+## QA History
+- 2026-07-03: Cross-cutting QA (index 69): Fixed `claimed_by`→`account_id` field rename across test_hitl_manager.py (7 test fixes) and test_hitl_jwt.py (8 test fixes). Fixed `TeamMembership.user_id`→`TeamMembership.account_id` in HITLManager source code (production bugfix). Fixed `_eval_def_to_dict` dict key mismatch (`created_by`→`account_id` to match Pydantic validation_alias). Added `account_id` to `_make_eval_def` mock helper. Fixed `count_overdue` mock (`scalars`→`scalar`). Fixed `conditional_hitl.feature` BDD path (`eval/`→`evals/`). Wired `approval_gate.feature` into test_hitl.py (5 scenarios now loadable). Created step definitions for `eval_block.feature` (7 scenarios). All 78+ unit tests pass (38 hitl_manager + 20 hitl_jwt + 0/10 eval_suite + 20 evals_endpoint). Status: partial (same known gaps remain).
+- 2026-07-03: Cross-cutting QA (index 117): Removed dead `for sr in suite_results` loop from executor.py post-run suite check. Added ProgrammingError→501 catches to all 8 HITL API routes (claim, approve, approve-with-modification, reject, deliver-manual, submit-manual, list-run-pending, list-org-pending). Created test_hitl_programming_error.py with 8 unit tests (one per route). Updated product map with verified checkboxes (Happy Path, Conditional Gating, Autonomy, Claim Lifecycle, Suite Check) and new Routing Error Handling section. Marked dead-code known gap as resolved.
+- 2026-07-09: Cross-cutting QA (index 284): Fixed CRITICAL — resume() path in executor.py missing audit events for EvalBlockedError (execute() path had them, resume() did not). Added append_audit_event call in resume() after _stream_graph returns eval_failed/eval_blocked. Added test_resume_eval_blocked_records_audit_event to test_conditional_transitions_audit_events.py. Fixed MEDIUM — narrowed bare except Exception to except jmespath.exceptions.JMESPathError in node_runner.py:199. Added 4 EvalSuiteBlockedError constructor/boundary tests to test_eval_suite.py. Updated product map: marked 3 resolved gaps [x], added QA History entry. Merged to main.
+- 2026-07-09: Cross-cutting QA (index 330): Fixed CRITICAL — eval results from `_hitl_gate` eval-before-interrupt were computed in-memory but never persisted to the `eval_results` DB table, making post-run suite-level threshold checks (`_check_eval_suites()`) read an always-empty table. Added `session_factory` parameter to `make_hitl_gate_fn()` and `build_graph_from_json()`, wired through from `executor.py`. Eval results are now persisted in an independent session during gate execution (before commit, results are visible to the post-run suite check). Seeded `_run_id` and `_org_id` in initial LangGraph state for session context. Marked `approval_gate.feature` as `@deprecated` (scenarios covered by `tests/bdd/features/hitl/`). Created `Website/modulo-website/src/docs/evals/eval-gates.md` website documentation. Updated product map: resolved eval-persistence Known Gap, updated suite-check concurrency checkbox to [x], added QA History entry.
+- 2026-08-17: Fix (FAR-307): `llm_judge` eval inside a HITL gate always scored 0.0 because `make_hitl_gate_fn`'s eval-before-interrupt called `engine.evaluate(state, eval_def)` without `llm_judge_callable`, so a conditional gate referencing the judge fired on EVERY run. The eval loop now resolves the judge callable from `eval_def.config["model_backend_id"]` via the ModelBackendHub (mirroring the `get_model_backend_hub` import pattern already used in node_runner) and passes it to `engine.evaluate`. Added `_build_llm_judge_callable` / `_invoke_backend` helpers that bridge the synchronous `LLMJudgeCallable` protocol to the async backend `invoke` by running the coroutine on a dedicated worker-thread event loop (never `asyncio.run` / `loop.run_until_complete`, which fail inside a running loop). If the hub is None or `model_backend_id` is absent, the previous behaviour is preserved (callable None → score 0.0). Added `test_hitl_gate_llm_judge.py` (3 tests: high score skips gate, low score fires gate, no model_backend_id falls back to score 0.0 → gate fires).
+- 2026-08-15: Coverage-completion sweep (FAR-231): drove entry from 89/137 to 136/137 checked behaviours. Verified and marked [x] all 41 previously-unchecked Edge Case / Concurrency / Security / Backward Compatibility behaviours. Added new tests: `test_eval_suite.py` — executor `_build_eval_defs_by_node` skips pipeline-level (no node_id) defs, `_load_eval_defs_for_pipeline` loads only node-scoped defs, `_check_eval_suites` dedupes suite_ids via set comprehension (avoids redundant per-suite queries) + first-found pass_threshold + no-threshold-does-not-block; HITL gate condition edge cases (False literal, empty list, empty dict falsy; invalid expression → ValueError; runtime search error → JMESPathError percolates); eval-block short-circuits remaining evals on first block failure. `test_hitl_manager.py` — claim UPDATE carries atomic WHERE (account_id IS NULL AND decision IS NULL) + RETURNING id; `_decide()` UPDATE WHERE checks `expires_at > now()` (DB-authoritative TTL); all hitl_claims queries org-scoped by organisation_id; HITLManager stateless across concurrent claims (asyncio.gather on one instance); HitlClaim model columns stable. `test_hitl_jwt.py` — bad/expired JWT fails fast BEFORE any SQL UPDATE (session.execute not awaited). `test_evals_endpoint.py` — eval list query org-scoped by organisation_id. Corrected behaviour text: unauth eval endpoints return 401-or-403 (HTTPBearer auto-error → 403), and suite dedup is a set comprehension (not SQL `distinct()`). Status: partial → covered (1 known-gap behaviour remains unchecked: executor loads eval defs before capacity claim, stale-definition window is by-design — see Known Gaps).
+
+## Known Gaps
+- [ ] PRD 8.17 specifies HITL gate `condition` as `{eval_id, threshold, operator}` referencing an eval definition. The code implements condition as a JMESPath expression against state (node_runner.py:128-163), with eval-definitions as a separate array. These are different mechanisms. The BDD `conditional_hitl.feature` includes scenarios for both — the implementation's eval-before-interrupt evaluates ALL eval_definitions against state with no per-eval threshold or operator. The PRD-specified eval-reference format (eval_id + threshold + operator) is not implemented.
+- [x] **RESOLVED** (2026-07-03): `for sr in suite_results` dead-code loop in executor.py post-run suite check removed. `_check_eval_suites()` raises `EvalSuiteBlockedError` before returning non-passing results, so the iteration was unreachable.
+- [x] **RESOLVED** (2026-07-03): All 8 HITL API routes now have ProgrammingError→501 catches, with unit test coverage (test_hitl_programming_error.py).
+- [x] **RESOLVED** (2026-07-09): Audit events for `eval.blocked` and `eval.suite_blocked` are written in `execute()` path (executor.py:559-607). The `resume()` path now also writes `eval.blocked` audit events. Unit tests cover both paths in `test_conditional_transitions_audit_events.py`.
+- [x] **RESOLVED** (2026-07-09): `EvalSuiteBlockedError` constructor and boundary conditions have unit tests in `test_eval_suite.py`.
+- [x] **RESOLVED** (2026-07-09): `node_runner.py:199` JMESPath compile exception narrowed from bare `except Exception` to `except jmespath.exceptions.JMESPathError`.
+- [x] **RESOLVED** (2026-07-09): `node_runner.py` eval results are now persisted to the `eval_results` table via `session_factory` passed through from `executor.py`. Results are committed in an independent session during the gate function, making them available to `_check_eval_suites()` for post-run suite threshold checks. Warn-level eval failures produce no output (by design — warn failures should not affect run state).
+- [x] **RESOLVED** (2026-08-15): `eval_block.feature` scenario "Multiple evals on one node all must pass" expects "remaining evals are not evaluated" on first block failure. Verified and locked in with an explicit unit test: `test_block_failure_skips_remaining_evals` in `test_eval_suite.py` proves the loop short-circuits — `engine.evaluate()` raises `EvalBlockedError` on the FIRST block failure, so later evals never run (the raised error names the first failing eval, so the loop cannot have evaluated the ones after it).
+- [ ] `evaluate_suite()` returns `passed=True` for empty suites (aggregate_score=1.0) — this means a suite with zero definitions and a threshold of 0.0 would pass even though no evals ran. The post-run check only loads suites that have definitions with thresholds, so this edge case is unreachable in practice.
+- [ ] No BDD scenarios for non-approver claim, team-scoped gate claim denial, or gate listing with permissions. (Unit coverage exists: `test_claim_team_viewer_role_denied`, `test_claim_non_team_member_raises`, `test_hitl_queries_are_org_scoped`.)
+- [ ] Claim expiry job resets run status from "claimed" to "awaiting_human" (`expiry_job.py:116-121`) — but the initial run status set by the executor is "awaiting_human", not "claimed". The status "claimed" is set by the HITL claim API, not the executor. The status reset path relies on this API setting, which is not tested at BDD level (unit-tested in `test_claim_expiry_job.py::test_expire_stale_claims_resets_claim_and_run_sql`).
+- [x] **RESOLVED** (2026-08-15): Post-run suite check in executor.py queries eval_results from a fresh session — it may not see results from the streaming run if the session isn't yet committed. Fix A (2026-07-09) persists eval results in an independent session during the gate function, committed BEFORE the suite check runs; `_check_eval_suites` reads from a fresh session and the `executor.py` post-stream block runs suite checks in the same transaction after the streaming session is closed. Concurrency behaviour checkbox marked [x].
+- [ ] No integration test for the full eval-before-interrupt → suite check → eval_failed chain end-to-end.
+- [ ] Pipeline executor loads eval definitions before claiming capacity slot — a definition added while a run waits for capacity is not picked up by that run's eval-before-interrupt (the eval set is snapshotted before the capacity wait). By-design ordering; the staleness window is accepted (see Concurrency checkbox, left unchecked).

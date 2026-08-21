@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Modulo — Agent governance for your agentic SDLC</title>
+    <meta name="description" content="Agent governance of your agentic software delivery lifecycle. Modulo handles the boilerplate. You handle the remainder." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/favicon.svg" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="/runtime-config.js"></script>
+    <script>
+      // Runtime monitor configuration — populated from MODULO_MONITOR_CONFIG env var
+      // at deploy time by backend or startup script. Format:
+      // {"monitor":{"monitorBackends":["builtin","sentry"],"sentry":{"dsn":"..."}}}
+      window.__MODULO_CONFIG__ = window.__MODULO_CONFIG__ || {};
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

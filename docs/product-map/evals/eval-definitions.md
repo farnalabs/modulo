@@ -1,0 +1,212 @@
+---
+id: feat-evals-eval-definitions
+prd: 8.17
+delivery-tasks: [task-nv2-eval-definition]
+bdd:
+  - backend/tests/bdd/features/eval/eval_run.feature
+  - backend/tests/bdd/features/eval/eval_suite_crud.feature
+  - backend/tests/bdd/features/evals/eval_regex.feature
+  - backend/tests/bdd/features/evals/eval_llm_judge.feature
+  - backend/tests/bdd/features/evals/eval_block.feature
+  - backend/tests/bdd/features/evals/conditional_hitl.feature
+  - backend/tests/bdd/features/eval/eval_scorer.feature
+  - backend/tests/bdd/features/eval/feedback_system.feature
+code:
+  - backend/src/modulo/db/models/eval_definition.py
+  - backend/src/modulo/db/models/eval_result.py
+  - backend/src/modulo/api/routes/evals.py
+  - backend/src/modulo/core/eval_engine/__init__.py
+unit-tests:
+  - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/unit/api/test_error_handling.py
+  - backend/tests/unit/api/test_evals_compare.py
+  - backend/tests/unit/api/test_evals_dashboard.py
+  - backend/tests/unit/core/test_eval_engine.py
+  - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/core/test_eval_judge_injection.py
+  - backend/tests/unit/mcp/test_mcp_run_tools.py
+depends-on: [feat-pipelines-core]
+status: partial
+---
+
+# Eval Definitions
+
+Eval definitions describe automated quality checks that run as a post-node step within the LangGraph StateGraph (8.17). Each definition specifies an eval type, config, pass threshold, and failure behaviour.
+
+**Standalone post-node eval path (FAR-305):** node-scoped eval definitions (with a `node_id`) run as a standalone post-node step in `executor.py` (`_run_post_node_evals`) for every completed node, independent of HITL gates — previously they only fired within eval-before-interrupt gates. Results are evaluated against the node's inner output dict and persisted to the `eval_results` table; a `block` failure transitions the run to `eval_failed`. Covered by `backend/tests/unit/pipeline_engine/test_post_node_evals.py`.
+
+## Behaviours
+
+### Eval Definition CRUD
+- [x] Admin can create an eval definition with pipeline_id, name, eval_type, and optional node_id, config_json, failure_behaviour, pass_threshold, suite_id
+- [x] Admin can create an eval definition with only required fields (pipeline_id, name, eval_type)
+- [x] Non-admin user (runner) receives 403 when creating eval definition
+- [x] Unauthenticated user receives 401/403 when creating eval definition
+- [x] Invalid eval_type returns 422
+- [x] Admin can list all eval definitions for their org, paginated
+- [x] Admin can list eval definitions filtered by pipeline_id
+- [x] Empty list returns 200 with total=0, items=[]
+- [x] Admin can get a single eval definition by ID
+- [x] Non-existent eval definition ID returns 404
+- [x] Admin can update an eval definition (name, pass_threshold, suite_id, etc.)
+- [x] Non-admin receives 403 when updating eval definition
+- [x] Update on non-existent ID returns 404
+- [x] Admin can delete an eval definition
+- [x] Non-admin receives 403 when deleting eval definition
+- [x] Delete on non-existent ID returns 404
+- [x] Non-admin cannot update eval definition
+- [x] Non-admin cannot delete eval definition
+- [x] Eval definition "from-run" endpoint creates a definition pre-populated from run output with type-specific config stubs
+- [x] Eval coverage endpoint returns per-node coverage map for a pipeline
+
+### Eval Definition Fields
+- [x] Eval definition has fields: id, organisation_id, pipeline_id, name, eval_type, config_json, failure_behaviour, created_by
+- [x] Optional fields: node_id, pass_threshold, suite_id
+- [x] eval_type must be one of: llm_judge, regex, json_schema, custom_function (DB CHECK constraint)
+- [x] failure_behaviour must be one of: warn, block (DB CHECK constraint)
+- [x] pass_threshold is a nullable float (0.0–1.0)
+- [x] suite_id is a nullable string for grouping evals into suites
+- [x] eval_definitions cascade-delete when parent pipeline is deleted
+
+### Eval Engine — Regex
+- [x] Regex pattern matched on output field returns passed=true with score 1.0
+- [x] Regex pattern not matched on output field returns passed=false with score 0.0
+- [x] Regex eval on a nested/missing field coerces value to string
+- [x] Missing "pattern" in config returns passed=false with score 0.0
+- [x] Missing "field" in config returns passed=false with score 0.0
+- [x] Regex match can be found anywhere in the field value (re.search, not full match)
+- [x] Regex with block behaviour raises EvalBlockedError when no match occurs
+- [x] Regex with warn behaviour logs warning and continues when no match occurs
+- [x] Invalid regex pattern returns passed=false with error detail
+- [x] Case-insensitive flag (i) is supported
+- [x] Multi-line flag (m) is supported
+- [x] Empty output field defaults to empty string for regex matching
+- [x] Numeric field is coerced to string for regex matching
+
+### Eval Engine — LLM Judge
+- [x] LLM judge returns score and passed based on rubric callable
+- [x] Score above pass_threshold marks eval as passed
+- [x] Score below pass_threshold marks eval as failed
+- [x] LLM judge uses a dedicated model_backend_id (independent of agent's backend)
+- [x] Custom rubric prompt is sent to the judge model
+- [x] Rubric prompt treats agent output as untrusted
+- [x] Missing llm_judge callable returns passed=false with score 0.0
+- [x] LLM judge callable raises exception returns passed=false with score 0.0
+- [x] LLM judge content too long returns passed=false with error detail
+- [x] LLM judge non-numeric score is handled gracefully (score=None)
+- [x] LLM judge with block behaviour raises EvalBlockedError when eval fails
+
+### Eval Engine — JSON Schema
+- [x] JSON Schema validation on output field passes when data matches schema
+- [x] JSON Schema validation fails with descriptive message when data does not match
+- [x] JSON Schema field-scoped validation validates only the nested field
+- [x] JSON Schema without additionalProperties allows extra fields
+- [x] JSON Schema with additionalProperties=false rejects extra fields
+- [x] JSON Schema without field validates the entire output dict
+- [x] JSON Schema eval with no schema defined returns appropriate failure
+
+### Eval Engine — Custom Function
+- [x] Custom function from registry is called with output and config
+- [x] Missing function in registry returns passed=false
+- [x] Custom function exception returns passed=false with error detail
+- [x] Custom function can return passed, score, and detail
+- [x] Custom function receives function_config from eval config
+- [x] Custom function with block behaviour raises EvalBlockedError when result=fail
+
+### Failure Behaviour
+- [x] failure_behaviour="block" raises EvalBlockedError when eval fails
+- [x] EvalBlockedError is caught by pipeline executor and run transitions to "eval_failed" with error_code "eval_blocked"
+- [x] Block failure is recorded in AuditEvent with type "eval_blocked" — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked")
+- [x] Multiple evals on one node — first block failure halts evaluation of remaining evals
+- [x] failure_behaviour="warn" logs a warning and pipeline execution continues
+- [x] Warn failure does not transition run to "eval_failed"
+
+### Suite-Level Aggregation
+- [x] evaluate_suite aggregates individual eval results into aggregate score
+- [x] Aggregate score below pass_threshold marks suite as failed
+- [x] Suite pass threshold met allows run to complete successfully
+- [x] Suite with pass_threshold=None never blocks but still returns aggregate
+- [x] Suite with no eval results returns aggregate_score=1.0
+- [x] Suite threshold zero always passes (>= 0.0)
+- [x] Suite threshold one requires perfect score
+- [x] Empty suite passes with aggregate_score=1.0
+
+### Eval Run Lifecycle
+- [x] Triggering an eval run returns 202 with status "pending"
+- [x] Eval run with all cases scored produces an aggregate score
+- [x] Eval run scoring below suite pass_threshold results in status "failed"
+- [x] Completed eval run results are visible per-case with aggregate score
+
+### Conditional HITL Gating (v1)
+- [x] Eval score below HITL gate threshold triggers NodeInterrupt, run transitions to "awaiting_human"
+- [x] Eval score above HITL gate threshold skips the gate, execution continues without interrupt
+- [x] Gate artifact contains "condition_skipped" when eval condition is false
+- [x] JMESPath condition on run_context can skip or trigger the gate independently of evals
+- [x] Eval block failure takes priority over HITL interrupt — run goes to "eval_failed", no interrupt
+- [x] Gate resume from interrupt does not re-evaluate condition or re-run evals
+- [x] HITL gate condition references eval by id with threshold and operator (lt)
+- [x] Reject routing from conditional HITL gate routes to reject_target
+
+### Auth & Org Scoping
+- [x] All eval definition operations enforce org-level RLS
+- [x] All eval result queries enforce org-level RLS
+- [x] Admin role required for create, update, delete
+- [x] Any authenticated user can list and read eval definitions within their org
+
+### Edge Cases
+- [x] Eval definition with empty config_json defaults to empty dict
+- [x] Eval definition node_id can be null (pipeline-level eval, not node-specific)
+- [x] Deleted eval definition cascades to delete associated eval_results — DB-level CASCADE configured on eval_results.eval_id FK (covered by test_eval_result_fk_cascades_on_eval_delete)
+- [x] Eval "from-run" with missing run output creates an eval with empty config (covered by test_from_run_no_return_node_yields_empty_sample)
+- [x] Coverage endpoint returns coverage_pct=0.0 when no nodes exist in pipeline
+- [x] Eval engine with unknown eval_type raises ValueError
+
+### Error Handling
+- [x] All DB-accessing routes (CRUD, coverage, compare, from-run, run-evals) catch ProgrammingError and return 501 with migration instructions
+- [x] All DB-accessing routes catch SQLAlchemyError and return 503 with retry suggestion
+- [x] All DB-accessing routes catch IntegrityError and return 409 for FK constraint violations
+- [x] All route handlers catch generic Exception and return 500 with structured detail (not raw 500 to CatchAllMiddleware)
+- [x] Auth checks return 403 with specific, actionable messages per operation
+- [x] 404 errors include the specific entity name ("Run not found", "Eval definition not found", "Pipeline not found")
+- [x] Eval engine errors are captured as structured EvalResult detail, not propagated as exceptions (except block/warn behaviour)
+- [x] No bare except blocks in API routes — every try/except catches specific exceptions (HTTPException, IntegrityError, ProgrammingError, SQLAlchemyError, Exception)
+- [x] Custom function eval errors are caught at the callable boundary and returned as structured results
+- [x] LLM judge callable exceptions are caught and returned as structured results with error detail
+- [x] compare_evals second transaction block sets RLS context for cross-tenant safety
+
+### Edge Cases
+- [x] pass_threshold has Pydantic Field range validation (ge=0.0, le=1.0) on CreateEvalRequest and UpdateEvalRequest
+- [ ] No uniqueness constraint on eval definition name per pipeline — duplicate eval names possible
+- [ ] EvalResult DB model has no `created_at` timestamp from base (uses `evaluated_at` instead)
+- [ ] Multiple evals with same suite_id but mixed failure_behaviour — evaluation ORDER IS NOT GUARANTEED to be block-before-warn (corrected 2026-08-15): `_build_eval_defs_by_node` preserves DB load order (no ORDER BY, no block-first sort), so a warn eval that fails earlier in the list runs before a later block eval. Block failures always halt the run wherever they appear in the order; warn evals before the block are simply recorded first.
+- [ ] Concurrent eval definition creation has no advisory lock — two admins creating the same eval simultaneously may create duplicates
+
+### Frontend Error Handling
+- [x] EvalEditorView.vue uses formatApiError(err) instead of bare `String(e)` / `e instanceof Error ? e.message : String(e)` in all catch blocks
+- [x] No empty catch {} blocks — every catch path sets an error state with user-facing message
+- [x] ErrorAlert component used for page-level errors with retry callback
+
+### QA History
+- **2026-08-15**: Coverage completion (FAR-231/FAR-233 distribute batch). Corrected the mixed-failure_behaviour ordering claim — `_build_eval_defs_by_node` (executor.py:951-975) preserves DB load order with no block-first sort, so "block evals checked before warn evals" is not guaranteed; the item now describes the real behaviour (block failures halt wherever they occur). The other three unchecked items (name uniqueness constraint, EvalResult `created_at`, advisory-lock on concurrent creation) were re-verified as genuine gaps. All 115 checked items were spot-re-verified against the code paths; no new [x] items this pass.
+
+- **2026-08-15**: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked"); the "not wired" claim was stale. (2) "Deleted eval definition cascades to eval_results" — DB-level CASCADE is configured on eval_results.eval_id FK; added test_eval_result_fk_cascades_on_eval_delete. (3) "Eval from-run with missing run output" — already covered by test_from_run_no_return_node_yields_empty_sample. Remaining unchecked items are genuine gaps (name uniqueness, created_at, mixed-behaviour ordering note, advisory lock).
+- **2026-07-08**: Cross-cutting architecture QA (index 264) by Worker sub-agent (worktree arch-264)
+  - **Fixed CRITICAL** — Added `except Exception → 500` catches to all 9 eval route handlers with `except HTTPException: raise` guard (create, list, get, update, delete, coverage, list_run_evals, compare with 2 blocks, from-run with 2 blocks) — previously only caught ProgrammingError→501 and SQLAlchemyError→503, allowing Python-level errors (TypeError, KeyError, AttributeError) to propagate as raw 500 to CatchAllMiddleware
+  - **Fixed CRITICAL** — `compare_evals` second transaction block (line 593) missing `set_rls_org()` and `set_rls_user_context()` calls — eval definitions query ran without RLS context on non-Postgres backends. Added both calls.
+  - **Added IntegrityError→409** — create, update, and from-run routes now catch FK violations with specific "does not exist" messages (previously fell through to SQLAlchemyError→503 with misleading "temporarily unavailable")
+  - **Added pass_threshold range validation** — `Field(ge=0.0, le=1.0)` on both CreateEvalRequest and UpdateEvalRequest (was unvalidated, accepting -1.0 or 2.0)
+  - **Fixed MAJOR** — EvalEditorView.vue replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(err)` in 5 catch blocks (loadPipelines, saveEval, deleteEval, loadAll) and simplified 404 detection
+  - **Created 18 new tests** in `test_evals_exception_guard.py` covering Exception→500 for all 9 route handlers, IntegrityError→409 for create/update/from-run, pass_threshold out-of-range→422, and second-block IntegrityError
+  - **Updated product map** — added Error Handling checkboxes (3 new), Edge Cases (pass_threshold [ ]→[x]), Frontend Error Handling section (3 checkboxes), unit-tests updated
+
+- **2026-07-04**: Cross-cutting architecture QA by Worker sub-agent (worktree qa-eval-definitions-150)
+  - **Verified [x] claims (82 of 82 checked):** All 82 claimed behaviours confirmed against code and tests. No false claims found.
+  - **Updated from [ ]→[x]:** 7 edge case/behaviour checkboxes confirmed implemented and tested.
+  - **Added Error Handling section:** 7 checkboxes covering ProgrammingError→501 catches, auth/404 error specificity, engine error boundaries.
+  - **Added Additional Edge Cases section:** 5 new edge cases discovered during audit (pass_threshold range validation, name uniqueness, timestamp, mixed behaviours, concurrency).
+  - **Updated frontmatter:** `unit-tests` populated with 11 test file paths; `status` changed from `covered` to `partial` (several edge cases not yet tested).
+  - **Findings summary:**
+    - **Critical:** 0
+    - **Major:** Unit test file paths were missing from frontmatter (empty `unit-tests: []`). Fixed. `pass_threshold` field lacks range validation in both API and DB layers. `conditional_hitl.feature` duplicated in two directory trees (`tests/bdd/features/eval/` and `tests/features/evals/`).
+    - **Minor:** Cascade delete and from-run-with-missing-output edge cases lack tests. Warn logging uses `eval.failed_warn` instead of a human-readable message. No uniqueness constraint on eval name per pipeline.

@@ -1,0 +1,422 @@
+# Backend — Agent Guidance
+
+## Lessons Learned
+
+### nginx /mcp SSE proxy: never set `Connection ""` on the /mcp location
+
+- The `/mcp` endpoint streams responses (SSE) through the Fly proxy. Setting `proxy_set_header Connection "";` on the `/mcp` location in `deploy/fly/nginx.conf` causes MCP tools to stall indefinitely via the Fly global load balancer — this regression was tried before and reverted. Keep `proxy_buffering off` + `proxy_request_buffering on` + `proxy_http_version 1.1` on `/mcp`, but do NOT set `Connection ""` there (unlike `/api/` and `/healthz`). PR #673 added `proxy_http_version 1.1` + `proxy_request_buffering on` to all proxy blocks and deliberately left `Connection ""` off `/mcp` for exactly this reason. See the `/mcp` block comment in `deploy/fly/nginx.conf`.
+
+### SQL: raw f-strings are SQL injection
+
+- `text(f"SELECT ... WHERE id = '{value}'")` creates SQL injection vectors even for internal use. Always use parameterized queries: `text("SELECT ... WHERE id = :val").bindparams(val=value)` or SQLAlchemy ORM expressions. This was the single most common critical finding across codebase QA — files across all layers (CRUD, routes, aggregations, analysis) used interpolated values in SQL text.
+
+### TOCTOU: check-then-act requires atomicity
+
+- Reading a value (e.g. "is this slot available?") then acting on it (e.g. "assign to slot") in separate queries creates a race window where another request can interleave. Use `SELECT ... FOR UPDATE` (Postgres row lock) or a single atomic `UPDATE ... WHERE ... RETURNING` to eliminate the window. Found in slot assignment, budget enforcement, and duplicate-prevention logic.
+
+### Cross-tenant: every multi-tenant query must include `organisation_id = :org_id`
+
+- Missing org scoping was found in audit routes, dashboard aggregations, and notification queries — not just entity CRUD. When adding a new query, grep for `organisation_id` in the WHERE clause as a pre-merge check. On non-Postgres backends (MariaDB, SQLite), the `_inject_tenant_filter` listener handles this automatically, but raw `text()` queries bypass it entirely.
+
+### Rollback: `session.rollback()` destroys in-progress data from other operations
+
+- Prefer `savepoint = await session.begin_nested()` for local rollback scopes. The outer `session.rollback()` discards ALL uncommitted writes, including those from other concurrent operations on the same session — not just the failed one.
+
+### Python 3.13: `Mapped["Type | None"]` forward reference syntax is broken; bare annotations without `Mapped[]` also rejected
+
+- Python 3.13 changed PEP 604 union parsing in annotations. `Mapped["Type | None"]` raises `TypeError` at class body execution. Use `Mapped[Optional["Type"]]` or `Mapped[Union["Type", None]]` instead.
+- SQLAlchemy's Annotated Declarative Table form also rejects bare annotations without the `Mapped[]` wrapper. A field like `rate_limit_config: dict[str, Any] | None` must be `Mapped[Optional[dict[str, Any]]]`. Every mapped column must use `Mapped[...]` — bare type annotations are silently ignored or cause `TypeError` at class body execution.
+
+### Test login: payload must use `email` field, not `username`
+
+- The login endpoint validates against `OAuth2PasswordRequestForm` which expects `{"email": "...", "password": "..."}` — not `{"username": "...", "password": "..."}`. Sending `username` produces a silent 422 validation error, causing all subsequent test assertions to fail with confusing messages. This was found in 3 separate test files across BDD, unit, and integration tests.
+
+### Event loops: `asyncio.new_event_loop()` must be closed
+
+- Test fixtures that create a new event loop must close it in `finally` or `addfinalizer`. Unclosed loops accumulate and eventually cause `RuntimeError: Event loop is closed` on unrelated async tests. BDD test files had 80+ instances of unclosed event loops.
+
+### WebSocket test fixtures: always close the connection
+
+- `async with client.websocket_connect("/ws") as ws:` must be wrapped in `try/finally ws.close()` — without an explicit close, the test hangs at teardown because the WS connection is never released.
+
+### Sensitive data: auth tokens must never appear in logs
+
+- Several test fixtures and a load-test scenario logged `Authorization: Bearer <token>` or API response bodies containing secrets. Use `logging.getLogger(...).setLevel(logging.WARNING)` on noisy loggers, or strip sensitive fields before logging. Also: never log raw API request/response bodies in production code — they may contain credentials.
+
+- Loop variable over module import name (`for status in ...` when `from fastapi import status`) → rename the import with an alias (`import status as http_status`). A loop variable shadows the module for its entire scope, so any reference like `status.HTTP_500_...` after the loop raises `AttributeError`. This is especially dangerous in exception handlers — the handler itself crashes trying to reference the shadowed module.
+
+- SQL aggregate functions (`SUM`, `COUNT`, `func.sum()`, etc.) return `None` when the result set is empty, not `0`. Always wrap `int(result.scalar_one())` in a null-safe helper like `_safe_int` that returns a default for `None`. Without this, `int(None)` raises `TypeError` which is NOT caught by `except SQLAlchemyError:`.
+
+- Every API endpoint that runs database queries needs BOTH `except SQLAlchemyError:` (for SQL failures) AND `except Exception:` (for Python-level errors like `TypeError`, `AttributeError`, `ValueError` from data processing). Without the generic catch, non-SQL errors propagate to the CatchAllMiddleware and produce an opaque 500 with no structured detail.
+
+- Every `except SQLAlchemyError:` and `except Exception:` handler must log the exception with `_log.exception()` before returning the error response. Without logging, a SQLAlchemyError (like a trigger function crashing on a non-UUID column) produces an opaque 503 with no traceback, making root-cause investigation impossible. The pattern is:
+  ```python
+  except SQLAlchemyError:
+      _log.exception("agents.create_agent")  # <-- always log
+      raise HTTPException(status_code=503, detail="Database temporarily unavailable.")
+  ```
+
+- `model_validate()` error handlers must never use bare `raise` — always raise a structured `HTTPException` instead. A bare `raise` inside an `except Exception` block propagates the original exception to the CatchAllMiddleware, producing an opaque 500 with no structured detail. Pattern: `except Exception: raise HTTPException(status_code=500, detail="...") from None`.
+
+- PATCH endpoint `model_dump(exclude_none=True)` → use `exclude_unset=True`. `exclude_none=True` prevents clearing nullable fields because keys with `None` values are omitted from the dump, so setting a field to `None` becomes a no-op instead of a NULL update.
+
+- Cross-field validation (e.g. `visibility='team' requires owner_team_id`) must be added to BOTH the `Create` model and the `Update` model — it's common to add it only to Create and forget Update.
+
+- When calling a service function with keyword arguments, the caller's argument names must match the function's parameter names. A mismatch (`account_id=...` when the parameter is `created_by`) raises `TypeError` at runtime. Verify both call site and definition when renaming parameters.
+
+- Content-Disposition `filename=` values must be sanitized to alphanumeric + limited special chars (`-_.`). Simple `replace()`-based sanitization leaves HTTP header injection vectors via `"`, `\`, `;`, or `\r\n`. Use `"".join(c if c.isalnum() or c in "-_." else "_" for c in name)`.
+
+- Upload file size validation should check `file.size` (Content-Length header) before calling `await file.read()` to reject oversized uploads without allocating memory. Also re-check `len(data)` after read as a safety net for chunked requests without Content-Length.
+
+- Analysis functions that stamp metadata keys onto a mutable dict argument (e.g. `_analyse_bundle` setting `_resolved_id` on bundle entries) must `copy.deepcopy()` the dict first. Otherwise, a transaction rollback leaves stale metadata in the caller's dict object, corrupting subsequent retries or reuses of the same reference.
+
+- BDD feature file API paths must match the actual router prefix. A feature file referencing `/api/composite-templates` when the router uses `/api/v1/composite-templates` causes silent false passes (or 404s in production). Always cross-reference the `prefix=` argument in the route file.
+
+- Frontend ParameterPort interface fields must mirror the backend Pydantic ParameterPort model. When adding a field to one side (e.g. `multiline`, or changing `options` type), update the other side in the same delivery. A type mismatch between `str[]` (backend) and `{value, label}[]` (frontend) causes runtime rendering errors for select inputs.
+
+- `except Exception` for external library calls (JMESPath, regex, etc.) → narrow to the specific exception type the library documents (e.g. `jmespath.exceptions.JMESPathError`, `re.error`). Bare `except Exception` masks programming bugs like `TypeError` from wrong argument types.
+
+- Failure routing by `startswith(f"'{name}'")` → add a trailing delimiter (`startswith(f"'{name}':")`) so that a short name like `"a"` does not also route failures for `"ab"`.
+
+- Integer fields that must be non-negative (retry counts, pages, sizes) → always add `Field(ge=0)`. Without it, negative values pass Pydantic validation and cause logic errors (e.g. `retry_count (0) >= -1` → immediate exhaustion).
+
+- PUT endpoints that accept only a subset of a JSON blob (e.g. `{nodes, edges}` from a graph editor) → merge with the existing blob, don't replace entirely. `db_obj.field | update_dict` preserves unmanaged metadata keys (viewport, zoom, comments) that would otherwise be silently deleted on every save.
+
+- Unit tests for standalone modules (`modulo.core.*`, `modulo.auth.*`, etc.) should import the module under test directly instead of going through `modulo.api.main`. Importing `modulo.api.main` at module level triggers MCP server startup and database connection pooling, causing the test suite to hang indefinitely. Prefer `from modulo.core.license import parse_and_verify` over `from modulo.api.main import app` in pure unit tests.
+
+- Base64 padding for `urlsafe_b64decode` — always compute proper padding with `'=' * (-len(b64) % 4)`. Python < 3.13 rejects unpadded input, and assuming exactly 2 chars of padding fails when the input is already padded or has a different length.
+
+- Module-level mutable lists (e.g. `_KNOWN_FLAGS`) must not be assigned directly as default instance attributes — use `list(source)` to create an independent copy per instance. Direct assignment shares the same list object across all instances, so mutations in one instance affect all others.
+
+- `unittest.mock.patch.stop()` returns `None` — never call `.stop().__aexit__()`. In `__aexit__` handlers, use `p.stop()` directly. Calling `p.stop().__aexit__(...)` calls `None.__aexit__()` which silently fails, leaking patches.
+
+- `os.environ.pop()` / `os.environ[key]=val` in tests without `try/finally` → use `monkeypatch.delenv()` / `monkeypatch.setenv()`. `monkeypatch` automatically restores the original value on teardown, preventing cascading failures when a test mutates global env state.
+
+- `pytest.raises(Exception)` in tests → narrow to the specific exception type the code is expected to raise (e.g. `ValueError`, `JWTError`). Bare `Exception` masks bugs where the code raises an unexpected exception (including `SystemExit`, `KeyboardInterrupt`) and the test passes.
+
+- `output.get(field, output)` when field is absent from the dict silently validates the entire dataset instead of the intended sub-field. If a specific field is requested (non-empty `field`), check `field in output` explicitly and fail with a clear error message — don't fall back to the parent dict.
+
+- Config values that are expected to be a `dict` (e.g. a callable registry) must be validated with `isinstance(val, dict)` before accessing `.get()` or `[]`. A non-empty list is truthy, so `config.get("key") or {}` does NOT fall back to `{}` for list values — `[1, 2].get(key)` raises `AttributeError`.
+
+### HTTP: every `requests` call must have an explicit timeout
+
+- Even in scripts, tools, and test helpers, every `requests.Session.post()` / `.get()` / `.request()` call must pass `timeout=N`. Without it, a network hang blocks the caller indefinitely. This applies to `_login()` methods that bypass a shared `_request()` helper — they must set `timeout=` independently.
+
+### HTTP response handling: call `raise_for_status()` before JSON parsing
+
+- Pattern `if not resp.ok: log_error(); resp.raise_for_status(); return resp.json()` creates a dead branch: `raise_for_status()` always raises on non-2xx, so the `if not resp.ok` branch is either redundant (never reached) or the only guard. Simplify to: `resp.raise_for_status()` first (covers all non-2xx), then `resp.json()`. This gives a single, clear control flow with no dead branches.
+
+### URL construction: use `urlparse`/`urlunparse`, not string replace chains
+
+- Building URLs with `.replace("http://", "").replace("https://", "").replace("/api/v1", "").rstrip("/")` is fragile — it breaks on unexpected URL formats (query params, auth, fragments) and silently corrupts edge cases. Use `urllib.parse.urlparse` + `urlunparse` to manipulate scheme, netloc, and path separately.
+
+- When accepting a user-supplied callable and parsing its return value with `.get()`, wrap the parsing in `try/except TypeError` or validate `isinstance(ret, dict)` first. A non-dict return (e.g. `None`, a list, a string) crashes the caller with `AttributeError: 'NoneType' object has no attribute 'get'`.
+
+### Alembic / Entrypoint
+
+- **The migration chain ends at `0110_schema_pipeline_runtime`.** The ~94 post-squash migrations were replaced by three idempotent "schema reconciliation" migrations — `0108_schema_org_identity` (revises `0005_v2_features_system`), `0109_schema_teams_library`, `0110_schema_pipeline_runtime`. The four v2 base files (`0001_v2_identity_org` / `0002_v2_teams_library` / `0003_v2_pipeline_runtime` / `0005_v2_features_system`) are retained. The reconciliation chain uses `CREATE ... IF NOT EXISTS` / existence guards / DROP+CREATE for replaced objects / data-safe `SET NOT NULL` (never over NULL rows) / `ALTER TYPE` guards, so it brings any database to the current schema state without assuming migration history. **Orphaned `alembic_version` entries no longer need a cleanup script** — `cleanup_orphan_migrations.py` does not exist in the repo. During rollout, existing databases are stamped to the new head with a one-line `alembic_version` update, and the reconciliation migrations then no-op on everything already present. Downgrades are no-ops (reconciliation is not reversible in general).
+
+- **Alembic `env.py` sync URL driver must use a package in production deps.** The `_to_sync_url` function converts `postgresql+asyncpg://` to `postgresql+psycopg2://`. But `psycopg2` is not in the production dependency tree — only `psycopg-binary` (psycopg v3) is. Use `postgresql+psycopg://` (psycopg v3) instead of `postgresql+psycopg2://`. The fix is in `backend/src/modulo/db/migrations/env.py:_to_sync_url`. Without this, Docker builds fail at startup with `ModuleNotFoundError: No module named 'psycopg2'`.
+
+### Connectors: shell command construction with env vars
+
+- When prepending env vars to a shell command in `_build_exec_cmd`, env vars must prefix the final command itself (`KEY=VALUE cmd`), not appear as a separate `&&`-delimited statement (`KEY=VALUE && cmd` which is invalid shell).
+
+### Connectors: pagination cursor must not double as resource identifier
+
+- Never use `q.filters.get("id") or q.cursor` as a fallback resource ID. The pagination cursor is a bookmark, not an entity identifier. Mixing them means a caller that passes a cursor gets a wrong/failed API call instead of a clear validation error.
+
+### Connectors: import stdlib modules at module level
+
+- Always import stdlib modules (`datetime`, `base64`, `uuid`, `urllib.parse`) at module level, not inside method bodies. Lazy imports inside methods: (1) pay the import cost on every invocation, (2) delay dependency-failure detection from import time to first-use time, (3) are flagged by linters. Found in 4 connector files.
+
+### Connectors: use `key in dict` for required filter validation, not `dict.get(key)` with falsy check
+
+- `if not value` after `dict.get(key)` rejects falsy-but-valid values (empty string `""`, integer `0`, boolean `False`). For required fields validation, use `if key not in filters` / `if key not in data` instead. This matches the GitLab connector's correct pattern and avoids introducing subtle bugs when a valid field value is falsy.
+
+### FastAPI router ordering: include specific routes before catch-all path-param routers
+
+- When a router with a path parameter (e.g. `errors_router` with `/{error_id}` where `error_id` is a UUID) is included BEFORE a router with a more specific path (e.g. `error_forwarder_config_router` with `/forwarders`), the catch-all router matches first — it tries to parse `"forwarders"` as a UUID and fails with a 422 validation error. Always include routers with specific, non-parameterized paths before routers with path parameters. This applies to `include_router()` ordering in `main.py`.
+
+### Response model serialization: never return raw ORM objects from route handlers
+
+- FastAPI route handlers that return a `response_model` must pass Pydantic-model-converted objects, not raw SQLAlchemy ORM instances. Returning a raw ORM object causes FastAPI's response serialization to fail with a 500 Internal Server Error because ORM instances don't match the Pydantic response schema structure. Always wrap ORM results: `return [SsoProviderResponse.from_orm(p) for p in providers]` or use `model_validate()`.
+
+### AsyncSession must always pass `autobegin=False`
+
+The DI factory in `dependencies.py:93` creates sessions with `autobegin=False`. Any code that manually constructs an `AsyncSession` (e.g. `AsyncSession(engine)` or `AsyncSession(session.bind)`) MUST pass `autobegin=False` to match.
+
+With the default `autobegin=True`, `Session.commit()` auto-starts a new implicit transaction. The next `async with session.begin():` then raises `InvalidRequestError: A transaction is already begun on this Session.` because the implicit transaction is already active. This is enforced by semgrep rule `async-session-missing-autobegin`.
+
+Found in `remy.py`: the `event_generator` created `AsyncSession(session.bind)` without `autobegin=False`, causing every Remy streaming request to fail with "Database error. Please try again later."
+
+### Redis is required for production deployments
+
+Modulo assumes Redis is present in production. The startup sequence in `main.py` hard-errors if `REDIS_URL` is not set and `settings.debug` is false. All three Fly tiers set `REDIS_URL = ""` by default — they MUST be provisioned with Upstash Redis before deploying:
+
+```powershell
+fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
+```
+
+Then set `REDIS_URL` in the corresponding `fly.*.toml` to the connection string from `fly redis status <name>`.
+
+In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py`, dashboard cache `api/routes/dashboard.py`, error tracking keys `core/error_tracking/__init__.py`, alert cooldowns `alerting.py`, EventBus `event_bus.py`, WS tokens `auth.py:315`) — these are acceptable in debug mode but silently lose state in production on deploy or scale-up. The eventual goal is to remove all fallbacks and hard-require Redis.
+
+### Model backends: `health_check` overrides must re-raise `asyncio.CancelledError`
+
+- Backends that override `health_check()` with a broad `except Exception` must add `except asyncio.CancelledError: raise` before the generic catch, matching the base class pattern in `base.py:84-85`. Without it, cancellation during shutdown is silently suppressed on Python < 3.12 (where CancelledError inherits from Exception).
+
+### Model backends: local/Ollama-compatible backends must set `supports_tools = True`
+
+- Backends that wrap `ChatOpenAI` (Ollama, Jan, llama.cpp, LM Studio, LocalAI, TGI, vLLM) inherit `supports_tools = False` from `ModelBackendBase`. Since `ChatOpenAI` supports tool calling, the subclass must explicitly set `supports_tools: bool = True` — otherwise tool routing is silently disabled.
+
+### Model backends: health checks must not pass API keys in URL query parameters
+
+- Health check requests that pass API keys as URL query parameters (e.g. `params={"key": self._api_key}`) expose the credential in server logs, proxy logs, and error messages via `str(exc)`. Always use header-based auth (`Authorization: Bearer`). If a provider requires query-param auth, sanitize the URL before logging.
+
+### Model backends: use module-level constants for base URLs
+
+- When a backend references its API base URL in both `__init__` and `health_check`, define it as a module-level constant (`COHERE_BASE_URL = "..."`) rather than hardcoding the string twice. This prevents drift between the two usages.
+
+### Async init guards: use double-checked locking, not a bare boolean
+
+- Setting `self._initialised = True` at the end of an async `initialise()` method WITHOUT a lock creates a race window. Two concurrent coroutines can both pass the `if self._initialised: return` guard (the check is between the flag being False and being set), then interleave their state mutations into `self._connectors`. Fix: use `asyncio.Lock()` with a double-checked locking pattern — check the flag outside the lock for fast-path return, then re-check inside the lock before the write path. Found in `ConnectorHub.initialise()` at `backend/src/modulo/core/connector_hub/__init__.py`.
+
+The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.
+
+### `set_rls_org` must be called inside `session.begin()`
+
+- `set_rls_org(session, org_id)` calls `_ensure_active_transaction()` which raises `RuntimeError` if there is no active transaction. With `session.autobegin=False` (the DI default), calling `set_rls_org` before `async with session.begin():` will always crash. Always place `set_rls_org` inside the `async with session.begin():` block, never before it.
+
+### PostgreSQL trigger functions casting non-UUID columns crash on VARCHAR values
+
+- `enforce_same_organisation()` trigger function used `(to_jsonb(NEW) ->> TG_ARGV[1])::uuid` which casts EVERY column value to UUID, regardless of column type. For VARCHAR columns like `agents.input_schema_version` (value `"latest"`), this raises `invalid input syntax for type uuid` which surfaces as a 503 (`SQLAlchemyError`). Always check `information_schema.columns.data_type` before casting in a trigger function:
+  ```sql
+  SELECT data_type INTO col_type FROM information_schema.columns
+  WHERE table_name = TG_TABLE_NAME AND column_name = TG_ARGV[1];
+  IF col_type IS DISTINCT FROM 'uuid' THEN
+    RETURN NEW;
+  END IF;
+  ```
+
+### MCP `auth_principal` fields must be consistent across all auth paths
+
+- The MCP auth middleware sets `request.scope["auth_principal"]` with different field sets depending on the auth path (API key, OAuth, JWT). Missing fields in one path (e.g. `user_id` missing from JWT path) cause `KeyError` in downstream middleware like `RateLimitMiddleware._client_key()`. When adding a field to `auth_principal` in any auth path, verify all other auth paths set the same field — or use `.get()` with defaults in consumers.
+
+### MCP Starlette sub-apps need custom exception handlers for visibility
+
+- `Starlette` adds `ServerErrorMiddleware` automatically, which catches unhandled exceptions and returns a plain text `"Internal Server Error"` with **no logging**. When building a Starlette sub-app (like the MCP server), always add `exception_handlers={Exception: handler}` with `_log.exception()` so production errors are visible in logs instead of silently swallowed.
+
+### Module docstring must precede `from __future__ import annotations` (E402)
+
+- Placing the module docstring AFTER `from __future__ import annotations` causes the triple-quoted string to be treated as a bare expression statement (not a docstring), triggering ruff E402 on ALL subsequent imports ("module-level import not at top of file"). The fix is always: docstring → `from __future__ import annotations` → other imports. This was the single most common finding across the QA sweep (~200+ occurrences in error_tracking, pipeline_engine, connectors, model_backends, otel_bridge, secrets_backend, and many more modules).
+
+### Tests using `require_feature` routers must override `get_plan_context`
+
+- When a FastAPI route uses `dependencies=[require_feature("error_forwarders")]` (or any feature name), the `require_feature` dependency runs before the route handler. If the test mocks a DB query to produce e.g. `ProgrammingError`, the mock returns `None` for feature checks, causing a 402 `FEATURE_REQUIRED` instead of the expected 501/503. Fix: override `get_plan_context` in the test app's `dependency_overrides` to return a `PlanContext` that enables all features:
+  ```python
+  class _AllFeatures:
+      def feature_enabled(self, name: str) -> bool:
+          return True
+
+      def list_enabled_features(self) -> list:
+          return []
+
+      def tier(self) -> str:
+          return "enterprise"
+
+      def has_license_key(self) -> bool:
+          return True
+
+
+  async def _override_plan_context() -> _AllFeatures:
+      return _AllFeatures()
+
+
+  app.dependency_overrides[get_plan_context] = _override_plan_context
+  ```
+
+### Health check API keys must use headers, not URL query parameters
+
+- When a backend passes its API key as a URL query parameter (`?key=...` or `params={"key": self._api_key}`), the credential is exposed in server logs, proxy logs, and error messages via `str(exc)`. Always use header-based auth (`Authorization: Bearer` or provider-specific header like `x-goog-api-key`). Found in the Gemini model backend during R2 QA.
+
+### Docker on Windows: NTFS junctions are not followed in build context
+
+- Docker for Windows does NOT follow NTFS junctions/reparse points when resolving files in a build context. If you create a junction at `backend/frontend/ → ../frontend`, the Docker build (`build: ./backend`) will not see `frontend/src/manifest.yaml` through the junction — COPY fails with "not found". Fix: either (a) remove the COPY from the Dockerfile and rely on runtime volume mount (the compose file already has `./frontend/src/manifest.yaml:/app/manifest.yaml`), or (b) change the build context to the repo root and adjust COPY paths accordingly.
+
+### Module-level raises for optional deps block the entire application
+
+- Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. (Legacy example — the Celery dependency was removed in the SAQ cutover; the pattern still applies to any optional dependency.) Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.
+
+### SQL: `FOR UPDATE` is not allowed with aggregate functions
+
+- `SELECT max(run_number) ... FOR UPDATE` raises `asyncpg.exceptions.FeatureNotSupportedError` — PostgreSQL explicitly forbids `FOR UPDATE` on aggregate queries. `FOR UPDATE` locks rows, but aggregates operate on the result set as a whole. Only use `FOR UPDATE` on queries that select individual rows (e.g. `SELECT ... FROM pipelines WHERE id = :pid FOR UPDATE`). Found in `db/crud/run.py:create_run()` where the `SELECT max(run_number)` for the next run number had a dangling `.with_for_update()`. The error surfaced as a generic 503 ("Database temporarily unavailable") because:
+  1. The aggregate `FOR UPDATE` raised `FeatureNotSupportedError` (subclass of `SQLAlchemyError`)
+  2. Route handlers and MCP tools caught `except SQLAlchemyError` / `except Exception` and returned opaque error messages
+  3. The `_log.exception()` output was invisible in Fly logs (JSON-structured logging format not rendered by `fly logs`)
+
+### Exception handlers must log the full traceback — generic catch blocks hide root causes
+
+- Every `except SQLAlchemyError:` and `except Exception:` handler that returns a generic error message (503, internal_error) MUST call `_log.exception()` with the full traceback BEFORE returning. Without logging, the actual error (e.g. `FeatureNotSupportedError: FOR UPDATE is not allowed with aggregate functions`) is lost behind an opaque "Database temporarily unavailable." After deploying with detailed error messaging (`print(f"ERROR: {e}\n{traceback.format_exc()}", flush=True)`), the real cause was visible. Without it, the error looked like a connection pool issue for hours.
+
+- `_log.exception()` output using the structured `JsonFormatter` may NOT appear in `fly logs` output — Fly's log shipper doesn't reliably render JSON-formatted log lines. For guaranteed visibility during debugging, use `print(f"ERROR: ...", flush=True)` to stderr or stdout. Remove debug prints before merging to release.
+
+### MCP `trigger_pipeline` creates run records but does NOT execute them
+
+- The MCP `trigger_pipeline` tool creates a `Run` record with `status="pending"` and returns immediately. The run stays `pending` forever because the MCP tool doesn't start LangGraph execution. Only the REST API route (`POST /api/v1/runs`) calls `background_tasks.add_task(_run_in_background, executor, ...)` which actually runs the pipeline. The MCP tool should either start execution itself or clearly document that the run requires a separate execution step. As of July 2026, use the REST API to trigger executable runs.
+
+### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
+
+- When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency — NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.
+
+### `agent_prompt` must always be non-empty for sandbox_agent nodes
+
+- Every `sandbox_agent` node in a pipeline graph must have a non-empty `agent_prompt`. This is enforced at three levels: (1) Pydantic model validation on `PipelineGraphNode` raises 422 if `agent_prompt` is missing/empty when `node_type == "sandbox_agent"`, (2) the `update_pipeline_graph` MCP tool validates all nodes before calling `replace_pipeline_graph`, and (3) the `GraphValidator._check_sandbox_agent_config` method emits an error at both save-time and pre-run validation. An agent running inside the sandbox without a prompt is a no-op — always provide the full instruction text.
+
+### Always wrap E2B SDK calls in `asyncio.wait_for()`
+
+- Every call to the E2B Sandbox SDK (creating a sandbox, running commands, reading files, closing) must be wrapped in `asyncio.wait_for()` with a realistic timeout. The E2B API can hang indefinitely under network congestion, upstream provider issues, or resource exhaustion. Without a timeout, a hung SDK call blocks the entire pipeline node indefinitely, consuming the node's timeout budget without making progress. Use 30s for sandbox creation, 300s for command execution, and 10s for teardown operations as baseline timeouts.
+
+### `asyncio.wait_for` kills long-lived SDK internal tasks — shield the wait
+
+- `asyncio.wait_for(coro.wait(), ...)` where `coro.wait()` internally awaits a long-lived task created ONCE at construction (e.g. an SDK event loop like E2B's `self._wait = asyncio.create_task(self._handle_events())`) is dangerous: the timeout CANCELS that long-lived internal task, and any subsequent call that re-awaits it raises `asyncio.CancelledError` with `cancelling()==0` (which LangGraph surfaces as `NodeCancelledError`). The 2026-08-09 app.modulo.run outage (fixed in #933) was exactly this: `_wait_command_with_idle_watchdog` in `core/pipeline_engine/node_runner.py` polled `handle.wait()` per slice with `asyncio.wait_for(..., timeout=5s)`; the first slice timeout killed the E2B events task, and every later slice re-awaited the dead task → every pipeline run failed ~7s in. Fix: `asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)` — the shield absorbs the cancellation while the internal task keeps running — or create the task once and shield it per slice. Only `wait_for` on single-shot operations (sandbox creation, file reads/writes, command start/kill, `Event.wait()`, `Lock.acquire()`, DB queries) is safe to cancel, because each call creates a fresh coroutine/future that is discarded after cancellation. Audit rule: any `asyncio.wait_for(X.wait(), ...)` where `X` is a long-lived object must be verified against this pattern before merging.
+
+### LangGraph state must be msgpack-serializable — never seed live objects
+
+LangGraph checkpoints serialize state via msgpack (`JsonPlusSerializer.dumps_typed` in `modulo_saver.py`). Seeding a live runtime object in `initial_state` (e.g. the `RunEventBroker` in PR #895) raises `TypeError: Type is not msgpack serializable` on the FIRST checkpoint write and kills every run of that pipeline.
+
+Rules:
+- Only primitives and collections of primitives (str/int/float/bool/None, lists, dicts) belong in LangGraph state — never live objects, connections, or handles.
+- If a node needs a runtime object (broker, connection, handle), look it up at run time via a registry keyed by `run_id` (the `BrokerRegistry` pattern) instead of carrying it in state.
+- Enforced by the semgrep rule `.semgrep/non_serializable_in_langgraph_state.yml` — do not bypass it.
+
+### `**env_vars_extra` must stay AFTER system env vars in the sandbox envs dict
+
+- In `node_runner.py` the sandbox `envs={...}` dict is ordered: system env vars first (`MODULO_*`, `APP_MODULO_OPENCODE_API_KEY`, `GITHUB_TOKEN`), then `**env_vars_extra` last. This is DELIBERATE — pipelines must be able to override system defaults for identity separation (e.g. PR Reviewer injects its own `modulo-reviewbot` PAT via `env_vars_extra`, not the system's `farnalabs` bot token). Commit b0c4bde97 reverted an earlier "env_vars_extra first" change for exactly this reason; do not move it back. The reserved-prefix validator prevents pipelines from overriding `MODULO_*` vars.
+
+### Stale cleanup `outputs_json` comparison needs `::jsonb` cast in PostgreSQL
+
+- When comparing JSONB columns in cleanup queries (e.g. deleting stale runs where `outputs_json` matches known patterns), the comparison must include an explicit `::jsonb` cast on the parameter value. Without the cast, PostgreSQL may compare JSON to JSONB using text equality, which fails for semantically identical JSON that differs in key ordering or whitespace. Pattern: `text("outputs_json != :clean::jsonb").bindparams(clean=json.dumps(result))`. Without the cast, cleanup queries silently skip rows whose JSON is semantically equal but textually different.
+
+### Pipeline timeout should account for sandbox provisioning + opencode execution time
+
+- Setting `timeout_seconds` on a pipeline node that runs a sandbox agent must account for: (1) E2B sandbox provisioning (~5-15s), (2) dependency installation in the sandbox (~30-120s for pip/uv sync), (3) the opencode agent's own execution loop (varies by task complexity — simple lint fixes take 60-180s, complex rebase + fix cycles take 300-900s), and (4) output collection and sandbox teardown (~5-10s). The recommended minimum for code-generation tasks is 1200s (20 min). Values below 60s are flagged by `GraphValidator._check_sandbox_agent_config` as too short.
+
+
+### FK checks to a table fail with "permission denied for schema public" for every role = corrupt table catalog
+
+On 2026-08-04 the production DB was recreated and the `accounts` table came out
+with a corrupt catalog state: EVERY foreign key referencing `accounts` failed
+with `permission denied for schema public` for EVERY role -- including the
+`postgres` superuser -- while FKs to other tables (e.g. `organisations`) worked
+fine. This broke login and most inserts.
+
+**Diagnostic signature:** grants look correct, direct SELECTs on `accounts`
+work, but any child-table INSERT fails on the FK check with the schema-permission
+error. The quick test is a scratch-table probe: create a TEMP table with an FK
+to `accounts`, INSERT a valid account id -- on the corrupt catalog the FK
+operation fails no matter which role connects.
+
+**What does NOT fix it:** REINDEX TABLE accounts, VACUUM (FULL/ANALYZE)
+accounts, dropping/re-adding the FK constraint, and disabling the tenant
+trigger all leave the corruption in place.
+
+**Root cause:** the table's pg_class/pg_namespace catalog entry was corrupt
+after the DB recreate, so FK checks that must resolve the referenced table
+failed with a schema-permission error regardless of the role.
+
+**Fix:** rebuild the table so it gets a fresh catalog entry -- CREATE TABLE
+accounts_new (LIKE accounts INCLUDING ALL) -> INSERT INTO accounts_new SELECT
+* FROM accounts -> DROP TABLE accounts -> ALTER TABLE accounts_new RENAME TO
+accounts -> re-apply grants/ownership -> re-add all 46 FK constraints. This is
+scripted as a repeatable, version-controlled tool in
+`backend/scripts/repair_accounts_fks.py` (`check` / `rebuild-accounts` /
+`add-fks` / `repair`), including the orphan-row guard (never auto-delete data).
+`check` returns non-zero on any drift between the tool's `ACCOUNTS_FKS`
+snapshot and the live catalog, so a stale snapshot fails loudly. Run the
+rebuild with the app drained / writes quiesced: the pre-checks and the rebuild
+transaction are separate windows, so a concurrent INSERT between them would be
+lost.
+
+### Ops / Fly: `fly ssh console` runs commands WITHOUT a shell (2026-08-07 DB restart)
+
+`fly ssh console --app <app> --machine <id> --command "<cmd>"` does NOT execute
+`<cmd>` through a shell — it splits the string into argv tokens. This means:
+- Pipes, redirects (`2>&1`, `> file`), `||`, `&&`, and command substitution DO NOT work.
+- The classic `su - postgres -c '...'` wrapper pattern gets mangled — the inner
+  command is executed as the connected user anyway (e.g. `pg_ctl` ran as root and
+  failed with `pg_ctl: command not found`), and commands with `|` or `2>&1` are
+  split into separate argv entries (`ls: cannot access '|': No such file or directory`).
+
+Use the `--user` flag to connect as the right user and pass a direct command:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "/usr/lib/postgresql/17/bin/pg_ctl restart -D /data/postgresql -m fast"
+```
+Notes: `pg_ctl restart` can take a while and the SSH command may appear to hang —
+that is normal; verify completion via `pg_postmaster_start_time()` afterwards.
+
+### Ops / Fly: Postgres Flex listens on port 5433 internally, not 5432
+
+On Fly Postgres Flex machines the postmaster runs on port **5433** (`postgres -D /data/postgresql -p 5433`), so a default-socket psql check fails with
+`connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory`
+even when the server is healthy. Verify with:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "psql -p 5433 -tAc 'select pg_postmaster_start_time();'"
+```
+Reliable restart indicators: `pg_postmaster_start_time()` (new value after a
+restart) and the machine's UPDATED timestamp in `fly status`. Do NOT treat a
+5432-socket psql failure as "postgres is down".
+
+### Ops / Fly: secrets override fly.toml [env] — a stale secret silently wedged the SAQ workers (2026-08-10)
+
+Fly secrets take precedence over fly.toml [env] on every machine. A stale secret
+from the SAQ cutover (SAQ_WORKER_CONCURRENCY=2) silently overrode fly.toml's 20,
+capping the fleet at 2 concurrent runs while fly.toml and the machine config.env
+both said 20. When the concurrency was raised via secret, the workers WEDGED
+instead: SAQ's blocking dequeue() (blmove, _DEQUEUE_TIMEOUT) holds ONE pool
+connection per concurrent _process task and is NOT gated by max_concurrent_ops;
+with concurrency 20 and a Redis pool of 5 (another stale secret), all 20
+connections were held by blocked dequeues, the Upkeep task (worker_info
+heartbeats, crons) died with `ConnectionError: Too many connections`, and the
+worker stayed alive but silent — no heartbeats, no cron schedule, runs stuck in
+`running`. At concurrency 2 it was stable (2 conns held, 3 spare).
+
+Fixes (all verified):
+1. Runtime guard: saq_worker._effective_redis_pool_size() enforces
+   pool >= concurrency + 5 in _build_queue (PR #972).
+2. Secrets now pin SAQ_WORKER_CONCURRENCY=20 and SAQ_REDIS_POOL_SIZE=50; both
+   values were then moved into fly.toml [env] and the shadowing secrets unset
+   (PR #984) so committed config is the single source.
+3. Drift detector: Repos/devtools/harness/tools/check-config-drift.ps1 lists
+   secrets that shadow the config file's [env]; exits 1 on drift.
+
+Rules:
+- NEVER rely on a Fly secret for a non-secret config value that also exists in
+  fly.toml [env] — the secret silently wins and can diverge (a stale value from
+  a past deploy lingers forever).
+- When changing a worker-scaling knob, always check BOTH the secret set AND
+  fly.toml [env] (and run check-config-drift.ps1).
+- SAQ worker concurrency and Redis pool are NOT decoupled: blocking dequeue
+  holds one pool connection per concurrent task, so the pool MUST stay strictly
+  larger than concurrency (the code guard enforces concurrency + 5).
+
+### Ops / SAQ: a worker process that is alive but not heartbeating is WEDGED
+
+Diagnosing a SAQ wedge (2026-08-10): the worker process was `S (sleeping)` in
+epoll with low CPU and no crash-loop (same PID for 20+ min) — yet worker_info
+entries vanished from `saq:runs:stats`/`saq:system:stats`, the fire_due_triggers
+cron heartbeat went stale, and dispatcher_reconcile stopped. Do not trust
+process aliveness: check Redis.
+
+Signals of a wedge (check from the machine via exec):
+- `zrange saq:runs:stats 0 -1 withscores` / `zrange saq:system:stats 0 -1
+  withscores` — empty or all scores older than ~2x the worker_info timer (89s).
+- `get saq:cron:heartbeat:fire_due_triggers:<machine>` — stale beyond 60-120s.
+- `hgetall saq:cron:stats:dispatcher_reconcile` — missing/stale.
+- `fly logs` shows `ERROR:saq:Upkeep task failed unexpectedly` +
+  `redis.exceptions.ConnectionError: Too many connections`.
+
+The root cause is almost always Redis pool starvation (see the dequeue lesson).
+Check `connected_clients` (info clients) to rule out the Upstash server limit —
+the local pool error "Too many connections" comes from redis-py's
+get_available_connection, NOT the server.

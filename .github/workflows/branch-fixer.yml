@@ -1,0 +1,70 @@
+name: "Fix: Modulo Branch Fixer"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to fix'
+        required: true
+        type: number
+      branch:
+        description: 'Head branch of the PR'
+        required: true
+        type: string
+      feedback:
+        description: 'Review feedback or failure description'
+        required: true
+        type: string
+
+jobs:
+  trigger-modulo-fixer:
+    name: Trigger Modulo Branch Fixer
+    runs-on: ubicloud-standard-2
+    # Manual-delivery label protocol:
+    # The `manual-delivery` label on a PR tells the ci.yml caller
+    # (notify-pr-failure job) to skip dispatching this Branch Fixer. The label
+    # guard lives in ci.yml because workflow_dispatch events carry no
+    # github.event.pull_request context, so the check cannot be evaluated here.
+    # Manual `workflow_dispatch` invocations MUST check the PR's labels
+    # themselves before calling this workflow.
+    steps:
+      - name: Send webhook to Modulo Branch Fixer
+        id: webhook
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BRANCH: ${{ inputs.branch }}
+          FEEDBACK: ${{ inputs.feedback }}
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "farnalabs/modulo" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          # Retry with exponential backoff on 429/5xx (max 5 attempts)
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          echo "Branch Fixer notified"

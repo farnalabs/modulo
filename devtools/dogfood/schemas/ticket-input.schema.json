@@ -1,0 +1,23 @@
+{
+  "name": "ticket-input",
+  "description": "Input payload for a ticket-to-PR wrap",
+  "definition": {
+    "title": "Ticket Input",
+    "description": "Issue or ticket to be turned into code changes by a dogfood pipeline",
+    "type": "object",
+    "properties": {
+      "id": {"type": "string", "description": "Ticket/issue id"},
+      "title": {"type": "string", "description": "Ticket title"},
+      "body": {"type": "string", "description": "Ticket description"},
+      "type": {
+        "type": "string",
+        "enum": ["bug", "feature", "enhancement", "chore"],
+        "description": "Ticket type"
+      },
+      "priority": {"type": "string", "description": "Ticket priority"},
+      "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels"},
+      "repo": {"type": "string", "description": "Repository the ticket belongs to"}
+    },
+    "required": ["id", "title", "type"]
+  }
+}

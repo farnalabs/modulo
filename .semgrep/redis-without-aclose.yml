@@ -1,0 +1,14 @@
+rules:
+  - id: redis-without-aclose
+    patterns:
+      - pattern: await Redis.from_url($URL)
+      - pattern-not-inside: |
+          try:
+              ...
+          finally:
+              await $REDIS.aclose()
+    message: "Redis.from_url() must be wrapped in try/finally with await redis.aclose() in the finally block to prevent TCP connection leaks"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

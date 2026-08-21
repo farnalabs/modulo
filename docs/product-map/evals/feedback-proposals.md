@@ -1,0 +1,131 @@
+---
+id: feat-evals-feedback-proposals
+prd: 8.20
+delivery-tasks: [task-nv4-eval-proposals-queue]
+bdd: [backend/tests/bdd/features/eval/feedback_system.feature]
+code: [backend/src/modulo/core/feedback_manager/, backend/src/modulo/api/routes/feedback.py]
+unit-tests:
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/api/test_error_handling.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
+depends-on: [feat-evals-eval-definitions, feat-evals-feedback-routing]
+status: partial
+---
+
+# Feedback Proposals — Eval Suite Growth
+
+Discovered from 1 completed delivery task.
+
+## Behaviours
+
+### Eval Gap Detection (8.20 ¶Eval suite growth #1)
+
+- [x] System runs pipeline eval suite against rejected output as standalone evaluation (EvalEngine.evaluate) — `detect_eval_gap()` now executes real eval suite
+- [x] FeedbackRecord is tagged `eval_gap=True` when no eval scored the output as failing — logic implemented
+- [x] API endpoint `POST /feedback/{record_id}/detect-gap` triggers gap detection
+- [x] API endpoint returns `eval_gap` boolean in response
+
+### Proposed Eval Generation (8.20 ¶Eval suite growth #2)
+- [ ] AI correction agent or eval-proposal agent drafts a new eval case on `eval_gap` — Not implemented
+- [ ] Proposed eval uses rejected output as negative example — Not implemented
+- [ ] Proposed eval uses rejection reason as rubric — Not implemented
+- [ ] Proposed eval suggests eval type (`llm_judge`, `regex`, `json_schema`) — Not implemented
+
+### Eval Proposal Storage & Retrieval
+- [x] Proposed evals land in "Eval proposals" inbox — `get_eval_proposals()` queries `eval_gap=True` records; surfaced in `EvalProposalsQueueView.vue` at `/evals/proposals`. No dedicated draft-eval model exists
+- [x] API endpoint `GET /feedback/proposals` returns proposals with pagination
+- [x] Proposals filtered by status `pending` or `routing` and `eval_gap=True`
+- [x] Proposals ordered by creation date descending
+
+### Human Curation (8.20 ¶Eval suite growth #3)
+- [ ] Human reviews proposed eval in draft eval editor — Not implemented (queue UI exists, no draft eval editor)
+- [ ] Human edits proposed eval before publishing — Not implemented (no draft eval editor)
+- [x] Human publishes proposed eval — `POST /api/v1/feedback/proposals/{record_id}/publish` (added 2026-08-15) creates a live `EvalDefinition` scoped to the record's pipeline + node and resolves the record; the frontend "Publish" button is not yet wired to it
+- [x] Published evals become immediately active for future pipeline runs — the created EvalDefinition is node+pipeline scoped and loaded at run time (executor `node_id.isnot(None)` filter) and by gap detection
+
+### BDD Scenarios
+- [x] BDD feature file exists for feedback system — 7 real scenarios exist (not a placeholder); eval proposal generation/publication scenarios are not covered (would need new step definitions)
+
+### Library Contribution (8.20 ¶Eval suite growth #4, v2)
+- [ ] Curated evals can be contributed back to community library — v2, not implemented
+
+### Error Handling
+
+- [x] ProgrammingError on all feedback API routes returns 501 with migration hint
+- [x] SQLAlchemyError on all feedback API routes returns 503 with retry hint
+- [x] Missing FeedbackRecord on detect-gap returns 404
+- [x] Missing run_id on correction run creation returns 422
+- [x] Invalid status transition returns 409 (InvalidTransitionError / ConcurrentModificationError)
+- [x] Invalid status value on PATCH /status returns 422
+- [x] Invalid review action returns 422
+- [x] Concurrent modification guard on status transitions — UPDATE ... WHERE ... RETURNING pattern
+- [x] Eval engine failure in detect_eval_gap — caught, logged, eval_gap=False returned
+- [x] Empty eval_suite in detect_eval_gap — warning logged, returns True (gap assumed)
+- [x] Node name resolution in proposals endpoint guarded by ProgrammingError→501 + SQLAlchemyError→503
+
+### Edge Cases
+
+- [x] Empty eval suite: detect_eval_gap returns True (gap assumed) with warning
+- [x] No run_id on FeedbackRecord: detect-gap skips eval suite entirely (no pipeline evals to check)
+- [x] Malformed eval_def in eval_suite: logged and skipped, does not crash detection — note: real `EvalDefinition` objects (ORM/DTO) are now processed, not treated as malformed (fixed 2026-08-15)
+- [x] Multiple proposals with same run_id: node name resolution handles deduplication via dict
+- [x] No run_ids in proposal set: node name resolution short-circuits, returns empty map
+- [x] Double gap detection on same record: eval_gap stays True after first run (idempotent read) — covered by `test_double_detection_is_idempotent`
+- [x] Proposals endpoint with eval_gap=True but wrong status (e.g. "resolved"): excluded by filter
+- [x] Pipeline with 0 eval definitions returns empty eval_suite → gap assumed
+
+### Resilience
+
+- [x] EvalEngine.evaluate() failure in detect_eval_gap — caught, logged, iterates to next eval_def
+- [x] Missing eval_suite — warning logged, True returned (gap assumed)
+- [x] Run deleted between proposal list and node name resolution — no crash, node name simply absent
+- [x] Snapshot graph_json missing or None — no crash, node name simply absent
+- [x] Session context maintained across supplementary queries in proposals endpoint
+- [x] All DB queries wrapped in ProgrammingError + SQLAlchemyError try/except
+
+## Known Gaps
+- **`detect_eval_gap()` now works** — iterates eval suite and returns True if all pass (gap) or False if any fails. The API endpoint now fetches eval definitions from the pipeline instead of passing `eval_suite=[]`.
+- **No AI correction agent** — PRD 8.20 describes an agent that produces diagnosis + correction proposal + proposed eval case, but no code exists for it.
+- **No eval proposal model** — proposals are currently just FeedbackRecords with `eval_gap=True`. No dedicated `EvalProposal` entity with draft fields (negative example, rubric, suggested eval type, publication status).
+- **No draft eval editor UI** — PRD 8.20 mentions "Eval proposals queue with draft eval editor" in the feedback inbox UI. The queue UI exists (`EvalProposalsQueueView.vue` at `/evals/proposals`) but there is no editor for drafting/editing eval content, and the "Publish" button is not yet wired to the backend publish endpoint (`POST /feedback/proposals/{record_id}/publish`, added 2026-08-15) which creates the EvalDefinition.
+- **BDD feature** — `feedback_system.feature` has 7 real scenarios (create, status transitions, invalid transitions, eval gap detection, correction run spawning) but none cover eval proposal generation or publication.
+
+## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-232/233, partial-evals-b)
+- **Implemented (PRD §8.20 ¶Eval suite growth #3, publish step)**: `POST /api/v1/feedback/proposals/{record_id}/publish` in `api/routes/feedback.py` creates a live node-scoped `EvalDefinition` on the proposal's pipeline (node from explicit `node_id` → `producing_node_id` UUID → snapshot-graph node match), transitions the record to `resolved`, and emits `feedback.proposal_published`. Since run-time eval execution and gap detection load definitions by `pipeline_id` at run time, the published eval is immediately active for future runs.
+- **Marked `[x]` (implemented + tested)**: "Human publishes proposed eval" and "Published evals become immediately active". 9 new endpoint unit tests in `test_feedback_endpoint.py` + 2 new ProgrammingError→501/SQLAlchemyError→503 cases in `test_error_handling.py`.
+- **Still gaps (kept `[ ]`)**: AI correction / eval-proposal agent drafting (PRD #2 — no agent exists), proposed-eval negative-example/rubric/eval-type suggestion, draft eval editor UI + review/edit, frontend "Publish" wiring, library contribution (v2).
+
+### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
+- **Verified** all remaining unchecked behaviours against code + tests. Every unchecked item is a genuine new-feature gap requiring a dedicated eval-proposal entity/agent/UI, none of which exists and none of which is a backend-only change in this worktree's scope:
+  - **Proposed Eval Generation** (AI correction / eval-proposal agent drafting a case from rejected output, negative example, rejection-reason rubric, suggested eval type) — no agent exists (`grep` for a drafting path returns nothing beyond `detect_eval_gap` tagging).
+  - **Human Curation** (draft eval editor, edit, publish-to-active) — `EvalProposalsQueueView.vue` "Publish" only transitions the record to `resolved`; no `EvalDefinition` is created, so published evals cannot be immediately active for future runs.
+  - **Library contribution (v2)** — deferred by design.
+- **Confirmed** gap-detection surface remains complete: `detect_eval_gap`, `POST /feedback/{id}/detect-gap`, `GET /feedback/proposals`, filtering/ordering all `[x]` and covered by existing tests.
+- **Status**: partial — gap-detection + proposal-queue plumbing are done; generation + curation are genuine feature work, not coverage gaps.
+
+### 2026-08-15 — Coverage-completion (FAR-233)
+- **Verified**: eval proposals queue UI now exists (`EvalProposalsQueueView.vue` at `/evals/proposals`, router line 273) — the "API-only" claim is stale; queue UI checkbox split from the draft-eval-editor gap.
+- **Marked `[x]`**: BDD feature file exists (7 real scenarios), double gap detection idempotent (`test_double_detection_is_idempotent`).
+- **Fixed (bug)**: `detect_eval_gap` treated real `EvalDefinition` objects (ORM/DTO — what the `/detect-gap` route actually passes) as "malformed" and skipped the whole suite, so gap detection always returned `True` when the pipeline had eval definitions. The malformed guard now accepts `EvalDefinition`-shaped objects; covered by `test_uses_real_eval_engine_standalone_path`.
+- **Added**: 18 ProgrammingError→501 / SQLAlchemyError→503 cases for all 9 feedback routes in `test_error_handling.py` (the file previously had none despite product-map claims).
+- **Remaining gaps**: AI correction agent, eval proposal model, draft eval editor, frontend publish wiring (backend publish-to-active shipped 2026-08-15), library contribution (v2).
+
+### 2026-07-12 — Round 3 improve-architecture
+- **MAJOR:** Fixed B904 (exception chaining) on all feedback route handlers — `IntegrityError`, `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern
+
+### 2026-07-06 — Cross-cutting QA (improve-architecture index 228)
+- Fixed CRITICAL — `list_eval_proposals` node name resolution queries ran outside `session.begin()` and try/except — now inside the same transaction with ProgrammingError + SQLAlchemyError guards
+- Fixed CRITICAL — all 10 feedback routes added `except SQLAlchemyError → 503` (previously only caught ProgrammingError, allowing connection/deadlock failures to propagate as 500)
+- Fixed MAJOR — corrected 4 stale `[ ]` → `[x]` behaviours in product map (detect-gap endpoint, proposals endpoint, proposals filtering, proposals ordering)
+- Added Error Handling section (11 checkboxes: 11 [x]), Edge Cases section (8 checkboxes: 5 [x] + 3 [ ]), Resilience section (6 checkboxes: 6 [x]) to product map
+- Added SQLAlchemyError → 503 test file (test_feedback_sqlalchemy_error.py) with 22 tests covering 10 routes
+- Status remains `partial` (AI correction agent, eval proposal model, draft eval editor, BDD proposals scenarios all still gaps)
+
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 326)
+- Fixed CRITICAL — `routing → dismissed` not allowed in `_VALID_STATUS_TRANSITIONS` despite `EvalProposalsQueueView` showing "Dismiss" button for `routing` proposals (409 on click). Added `"dismissed"` to `routing`'s allowed transitions.
+- Fixed MAJOR — `publishProposal` success message falsely claimed "Eval definition created" when no eval is actually created. Message now says "Eval definition creation not yet implemented."
+- Fixed MAJOR — `ReviewFeedbackRequest.action` had default value `"mark_reviewed"`, silently accepting empty POST bodies. Default removed; action is now required.
+- Updated Edge Cases: `[x]` proposals endpoint excludes wrong-status records, `[x]` pipeline with 0 eval definitions returns gap assumed

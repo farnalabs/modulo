@@ -1,0 +1,35 @@
+# check=skip=SecretsUsedInArgOrEnv
+# One-shot mutation testing container for the backend
+# Build from repo root: docker build -t modulo-mutmut -f backend/Dockerfile.mutation .
+# Run: docker run --rm modulo-mutmut
+# With custom paths: docker run --rm modulo-mutmut uv run mutmut run --paths-to-mutate "src/modulo/auth/" "src/modulo/db/rls.py"
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Build deps for psycopg, bcrypt, etc.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy dependency manifests
+COPY backend/pyproject.toml backend/uv.lock ./
+
+# Install all dev dependencies
+RUN uv sync --dev --frozen
+
+# Copy source code and tests
+COPY backend/src/ src/
+COPY backend/tests/ tests/
+
+# Required non-production test values (the database is never contacted).
+ENV DATABASE_URL=postgresql+asyncpg://unused:unused@localhost/unused
+ENV SECRET_KEY=docker-mutation-secret-key-not-for-production
+ENV FERNET_KEY=vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+
+# Default runs all configured paths
+CMD ["uv", "run", "mutmut", "run"]

@@ -1,0 +1,83 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { registerHandler, getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
+import type { EventBusEvent } from '../types/events'
+
+function makeEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
+  return {
+    type: 'run',
+    id: 'test-id',
+    action: 'updated',
+    version: 1,
+    org_id: 'org-1',
+    ...overrides,
+  }
+}
+
+describe('syncRegistry', () => {
+  beforeEach(() => {
+    clearAllRegistrations()
+  })
+
+  it('registers and dispatches to a handler', () => {
+    const handler = vi.fn()
+    registerHandler('run', handler)
+    const handlers = getHandlers('run')
+    expect(handlers.size).toBe(1)
+
+    const event = makeEvent()
+    for (const h of handlers) h(event)
+    expect(handler).toHaveBeenCalledWith(event)
+  })
+
+  it('unregister removes handler', () => {
+    const handler = vi.fn()
+    const unsub = registerHandler('run', handler)
+    unsub()
+    expect(getHandlers('run').size).toBe(0)
+  })
+
+  it('dispatches to multiple handlers', () => {
+    const handler1 = vi.fn()
+    const handler2 = vi.fn()
+    registerHandler('run', handler1)
+    registerHandler('run', handler2)
+    const event = makeEvent()
+    for (const h of getHandlers('run')) h(event)
+    expect(handler1).toHaveBeenCalledWith(event)
+    expect(handler2).toHaveBeenCalledWith(event)
+  })
+
+  it('does not dispatch to wrong resource type', () => {
+    const handler = vi.fn()
+    registerHandler('pipeline', handler)
+    const event = makeEvent()
+    for (const h of getHandlers('run')) h(event)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('deduplicates identical handler registrations', () => {
+    const handler = vi.fn()
+    registerHandler('run', handler)
+    registerHandler('run', handler)
+    expect(getHandlers('run').size).toBe(1)
+  })
+
+  it('returns a defensive copy from getHandlers', () => {
+    const handler = vi.fn()
+    registerHandler('run', handler)
+    const copy = getHandlers('run')
+    copy.delete(handler)
+    expect(getHandlers('run').size).toBe(1)
+  })
+
+  it('allows re-registration after unregister', () => {
+    const handler = vi.fn()
+    const unsub = registerHandler('run', handler)
+    unsub()
+    expect(getHandlers('run').size).toBe(0)
+    registerHandler('run', handler)
+    const event = makeEvent()
+    for (const h of getHandlers('run')) h(event)
+    expect(handler).toHaveBeenCalledWith(event)
+  })
+})

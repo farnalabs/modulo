@@ -1,0 +1,210 @@
+---
+id: feat-core-ai-schema-gen
+prd: 8.16
+delivery-tasks: [task-nv9-ai-schema-gen]
+bdd:
+  - backend/tests/bdd/features/connectors/schema_inference.feature
+unit-tests:
+  - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_generation.py
+  - backend/tests/bdd/steps/test_schema_inference.py
+  - backend/tests/integration/crud/test_schema_inference_integration.py
+code:
+  - backend/src/modulo/core/schema_registry/inference.py
+  - backend/src/modulo/core/schema_registry/generation.py
+  - backend/src/modulo/api/routes/schemas.py
+depends-on: [feat-core-schema-inference]
+status: partial
+---
+
+# AI Schema Inference & Generation
+
+Schema Inference (8.16) samples records from a connected tool and uses an LLM to produce a draft JSON Schema. Schema Generation takes a natural-language description plus optional examples and produces a draft schema. Both are read-only, LLM-assisted drafting tools — output always goes through human review before publishing.
+
+### Behaviours
+
+#### Schema Inference — service (`inference.py`, `SchemaInferenceService.infer`)
+- [x] LLM infers draft JSON Schema (draft-07/2020-12) from sample data records
+- [x] Samples capped at configurable max (default 50, `_MAX_SAMPLE_RECORDS`)
+- [x] Handles LLM responses wrapped in markdown code fences (with or without lang hint)
+- [x] Handles plain JSON responses (no fences)
+- [x] Adds default `type: "object"` and `properties: {}` if missing from LLM output
+- [x] Raises `SchemaInferenceError` on LLM call failure (backend exception)
+- [x] Raises `SchemaInferenceError` on LLM timeout (configurable, default 60s)
+- [x] Raises `SchemaInferenceError` on unparseable LLM response (invalid JSON, non-dict)
+- [x] Raises `SchemaInferenceError` on non-string `AIMessage.content`
+- [x] Raises `SchemaInferenceError` on non-dict samples input
+- [x] Handles empty sample list (returns backend response)
+- [x] Supports custom system prompt injection via constructor
+- [x] Nested object/array structures in samples inferred correctly
+- [x] Mixed field presence across records handled (required vs optional based on appearance)
+- [x] All-null-value fields omitted from draft schema
+- [x] Prompt truncates sample set to `_MAX_SAMPLE_RECORDS` (50)
+#### Schema Generation — service (`generation.py`, `SchemaGenerationService.generate`)
+- [x] LLM generates JSON Schema from natural-language description
+- [x] Optional example records shape the generated schema
+- [x] Handles markdown-fenced and plain-JSON LLM responses
+- [x] Raises `SchemaGenerationError` on LLM call failure
+- [x] Raises `SchemaGenerationError` on timeout (configurable, default 60s)
+- [x] Raises `SchemaGenerationError` on unparseable response
+- [x] Raises `SchemaGenerationError` on non-string `AIMessage.content`
+- [x] Raises `SchemaGenerationError` on backend returning object without `.content`
+- [x] Raises `ValueError` on empty/whitespace-only description
+- [x] Omits examples section when none provided (or empty list)
+- [x] Supports custom system prompt via constructor
+- [x] Rejects non-fenced surrounding explanatory text from LLM (no greedy extraction) #### API endpoints (`routes/schemas.py`)
+- [x] `POST /api/v1/schemas/infer` — samples connector data, LLM infers, returns draft
+- [x] `POST /api/v1/schemas/generate` — description + examples, LLM generates, returns draft
+- [x] Both endpoints require authentication + RLS org scoping
+- [x] `POST /infer` returns 404 when connector instance not found
+- [x] Both return 400 when no model backends configured
+- [x] `POST /infer` returns 502 when connector sampling fails
+- [x] Both return 502 when LLM step fails
+- [x] `POST /infer` returns `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description` #### Unit test coverage (`test_schema_inference.py`, `test_schema_generation.py`)
+- [x] Prompt-building: system + human message structure, truncation, empty samples
+- [x] Response parsing: plain JSON, markdown fences, fences without lang hint, whitespace, missing fields
+- [x] Error parsing: invalid JSON, non-dict JSON, empty string
+- [x] Inference service: happy path, markdown-wrapped, LLM failure, unparseable, empty samples, nested structures, mixed field presence, all-null values, non-string content
+- [x] Generation service: happy path, with examples, markdown-wrapped, LLM failure, unparseable, empty/blank description, non-string content, empty examples list, non-fenced surrounding text, complex nested schema, backend without `.content`, timeout #### Integration test coverage (`test_schema_inference_integration.py`)
+- [x] Full end-to-end: realistic records, stub LLM, parsed schema
+- [x] Schema includes all fields from samples
+- [x] Empty records list
+- [x] Markdown-wrapped LLM response
+- [x] Backend failure wrapped in `SchemaInferenceError`
+- [x] Unparseable response wrapped in `SchemaInferenceError`
+- [x] Deeply nested object/array structures
+- [x] Non-string `AIMessage` content #### PRD scope gaps (8.16) — not yet implemented
+- Configurable sample count (default 200 per PRD, not 50 as today) — see Known Gaps
+- Enum detection for `issue_type`, `status`, `priority` fields — see Known Gaps
+- Fields appearing in <10% of records flagged as rarely-used, excluded from default draft — see Known Gaps
+- Inferred `abstract_name` suggestion surfaced in response — see Known Gaps
+- Draft opens in schema editor for operator review before publishing — see Known Gaps
+- [x] ~~**Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data**~~ **RESOLVED 2026-08-12/15**: sample/example data is sanitised (`schema_registry/sanitize.py`) and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators with an explicit untrusted-input instruction in the system prompt; Jinja `SandboxedEnvironment` itself is not used because there is no user-authored template in the inference/generation path
+- [x] ~~**Sampled data not stored after inference completes**~~ **RESOLVED 2026-08-15**: regression test (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) asserts the infer response carries no raw sample records and only the documented response keys; samples are held in memory for the request only and never written to the DB
+- SDLC onboarding path: connect, infer, review, publish, browse library, wire agents — PARTIAL: OnboardingWizard.vue implements connect → Run Inference → Review Schemas → publish (and browse-library/wire-pipeline steps exist as UI steps); the library-browse step filtered by inferred `abstract_name` is blocked on the `abstract_name` inference gap (see Known Gaps) #### BDD coverage
+- [x] Gherkin scenarios in `schema_inference.feature` — 6 scenarios covering infer, 404, 400, validation, migration plan, and unsupported connector types #### Error Handling — DB ProgrammingError → 501
+- [x] `list_schemas_endpoint` (line 142) — caught, returns 501
+- [x] `create_schema_endpoint` (line 173) — caught, returns 501
+- [x] `get_schema_endpoint` (line 192) — caught, returns 501
+- [x] `update_schema_endpoint` (line 215) — caught, returns 501
+- [x] `deprecate_schema_endpoint` (line 237) — caught, returns 501
+- [x] `delete_schema_endpoint` (line 265) — caught, returns 501
+- [x] `list_schema_versions_endpoint` (line 295) — caught, returns 501
+- [x] `create_version_endpoint` (line 336) — caught, returns 501
+- [x] `get_schema_version_endpoint` (line 356) — caught, returns 501
+- [x] `list_schema_fields_endpoint` (line 385 → now fixed) — caught, returns 501
+- [x] `POST /api/v1/schemas/validate` — pure structural validation, no DB access, no ProgrammingError/SQLAlchemyError catch needed
+- [x] `POST /api/v1/schemas/import` — pure parse + structural validation, no DB access, no catch needed
+- [x] `POST /api/v1/schemas/migrate/plan` — no schema-table reads; records a `schema_migration_planned` audit event whose ProgrammingError is caught and logged (never breaks the response)
+- [x] `POST /api/v1/schemas/infer` — ProgrammingError caught, returns 501
+- [x] `POST /api/v1/schemas/infer` — SQLAlchemyError caught, returns 503
+- [x] `POST /api/v1/schemas/infer` — Exception caught, returns 500
+- [x] `POST /api/v1/schemas/generate` — ProgrammingError caught, returns 501
+- [x] `POST /api/v1/schemas/generate` — SQLAlchemyError caught, returns 503
+- [x] `POST /api/v1/schemas/generate` — Exception caught, returns 500
+
+## Known Gaps
+- **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200.
+  - **Compounding issue:** `SchemaSampleQuery.limit` max is 100 while inference caps at 50. Users can request 100 samples but only 50 reach the LLM — wasted sampling work.
+  - **Misleading API response:** `SchemaInferResponse.sample_count` reports total sampled records, not the count actually sent to the LLM.
+- **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (8.16)
+- **No `abstract_name` inference:** `abstract_name` field exists on `SchemaCreate`/`SchemaUpdate`/`SchemaResponse` models (CRUD layer supports it), but `/infer` endpoint (`SchemaInferResponse`) does NOT include `abstract_name`. `suggestion_name` is hardcoded `"Inferred from {ci.name}"`, not AI-inferred.
+- **SandboxedEnvironment resolved (2026-08-12/15):** untrusted record/example values are sanitised (`schema_registry/sanitize.py` — credential masking, control-char stripping, length/cardinality/depth bounds) and isolated behind `<<<SAMPLE_DATA>>>` structural separators with an explicit untrusted-input instruction; Jinja `SandboxedEnvironment` itself is not used (no user-authored template in the prompt path)
+- **Data lifecycle (verified 2026-08-15):** samples are never persisted — they live in memory for the request and the response carries only the inferred definition + metadata; a regression test asserts the response contains no raw sample records
+
+## Resilience & Integration Robustness
+
+- [x] ConnectorHub sampling has 30s timeout → 504 Gateway Timeout
+- [x] ConnectorHub.initialise() wrapped in try/except → 502
+- [x] ModelBackendHub.initialise() wrapped in try/except → 502
+- [x] ModelBackendHub.get() wrapped in try/except → 502
+- [x] Empty backend_ids guard → 503 Service Unavailable
+- [x] LLM inference call has configurable 60s timeout → SchemaInferenceError
+- [x] LLM generation call has configurable 60s timeout → SchemaGenerationError
+- [x] Failed LLM call distinguished from timeout in error type
+- [x] Audit event best-effort (never loses successful inference)
+- [x] Non-serializable sample data (circular references) caught → ValueError
+- [x] Example data truncated to max_example_records (default 50) for generation
+- [x] Raw exception text not leaked in 502/504 responses
+
+## Edge Cases
+
+- [x] Empty sample list (0 records) — returns LLM backend response
+- [x] Single record — inferred schema from single datapoint
+- [x] Maximum records (50) — truncation tested at boundary
+- [x] All-null-value fields omitted from draft schema
+- [x] Mixed field presence across records — required vs optional
+- [x] Nested object/array structures (2+ levels)
+- [x] Markdown code fences without language hint
+- [x] Plain JSON response (no fences)
+- [x] Non-fenced explanatory text around JSON in LLM response — rejected
+- [x] Empty/whitespace-only description for generation → ValueError
+- [x] Non-string AIMessage.content → error
+- [x] Backend returning object without .content → error
+- [x] Unsupported connector type → 400
+- [x] Connector not found → 404
+- [x] Connector sampling timeout → 504
+- [x] Circular references in sample data → catch ValueError before API
+- [x] Backend_ids empty between check and initialisation → 503 guard
+
+## QA History
+
+### 2026-08-15 — Coverage drive (FAR-234)
+
+Verified and checked off: retry/backoff on LLM calls (`_common.invoke_and_parse`: up to 3 attempts, exponential backoff, timeout path retries without sleep — proven by `test_infer_retries_transient_failures_then_succeeds`); no-DB-access endpoints (validate/import are pure; migrate/plan's audit ProgrammingError is caught+logged); resolved the SandboxedEnvironment PRD-gap (sanitisation + structural separators, matching `feat-core-schema-inference` 2026-08-12); resolved the sampled-data-lifecycle gap with a no-sample-persistence regression test. Added ProgrammingError→501 + SQLAlchemyError→503 tests for the generate endpoint (`test_schema_generate_endpoint.py`). Clarified the SDLC onboarding path gap: the wizard implements connect → infer → review → publish; the browse-library-by-`abstract_name` step stays blocked on the `abstract_name` inference gap. **Status:** partial (remaining PRD gaps: sample cap 200 vs 50/100, enum detection, rare-field flagging, `abstract_name` inference, field-level schema editor, onboarding browse-by-abstract_name).
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 6 remaining unchecked behaviour checkboxes to plain PRD-gap bullets (all already documented in Known Gaps): configurable sample count (200 vs 50/100), enum detection, rare-field flagging, `abstract_name` inference, field-level schema editor draft, and the partial SDLC onboarding path blocked on `abstract_name`. No code change. Status: partial (100/106 — all remaining unchecked items are documented gaps).
+
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 276)
+
+**CRITICAL fixes applied:**
+- Added `except Exception → 500` guard to both `infer_schema_endpoint` and `generate_schema_endpoint` first try/except blocks (previously only caught `ProgrammingError` and `SQLAlchemyError`, allowing Python-level errors like TypeError, KeyError, ValueError from `get_connector_instance`/`list_model_backends`/Pydantic validation to propagate as opaque 500 to CatchAllMiddleware)
+
+**MAJOR fixes applied:**
+- `generate_schema_endpoint` `SchemaGenerationError` handler now includes `{exc}` in 502 detail message (was static `"Schema generation failed."`, now `f"Schema generation failed: {exc}"` matching `infer_schema_endpoint`'s pattern)
+
+**Product map updates:**
+- Added 3 new Error Handling checkboxes (Exception→500 for infer, SQLAlchemyError→503 for infer, Exception→500 for generate, SQLAlchemyError→503 for generate)
+- Added QA History entry
+
+**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle)
+
+### 2026-07-05 — Cross-cutting QA (improve-architecture index 147)
+
+**CRITICAL fixes applied:**
+- Circular reference crash in `json.dumps`: added `try/except ValueError` around serialization in both `_build_infer_prompt()` and `_build_generate_prompt()`
+- Generate endpoint missing audit event: added `append_audit_event` call (`schema_generation_completed` event type)
+- Audit event best-effort: wrapped audit event dispatch in `try/except Exception` in both endpoints so successful LLM inference is never lost on audit failure
+- `next(iter(mh.backend_ids))` StopIteration guard: added `if not mh.backend_ids → 503` check
+- `ConnectorHub.initialise()` exception: wrapped in `try/except → 502`
+- `ModelBackendHub.initialise()` exception: wrapped in `try/except → 502`
+- `mh.get()` exception: wrapped in `try/except → 502`
+
+**MAJOR fixes applied:**
+- Generation endpoint no `max_example_records` cap: added `_MAX_EXAMPLE_RECORDS = 50` and `max_example_records` parameter to `SchemaGenerationService`
+- Raw exception text leaked in 502 response body: replaced `f"Failed to sample connector: {exc}"` with static string
+- `invoke_and_parse` positional arg bug: calls in both `inference.py` and `generation.py` used positional args for keyword-only params (`timeout`, `error_cls`, `context`) — fixed
+
+**Product map updates:**
+- Added 17 Resilience & Integration Robustness checkboxes
+- Added 17 Edge Cases checkboxes
+- Stale [ ]→[x]: configurable sample count (IS configurable with `max_sample_records`, default mismatch noted in Known Gaps)
+- Added QA History section
+
+**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle)
+
+### 2026-07-10 — Cross-cutting QA (improve-architecture index 299)
+
+**MINOR fixes applied:**
+- Product map line 30: corrected `Raises ValueError` → `Raises SchemaInferenceError` on non-dict samples input (code `inference.py:71` raises `SchemaInferenceError`, not `ValueError`)
+- `schemas.py`: moved lazy `append_audit_event` import from function body to module level
+- `schemas.py`: added `from None` to 6 exception handlers (`create_secrets_backend` ×2, `ConnectorHub.initialise`, `ConnectorHub.sample`, `ModelBackendHub.initialise`, `ModelBackendHub.get`) — prevents internal exception context leaking in 502/500 responses, matching established `from None` pattern elsewhere in the file
+
+**Test results:** All schema inference/generation/endpoint tests pass (no behaviour change).
+
+### 2026-07-12 — Round 3 improve-architecture
+
+**Findings:** No B904 violations. No `exc_info=1` patterns. Code is clean — `inference.py`, `generation.py`, and `schemas.py` all use `from None` for exception chaining and `exc_info=True` (or `logger.exception`) for logging. Error handling sections in product map comprehensive. Entry already had 3 prior QA passes (most recent 2026-07-10). No code changes needed.

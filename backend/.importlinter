@@ -1,0 +1,122 @@
+[importlinter]
+root_package = modulo
+include_external_packages = True
+
+[importlinter:contract:api-does-not-import-langgraph-directly]
+name = API layer uses pipeline_engine, not LangGraph directly
+type = forbidden
+source_modules =
+    modulo.api
+forbidden_modules =
+    langgraph
+ignore_imports =
+    modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
+    modulo.api.routes.runs -> modulo.core.dispatch
+    modulo.api.routes.runs -> modulo.core.trigger_engine
+    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.webhooks -> modulo.core.dispatch
+    modulo.api.routes.webhooks -> modulo.core.trigger_engine
+    modulo.api.routes.triggers -> modulo.core.cron_helpers
+    modulo.api.routes.triggers -> modulo.core.trigger_engine
+    modulo.api.mcp_server -> modulo.core.cron_helpers
+    modulo.api.mcp_server -> modulo.core.dispatch
+    modulo.api.routes.pipelines -> modulo.core.reports.quality_report
+
+[importlinter:contract:connectors-do-not-import-api]
+name = Connectors layer is independent of API
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.api
+    modulo.auth
+
+[importlinter:contract:core-does-not-import-modulo-cloud]
+name = Core is zero-coupled to modulo-cloud
+type = forbidden
+source_modules =
+    modulo.core
+    modulo.api
+    modulo.connectors
+forbidden_modules =
+    modulo_cloud
+
+[importlinter:contract:otel-bridge-is-standalone]
+name = OTel bridge does not import core business logic
+type = forbidden
+source_modules =
+    modulo.otel_bridge
+forbidden_modules =
+    modulo.core.pipeline_engine
+    modulo.core.hitl_manager
+    modulo.core.eval_engine
+
+[importlinter:contract:core-does-not-import-api]
+name = Core layer never sees FastAPI
+type = forbidden
+source_modules =
+    modulo.core
+forbidden_modules =
+    modulo.api
+ignore_imports =
+    modulo.core.feature_flags -> modulo.api.dependencies
+    modulo.core.logging_config -> modulo.api.dependencies
+    modulo.core.dispatch -> modulo.api.dependencies
+
+[importlinter:contract:db-does-not-import-core]
+name = DB layer has no business logic imports
+type = forbidden
+source_modules =
+    modulo.db
+forbidden_modules =
+    modulo.core
+    modulo.api
+ignore_imports =
+    modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
+    modulo.db.crud.run -> modulo.core.exceptions
+    modulo.db.settings_resolver -> modulo.core.exceptions
+    modulo.db.crud.pipeline_snapshot -> modulo.core.composite_engine.expander
+    modulo.db.crud.sso_provider -> modulo.core.audit_logger
+    modulo.db.crud.pipeline -> modulo.core.audit_logger
+    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
+    modulo.db.session -> modulo.core.audit_logger.append_only
+    # FAR-208 guardrails: the ingestion-edge interception lives in create_run
+    # (the single chokepoint for all run-creation dispatch paths), so the DB
+    # layer is the ONLY caller of the core guardrail pass. The mapping is a
+    # thin DTO conversion (to_engine_definition); all guardrail logic stays in
+    # core.
+    modulo.db.crud.run -> modulo.core.guardrails
+    modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-213 run-termination compensation: the guardrail-blocked terminalization
+    # seam lives in create_run (it writes the blocked_partial summary AFTER the
+    # terminal status write). Same cross-boundary category as the FAR-208
+    # guardrail exemption above — compensation orchestration stays in core;
+    # create_run only invokes it.
+    modulo.db.crud.run -> modulo.core.guardrails.compensation
+    # FAR-223 item 10 — snapshot creation serializes the pipeline's guardrail
+    # rows into ``guardrail_pins_json`` (thin DTO conversion via
+    # ``serialize_guardrail_pin``); same cross-boundary category as the run.py
+    # guardrail exemption above.
+    modulo.db.crud.pipeline_snapshot -> modulo.core.guardrails
+    # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
+    # variant / transition_run / request_cancellation) invokes the run-outcome
+    # classifier inline, so every terminalizer that funnels through db.crud.run
+    # persists a classification record. NOT every terminalizer funnels through
+    # the hook: the raw-SQL writers (cron_helpers dispatcher_reconcile / stale-
+    # run sweeps, saq_hooks._mark_run_failed, pipeline_execution) are covered by
+    # the wired periodic backfill sweep instead (cron_helpers' dispatcher_reconcile
+    # -> classify.reconcile_missing_classifications, every 60s). Same
+    # cross-boundary wiring category as the audit_logger / composite_engine
+    # exceptions above: db.crud.run exposes the terminal write, classify.py is
+    # the pure decision function.
+    modulo.db.crud.run -> modulo.core.pipeline_engine.classify
+
+[importlinter:contract:connectors-do-not-import-core]
+name = Connectors don't reach into core
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.core
+ignore_imports =
+    modulo.connectors.shell -> modulo.db.session

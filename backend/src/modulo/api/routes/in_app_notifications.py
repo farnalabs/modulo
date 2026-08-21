@@ -1,0 +1,528 @@
+"""In-app notification CRUD routes.
+
+Endpoints for the in-app notification system — dashboard panel, full notification
+page, dismiss flow, and user preferences.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any, cast
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.jwt import TenantPrincipal
+from modulo.core.events.event_bus import get_event_bus
+from modulo.core.notifier.event_mapper import notification_categories
+from modulo.db.crud.account import get_account_by_id, update_account_preferences
+from modulo.db.crud.notifications import (
+    count_notifications_for_user,
+    dismiss_notification,
+    get_dashboard_notifications,
+    get_notification,
+    get_notifications_for_user,
+    get_opted_out_categories,
+    get_unread_count,
+    review_later,
+    set_notification_preferences,
+)
+from modulo.db.models.notification import Notification
+from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_NOTIFICATION_SELF = "notification.self"
+_CODE_APP_NOTIFICATIONS_GET_DASHBOARD = "in_app_notifications.get_dashboard"
+_MSG_DATA_CONFLICT_OCCURRED = "A data conflict occurred."
+_MSG_DATABASE_ERROR_OCCURRED = "A database error occurred."
+_CODE_APP_NOTIFICATIONS_GET_UNREAD = "in_app_notifications.get_unread"
+_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS = "in_app_notifications.list_notifications"
+_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION = "in_app_notifications.get_notification_detail"
+_CODE_APP_NOTIFICATIONS_REVIEW_LATER = "in_app_notifications.review_later_endpoint"
+_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT = "in_app_notifications.dismiss_endpoint"
+
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/notifications/in-app", tags=["notifications"])
+
+
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    scope: str
+    level: str
+    category: str
+    title: str
+    body: str
+    action_url: str | None = None
+    dismiss_strategy: str = "user_only"
+    dismissible_at_scope: bool = False
+    created_at: str
+    expires_at: str | None = None
+    scope_label: str = ""
+
+
+class DashboardNotificationResponse(BaseModel):
+    notifications: list[NotificationResponse]
+    total_unread: int
+
+
+class NotificationPreferencesResponse(BaseModel):
+    dashboard_level: str = "warning"
+    notification_opt_outs: dict[str, bool] = Field(default_factory=dict)
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    dashboard_level: str | None = None
+    notification_opt_outs: dict[str, bool] | None = None
+
+
+class DismissRequest(BaseModel):
+    dismiss_scope: str = Field(default="self", pattern=r"^(self|scope)$")
+
+
+class PaginatedNotificationsResponse(BaseModel):
+    items: list[NotificationResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+SCOPE_LABELS: dict[str, str] = {
+    "user": "Personal",
+    "org": "Org-wide",
+    "admin": "Admin",
+}
+
+_DASHBOARD_LEVELS: frozenset[str] = frozenset({"debug", "info", "warning", "error"})
+_DASHBOARD_LEVEL_KEY = "notification_dashboard_level"
+
+
+async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
+    account = await get_account_by_id(session, account_id)
+    if account is None:
+        return "warning"
+    prefs = account.preferences if isinstance(account.preferences, dict) else {}
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "warning"))
+
+
+def _notification_to_response(n: Notification) -> NotificationResponse:
+    return NotificationResponse(
+        id=n.id,
+        scope=n.scope,
+        level=n.level,
+        category=n.category,
+        title=n.title,
+        body=n.body,
+        action_url=n.action_url,
+        dismiss_strategy=n.dismiss_strategy,
+        dismissible_at_scope=n.dismissible_at_scope,
+        created_at=n.created_at.isoformat() if n.created_at else "",
+        expires_at=n.expires_at.isoformat() if n.expires_at else None,
+        scope_label=SCOPE_LABELS.get(n.scope, n.scope),
+    )
+
+
+@router.get("/dashboard", response_model=DashboardNotificationResponse)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
+async def get_dashboard(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> DashboardNotificationResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            notifications = await get_dashboard_notifications(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                limit=5,
+            )
+            unread = await get_unread_count(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+            )
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return DashboardNotificationResponse(
+        notifications=[_notification_to_response(n) for n in notifications],
+        total_unread=unread,
+    )
+
+
+@router.get("/unread-count", response_model=dict)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
+async def get_unread(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            count = await get_unread_count(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+            )
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return {"count": count}
+
+
+@router.get("", response_model=PaginatedNotificationsResponse)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
+async def list_notifications(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    level: str | None = Query(None),
+    scope: str | None = Query(None),
+    category: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+) -> PaginatedNotificationsResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            offset = (page - 1) * page_size
+            notifications = await get_notifications_for_user(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                level=level,
+                scope=scope,
+                category=category,
+                status_filter=status_filter,
+                limit=page_size,
+                offset=offset,
+            )
+            total = await count_notifications_for_user(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                level=level,
+                scope=scope,
+                category=category,
+                status_filter=status_filter,
+            )
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return PaginatedNotificationsResponse(
+        items=[_notification_to_response(n) for n in notifications],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.get_preferences")
+async def get_preferences(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> NotificationPreferencesResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            opted_out = await get_opted_out_categories(
+                session=session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            dashboard_level = await _load_dashboard_level(session, principal.account_id)
+    except ProgrammingError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return NotificationPreferencesResponse(
+        dashboard_level=dashboard_level,
+        notification_opt_outs={category: category in opted_out for category in sorted(notification_categories())},
+    )
+
+
+@router.put("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.update_preferences")
+async def update_preferences(
+    req: NotificationPreferencesUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> NotificationPreferencesResponse:
+    dashboard_level = req.dashboard_level
+    if dashboard_level is not None and dashboard_level not in _DASHBOARD_LEVELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"dashboard_level must be one of {sorted(_DASHBOARD_LEVELS)}.",
+        )
+    if req.notification_opt_outs is not None:
+        unknown = set(req.notification_opt_outs) - set(notification_categories())
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unknown notification category keys: {sorted(unknown)}.",
+            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if req.notification_opt_outs is not None:
+                await set_notification_preferences(
+                    session=session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    opt_outs=req.notification_opt_outs,
+                )
+            if dashboard_level is not None:
+                await update_account_preferences(session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level})
+            opted_out = await get_opted_out_categories(
+                session=session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            if dashboard_level is None:
+                dashboard_level = await _load_dashboard_level(session, principal.account_id)
+    except ProgrammingError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return NotificationPreferencesResponse(
+        dashboard_level=dashboard_level,
+        notification_opt_outs={category: category in opted_out for category in sorted(notification_categories())},
+    )
+
+
+@router.get("/{notification_id}", response_model=NotificationResponse)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
+async def get_notification_detail(
+    notification_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> NotificationResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            n = await get_notification(
+                session=session,
+                org_id=principal.organisation_id,
+                notification_id=notification_id,
+                user_id=principal.account_id,
+            )
+            if n is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return _notification_to_response(n)
+
+
+@router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
+async def review_later_endpoint(
+    notification_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                await review_later(
+                    session=session,
+                    notification_id=notification_id,
+                    user_id=principal.account_id,
+                    org_id=principal.organisation_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+
+    try:
+        event_bus = get_event_bus()
+        await event_bus.publish(
+            org_id=str(principal.organisation_id),
+            resource_type="notification",
+            resource_id=str(notification_id),
+            action="review_later",
+            version=1,
+        )
+    except Exception:
+        _log.warning("review_later_endpoint.publish_failed", exc_info=True)
+
+    return {"status": "review_later"}
+
+
+@router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
+async def dismiss_endpoint(
+    notification_id: uuid.UUID,
+    req: DismissRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                await dismiss_notification(
+                    session=session,
+                    notification_id=notification_id,
+                    user_id=principal.account_id,
+                    org_id=principal.organisation_id,
+                    dismiss_scope=req.dismiss_scope,
+                    is_admin=principal.org_role == "admin",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+
+    try:
+        event_bus = get_event_bus()
+        await event_bus.publish(
+            org_id=str(principal.organisation_id),
+            resource_type="notification",
+            resource_id=str(notification_id),
+            action="dismissed",
+            version=1,
+        )
+    except Exception:
+        _log.warning("dismiss_endpoint.publish_failed", exc_info=True)
+
+    scope_label = "for_everyone" if req.dismiss_scope == "scope" else "for_self"
+    return {"status": f"dismissed_{scope_label}"}

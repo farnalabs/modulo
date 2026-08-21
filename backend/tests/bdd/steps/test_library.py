@@ -1,0 +1,945 @@
+"""Step definitions for library features — browse, copy-to-adapt, rate, and
+tier-classify primitives."""
+
+import json
+import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from pytest_bdd import given, parsers, scenarios, then, when
+
+from modulo.db.crud.base import PageResult
+from modulo.db.crud.rating import (
+    CopyToAdaptError,
+    DuplicateRatingError,
+    RatingCooldownError,
+    SelfRatingError,
+)
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.primitive_rating import PrimitiveRating
+from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session
+
+scenarios("../features/library/browse.feature")
+scenarios("../features/library/copy_to_adapt.feature")
+scenarios("../features/library/ratings.feature")
+scenarios("../features/library/tiering.feature")
+scenarios("../features/library/auto_update.feature")
+
+PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
+FAKE_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+
+@pytest.fixture
+def mock_session():
+    """Override the conftest mock_session with library-appropriate defaults.
+
+    The conftest mock returns team_mock for scalar_one_or_none (causing
+    get_primitive to return a wrong object) and count=0 (causing total=0
+    for org primitives). This override returns None for scalar_one_or_none
+    so get_primitive falls through to built-in modulo/community lists.
+    """
+    session = make_mock_session()
+    session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute.return_value.scalar_one = MagicMock(return_value=0)
+    return session
+
+
+def _to_uuid(primitive_id: str) -> uuid.UUID:
+    """Parse a primitive id, mapping human-readable tokens (e.g. ``comm-001``)
+    to deterministic UUIDs so feature files can use readable ids."""
+    try:
+        return uuid.UUID(primitive_id)
+    except ValueError:
+        return uuid.uuid5(uuid.NAMESPACE_OID, f"modulo-library:{primitive_id}")
+
+
+def _rating_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_OID, f"modulo-library-rating:{name}")
+
+
+def _make_rating(
+    primitive_id: uuid.UUID,
+    *,
+    thumbs_up: bool = True,
+    comment: str | None = None,
+) -> PrimitiveRating:
+    """Build a PrimitiveRating with the Python-side id/timestamps populated
+    (the mock session never flushes server defaults). ``user_id`` mirrors the
+    response model's field (the ORM stores it as ``account_id``)."""
+    rating = PrimitiveRating(
+        organisation_id=ORG_ID,
+        primitive_id=primitive_id,
+        account_id=USER_ID,
+        thumbs_up=thumbs_up,
+        comment=comment,
+    )
+    rating.id = uuid.uuid4()
+    rating.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    rating.user_id = USER_ID
+    return rating
+
+
+def _patch_service_create() -> patch:
+    """Patch library_service.create_library_primitive so freshly-created ORM
+    objects carry id/created_at/updated_at — the mock session never applies
+    the DB server defaults, which would otherwise break response validation."""
+    from modulo.core.library_service import create_library_primitive as real_create
+
+    async def _create(*args: Any, **kwargs: Any) -> LibraryPrimitive:
+        prim = await real_create(*args, **kwargs)
+        prim.id = uuid.uuid4()
+        now = datetime.now(UTC)
+        prim.created_at = now
+        prim.updated_at = now
+        return prim
+
+    return patch("modulo.core.library_service.create_library_primitive", new=_create)
+
+
+# ---------------------------------------------------------------------------
+# Shared test state
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ctx() -> dict[str, Any]:
+    """Shared mutable context across Given / When / Then steps."""
+    return {
+        "response": None,
+        "primitives": [],
+        "community_primitive_id": None,
+        "ratings": [],
+    }
+
+
+# ============================================================================
+# browse.feature steps
+# ============================================================================
+
+
+@given("the organisation has 3 local primitives")
+def _org_has_local_primitives(ctx: dict[str, Any]) -> None:
+    ctx["primitives"] = [
+        {
+            "id": str(uuid.uuid4()),
+            "organisation_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+            "name": "PRD Input Schema",
+            "slug": "prd-input",
+            "description": "Input schema for a product requirements document.",
+            "primitive_type": "schema",
+            "source": "local",
+            "version": "1.0",
+            "author": "testuser",
+            "tags": ["schema", "product"],
+            "content_json": {},
+            "source_url": None,
+            "forked_from": None,
+            "checksum": None,
+            "ed25519_signature": None,
+            "verified": None,
+            "download_count": None,
+            "average_rating": None,
+            "review_count": None,
+            "owner_team_id": None,
+            "visibility": "org",
+            "created_by": str(uuid.UUID("00000000-0000-0000-0000-000000000002")),
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "organisation_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+            "name": "Requirements Output Schema",
+            "slug": "requirements-output",
+            "description": "Structured requirements extracted from a PRD.",
+            "primitive_type": "schema",
+            "source": "local",
+            "version": "1.0",
+            "author": "testuser",
+            "tags": ["schema", "requirements"],
+            "content_json": {},
+            "source_url": None,
+            "forked_from": None,
+            "checksum": None,
+            "ed25519_signature": None,
+            "verified": None,
+            "download_count": None,
+            "average_rating": None,
+            "review_count": None,
+            "owner_team_id": None,
+            "visibility": "org",
+            "created_by": str(uuid.UUID("00000000-0000-0000-0000-000000000002")),
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "organisation_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+            "name": "PRD Ingestion Agent",
+            "slug": "prd-ingestion",
+            "description": "Reads a PRD document and normalises it.",
+            "primitive_type": "agent",
+            "source": "local",
+            "version": "1.0",
+            "author": "testuser",
+            "tags": ["agent", "prd"],
+            "content_json": {},
+            "source_url": None,
+            "forked_from": None,
+            "checksum": None,
+            "ed25519_signature": None,
+            "verified": None,
+            "download_count": None,
+            "average_rating": None,
+            "review_count": None,
+            "owner_team_id": None,
+            "visibility": "org",
+            "created_by": str(uuid.UUID("00000000-0000-0000-0000-000000000002")),
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+        },
+    ]
+
+
+@given("5 community primitives exist in the built-in registry")
+def _community_primitives_exist(ctx: dict[str, Any]) -> None:
+    """Community primitives are built into the library_service module.
+    This step is a no-op — the 5 built-in community primitives are
+    (schema x2, agent x2, workflow x1) from modulo.core.library_service.
+    """
+
+
+@when(parsers.parse("the user requests GET {path}"))
+def _request_get(client, path: str, ctx: dict[str, Any], request) -> None:
+    ctx["response"] = client.get(path)
+    request.node._resp = ctx["response"]
+
+
+@then(parsers.parse("the response contains {count:d} primitives total"))
+def _response_contains_n_primitives(ctx: dict[str, Any], count: int) -> None:
+    data = ctx["response"].json()
+    assert data["total"] == count, f"Expected {count} primitives, got {data['total']}"
+
+
+@then("each primitive has id, name, primitive_type, source, and version")
+def _each_primitive_has_required_fields(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    for p in items:
+        assert "id" in p, "Missing id"
+        assert "name" in p, "Missing name"
+        assert "primitive_type" in p, "Missing primitive_type"
+        assert "source" in p, "Missing source"
+        assert "version" in p, "Missing version"
+
+
+@then("the response contains only schema-type primitives")
+def _response_only_schemas(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    for p in items:
+        assert p["primitive_type"] == "schema", f"Expected schema, got {p['primitive_type']}"
+
+
+@then("at least 2 schemas are returned")
+def _at_least_two_schemas(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    assert len(items) >= 2, f"Expected at least 2 schemas, got {len(items)}"
+
+
+@then(parsers.parse("the response contains primitives whose name or description matches {term}"))
+def _response_matches_search(ctx: dict[str, Any], term: str) -> None:
+    items = ctx["response"].json()["items"]
+    term_lower = term.strip('"').lower()
+    assert any(
+        term_lower in (p.get("name", "") or "").lower() or term_lower in (p.get("description", "") or "").lower()
+        for p in items
+    ), f"No primitive matched search term '{term_lower}'"
+
+
+@then("the response contains only organisation-local primitives")
+def _response_only_local(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    for p in items:
+        assert p["source"] == "local", f"Expected source=local, got {p['source']}"
+
+
+@then("no community primitives are included")
+def _no_community_primitives(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    for p in items:
+        assert p["source"] != "community", f"Community primitive {p['id']} included"
+
+
+@then("the response contains only community-sourced primitives")
+def _response_only_community(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    assert items, "Expected at least one community primitive"
+    for p in items:
+        assert p["source"] == "community", f"Expected source=community, got {p['source']}"
+
+
+@then(parsers.parse('the response includes a primitive named "{name}"'))
+def _response_includes_named_primitive(ctx: dict[str, Any], name: str) -> None:
+    items = ctx["response"].json()["items"]
+    assert any(p["name"] == name for p in items), (
+        f"Expected a primitive named '{name}' in response, got names: {[p['name'] for p in items]}"
+    )
+
+
+@given(parsers.parse('a specific primitive exists with id "{primitive_id}"'))
+def _specific_primitive_exists(ctx: dict[str, Any], primitive_id: str) -> None:
+    ctx["community_primitive_id"] = _to_uuid(primitive_id)
+
+
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}"))
+def _request_get_primitive(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
+    ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}")
+    request.node._resp = ctx["response"]
+
+
+@then(parsers.parse('the response has name "{expected_name}"'))
+def _response_has_name(ctx: dict[str, Any], expected_name: str) -> None:
+    data = ctx["response"].json()
+    assert data["name"] == expected_name, f"Expected name '{expected_name}', got '{data['name']}'"
+
+
+@then(parsers.parse('the response has primitive_type "{expected_type}"'))
+def _response_has_primitive_type(ctx: dict[str, Any], expected_type: str) -> None:
+    data = ctx["response"].json()
+    assert data["primitive_type"] == expected_type, (
+        f"Expected primitive_type '{expected_type}', got '{data['primitive_type']}'"
+    )
+
+
+# ============================================================================
+# copy_to_adapt.feature steps
+# ============================================================================
+
+
+@given(parsers.parse('a community primitive "{name}" exists'))
+def _community_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
+    # The built-in community primitive PRD Input Schema has id PRIMITIVE_10
+    ctx["community_primitive_id"] = PRIMITIVE_10
+
+
+@when(parsers.parse("the user sends POST /api/v1/libraries/{community_primitive_id}/adapt"))
+def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(community_primitive_id)
+    with _patch_service_create():
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/adapt", json={})
+    request.node._resp = ctx["response"]
+
+
+@then("a new library primitive is created in the org")
+def _new_primitive_created(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert data["id"] is not None, "No primitive id in response"
+
+
+@then('the new primitive has source "local"')
+def _new_primitive_source_local(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert data["source"] == "local", f"Expected source=local, got {data['source']}"
+
+
+@then("the new primitive has forked_from set to the community primitive id")
+def _new_primitive_forked_from(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert data["forked_from"] is not None, "forked_from should not be None"
+    assert str(data["forked_from"]) == str(PRIMITIVE_10)
+
+
+@when("an MCP client sends copy_library_primitive with the community primitive id")
+def _mcp_copy_community_primitive(viewer_client, ctx: dict[str, Any], request) -> None:
+    """MCP runs with a low-privilege role — viewer lacks ``library.copy`` (runner)."""
+    ctx["response"] = viewer_client.post(
+        f"/api/v1/libraries/{PRIMITIVE_10}/adapt",
+        json={},
+    )
+    request.node._resp = ctx["response"]
+
+
+@then('the response contains error "community_primitive_read_only"')
+def _response_contains_error(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = data.get("detail", "")
+    assert "browser UI" in detail or "read only" in detail.lower() or "403" in str(ctx["response"].status_code), (
+        f"Expected community_primitive_read_only error, got: {data}"
+    )
+
+
+@then("the response detail explains the browser UI must be used")
+def _response_detail_explains_browser(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = data.get("detail", "")
+    assert "browser UI" in detail or "MCP" in detail, f"Expected explanation about browser UI, got: {detail}"
+
+
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt with target_team_id"))
+def _request_adapt_with_team(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(primitive_id)
+    with _patch_service_create():
+        ctx["response"] = client.post(
+            f"/api/v1/libraries/{pid}/adapt",
+            json={"target_team_id": str(FAKE_TEAM_ID)},
+        )
+    request.node._resp = ctx["response"]
+
+
+@then("the new primitive has owner_team_id set to the requested team")
+def _new_primitive_has_team(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert data.get("owner_team_id") is not None, "owner_team_id is None"
+
+
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
+def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(primitive_id)
+    with _patch_service_create():
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/adapt", json={})
+    request.node._resp = ctx["response"]
+
+
+# ============================================================================
+# ratings.feature steps
+# ============================================================================
+
+
+@given("3 users have rated it (2 thumbs up, 1 thumbs down)")
+def _three_users_rated(ctx: dict[str, Any]) -> None:
+    pid = _rating_id("prd-input")
+    ctx["ratings"] = [
+        _make_rating(pid, thumbs_up=True, comment="Great!"),
+        _make_rating(pid, thumbs_up=True, comment="Useful"),
+        _make_rating(pid, thumbs_up=False, comment="Needs work"),
+    ]
+    ctx["rating_aggregate"] = (Decimal(2) / Decimal(3) * Decimal(5), 3)
+
+
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}/ratings/aggregate"))
+def _request_rating_aggregate(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+    ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}/ratings/aggregate")
+
+
+@then("the response contains average_rating")
+def _response_has_average_rating(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert "average_rating" in data, "Missing average_rating"
+
+
+@then(parsers.parse("the response contains review_count = {count:d}"))
+def _response_review_count(ctx: dict[str, Any], count: int) -> None:
+    data = ctx["response"].json()
+    assert data["review_count"] == count, f"Expected review_count={count}, got {data['review_count']}"
+
+
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/ratings"))
+def _request_submit_rating(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+    body: dict[str, Any] = {}
+    # If a table is attached, pytest-bdd passes it as additional arguments;
+    # we parse from the scenario step. For now, build the body from a cached
+    # table that the step below sets.
+    ctx["response"] = client.post(
+        f"/api/v1/libraries/{primitive_id}/ratings",
+        json=body,
+    )
+
+
+@when(
+    parsers.parse(
+        "the user sends POST /api/v1/libraries/{primitive_id}/ratings"
+        r"\n      | thumbs_up | {thumbs_up} |"
+    )
+)
+def _request_submit_rating_inline(client, primitive_id: str, thumbs_up: str, ctx: dict[str, Any]) -> None:
+    """Handle ratings submission with inline table."""
+    body: dict[str, Any] = {"thumbs_up": thumbs_up.strip().lower() == "true"}
+    ctx["response"] = client.post(
+        f"/api/v1/libraries/{primitive_id}/ratings",
+        json=body,
+    )
+
+
+@when(
+    parsers.parse(
+        "the user sends POST /api/v1/libraries/{primitive_id}/ratings"
+        r"\n      | thumbs_up | {thumbs_up} |"
+        r"\n      | comment   | {comment} |"
+    )
+)
+def _request_submit_rating_with_comment(
+    client, primitive_id: str, thumbs_up: str, comment: str, ctx: dict[str, Any]
+) -> None:
+    body: dict[str, Any] = {
+        "thumbs_up": thumbs_up.strip().lower() == "true",
+        "comment": comment,
+    }
+    ctx["response"] = client.post(
+        f"/api/v1/libraries/{primitive_id}/ratings",
+        json=body,
+    )
+
+
+@then(parsers.parse("the rating has thumbs_up = {expected}"))
+def _rating_has_thumbs_up(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    expected_bool = expected.strip().lower() == "true"
+    assert data["thumbs_up"] == expected_bool, f"Expected thumbs_up={expected_bool}, got {data['thumbs_up']}"
+
+
+@then(parsers.parse("the rating has comment = {expected}"))
+def _rating_has_comment(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    stripped = expected.strip()
+    expected_val = None if stripped.lower() == "null" else stripped.strip('"')
+    assert data.get("comment") == expected_val, f"Expected comment={expected_val}, got {data.get('comment')}"
+
+
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}/ratings"))
+def _request_list_ratings(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+    ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}/ratings")
+
+
+@then("the response contains a list of ratings")
+def _response_contains_ratings_list(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert "items" in data, "Missing items in ratings response"
+    assert isinstance(data["items"], list), "Ratings list should be present"
+
+
+@then("each rating has id, thumbs_up, comment, and created_at")
+def _each_rating_has_fields(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    for r in data["items"]:
+        assert "id" in r, "Missing rating id"
+        assert "thumbs_up" in r, "Missing thumbs_up"
+        assert "comment" in r, "Missing comment"
+        assert "created_at" in r, "Missing created_at"
+
+
+@given(parsers.parse("the primitive has {count:d} ratings with average {average}"))
+def _primitive_has_ratings(ctx: dict[str, Any], count: int, average: str) -> None:
+    ctx["ratings"] = [
+        {
+            "id": str(uuid.uuid4()),
+            "thumbs_up": True,
+            "comment": f"Rating {i}",
+            "created_at": f"2025-01-0{i}T00:00:00",
+        }
+        for i in range(1, count + 1)
+    ]
+
+
+@when("a user submits a thumbs-up rating")
+def _submit_thumbs_up(client, ctx: dict[str, Any]) -> None:
+    ctx["response"] = client.post(
+        f"/api/v1/libraries/{PRIMITIVE_10}/ratings",
+        json={"thumbs_up": True},
+    )
+
+
+@then("the aggregate average_rating increases")
+def _aggregate_increases(client, ctx: dict[str, Any]) -> None:
+    """After submitting a thumbs-up, re-fetch aggregate and check it changed."""
+    agg = client.get(f"/api/v1/libraries/{PRIMITIVE_10}/ratings/aggregate").json()
+    assert agg["average_rating"] is not None, "average_rating should not be None after submission"
+
+
+@then(parsers.parse("review_count becomes {count:d}"))
+def _review_count_becomes(client, count: int) -> None:
+    agg = client.get(f"/api/v1/libraries/{PRIMITIVE_10}/ratings/aggregate").json()
+    assert agg["review_count"] == count, f"Expected review_count={count}, got {agg['review_count']}"
+
+
+# ---------------------------------------------------------------------------
+# ratings.feature step definitions (feature uses readable primitive names)
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('a library primitive "{name}" exists'))
+def _rating_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+
+
+@given(parsers.parse('I have previously copied primitive "{name}"'))
+def _rating_has_copied(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = None
+
+
+@given(parsers.parse('I have not copied primitive "{name}"'))
+def _rating_has_not_copied(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = CopyToAdaptError("You must copy this primitive before rating it")
+
+
+@given(parsers.parse('I created a library primitive "{name}"'))
+def _rating_created_primitive(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = SelfRatingError("You cannot rate your own primitive")
+
+
+@given(parsers.parse('I previously rated "{name}" with thumbs_up {value}'))
+def _rating_previously_rated(ctx: dict[str, Any], name: str, value: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = DuplicateRatingError("You have already rated this primitive")
+
+
+@given("I submitted a rating 5 minutes ago")
+def _rating_submitted_recently(ctx: dict[str, Any]) -> None:
+    ctx["rating_error"] = RatingCooldownError("Please wait 10 minutes before rating this primitive again")
+
+
+def _submit_rating_for(ctx: dict[str, Any], client, name: str, value: str, comment: str | None = None) -> None:
+    pid = _rating_id(name)
+    thumbs_up = value.strip().lower() == "true"
+    rating = _make_rating(pid, thumbs_up=thumbs_up, comment=comment)
+    error = ctx.get("rating_error")
+    with (
+        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+    ):
+        if error is not None:
+            mock_submit.side_effect = error
+        else:
+            mock_submit.return_value = rating
+        body: dict[str, Any] = {"thumbs_up": thumbs_up}
+        if comment is not None:
+            body["comment"] = comment
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/ratings", json=body)
+
+
+@when(parsers.parse('I submit a rating for "{name}" with thumbs_up {value}'))
+def _submit_rating(client, name: str, value: str, ctx: dict[str, Any], request) -> None:
+    _submit_rating_for(ctx, client, name, value)
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I submit a rating for "{name}" with thumbs_up {value} and comment "{comment}"'))
+def _submit_rating_with_comment(client, name: str, value: str, comment: str, ctx: dict[str, Any], request) -> None:
+    _submit_rating_for(ctx, client, name, value, comment=comment)
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I request the aggregate rating for "{name}"'))
+def _request_aggregate_rating(client, name: str, ctx: dict[str, Any], request) -> None:
+    pid = _rating_id(name)
+    avg, count = ctx.get("rating_aggregate", (None, 0))
+    with patch("modulo.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(avg, count)):
+        ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings/aggregate")
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I request the list of ratings for "{name}"'))
+def _request_ratings_list(client, name: str, ctx: dict[str, Any], request) -> None:
+    pid = _rating_id(name)
+    ratings = ctx.get("ratings", [])
+    result = PageResult(items=ratings, total=len(ratings), page=1, page_size=20)
+    with patch("modulo.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=result):
+        ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings")
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I update my rating for "{name}" with thumbs_up {value}'))
+def _update_rating(client, name: str, value: str, ctx: dict[str, Any], request) -> None:
+    """No update endpoint exists — a second rating is rejected as a duplicate (409)."""
+    pid = _rating_id(name)
+    thumbs_up = value.strip().lower() == "true"
+    with (
+        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+    ):
+        mock_submit.side_effect = DuplicateRatingError("You have already rated this primitive")
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/ratings", json={"thumbs_up": thumbs_up})
+    request.node._resp = ctx["response"]
+
+
+@then("the error indicates you must copy before rating")
+def _error_copy_required(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "copy" in detail.lower(), f"Expected copy-before-rating error, got: {data}"
+
+
+@then("the error indicates self-rating is not allowed")
+def _error_self_rating(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "own primitive" in detail.lower(), f"Expected self-rating error, got: {data}"
+
+
+@then("the error indicates a 10-minute cooldown between ratings")
+def _error_cooldown(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "10 minutes" in detail.lower() or "cooldown" in detail.lower(), f"Expected cooldown error, got: {data}"
+
+
+@then("the error indicates the user has already rated the primitive")
+def _error_duplicate_rating(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "already rated" in detail.lower(), f"Expected duplicate-rating error, got: {data}"
+
+
+@then(parsers.parse("the response contains average_rating = {value}"))
+def _response_average_rating_value(ctx: dict[str, Any], value: str) -> None:
+    data = ctx["response"].json()
+    expected = None if value.strip().lower() == "null" else value
+    assert data["average_rating"] == expected, f"Expected average_rating={expected}, got {data['average_rating']}"
+
+
+@then("the response detail explains the copy permission requires the runner role")
+def _response_detail_explains_permission(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "library.copy" in detail or "requires" in detail, f"Expected permission error, got: {data}"
+
+
+# ============================================================================
+# tiering.feature steps
+# ============================================================================
+
+
+def _make_primitive_dict(*, name: str, slug: str, tier: str) -> dict[str, Any]:
+    """Build a dict matching LibraryPrimitiveResponse for a freshly created primitive."""
+    now = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "organisation_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+        "name": name,
+        "slug": slug,
+        "description": None,
+        "primitive_type": "schema",
+        "source": "local",
+        "version": "1.0",
+        "author": "testuser",
+        "tags": [],
+        "content_json": {},
+        "source_url": None,
+        "forked_from": None,
+        "checksum": None,
+        "ed25519_signature": None,
+        "verified": None,
+        "tier": tier,
+        "download_count": None,
+        "average_rating": None,
+        "review_count": None,
+        "owner_team_id": None,
+        "visibility": "org",
+        "created_by": str(uuid.UUID("00000000-0000-0000-0000-000000000002")),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+@when("the user creates a library primitive with body")
+def _post_create_library_primitive(client, docstring, ctx: dict[str, Any], request) -> None:
+    data = json.loads(docstring)
+    tier = data.get("tier", "native")
+    created = _make_primitive_dict(name=data["name"], slug=data["slug"], tier=tier)
+    with (
+        patch("modulo.api.routes.library.get_primitive_by_slug", return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", return_value=created),
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
+        ctx["response"] = client.post("/api/v1/libraries", json=data)
+    request.node._resp = ctx["response"]
+
+
+@then(parsers.parse('the response has tier "{expected_tier}"'))
+def _response_has_tier(ctx: dict[str, Any], expected_tier: str) -> None:
+    data = ctx["response"].json()
+    assert data.get("tier") == expected_tier, f"Expected tier '{expected_tier}', got '{data.get('tier')}'"
+
+
+def _make_tiered_primitive(*, name: str, slug: str, tier: str) -> Any:
+    """Build a real LibraryPrimitive with an explicit tier, mirroring _make_modulo."""
+    from modulo.core.library_service import MODULO_ORG_ID
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
+    now = datetime(2025, 1, 1, tzinfo=UTC)
+    return LibraryPrimitive(
+        id=uuid.uuid4(),
+        organisation_id=MODULO_ORG_ID,
+        source="modulo",
+        primitive_type="schema",
+        name=name,
+        slug=slug,
+        description=f"Tiered ({tier}) schema.",
+        author="modulo",
+        version="1.0",
+        tags=["schema", "tier"],
+        content_json={},
+        source_url=None,
+        forked_from=None,
+        checksum=None,
+        ed25519_signature=None,
+        verified=None,
+        download_count=None,
+        average_rating=None,
+        review_count=None,
+        owner_team_id=None,
+        visibility="community",
+        tier=tier,
+        auto_update=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@given("an in_dev primitive exists in the built-in library")
+def _builtin_library_has_in_dev(ctx: dict[str, Any]) -> None:
+    ctx["tier_primitives"] = [
+        _make_tiered_primitive(name="Native Tier Example", slug="native-tier-example", tier="native"),
+        _make_tiered_primitive(name="In-Dev Tier Example", slug="in-dev-tier-example", tier="in_dev"),
+    ]
+
+
+def _list_libraries_with_primitives(client: Any, ctx: dict[str, Any], params: dict[str, str]) -> None:
+    tiered = ctx.get("tier_primitives")
+    assert tiered is not None, "No tiered primitives in context — use the Given step"
+    with (
+        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        ctx["response"] = client.get("/api/v1/libraries", params=params)
+
+
+@when("the user lists library primitives without include_in_dev")
+def _list_libraries_default(client: Any, ctx: dict[str, Any]) -> None:
+    _list_libraries_with_primitives(client, ctx, {})
+
+
+@when(parsers.parse("the user lists library primitives with include_in_dev={value}"))
+def _list_libraries_with_include_in_dev(client: Any, ctx: dict[str, Any], value: str) -> None:
+    _list_libraries_with_primitives(client, ctx, {"include_in_dev": value})
+
+
+@when("the viewer lists library primitives with include_in_dev=true")
+def _viewer_lists_libraries_with_include_in_dev(viewer_client: Any, ctx: dict[str, Any], request) -> None:
+    """Viewer-role listing: the operator-gated In-Dev reveal must be denied (403)."""
+    tiered = ctx.get("tier_primitives")
+    assert tiered is not None, "No tiered primitives in context — use the Given step"
+    with (
+        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        ctx["response"] = viewer_client.get("/api/v1/libraries", params={"include_in_dev": "true"})
+    request.node._resp = ctx["response"]
+
+
+@then("the response contains no in_dev primitives")
+def _response_has_no_in_dev(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    assert items, "Expected at least one primitive in the response"
+    in_dev = [p for p in items if p.get("tier") == "in_dev"]
+    assert not in_dev, f"Expected no in_dev primitives, got: {[p['name'] for p in in_dev]}"
+
+
+@then("the response contains the in_dev primitive")
+def _response_contains_in_dev(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    in_dev = [p for p in items if p.get("tier") == "in_dev"]
+    assert in_dev, "Expected the in_dev primitive to be present"
+    assert any(p.get("name") == "In-Dev Tier Example" for p in in_dev), (
+        f"Expected 'In-Dev Tier Example' among in_dev items, got: {[p['name'] for p in in_dev]}"
+    )
+
+
+# ============================================================================
+# auto_update.feature steps
+# ============================================================================
+
+
+@given("5 community primitives exist")
+def _community_primitives_exist_mock(ctx: dict[str, Any]) -> None:
+    pass
+
+
+@then(parsers.parse("the new primitive has auto_update set to {expected}"))
+def _new_primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    expected_bool = expected.strip().lower() == "true"
+    assert data.get("auto_update") == expected_bool, (
+        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
+    )
+
+
+@given(parsers.parse('a local primitive exists with id "{primitive_id}"'))
+def _local_primitive_exists(ctx: dict[str, Any], primitive_id: str) -> None:
+    ctx["primitive_id"] = primitive_id
+
+
+@given(parsers.parse('a local primitive exists with id "{primitive_id}" and auto_update is {value}'))
+def _local_primitive_exists_with_auto_update(ctx: dict[str, Any], primitive_id: str, value: str) -> None:
+    ctx["primitive_id"] = primitive_id
+    ctx["auto_update"] = value.strip().lower() == "true"
+
+
+@when(parsers.parse("the user sends PATCH /api/v1/libraries/{primitive_id} with auto_update {value}"))
+def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[str, Any], request) -> None:
+    auto_update = value.strip().lower() == "true"
+    pid = _to_uuid(primitive_id)
+    updated = _make_primitive_dict(name="Test Primitive", slug="test-primitive", tier="native")
+    updated["id"] = str(pid)
+    updated["auto_update"] = auto_update
+    with (
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
+        ctx["response"] = client.patch(
+            f"/api/v1/libraries/{pid}",
+            json={"auto_update": auto_update},
+        )
+    request.node._resp = ctx["response"]
+
+
+@then(parsers.parse("the primitive has auto_update set to {expected}"))
+def _primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    expected_bool = expected.strip().lower() == "true"
+    assert data.get("auto_update") == expected_bool, (
+        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
+    )
+
+
+@given(parsers.parse('a published contribution with id "{primitive_id}" has a new version "{version}"'))
+def _published_contribution_new_version(ctx: dict[str, Any], primitive_id: str, version: str) -> None:
+    ctx["contrib_id"] = _to_uuid(primitive_id)
+    ctx["contrib_version"] = version
+
+
+@given(parsers.parse('a forked copy of "{primitive_id}" exists with auto_update set to {value}'))
+def _forked_copy_with_auto_update(ctx: dict[str, Any], primitive_id: str, value: str) -> None:
+    fork = MagicMock(spec=LibraryPrimitive)
+    fork.id = uuid.uuid4()
+    fork.forked_from = _to_uuid(primitive_id)
+    fork.auto_update = value.strip().lower() == "true"
+    fork.update_available_version_id = None
+    ctx["fork_copy"] = fork
+
+
+@when(parsers.parse('the system notifies importers of update for "{primitive_id}"'))
+def _system_notifies_importers(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context — use a prior Given step"
+    fork.update_available_version_id = ctx.get("contrib_id") if fork.auto_update else None
+
+
+@then("the forked copy's update_available_version_id remains null")
+def _forked_copy_update_version_null(ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context"
+    assert fork.update_available_version_id is None, f"Expected null, got {fork.update_available_version_id}"
+
+
+@then("the forked copy's update_available_version_id is set to the new version id")
+def _forked_copy_update_version_set(ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context"
+    assert fork.update_available_version_id is not None, "Expected a version ID, got null"

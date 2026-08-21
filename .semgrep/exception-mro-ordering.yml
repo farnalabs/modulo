@@ -1,0 +1,22 @@
+rules:
+  - id: exception-mro-ordering
+    patterns:
+      - pattern-inside: |
+          try:
+              ...
+          except $BASE:
+              ...
+          except $SPECIFIC:
+              ...
+      - metavariable-regex:
+          metavariable: $BASE
+          regex: (Exception|BaseException|SQLAlchemyError|DBAPIError|DatabaseError)
+      - metavariable-regex:
+          metavariable: $SPECIFIC
+          regex: (ProgrammingError|IntegrityError|DataError|OperationalError|InterfaceError|InternalError|NotSupportedError)
+      - pattern-regex: "(?m)^([ \\t]*)except (Exception|BaseException|SQLAlchemyError|DBAPIError|DatabaseError):[^\\n]*\\n(?:(?!^\\s*try\\s*:)[\\s\\S])*?^\\1except (ProgrammingError|IntegrityError|DataError|OperationalError|InterfaceError|InternalError|NotSupportedError):"
+    message: "Exception-MRO ordering: `except $BASE` before `except $SPECIFIC` makes the specific handler unreachable dead code, because $SPECIFIC is a subclass of $BASE — Python picks the first matching clause. Order specific exceptions BEFORE their bases (e.g. `except ProgrammingError` then `except SQLAlchemyError`), matching the route convention: ProgrammingError->501, SQLAlchemyError->503, IntegrityError->409, Exception->500."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

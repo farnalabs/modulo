@@ -1,0 +1,247 @@
+---
+id: feat-model-backends-management
+prd: 8.1
+delivery-tasks: []
+bdd:
+  - backend/tests/bdd/features/model_backends/backend_crud.feature
+  - backend/tests/bdd/features/model_backends/backend_selection.feature
+  - backend/tests/bdd/features/model_backends/backend_health_check.feature
+  - backend/tests/bdd/features/model_backends/backend_error_handling.feature
+  - backend/tests/bdd/features/model_backends/rate_limiting.feature
+unit-tests:
+  - backend/tests/unit/model_backends/test_ai21.py
+  - backend/tests/unit/model_backends/test_anthropic.py
+  - backend/tests/unit/model_backends/test_azure_openai.py
+  - backend/tests/unit/model_backends/test_bedrock.py
+  - backend/tests/unit/model_backends/test_cohere.py
+  - backend/tests/unit/model_backends/test_deepseek.py
+  - backend/tests/unit/model_backends/test_fireworks.py
+  - backend/tests/unit/model_backends/test_gemini.py
+  - backend/tests/unit/model_backends/test_grok.py
+  - backend/tests/unit/model_backends/test_groq.py
+  - backend/tests/unit/model_backends/test_local_openai_backends.py
+  - backend/tests/unit/model_backends/test_mistral.py
+  - backend/tests/unit/model_backends/test_openai.py
+  - backend/tests/unit/model_backends/test_openrouter.py
+  - backend/tests/unit/model_backends/test_perplexity.py
+  - backend/tests/unit/model_backends/test_qwen.py
+  - backend/tests/unit/model_backends/test_stub.py
+  - backend/tests/unit/model_backends/test_togetherai.py
+  - backend/tests/unit/model_backends/test_vertexai.py
+  - backend/tests/unit/model_backends/test_watsonx.py
+  - backend/tests/unit/mcp/test_mcp_schema_tools.py
+code:
+  - backend/src/modulo/api/routes/mcp_setup.py
+  - backend/src/modulo/core/mcp_setup_handoff/
+  - backend/src/modulo/db/models/mcp_setup_token.py
+  - backend/src/modulo/model_backends/base.py
+  - backend/src/modulo/model_backends/anthropic/__init__.py
+  - backend/src/modulo/model_backends/openai/__init__.py
+  - backend/src/modulo/model_backends/ollama/__init__.py
+  - backend/src/modulo/model_backends/opencode/__init__.py
+  - backend/src/modulo/model_backends/stub/backend.py
+  - backend/src/modulo/model_backends/ai21/__init__.py
+  - backend/src/modulo/model_backends/azure_openai/__init__.py
+  - backend/src/modulo/model_backends/bedrock/__init__.py
+  - backend/src/modulo/model_backends/cohere/__init__.py
+  - backend/src/modulo/model_backends/deepseek/__init__.py
+  - backend/src/modulo/model_backends/fireworks/__init__.py
+  - backend/src/modulo/model_backends/gemini/__init__.py
+  - backend/src/modulo/model_backends/grok/__init__.py
+  - backend/src/modulo/model_backends/groq/__init__.py
+  - backend/src/modulo/model_backends/jan/__init__.py
+  - backend/src/modulo/model_backends/llamacpp/__init__.py
+  - backend/src/modulo/model_backends/lm_studio/__init__.py
+  - backend/src/modulo/model_backends/localai/__init__.py
+  - backend/src/modulo/model_backends/mistral/__init__.py
+  - backend/src/modulo/model_backends/openrouter/__init__.py
+  - backend/src/modulo/model_backends/perplexity/__init__.py
+  - backend/src/modulo/model_backends/qwen/__init__.py
+  - backend/src/modulo/model_backends/tgi/__init__.py
+  - backend/src/modulo/model_backends/togetherai/__init__.py
+  - backend/src/modulo/model_backends/vertexai/__init__.py
+  - backend/src/modulo/model_backends/vllm/__init__.py
+  - backend/src/modulo/model_backends/watsonx/__init__.py
+depends-on: []
+status: partial
+---
+
+# Model Backend Management
+
+Model backends are a first-class resource, parallel to connector instances. Every agent depends on a model backend. This covers the entity lifecycle, credential management, health checks, and runtime resolution — the management plane of the model backend subsystem.
+
+## Behaviours
+
+### ModelBackend Entity — fields and validation
+
+- [x] `ModelBackendBase` ABC defines: `invoke()`, `stream()`, `backend_id` property
+- [x] `backend_id` follows `"{vendor}/{model_id}"` format
+- [x] `id`, `name`, `display_name` fields on DB entity (`model_backends` table)
+- [x] `provider` enum with values `ai21 | anthropic | azure_openai | bedrock | cohere | custom | deepseek | fireworks | gemini | grok | groq | jan | llamacpp | lm_studio | localai | mistral | ollama | openai | opencode | openrouter | perplexity | qwen | replicate | tgi | togetherai | vertexai | vllm | watsonx` — DB CheckConstraint + `ModelBackendProvider` enum (28 providers in enum; 26 have backend implementations; `replicate` and `custom` registered in enum but no backend implementation)
+- [x] `model_id` string field
+- [x] `default_params` JSON column (temperature, max_tokens, timeout)
+- [x] `cost_tracking` flag (`enabled`/`disabled` with CheckConstraint)
+- [x] `currency` field (default: USD)
+- [x] `organisation_id` foreign key (via `OrgScoped`)
+- [x] Fernet-encrypted `credentials_ciphertext` column — key never exposed in API responses, only `has_credentials` boolean
+- [x] `health_check` test-inference call on save — create/update run the provider health check AFTER the write transaction commits and persist `last_health_check_at` / `last_health_check_error` on the entity (non-blocking; the graph validator surfaces genuine failures as `MODEL_BACKEND_UNHEALTHY`, while providers the API cannot construct record no error — see Health Check section)
+
+### Built-in Backends — alpha provider implementations
+
+- [x] `AnthropicBackend`: wraps `ChatAnthropic(model=model_id, api_key=api_key)`
+- [x] `OpenAIBackend`: wraps `ChatOpenAI(model=model_id, api_key=api_key)`
+- [x] `OllamaBackend`: wraps `ChatOpenAI` pointed at Ollama's OpenAI-compatible endpoint
+- [x] `OllamaBackend` defaults base URL to `http://localhost:11434/v1`
+- [x] `OllamaBackend` substitutes `"ollama"` as placeholder API key when `None` is provided
+- [x] `OpenCodeBackend`: wraps `ChatOpenAI` pointed at OpenCode's OpenAI-compatible endpoint
+- [x] `StubModelBackend`: deterministic test double keyed by normalized input
+- [x] All backends expose `invoke(messages)` returning `BaseMessage`
+- [x] All backends expose `stream(messages)` returning `AsyncIterator[BaseMessage]`
+- [x] `AzureOpenAIBackend`: wraps `AzureChatOpenAI`
+- [x] `BedrockBackend`: wraps `ChatBedrock`
+- [x] `Ai21Backend`: wraps `langchain_ai21`
+- [x] `CohereBackend`: wraps `ChatCohere`
+- [x] `DeepSeekBackend`: wraps `ChatOpenAI`
+- [x] `FireworksBackend`: wraps `ChatFireworks`
+- [x] `GeminiBackend`: wraps `ChatGoogleGenerativeAI`
+- [x] `GrokBackend`: wraps `ChatOpenAI`
+- [x] `GroqBackend`: wraps `ChatGroq`
+- [x] `JanBackend`: wraps `ChatOpenAI`
+- [x] `LLamaCppBackend`: wraps `ChatLiteLLM`
+- [x] `LmStudioBackend`: wraps `ChatOpenAI`
+- [x] `LocalAIBackend`: wraps `ChatOpenAI`
+- [x] `MistralBackend`: wraps `ChatMistralAI`
+- [x] `OpenRouterBackend`: wraps `ChatOpenAI`
+- [x] `PerplexityBackend`: wraps `ChatPerplexity`
+- [x] `QwenBackend`: wraps `ChatOpenAI`
+- [x] `TgiBackend`: wraps `ChatHuggingFace`
+- [x] `TogetherAIBackend`: wraps `ChatTogether`
+- [x] `VertexAIBackend`: wraps `ChatVertexAI`
+- [x] `VllmBackend`: wraps `ChatOpenAI`
+- [x] `WatsonXBackend`: wraps `WatsonxLLM`
+- [ ] `ReplicateBackend`: wraps `ChatReplicate` — no backend implementation file exists; enum value registered in `ModelBackendProvider` but `_build_backend()` factory has no `replicate` case (would fall through to plugin registry or raise `ValueError`)
+- [ ] `Custom` backend (user-provided endpoint) — not implemented: `_build_backend()` has a `custom` case that builds a fixture-driven `_CustomStubBackend` (test double), but there is no real user-provided-endpoint HTTP backend
+- [x] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — verified: `test_chat_anthropic_uses_default_params`, `test_bedrock.py` (`max_tokens`/`temperature` forwarded to the underlying ChatBedrock), `test_openai.py`, and `test_shared.py` all assert constructor/invoke params reach the wrapped chat model
+- [x] All 26 provider backend implementations registered in `ModelBackendHub._build_backend()` factory; `replicate` has an enum entry but no factory case (falls through to plugin registry or raises `ValueError`), and `custom` maps to a fixture-driven stub rather than a real endpoint backend
+
+### Credential Management — encryption and rotation
+
+- [x] Credentials stored encrypted with Fernet at rest — `_encrypt()` in `model_backends.py` uses `cryptography.fernet.Fernet`
+- [x] API key never exposed in API responses — only `has_credentials: bool` returned (confirmed by `test_create_model_backend_does_not_expose_credentials` and all endpoint tests)
+- [x] PATCH endpoint supports API key update — re-encrypts with Fernet on update
+- [x] Credentials never enter LangGraph state, checkpoint blobs, OTel spans, or logs (§6.13 credential-in-state rule) — `# nosemgrep: credential-not-in-state` annotation on update path
+- [ ] Dedicated "Rotate credentials" action (separate endpoint) — no `/rotate` route; PATCH with a new `api_key` is the credential-rotation path and now re-runs the health check (see next item)
+- [x] Post-rotation health check fires automatically — PATCH with a new `api_key` re-runs the provider health check and records the result on the entity (unit-tested in `test_error_handling.py` + BDD scenario)
+- [x] Old credential continues serving in-flight runs — the run-scoped hub decrypts credentials once at run-start (`initialise`) and holds the backend for the run's lifetime; a PATCH writes a new secret without touching the live run (one-decrypt-per-run, verified in hub unit tests + `hub.feature`)
+- [x] Rotation does not affect active runs — same run-scoped credential-snapshot guarantee: the in-flight hub retains the run-start decrypted backend
+
+### Health Check — connectivity and auth validation
+
+- [x] `HealthResult` dataclass defined in `base.py` with `ok: bool` and `detail: str`
+- [x] `ModelBackendBase.health_check()` method exists in `base.py` with default implementation using `asyncio.wait_for` (timeout 10s)
+- [x] Graph validator checks backend health at pipeline save time — `_check_model_backends()` in `graph_validator/__init__.py` produces `MODEL_BACKEND_UNHEALTHY` error when `last_health_check_error` is set
+- [x] Graph validator checks backend health at run creation time — same `_check_model_backends` called for run pre-check
+- [x] Graph validator returns `MODEL_BACKEND_NOT_FOUND` when pin references non-existent backend
+- [x] Graph validator returns `MODEL_BACKEND_INACTIVE` when backend status is not `"active"`
+- [x] `last_health_check_at` and `last_health_check_error` persisted on `ModelBackend` entity
+- [x] `_openai_compatible_health_check()` in `base.py` — endpoint ping for OpenAI-compatible providers
+- [x] Test-inference call on save validates credentials — create/update run the provider health check and persist the result (BDD + unit tested)
+- [x] Surfaces auth failures and quota errors — the provider's health-check detail (e.g. OpenAI's 401 body, a 429 rate-limit response) is persisted to `last_health_check_error`; no typed enum codes (see Known Gaps)
+- [x] Surfaces network errors — httpx connect/timeout failures are captured in the persisted health-check detail, which includes the provider endpoint
+- [x] Health check never holds the DB transaction — the save-time check runs AFTER the create/update transaction commits (the provider network call has up to `HEALTH_CHECK_TIMEOUT`=10s budget and must never hold a connection/row lock); the result is persisted in a short second transaction
+- [x] Providers the API cannot construct are never marked unhealthy — `_build_backend` failures (bedrock needs aws keys, vertexai needs `project`, watsonx needs `project_id`, azure_openai needs `azure_endpoint`) map to `not_applicable` and record NO `last_health_check_error`, so the graph validator never emits `MODEL_BACKEND_UNHEALTHY` for them (they were never blocked pre-PRD-8.1)
+- [x] On-demand health check endpoint for manual revalidation — `POST /api/v1/model-backends/{id}/health-check` re-runs the check against the stored credential and persists the result; operators use it to clear a sticky `last_health_check_error` (e.g. a transient save-time outage) without rotating the API key
+- [x] Standalone health check API route — the on-demand route above; health is no longer only checked during graph validation
+- [ ] Health check result cached with 5-minute staleness bound
+
+### Deletion Protection — safe removal lifecycle
+
+- [x] `status` column on `ModelBackend` entity (server default `"active"`)
+- [x] Graph validator blocks inactive backends — `MODEL_BACKEND_INACTIVE` error when status != `"active"`
+- [x] Agent definitions reference `model_backend_id` (UUID FK to `model_backends.id` with `ON DELETE RESTRICT`) — DB-level referential integrity prevents deletion of backends referenced by agents
+- [x] PipelineSnapshot stores `model_backend_pins_json` — pinning at snapshot time prevents stale-backend runs
+- [x] Hard delete blocked if referenced by any active agent definition — `ON DELETE RESTRICT` on agent FK enforces this at DB level
+- [x] Hard delete blocked if referenced by any PipelineSnapshot associated with a non-terminal run — delete_model_backend_endpoint calls _list_snapshots_referencing_backend() which scans org snapshots whose model_backend_pins_json reference the backend and joins Run on non-terminal status; a match returns 409 before any delete. Verified by 	est_delete_model_backend_blocked_by_non_terminal_run_snapshot and 	est_delete_model_backend_allowed_when_snapshot_runs_terminal in 	est_error_handling.py
+- [ ] Soft-delete (`status: deprecated`) — `status` column exists but no soft-delete API or deprecation workflow
+- [ ] Deprecated backends serve in-progress runs but hidden from new pipeline pickers
+- [ ] Deprecated backends cannot be selected for new agent definitions
+- [ ] Hard delete requires zero active references — same policy as schema version deletion (§7.3)
+
+### Runtime Resolution — model_id pinning
+
+- [x] `model_backend_pins_json` stored in `PipelineSnapshot` — created by `_resolve_graph_references()` in `pipelines.py`
+- [x] Model backends pinned at snapshot creation time — each agent's `model_backend_id` captured in pins list
+- [ ] Consistent execution across paused/resumed runs — PARTIAL: within a single run the run-scoped hub holds the run-start backend, but a paused→resumed run re-inits the hub from CURRENT entity rows, so a mid-pause `model_id`/provider update DOES affect the resumed run (PRD §8.1 deviation, see Known Gaps)
+- [x] Graph validator checks pinned backends against live `ModelBackend` entity state at run pre-check — validates status, health, and existence
+- [x] Pre-run model backend health check blocks run start on failed backends — `MODEL_BACKEND_UNHEALTHY` error produced by `_check_model_backends`
+- [x] Pre-run check blocks run on deleted backends — `MODEL_BACKEND_NOT_FOUND` error
+- [x] Pre-run check blocks run on inactive backends — `MODEL_BACKEND_INACTIVE` error
+- [ ] Operator updates to ModelBackend entity take effect only on new runs — PARTIAL: within a run the hub holds the run-start backend, but resume re-inits the hub from current rows and the pinned `model_id` is not enforced, so updates DO affect resumed runs and re-runs from older snapshots (PRD §8.1 deviation; see Known Gaps)
+- [ ] Cost computed against pinned `model_id` — `core/pricing.get_pricing()` exists (glob/prefix match on `model_id`, returns `None` for unknown models) but the cost controller never calls it
+- [ ] If pinned model_id no longer exists in pricing config, cost falls back to zero with logged warning — downstream of the unwired pricing integration
+
+### Edge Cases and Error States
+
+- [x] Non-existent backend in pipeline graph → `MODEL_BACKEND_NOT_FOUND` error at save/run time
+- [x] Inactive backend in pipeline graph → `MODEL_BACKEND_INACTIVE` error at save/run time
+- [x] Unhealthy backend in pipeline graph → `MODEL_BACKEND_UNHEALTHY` error at save/run time
+- [x] Health check timeout (10s) → `HealthResult(ok=False, detail="Health check timed out")` in base.py
+- [x] Fernet encryption: API key encrypted at create time, re-encrypted at update time
+- [x] Credentials never exposed in API responses — `has_credentials` boolean only (confirmed by 10+ unit tests)
+- [x] ProgrammingError on any CRUD operation → 501 Not Implemented (all 5 routes)
+- [x] Unauthenticated access → 401/403 (confirmed by `test_list_model_backends_unauthenticated_returns_4xx`)
+- [x] Not-found on GET/PATCH/DELETE → 404
+- [x] Duplicate name on create → 409 (BDD scenario defined, with_for_update() on duplicate check, IntegrityError→409 catch for defense-in-depth)
+- [x] IntegrityError on CRUD operation → 409 Conflict (handled on all 5 routes)
+- [ ] Concurrent credential rotation and run start — rotation waits for active snapshot release
+- [ ] Null `model_id` in snapshot — validation error at run start, not at pipeline save time
+- [ ] Backend provider returns unexpected status code — mapped to typed error
+- [x] `asyncio.CancelledError` propagated correctly (not swallowed) in `ModelBackendBase.health_check()` — fixed `except Exception`→`except asyncio.CancelledError: raise`
+- [x] PATCH with null `api_key` does not crash — guard added to skip encryption when value is `None`
+- [x] Hub `initialise()` logs warning when zero backends registered after all instances fail
+
+## Known Gaps
+
+### Resolved (implemented since last QA pass)
+- [RESOLVED] **DB entity**: `ModelBackend` model exists with all PRD fields (name, display_name, provider, model_id, credentials_ciphertext, default_params, cost_tracking, currency, owner_team_id, visibility, status, last_health_check_at, fallback_backend_ids)
+- [RESOLVED] **Credential encryption**: Fernet encryption confirmed at create and update — API key never exposed in responses, only `has_credentials: bool`
+- [RESOLVED] **`model_backend_pins_json`**: Implemented in `PipelineSnapshot` — created by `_resolve_graph_references()`, checked by graph validator at save and run time
+- [RESOLVED] **BDD steps**: All 5 feature files (backend_crud, backend_selection, backend_health_check, backend_error_handling, rate_limiting) have step definitions in `test_model_backends.py` — step definitions pass
+- [RESOLVED] **REST API**: Full CRUD API at `/api/v1/model-backends` with Fernet encryption, ProgrammingError→501, RLS scoping, and pagination
+- [RESOLVED] **Health check on save**: create/update run the provider health check and persist `last_health_check_at` / `last_health_check_error` (PRD §8.1 `health_check`) — `_run_health_check_on_save()` in `model_backends.py`, tested via real-route BDD scenarios in `backend_health_check.feature` and unit tests in `test_error_handling.py`
+- [RESOLVED] **On-demand health check API route**: `POST /api/v1/model-backends/{id}/health-check` re-runs the check against the stored credential and persists the result, giving operators a way to clear a sticky `last_health_check_error` without rotating the API key (replaces the documented gap)
+- [RESOLVED] **Post-rotation health check**: PATCHing a new `api_key` re-runs the provider health check and records the result on the entity
+- [RESOLVED] **Multi-backend fallback runtime verification**: `fallback_backend_ids` rotation is exercised by `tests/unit/core/model_backend_hub/test_failover.py`, the hub rotation tests, and `hub.feature`
+
+- [RESOLVED] **Hard delete blocked by non-terminal run snapshots**: `delete_model_backend_endpoint` now calls `_list_snapshots_referencing_backend()`, which scans the org’s snapshots for any whose `model_backend_pins_json` reference the backend and that are tied to a non-terminal run (`Run.status not in TERMINAL_STATUSES`); a match returns 409 before any delete. Terminal-run snapshots impose no constraint. Unit-tested in `test_error_handling.py` (`test_delete_model_backend_blocked_by_non_terminal_run_snapshot`, `test_delete_model_backend_allowed_when_snapshot_runs_terminal`)
+
+### Unresolved
+
+- [ ] **No dedicated credential-rotation endpoint**: PATCH with a new `api_key` is the rotation path (re-encrypts + re-runs the health check), but there is no standalone `/rotate` action with "validate before replacing" semantics; a new endpoint would require regenerating `frontend/src/lib/api/schema.ts`
+- [ ] **No soft-delete / deprecation workflow**: `status` column exists but no API to deprecate, no deprecation warning in graph validator (inactive = blocked entirely; no "deprecated but allowed" state)
+- [ ] **No cost tracking**: `core/pricing.get_pricing()` exists (glob/prefix match on `model_id`, returns `None` for unknown models) but the cost controller never calls it — cost is not computed against the pinned `model_id`
+- [ ] **Pinned `model_id` not applied at runtime (PRD §8.1 deviation)**: `PipelineSnapshot.model_backend_pins_json` stores `{agent_id, model_backend_id, model_id}`, but the run-scoped hub (`executor._init_model_backend_hub`) builds each backend from the CURRENT entity row. A paused→resumed run re-inits the hub from current rows, so operator `model_id`/provider updates between pause and resume DO affect the resumed run, and re-runs from older snapshots use the current entity `model_id`. The graph validator validates pinned backend existence/status/health but never enforces the pinned `model_id`.
+- [ ] **No health check result caching**: no staleness bound on health check results
+- [ ] **No typed health-check error codes**: failures surface as free-text `last_health_check_error` (e.g. OpenAI's 401 body, 429 text, httpx connect errors) rather than typed codes (`authentication_failed`, `quota_exceeded`, `endpoint_unreachable`, `model_not_found`)
+
+- [ ] **No DB-level unique constraint on name**: `name` uniqueness per org enforced at application level via `with_for_update()` check in create route — no DB UNIQUE constraint for defense-in-depth
+- [ ] **No rate limiting on model backend API endpoints**: only general per-endpoint rate limits apply
+- [ ] **BDD rate_limiting.feature out of place**: rate_limiting.feature lives in model_backends directory but tests general API rate limiting (runs, webhooks, MCP), not backend-specific rate limiting
+- [ ] **ReplicateBackend and CustomBackend missing**: `ModelBackendProvider` enum includes `replicate` and `custom`; `_build_backend()` has a `custom` case that builds a fixture-driven stub, but `replicate` has no factory case and `custom` has no real user-provided-endpoint backend — both would fall through to the plugin registry or raise `ValueError`
+- [ ] **Legacy alpha BDD feature files**: `configure.feature`, `rotation.feature`, and `health_check.feature` under `tests/bdd/features/model_backends/` exist but route through the legacy `test_alpha_model_backends.py` step file with placeholder `pass` steps, stale patch paths (`modulo.core.pipeline_engine.run_crud`), and non-existent API paths (`/api/model-backends`, `/api/model-backends/health`) — not part of the active BDD suite; the active feature files listed in `bdd:` frontmatter are the real coverage
+
+## QA History
+
+- 2026-08-15 (distribute partial-model-backends, round 3): Implemented PRD §8.1 deletion protection — hard delete of a model backend is now blocked (409) when a `PipelineSnapshot` whose `model_backend_pins_json` references the backend is tied to a non-terminal run. `delete_model_backend_endpoint` calls the new `_list_snapshots_referencing_backend()` (scans org snapshots joined to `Run` on non-terminal status, mirrors `list_backends_referencing_fallback`); terminal-run snapshots impose no constraint. Added 2 unit tests in `test_error_handling.py` (blocked-by-non-terminal, allowed-when-terminal). Checked off the previously-unchecked `Hard delete blocked if referenced by any PipelineSnapshot associated with a non-terminal run` behaviour and moved the matching Known Gap from Unresolved to Resolved. Re-audited all remaining unchecked behaviours — they are genuine cross-cutting gaps (soft-delete/deprecation workflow, dedicated `/rotate` endpoint, cost-vs-pinned-`model_id`, health-check staleness caching, typed error codes, `replicate`/`custom` backends, null-`model_id`-in-snapshot, concurrent rotation) that need modules outside this delivery's allowlist; no tests deleted or disabled. Status: partial.
+
+- 2026-08-15 (distribute partial-model-backends, round 2): Coverage-drive pass on the model-backend entries. **Management**: verified + checked off the stale `[ ]` on provider-specific `invoke()` param forwarding — `max_tokens`/`temperature` are forwarded to the wrapped chat model and asserted in `test_anthropic.py`, `test_bedrock.py`, `test_openai.py`, and `test_shared.py`. Audited every remaining unchecked behaviour against the allowlisted code paths: all are genuine cross-cutting gaps, not "implemented but untested" — they require changes to modules OUTSIDE this delivery's scope and remain in Known Gaps. Specifically confirmed as unimplemented (no code change made): dedicated `/rotate` credential endpoint (a new route would trip the CI `schema-freshness` gate — it regenerates `frontend/src/lib/api/schema.ts` from the backend OpenAPI and fails if the committed file drifts, and that file is out of scope here; PATCH-with-new-api-key remains the rotation path), soft-delete/`status: deprecated` workflow (DB/API), hard-delete blocked by non-terminal run snapshots (DB/crud), health-check-result staleness caching, typed health-check error codes, cost computed against pinned `model_id` (`core/pricing` unwired from the cost controller), consistent paused/resumed execution, and custom/Replicate backend implementations. No deletions, no tests disabled; every checked-off behaviour is backed by a passing test. Status: partial.
+- 2026-08-16 (branch-fixer PR review follow-up): Addressed the PR-review MAJORs on the health-check-on-save implementation. **MAJOR 1 — health check now runs OUTSIDE the write transaction**: the create/update entity write commits first; the provider network call (up to `HEALTH_CHECK_TIMEOUT`=10s) never holds a pooled connection or row lock; the result is persisted in a short second transaction (`_persist_health_check_result`). **MAJOR 2 — non-constructible providers never block**: `_build_backend` failures (bedrock/vertexai/watsonx/azure_openai needing more than an api_key) map to `not_applicable` and record no `last_health_check_error`, so the graph validator emits no `MODEL_BACKEND_UNHEALTHY`; added `POST /api/v1/model-backends/{id}/health-check` so a sticky save-time error can be cleared/re-run without rotating the key. **MINORs**: dropped the `isinstance(mb, ModelBackend)` runtime guard (endpoint tests now patch `_run_health_check_on_save` via an autouse fixture); added direct async unit tests for `_run_health_check_on_save` covering ok / unhealthy / build-failure / exception branches plus re-check route tests (persist, not_applicable clears, 404). Hoisted `json` / `create_secrets_backend` imports to module level (inline-import-route-files semgrep rule). Status: partial.
+- 2026-08-15 (distribute partial-model-backends): Coverage drive on the two model-backend entries. **Management**: implemented PRD §8.1 `health_check` test-inference-on-save — create/update now run the provider health check via `_run_health_check_on_save()` in `model_backends.py` and persist `last_health_check_at` / `last_health_check_error` (non-blocking, guarded by `isinstance(mb, ModelBackend)` so the mock-based endpoint suite makes no network calls). Credential changes via PATCH re-run the check (post-rotation health check). Added real-route BDD scenarios (`backend_health_check.feature`: healthy create, unhealthy create, API-key update) with mock-session step definitions in `test_model_backends.py`, plus 2 unit tests in `test_error_handling.py`. Verified + checked off: health check on save, surfaces auth/quota/network errors (free-text detail), post-rotation health check, in-flight credential snapshot (run-scoped hub). CORRECTED stale claims: pinned `model_id` is NOT applied at runtime (hub builds from current entity; resume re-inits from current rows — PRD §8.1 deviation), operator updates affect resumed runs. Moved 3 stale gaps to Resolved (health check on save, post-rotation health check, multi-backend fallback verification). Status: partial.
+- 2026-07-31 (improve-architecture): Cross-cutting QA. Verified hub run-execution and failover-audit claims (see `model-backend-hub.md` QA History). Fixed `ModelBackendHub.get_with_rotation()` scan-all path to emit `model_failover` audit events (was silently omitted when no configured fallback was healthy). Documented the legacy alpha BDD feature files (configure/rotation/health_check) as a known gap — they route through `test_alpha_model_backends.py`, which has placeholder steps and stale patch/API paths. Hub now has BDD coverage (`hub.feature`, 7 scenarios). Status: partial.
+- 2026-07-08 (improve-architecture index 273): Cross-cutting QA. Fixed CRITICAL — `ModelBackendResponse.model_config` used `from_attributes: False` preventing `model_validate()` from ORM; changed to `from_attributes: True, populate_by_name: True` matching all other response models. `created_by` uses `validation_alias="account_id"` which requires `from_attributes=True`. Fixed CRITICAL — frontend provider dropdown sent `"google"` (backed expects `gemini`) and `"together"` (backed expects `togetherai`) — dead controls that always returned 422. Fixed CRITICAL — frontend created/had hardcoded English strings across entire view (add button, form labels, table headers, credentials badge, delete confirmation, action buttons) — wrapped ~30 strings in `$t()` wrappers with new i18n keys. Fixed CRITICAL — frontend error handlers used `String(err)` and `e instanceof Error ? e.message : String(e)` instead of `formatApiError(err)` — would display `[object Object]` on API errors. Fixed MAJOR — added `with_for_update()` to duplicate name check in create route (TOCTOU race prevention). Fixed MAJOR — added `except IntegrityError → 409` catch to create route (FK/constraint violations now return 409 instead of propagating to SQLAlchemyError→503). Fixed MAJOR — added `replicate` and `custom` to `_VALID_PROVIDERS` (were missing from API validation, so frontend provider dropdown options for these returned 422). Removed `replicate` and `custom` from frontend provider dropdown (no backend implementation — ReplicateBackend missing from factory, Custom not implemented). Added 1 new unit test `test_create_model_backend_integrity_error_returns_409` to `test_model_backends_endpoint.py`. Updated product map: added IntegrityError→409 behaviour checkbox, added QA History section. All existing tests pass (unchanged). Merged to main. Status: partial.
+- 2026-07-07 (improve-architecture index 313): Cross-cutting QA pass 4. **Fixed CRITICAL** — ModelBackendBase.health_check() did not catch asyncio.CancelledError (a BaseException subclass, not Exception in Python 3.12); added except asyncio.CancelledError: raise before generic except Exception so cancellation propagates correctly. **Fixed MAJOR** — PATCH endpoint crashed with AttributeError when api_key: null was passed (_encrypt(None, ...).encode()); added null guard that treats null api_key as no-op. **Fixed MINOR** — Hub initialise() silently succeeded when all backends failed decryption; added warning log when zero backends registered. Updated product map: added 3 new edge-case [x] checkboxes. All 11 known gaps from previous pass remain unresolved.
+- 2026-07-06 (qa-iterate prodmap model-backends): Fixes from code verification. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling claim (caught, not uncaught). Fixed logging claim — Hub has 11+ logger calls; real gap is failover events not surfaced via `audit_logger` callback. Updated provider count from 25 to 28 (enum) / 26 (implemented). Added `opencode` to `code:` frontmatter and provider list. Added `custom` to provider list. Updated ReplicateBackend gap to also cover CustomBackend.
+- 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
+- 2026-07-03 (improve-architecture index 84): Cross-cutting QA pass 2. Fixed massively stale product map — marked 40+ behaviours [ ]→[x] across DB entity, Fernet encryption, CRUD API routes, PipelineSnapshot pinning, graph validator health checks, and BDD step definitions. Resolved 5 stale known gaps (DB entity, credential encryption, model_backend_pins_json, BDD steps, REST API). Added ReplicateBackend to provider list. Added 11 new known gaps (no health check on save, no deletion protection FK, no soft-delete, no cost tracking, no health API route, no credential rotation endpoint, no caching, no duplicate name constraint, no rate limiting, no multi-backend fallback test coverage, rate_limiting.feature out of place). Added 9 edge case [x] from error path audit (MODEL_BACKEND_NOT_FOUND/INACTIVE/UNHEALTHY, 404, 501, 401/403, credential encryption). Created website docs stub.
+- 2026-07-02 (improve-architecture index 53): Cross-cutting QA pass 1. Fixed frontmatter YAML (bdd/unit-tests/code paths). Added 22 missing provider backends. Added 5 BDD feature file refs. Marked health_check method and HealthResult dataclass as [x].
+- 2026-07-12 (qa-iterate r2-docs-mb-66): Code verification pass. Corrected stale factory registration count — all 26 implementations registered in `_build_backend()` factory (was claimed "only 24 of 26"). Updated IntegrityError claim — handled on all 5 routes (was claimed "create route only").

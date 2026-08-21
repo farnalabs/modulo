@@ -1,0 +1,125 @@
+# fly.toml app configuration for app.modulo.run
+# See https://fly.io/docs/reference/configuration/
+
+app = 'app-modulo'
+
+# ===== Machine budget (stay within the org limit) =====
+# Standing footprint: 2 x app + 1 x worker = 3 machines for this app.
+# Whole-org standing: app-modulo 3 + staging-modulo 2 + DBs 2 = 7.
+# Rolling deploys peak at N+1 per process group; keep the org total
+# (incl. staging + DBs) under the Fly machine limit (~10 on the
+# personal plan). There is no automated budget guard in CI: deploy.yml only
+# prunes group-less strays ("Clean up stray machines"), so the limit is
+# enforced by this standing footprint + manual review before scaling up.
+# Do NOT add process groups or machines without updating this block.
+primary_region = 'lhr'
+
+[deploy]
+  strategy = 'rolling'
+
+[release]
+  command = "/release.sh"
+
+[build]
+  dockerfile = "backend/Dockerfile.fly"
+
+[processes]
+  app = ""
+  worker = ""
+
+# Web process group — nginx + uvicorn, handles HTTP traffic
+# Restart policy — crash-loop guard + max-restart in the entrypoint is the
+# control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
+# container and the LB moves traffic decisively.
+# Machine-level recovery for a machine whose worker/scheduler is SILENTLY dead
+# (not crash-looping) is the /healthz/ready watchdog: it 503s when THIS machine's
+# SAQ workers are stale on any queue OR the fire_due_triggers system cron has not
+# fired within 2x its cadence (health.py _check_saq_workers / _check_system_crons),
+# so Fly removes/replaces the machine without relying on a restart policy.
+[[restart]]
+  processes = ['app']
+  policy = "never"
+
+[http_service]
+  internal_port = 8080  # nginx serves SPA; proxies API/WS/MCP to uvicorn
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+  max_machines_running = 5
+  processes = ['app']
+  # Graceful worker drain window (plan F8): SIGTERM drains 30s + hard deadline
+  # 60s each (parallel, ~90s max). kill_timeout must exceed that.
+  kill_timeout = 120
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 50
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/healthz/ready"
+    protocol = "http"
+
+# Worker process-group health check (ADR 021). Top-level [checks], not a service
+# check — it does not affect routing. The worker container exposes a liveness
+# server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
+# SAQ worker subprocesses (runs + system) are alive. The worker group has no
+# service/health check today, so a machine that is "up" but running no SAQ
+# workers is invisible to `fly checks list` and to rolling-deploy readiness.
+[checks]
+  [checks.worker_health]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/"
+    port = 8082
+    type = "http"
+    processes = ['worker']
+
+# Worker process group — SAQ workers only, ALWAYS restart (ADR 021).
+# policy = "always" restarts the machine no matter the exit code. "on-failure"
+# only restarts a non-zero exit, so a worker machine that a rolling deploy leaves
+# `stopped` (clean exit / SIGTERM teardown) stays down — the 2026-08-08 outage
+# where both worker machines were `stopped` for ~3h and needed a manual
+# `fly machines start`. "always" is the Fly-documented policy for long-running
+# background workers: crash, clean exit, or deploy replacement all self-heal.
+[[restart]]
+  processes = ['worker']
+  policy = "always"
+
+[env]
+  MODULO_DB = "postgres"
+  MODULO_PUBLIC_URL = "https://app.modulo.run"
+  # MODULO_USERS is set with `fly secrets set` and must not be committed.
+  MODULO_PLUGIN_DISCOVERY = "false"
+  MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  SAQ_WORKER_CONCURRENCY = "20"
+  # Redis pool must exceed SAQ worker concurrency (blocking dequeue holds one
+  # pool connection per concurrent task). Must stay > SAQ_WORKER_CONCURRENCY.
+  SAQ_REDIS_POOL_SIZE = "50"
+  # REQUIRED: Upstash Redis instance. Create with:
+  #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
+  # Then store its connection string with `fly secrets set REDIS_URL=...`.
+  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) — NOT pay-as-you-go.
+  # (2026-08: PAYG projected ~$87/mo at ~46M commands; Fixed 250MB is flat $15/mo
+  # with 250MB data + 50GB bandwidth. Enable auto-upgrade on the add-on as a
+  # safety net: `flyctl redis update <name>` → select plan, then enable auto-upgrade.)
+  CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
+
+[[vm]]
+  processes = ['app']
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2
+
+[[vm]]
+  processes = ['worker']
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 1

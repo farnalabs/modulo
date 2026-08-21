@@ -1,0 +1,50 @@
+"""Architecture test: no raw f-string SQL in production code.
+
+Analogous to ArchUnit's coded-rule checks — verifies code structure
+constraints that static analysis (Ruff, bandit) can miss or that are
+unique to this project's SQLAlchemy + asyncpg patterns.
+
+This is not a Semgrep duplicate: this test runs in CI via pytest
+and fails the build with an explicit error message, providing a
+second layer of defense beyond pre-commit hooks.
+"""
+
+import re
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+
+
+def _iter_py_files(root: Path):
+    for path in root.rglob("*.py"):
+        # Skip only files *under* a `migrations` directory, relative to the scan
+        # root: the checkout root may itself contain a `migrations` component,
+        # and a file literally named `migrations.py` is not a migration.
+        if any(part == "migrations" for part in path.relative_to(root).parts[:-1]):
+            continue
+        yield path
+
+
+# Only match a call to the *identifier* `text` — `(?<![A-Za-z0-9_])` prevents
+# matching the `text` substring inside `_text(`/`mytext(` aliases. Both quote
+# styles are covered; the f-string body must contain a placeholder.
+RAWSQL_CALLS = re.compile(
+    r'(?<![A-Za-z0-9_])text\(\s*[fF]["\']'
+    r'[^"\']*\{[^}]+}[^"\']*["\']',
+)
+
+
+def test_no_raw_sql_fstrings():
+    violations = []
+    for path in _iter_py_files(SRC):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for i, line in enumerate(content.splitlines(), 1):
+            if RAWSQL_CALLS.search(line):
+                violations.append(f"  {path.relative_to(SRC)}:{i}  {line.strip()[:100]}")
+    assert not violations, (
+        f"Found {len(violations)} raw f-string SQL text() calls (SQL injection risk).\n"
+        "Use parameterized queries: text('... :param ...').bindparams(param=value)\n" + "\n".join(violations)
+    )

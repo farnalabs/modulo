@@ -1,0 +1,178 @@
+---
+id: feat-core-prompt-optimization
+prd: 8.2
+delivery-tasks: [task-nv10-prompt-optimization]
+bdd:
+  - backend/tests/bdd/features/agents/prompt_versioning.feature
+  - backend/tests/bdd/features/pipelines/run_variants.feature
+code:
+  - backend/src/modulo/core/prompt_optimizer/
+  - backend/src/modulo/api/routes/agents.py
+  - backend/src/modulo/db/crud/agent.py
+  - backend/src/modulo/db/crud/variant_group.py
+  - backend/src/modulo/db/crud/pipeline_snapshot.py
+  - backend/src/modulo/db/models/agent.py
+depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
+unit-tests:
+  - backend/tests/unit/api/test_agent_prompt_versioning.py
+  - backend/tests/unit/api/test_agent_prompts.py
+  - backend/tests/unit/core/prompt_optimizer/test_prompt_optimizer.py
+  - backend/tests/unit/api/test_error_handling.py
+status: partial
+---
+
+# Prompt Optimization
+
+LLM-driven prompt improvement from eval failures, with full version history, rollback, diff, and pipeline snapshot pinning.
+
+## Behaviours
+
+### Prompt Versioning
+
+- [x] Every prompt edit creates a new entry in `prompt_version_history`
+- [x] Version entries track `version`, `template`, `created_at`, `notes`, `optimized_from`, `eval_result_ids`
+- [x] Users can roll back to any prior version without creating a new pipeline version
+- [x] Rollback appends a new history entry (not a mutation) — history is append-only
+- [x] PipelineSnapshot captures the specific prompt version hash in use at run-start
+- [x] Snapshots store `prompt_version_hash` (SHA-256 of template) and `prompt_version_at` per agent
+- [x] New runs using a pinned snapshot execute against the snapshot's pinned prompt, not the current prompt
+- [x] New runs without a pinned snapshot use the agent's latest prompt template
+- [x] Listing prompt versions returns entries sorted newest-first
+- [x] Listing returns empty array when an agent has no version history
+- [x] Getting a specific version returns that entry's template, metadata, and timestamps
+- [x] Getting a non-existent version returns 404
+- [x] Diffing two versions returns structured line-level result with `added`/`removed`/`unchanged` annotations
+- [x] Diff with a non-existent version returns 404
+- [x] Diff on a non-existent agent returns 404
+- [x] Listing versions on a non-existent agent returns 404
+
+### Prompt Optimization
+
+- [x] `POST /agents/{id}/prompts/{version}/optimize` accepts one or more `eval_result_ids`
+- [x] Request with an empty `eval_result_ids` array returns 422
+- [x] Request with non-existent agent returns 404
+- [x] Request with eval result IDs that resolve to zero results returns 404
+- [x] Optimization uses the agent's `model_backend_id` by default
+- [x] Optimization can override the model backend via `model_backend_id` in the request body
+- [x] Optimization requires encrypted credential retrieval for the model backend
+- [x] Fails with 500 if model backend credentials cannot be decrypted
+- [x] Response includes `suggested_prompt`, `rationale`, `analysis`, and `version` (next version label)
+- [x] The optimizer builds a failure context from eval results and eval definitions
+- [x] Evaluation results are annotated with eval definition name, type, config, score, and detail
+- [x] Missing eval definitions are shown as `unknown` in the failure context
+- [x] Empty eval results produce an empty `<failing_evals>[]</failing_evals>` section
+- [x] The optimizer sends a system prompt (instructions) + human message (context) to the LLM
+- [x] LLM response is parsed as plain JSON
+- [x] LLM response wrapped in a markdown code fence (with or without `json` language tag) is parsed correctly
+- [x] Malformed LLM response (bad JSON) raises a JSON decode error
+- [x] LLM response missing required keys (`suggested_prompt`, `rationale`) raises a KeyError
+- [x] LLM call failures (network, timeout) propagate to the caller
+- [x] Optimization validates the `version` path parameter — a version absent from `prompt_version_history` (and not `current`) returns 404 before any LLM call
+- [x] Optimization uses the requested version's template as the source (or the active prompt for `current`) — `optimize_prompt` no longer ignores the `version` path param
+
+### Apply Optimized Prompt
+
+- [x] `POST /agents/{id}/prompts/{version}/apply` accepts `suggested_prompt`, `rationale`, `optimize_version`, `eval_result_ids`
+- [x] Creates a new version entry linking back to the optimized-from version
+- [x] Returns the updated agent with the new prompt template
+- [x] Non-existent agent returns 404
+- [x] Empty `suggested_prompt` returns 422
+- [x] Apply failure (DB error) returns 404
+
+### Pipeline Integration
+
+- [x] Variant groups compare `prompt_version_hash` between base and variant snapshots
+- [x] Prompt version pinning is independent of pipeline snapshot versioning — prompts can be rolled back without a new snapshot
+- [x] Model backend `model_id` is also pinned in the snapshot (`model_backend_pins_json`) — consistent with prompt pinning
+
+### Error Handling
+
+- [x] All 5 agent CRUD routes (list, create, get, update, delete) catch ProgrammingError → 501
+- [x] All 6 prompt routes (optimize, apply, list versions, get version, rollback, diff) catch ProgrammingError → 501
+- [x] All 6 prompt routes (optimize, apply, list versions, get version, rollback, diff) catch SQLAlchemyError → 503
+- [x] Missing DB table on ModelBackend query in optimize endpoint returns 501
+- [x] Missing DB table on get_eval_results_with_defs returns 501
+- [x] 422 on empty eval_result_ids in optimize endpoint
+- [x] 404 on non-existent agent for all prompt endpoints
+- [x] 404 on non-existent version for get/rollback/diff/optimize endpoints
+- [x] 404 on no eval results found for optimize endpoint
+- [x] 404 on non-existent model backend for optimize endpoint
+- [x] 500 on credential decryption failure for optimize endpoint
+- [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
+- [x] Malformed LLM response or missing required keys raises error in optimize endpoint
+
+### Edge Cases
+
+- [x] Optimize against `current` uses the active prompt template; optimize against a named version uses that version's template — `_resolve_prompt_template` is shared with the diff endpoint (resolved 2026-08-12: version param is now validated + used, see QA History)
+- [x] Apply with duplicate version label creates entry with same label as existing
+- [x] Rollback to current version creates a new history entry with same template (append-only)
+- [x] Diff of same version (version_a == version_b) returns all lines as "unchanged"
+- [x] Empty version history returns empty list for list endpoint
+- [x] Empty template string accepted as valid prompt for version creation
+- [x] Diff endpoint rolls over when SQLAlchemyError is raised on get_agent call (returns 503)
+- [x] Diff endpoint rolls over when ProgrammingError is raised on get_agent call (returns 501)
+
+### Resilience & Integration Robustness
+
+- [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
+- [x] LLM call timeout (configurable _LLM_TIMEOUT=60s with asyncio.wait_for)
+- [x] Retry/backoff on LLM call failure (3 retries, exponential backoff + jitter)
+- No retry/backoff on credential decryption failure in optimize endpoint (see Known Gaps)
+- No circuit breaker if the LLM backend is persistently unavailable (see Known Gaps)
+
+## Known Gaps
+- No retry/backoff on credential decryption failure in the optimize endpoint — a transient decryption failure fails the request outright (LLM calls get 3 retries with exponential backoff; decryption does not).
+- No circuit breaker when the LLM backend is persistently unavailable — repeated failures always take the full 3-retry path; there is no trip-and-cool-down state.
+- No unit test for get_prompt_diffs SequenceMatcher diff logic as a standalone function — hash comparison has dedicated tests in `TestGetPromptDiffs` but the diff comparison (SequenceMatcher) logic is inlined in the route handler and only tested via the API endpoint, not as an independent unit
+- No integration test exercising the full optimize→LLM→parse→response chain with a real model backend
+- No performance or regression tests for large version histories (100+ entries)
+- No unauthorized access scenarios for prompt history (non-member org, viewer role)
+- Bound check on LLM response length — very long suggested_prompt could hit DB column limits
+- No website docs stub for prompt optimization
+- ~~`version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source~~ **RESOLVED 2026-08-12**: see QA History.
+
+## QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two unchecked resilience gaps in Known Gaps — no retry/backoff on credential decryption failure in the optimize endpoint, and no circuit breaker when the LLM backend is persistently unavailable. Status: partial.
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+- Confirmed the 2 remaining unchecked Resilience items are genuine gaps and moved both into Known Gaps: (1) no retry/backoff on credential decryption failure in the optimize endpoint — LLM calls get `_MAX_RETRIES=3` exponential backoff but decryption is single-shot; (2) no circuit breaker when the LLM backend is persistently unavailable. Neither is PRD-mandated hardening. No code change. Status: partial (70/72).
+
+### 2026-08-12 — improve-architecture: validate + use the optimize `version` path param RESOLVED
+- **RESOLVED "version path param accepted but never validated or used"** (`api/routes/agents.py`). `optimize_prompt` accepted any `version` (e.g. `v99` or garbage) and silently optimized from the agent's *current* template.
+- (1) New module-level `_resolve_prompt_template(agent, version)` — `current` resolves to the active `prompt_template`, any other label must exist in `prompt_version_history` (empty templates resolve to `""`, unknown labels to `None`); shared by `optimize_prompt` and `diff_prompt_versions` (the diff route's inline `_get_template` closure was replaced with the shared helper, identical semantics).
+- (2) `optimize_prompt` now resolves the source template from the `version` path param before any eval/LLM work — unknown version returns 404 `"Prompt version v99 not found"` (checked before the eval-results query and LLM call, mirroring get/rollback/diff), and the optimizer is invoked with the requested version's template instead of `agent.prompt_template`.
+- (3) Tests — 3 new unit tests in `test_agent_prompts.py`: `test_optimize_returns_404_when_version_not_found` (404 detail + `optimize.assert_not_called()`), `test_optimize_uses_specified_version_template` (optimizer called with the requested version's template, next version label from history length), `test_optimize_uses_current_template_when_version_current` (`current` → active template). Updated `test_optimize_returns_404_when_no_eval_results` to seed a v1 history entry so the eval-results check is still the one exercised.
+- Updated product map `core/prompt-optimization.md` (2 new behaviour `[x]`, error-handling 404-on-version line extended to optimize, edge-case quirk rewritten as resolved, Known Gap → RESOLVED). 10/10 `test_agent_prompts.py` + 57/57 prompt-optimizer/prompt-versioning tests + 20/20 `test_agents_endpoint.py` pass (77 total), ruff check + format clean, mypy --strict clean on `agents.py`. Status: partial (6 gaps remain — diff unit test, integration test, perf test, unauthorized-access tests, response-length bound, docs stub).
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 358)
+- Fixed CRITICAL — 3 broken unit test assertions in `test_prompt_optimizer.py`: `test_raises_on_bad_json` expected `json.JSONDecodeError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_raises_on_missing_required_keys` expected `KeyError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_optimize_passes_through_llm_errors` expected `RuntimeError` to propagate but the retry loop catches it and raises `OptimizationFailedError` after 3 retries. Fixed all 3 to expect `OptimizationFailedError`.
+- Fixed MAJOR — 6 dead `except IntegrityError` blocks on SELECT-only operations in `agents.py`:
+  - `optimize_prompt`: 3 blocks wrapping `get_agent` SELECT, `get_eval_results_with_defs` SELECT, and `select(ModelBackend)` SELECT
+  - `list_prompt_versions`: 1 block wrapping `get_agent` SELECT
+  - `get_prompt_version_endpoint`: 1 block wrapping `get_prompt_version` SELECT
+  - `diff_prompt_versions`: 1 block wrapping `get_agent` SELECT
+  These catches were misleading dead code — SELECT queries cannot raise IntegrityError. Removed all 6. IntegrityError catches on write paths (apply, rollback) were preserved.
+- Added 1 new Known Gap: `optimize_prompt` accepts but never validates/uses the `version` path parameter — non-existent version accepted as source.
+- Status: partial (7 known gaps remain — 6 original + 1 new unused version param).
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 260)
+- Fixed CRITICAL — `OptimizationFailedError` from `PromptOptimizer` after LLM retry exhaustion propagated uncaught to `CatchAllMiddleware`, producing a generic 500 with no structured detail. Added `except OptimizationFailedError → 500` with `"Prompt optimization failed: LLM call failed after retries"` and `except Exception → 500` with `"Prompt optimization failed unexpectedly"` in the optimize endpoint.
+- Fixed MAJOR — product map Resilience checkboxes for `LLM call timeout` and `retry/backoff` were `[ ]` but both are fully implemented (`_LLM_TIMEOUT=60s` with `asyncio.wait_for`, `_MAX_RETRIES=3` with exponential backoff + jitter). Marked both `[x]`.
+- Added 2 new unit tests in `test_prompt_programming_error.py` covering `OptimizationFailedError→500` and unexpected `Exception→500` paths.
+- Status: partial (5 known gaps remain — integration test, perf test, unauthorized access, response length bound check, website docs stub).
+
+### 2026-07-03 — Cross-cutting QA (improve-architecture index 106)
+- Marked 3 stale Pipeline Integration checkboxes [ ]→[x] (prompt version hash comparison, independent pinning, model_backend_pins_json)
+- Added Error Handling section (12 behaviour checkboxes)
+- Added Edge Cases section (6 checkboxes)
+- Refined Known Gaps (gap #1: corrected to "mock-based test, not real diff computation")
+- Status: partial (3 known gaps remain)
+
+### 2026-07-04 — QA fix-up (feat-core-prompt-optimization)
+- Confirmed all 6 prompt endpoints already catch both ProgrammingError → 501 and SQLAlchemyError → 503 (diff endpoint had both catches already)
+- Added `test_prompt_programming_error.py` — tests both error paths (ProgrammingError + SQLAlchemyError) for all 6 prompt routes
+- Added SQLAlchemyError → 503 checkbox to Error Handling section
+- Added 2 edge case checkboxes for diff endpoint error rollover
+- Added Resilience & Integration Robustness section with 5 checkboxes
+- Updated Known Gaps: refined gap #1, added 4 new gaps (no integration test, response length bound check, no retry/backoff, no website docs stub)
+- Status: partial (6 known gaps remain)
