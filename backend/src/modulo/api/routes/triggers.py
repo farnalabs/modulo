@@ -34,6 +34,7 @@ from modulo.core.cron_helpers import (
     validate_cron_expression,
 )
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -55,11 +56,6 @@ _CODE_TRIGGER_UPDATE = "trigger.update"
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
 
 
 _log = logging.getLogger(__name__)
@@ -1395,7 +1391,7 @@ async def list_trigger_events(
                         | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                     )
                 except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", _sanitise_log_value(cursor), exc_info=True)
+                    _log.warning("Malformed cursor ignored: %s", sanitise_log_value(cursor), exc_info=True)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()

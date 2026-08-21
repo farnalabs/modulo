@@ -19,14 +19,10 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
 )
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.settings import Settings, get_settings
 
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
 
 
 _log = logging.getLogger(__name__)
@@ -148,8 +144,8 @@ async def oidc_callback(
     except ValueError as exc:
         _log.warning(
             "OIDC callback failed for provider %s: %s",
-            _sanitise_log_value(provider),
-            _sanitise_log_value(exc),
+            sanitise_log_value(provider),
+            sanitise_log_value(exc),
             exc_info=True,
         )
         raise HTTPException(
