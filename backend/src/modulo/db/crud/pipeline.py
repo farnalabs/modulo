@@ -41,13 +41,9 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _log = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
 
 
 class PipelineHasActiveRunsError(Exception):

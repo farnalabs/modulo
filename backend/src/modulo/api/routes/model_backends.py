@@ -42,6 +42,7 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT
 from modulo.settings import Settings, get_settings
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_MODEL_BACKENDS_LIST_MODEL = "model_backends.list_model_backends_endpoint"
 _MSG_MODEL_BACKENDS_NOT_AVAILABLE = "Model backends are not available. Run database migrations to enable this feature."
@@ -55,12 +56,6 @@ _CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoin
 
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
-
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 

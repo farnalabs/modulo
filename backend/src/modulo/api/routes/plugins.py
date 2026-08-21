@@ -13,14 +13,9 @@ from pydantic import BaseModel
 from modulo.api.dependencies import require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin_registry
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
-
 
 router = APIRouter(prefix="/api/v1/plugins", tags=["plugins"])
 

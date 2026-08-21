@@ -37,14 +37,9 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.trigger import Trigger
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
-
 
 BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"

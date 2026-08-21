@@ -7,12 +7,9 @@ import os
 from dataclasses import dataclass
 from threading import Lock, RLock
 
+from modulo.util import sanitise_log_value as _sanitise_log_value
+
 _log = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
 
 
 @dataclass

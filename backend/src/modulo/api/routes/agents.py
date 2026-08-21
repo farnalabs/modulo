@@ -34,6 +34,7 @@ from modulo.db.crud.agent import (
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_AGENT_LIST = "agent.list"
 _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
@@ -46,12 +47,6 @@ _CODE_AGENTS_OPTIMIZE_PROMPT = "agents.optimize_prompt"
 
 
 _log = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
-
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 

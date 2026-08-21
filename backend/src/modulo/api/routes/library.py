@@ -76,6 +76,7 @@ from modulo.db.crud.rating import (
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
     "The library feature is temporarily unavailable due to a database issue. Please retry."
@@ -289,11 +290,6 @@ class PipelineFromTemplateResponse(BaseModel):
 
 
 _log = logging.getLogger(__name__)
-
-
-def _sanitise_log_value(value: object, limit: int = 200) -> str:
-    """Sanitise a value for logging: strip CR/LF and cap length."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
 
 
 @router.get("", response_model=LibraryPrimitiveListResponse)
