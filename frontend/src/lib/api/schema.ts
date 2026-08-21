@@ -7774,6 +7774,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Rotate Identity Secret
          * @description Rotate the shared secret, authenticated by the old secret.
