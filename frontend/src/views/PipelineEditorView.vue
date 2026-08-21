@@ -611,9 +611,10 @@
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.condition_expression') }}</dt>
+            <label for="pipelineeditorview-field-16" class="text-muted-foreground">{{ $t('views.PipelineEditorView.condition_expression') }}</label>
             <dd>
               <input
+                id="pipelineeditorview-field-16"
                 v-model="edgeForm.condition_expression"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder="JMESPath expression (e.g. score > `0.5`)"
@@ -636,9 +637,10 @@
             </dd>
           </div>
           <div v-if="edgeForm.edge_type === 'llm'">
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.routing_label') }}</dt>
+            <label for="pipelineeditorview-field-17" class="text-muted-foreground">{{ $t('views.PipelineEditorView.routing_label') }}</label>
             <dd>
               <input
+                id="pipelineeditorview-field-17"
                 v-model="edgeForm.routing_label"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder="e.g. retry, escalate, complete"
