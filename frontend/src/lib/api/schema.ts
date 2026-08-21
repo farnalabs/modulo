@@ -5905,7 +5905,7 @@ export interface paths {
          * @description Set the org's guardrails kill-switch (admin only).
          *
          *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
-         *     start — never a full disable. Enabling fires an audit event AND a
+         *     start -- never a full disable. Enabling fires an audit event AND a
          *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
          *     silent. Disabling restores full enforcement.
          */
@@ -7728,8 +7728,6 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
          * Rotate Identity Secret
          * @description Rotate the shared secret, authenticated by the old secret.
@@ -7738,6 +7736,32 @@ export interface paths {
          *     Distinguishes 401 (auth failure / clock skew) from 403 (permission) from 400.
          */
         post: operations["rotate_identity_secret_api_v1_product_analytics_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metrics/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Events
+         * @description Ingest a batch of curated product analytics events.
+         *
+         *     - Consent gate: 204 when the org's ``product_analytics.level`` is not ``all``.
+         *     - Best-effort insert: individual row failures are logged and skipped so the
+         *       client always receives a 2xx.
+         *     - ``api_error`` events are capped at ``API_ERROR_DAILY_CAP`` per org per day.
+         *     - ``UNIQUE(event_id)`` handles dedup — duplicate inserts are silently ignored.
+         */
+        post: operations["ingest_events_api_v1_metrics_events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11418,6 +11442,24 @@ export interface components {
             role: string;
             /** Created At */
             created_at: string;
+        };
+        /** MetricsEventBatchRequest */
+        MetricsEventBatchRequest: {
+            /** Events */
+            events: components["schemas"]["MetricsEventItem"][];
+        };
+        /** MetricsEventItem */
+        MetricsEventItem: {
+            /** Event Id */
+            event_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
         };
         /** ModelBackendCreate */
         ModelBackendCreate: {
@@ -34287,6 +34329,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RotateResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_events_api_v1_metrics_events_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricsEventBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
