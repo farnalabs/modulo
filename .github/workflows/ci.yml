@@ -47,10 +47,16 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             baseline="origin/$GITHUB_BASE_REF"
-          else
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
             baseline="HEAD^"
+          else
+            baseline=""
           fi
-          uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
+          if [ -n "$baseline" ]; then
+            uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
+          else
+            uv run --project backend --no-sync semgrep --config=.semgrep/ --error .
+          fi
       - run: uv run --no-sync pip-audit
       - name: Import-linter architecture contracts
         run: uv run --no-sync lint-imports
