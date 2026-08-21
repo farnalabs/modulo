@@ -10,7 +10,7 @@
         role="alert"
       >
         {{ store.error }}
-        <button class="ml-2 underline" @click="store.error = null">Dismiss</button>
+        <button class="ml-2 underline" @click="store.error = null">{{ $t('views.ProductAnalytics.dismiss_error') }}</button>
       </div>
       <div class="flex items-center justify-between">
         <div>

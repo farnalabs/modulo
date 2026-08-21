@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { toDate } from '../lib/formatDate'
 
 interface ConsentData {
   level: 'off' | 'all'
@@ -33,8 +34,9 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     if (!instanceEnabled.value) return false
     if (consent.value.prompted === 'yes' || consent.value.prompted === 'no') return false
     if (consent.value.prompted === 'dismissed' && consent.value.prompted_at) {
-      const dismissedAt = new Date(consent.value.prompted_at)
-      const cooldownExpiry = new Date(dismissedAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+      const dismissedAt = toDate(consent.value.prompted_at)
+      if (!dismissedAt) return false
+      const cooldownExpiry = new Date(dismissedAt.getTime() + 7 * 24 * 60 * 60 * 1000) // nosemgrep: new-date-without-guard - arithmetic on a validated Date
       return new Date() >= cooldownExpiry
     }
     return consent.value.prompted === null

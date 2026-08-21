@@ -133,7 +133,7 @@ describe('ProductAnalyticsConsentPrompt', () => {
     const store = useProductAnalyticsStore()
     store.instanceEnabled = true
     store.consent.prompted = 'dismissed'
-    store.consent.prompted_at = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()
+    store.consent.prompted_at = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() // nosemgrep: new-date-without-guard - deterministic past timestamp
     store.consent.level = 'off'
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)

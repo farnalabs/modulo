@@ -2103,6 +2103,7 @@ export default {
       "accept": "Yes, share usage data",
       "decline": "No thanks",
       "dismiss": "Ask me later",
+      "dismiss_error": "Dismiss",
       "partner_enable": "Enable analytics",
       "partner_stay_community": "Stay on Community",
       "settings_title": "Product Analytics",
