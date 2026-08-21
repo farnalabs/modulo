@@ -175,7 +175,7 @@ class TestIsEnforcementActive:
     async def test_kill_switch_absent_enforced(self) -> None:
         session = AsyncMock()
         with patch(
-            "modulo.core.product_analytics.license_enforcement.get_config",
+            "modulo.db.crud.system_config.get_config",
             return_value=None,
         ):
             assert await is_enforcement_active(session) is True
@@ -183,7 +183,7 @@ class TestIsEnforcementActive:
     async def test_kill_switch_false_enforced(self) -> None:
         session = AsyncMock()
         with patch(
-            "modulo.core.product_analytics.license_enforcement.get_config",
+            "modulo.db.crud.system_config.get_config",
             return_value=SimpleNamespace(value=False),
         ):
             assert await is_enforcement_active(session) is True
@@ -191,16 +191,18 @@ class TestIsEnforcementActive:
     async def test_kill_switch_true_disabled(self) -> None:
         session = AsyncMock()
         with patch(
-            "modulo.core.product_analytics.license_enforcement.get_config",
+            "modulo.db.crud.system_config.get_config",
             return_value=SimpleNamespace(value=True),
         ):
             assert await is_enforcement_active(session) is False
 
     async def test_kill_switch_read_error_fail_safe(self) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
         session = AsyncMock()
         with patch(
-            "modulo.core.product_analytics.license_enforcement.get_config",
-            side_effect=Exception("db error"),
+            "modulo.db.crud.system_config.get_config",
+            side_effect=SQLAlchemyError("db error"),
         ):
             assert await is_enforcement_active(session) is True
 
