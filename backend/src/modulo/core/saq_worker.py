@@ -827,6 +827,7 @@ def _get_system_async_engine() -> AsyncEngine:
                 pool_pre_ping=True,
                 pool_size=settings.saq_worker_db_pool_size,
                 max_overflow=0,
+                connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
             _SYSTEM_ASYNC_ENGINE = _get_async_engine()

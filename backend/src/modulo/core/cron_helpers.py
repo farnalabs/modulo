@@ -351,6 +351,7 @@ def _get_system_engine() -> AsyncEngine:
             _SYSTEM_ENGINE = create_async_engine(
                 settings.modulo_system_database_url,
                 pool_pre_ping=True,
+                connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
             _SYSTEM_ENGINE = _get_engine()
