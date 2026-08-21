@@ -65,7 +65,6 @@ export default {
       "allowed_models": "Allowed Models",
       "default_provider": "Default Provider",
       "save_current_access_list_configuration": "Save current access list configuration.",
-      "skill_description": "Skill description",
       "set_the_default_model_and_allowed_providers_for_remy": "Set the default model and allowed providers for Remy",
       "teams": "Teams",
       "failed_to_load_provider_status": "Failed to load provider status:",
