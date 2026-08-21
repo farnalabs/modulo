@@ -8,7 +8,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: modulo
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modulo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: modulo
     ports:
       - "5432:5432"
@@ -31,9 +31,9 @@ services:
       db:
         condition: service_healthy
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modulo}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-modulo}@db:5432/modulo
-      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-modulo}@db:5432/modulo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
@@ -55,8 +55,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modulo}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-modulo}@db:5432/modulo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
@@ -76,8 +76,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modulo}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-modulo}@db:5432/modulo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
