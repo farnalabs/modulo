@@ -61,7 +61,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -470,7 +470,9 @@ def _resolve_redaction_leaf(redacted: dict[str, Any], segments: Sequence[str]) -
         if not isinstance(current, dict) or segment not in current:
             return None
         current = current[segment]
-    return cast("dict[str, Any] | None", current)
+    if not isinstance(current, dict):
+        return None
+    return current
 
 
 def redact_payload(
