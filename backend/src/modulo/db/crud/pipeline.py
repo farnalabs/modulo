@@ -41,6 +41,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _log = logging.getLogger(__name__)
 
@@ -386,7 +387,12 @@ async def clone_pipeline(
     (the caller's org role) and the read session re-applies the caller's full
     RLS context; ``account_id`` doubles as the caller's user.
     """
-    _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
+    _log.info(
+        "Cloning pipeline %s (org=%s, requested_name=%s)",
+        _sanitise_log_value(pipeline_id),
+        _sanitise_log_value(org_id),
+        _sanitise_log_value(new_name),
+    )
 
     snapshot = await _read_clone_source_snapshot(
         session,
@@ -457,7 +463,11 @@ async def _clone_pipeline_config(
     giving it a fresh id before any dependent rows (edges, snapshots) are added.
     """
     name = new_name or f"Copy of {snapshot.name}"
-    _log.info("Copying pipeline config for %s -> '%s'", pipeline_id, name)
+    _log.info(
+        "Copying pipeline config for %s -> '%s'",
+        _sanitise_log_value(pipeline_id),
+        _sanitise_log_value(name),
+    )
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,

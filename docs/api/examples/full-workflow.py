@@ -29,6 +29,7 @@ import os
 import sys
 import time
 import uuid
+from urllib.parse import urlparse
 
 import httpx
 
@@ -282,7 +283,8 @@ def main():
         resp = client.post("/api/v1/auth/ws-token", json={}, headers=headers)
         if resp.status_code == 200:
             ws_token = resp.json()["ws_token"]
-            ws_url = BASE_URL.replace("http://", "ws://").replace("https://", "wss://")
+            ws_scheme = "wss" if BASE_URL.startswith("https") else "ws"
+            ws_url = f"{ws_scheme}://{urlparse(BASE_URL).netloc}"
             print(f"  WebSocket available: {ws_url}/api/v1/runs/{run_id}/ws?token={ws_token[:20]}...")
         else:
             print("  WebSocket token not available — falling back to polling")

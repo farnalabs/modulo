@@ -10,6 +10,8 @@ from typing import Any, cast
 
 import redis.asyncio as aioredis
 
+from modulo.util import sanitise_log_value as _sanitise_log_value
+
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
@@ -70,7 +72,7 @@ class RemyRedisRegistry:
             if tools is None:
                 raise ValueError("permission tools must be a list of objects")
         except (ValueError, TypeError, json.JSONDecodeError):
-            logger.warning("Invalid JSON in permission request tools for %s", request_id)
+            logger.warning("Invalid JSON in permission request tools for %s", _sanitise_log_value(request_id))
             tools = []
         return {"session_id": data.get("session_id", ""), "tools": tools}
 

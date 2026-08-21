@@ -11,31 +11,7 @@
  *   node library/js.js
  */
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
-const EMAIL = process.env.MODULO_EMAIL;
-const PASSWORD = process.env.MODULO_PASSWORD;
-
-if (!EMAIL || !PASSWORD) {
-  console.error("MODULO_EMAIL and MODULO_PASSWORD must be set");
-  process.exit(1);
-}
-
-async function api(path, options = {}) {
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
-  }
-  return res.json();
-}
-
-function auth(token) {
-  return { Authorization: `Bearer ${token}` };
-}
+const { api, logSafe, auth, EMAIL, PASSWORD, runMain } = require("../_shared/client.js");
 
 async function main() {
   const loginResp = await api("/api/v1/auth/login", {
@@ -48,9 +24,9 @@ async function main() {
   // Step 1: Browse library
   console.log("Browsing library ...");
   const browse = await api("/api/v1/libraries?page=1&page_size=20", { headers: h });
-  console.log(`  Found ${browse.total} primitive(s)`);
+  console.log(`  Found ${logSafe(browse.total)} primitive(s)`);
   for (const p of browse.items) {
-    console.log(`    - ${p.id}: ${p.name} (${p.primitive_type || "N/A"})`);
+    console.log(`    - ${logSafe(p.id)}: ${logSafe(p.name)} (${logSafe(p.primitive_type || "N/A")})`);
   }
 
   const items = browse.items;
@@ -59,18 +35,18 @@ async function main() {
     const prim = items[0];
 
     // Step 2: Preview
-    console.log(`\nPreviewing ${prim.name} ...`);
+    console.log(`\nPreviewing ${logSafe(prim.name)} ...`);
     const detail = await api(`/api/v1/libraries/${prim.id}`, { headers: h });
-    console.log(`  Description: ${detail.description || "N/A"}`);
+    console.log(`  Description: ${logSafe(detail.description || "N/A")}`);
 
     // Step 3: Copy-to-adapt
     console.log(`\nCopying to adapt ...`);
     const cloned = await api(`/api/v1/libraries/${prim.id}/adapt`, {
       method: "POST",
       headers: h,
-      body: "{}",
+      body: JSON.stringify({}),
     });
-    console.log(`  Cloned ID: ${cloned.id}`);
+    console.log(`  Cloned ID: ${logSafe(cloned.id)}`);
 
     // Step 4: Rate
     console.log(`\nSubmitting rating ...`);
@@ -79,7 +55,7 @@ async function main() {
       headers: h,
       body: JSON.stringify({ thumbs_up: true, comment: "Great primitive!" }),
     });
-    console.log(`  Rating submitted: ${rating.id || "OK"}`);
+    console.log(`  Rating submitted: ${logSafe(rating.id || "OK")}`);
   } else {
     // Create one
     console.log("\nNo primitives found. Creating one ...");
@@ -96,13 +72,10 @@ async function main() {
         },
       }),
     });
-    console.log(`  Created: ${created.id}`);
+    console.log(`  Created: ${logSafe(created.id)}`);
   }
 
   console.log("\nDone.");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err.message);
-  process.exit(1);
-});
+runMain(main);
