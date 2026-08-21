@@ -151,7 +151,7 @@ const saving = ref(false);
 type SkillFieldModel = "name" | "description" | "triggersText";
 const skillFields: { id: string; model: SkillFieldModel; labelKey: string }[] = [
   { id: "remyskill-name-input", model: "name", labelKey: "components.remy.RemySkillDialog.skill_name" },
-  { id: "remyskill-description-input", model: "description", labelKey: "components.remy.RemySkillManager.description" },
+  { id: "remyskill-description-input", model: "description", labelKey: "components.remy.RemySkillManager.skill_description_label" },
   { id: "remyskill-triggers-input", model: "triggersText", labelKey: "components.remy.RemySkillManager.triggers_commaseparated" },
 ];
 
