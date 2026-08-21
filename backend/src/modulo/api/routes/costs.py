@@ -158,6 +158,7 @@ class CostReportResponse(BaseModel):
     org_unassigned_components: str | None = None
     legacy_total: str | None = None
     org_total: str | None = None
+    org_run_count: int | None = None
     has_more: bool = False
 
 
@@ -250,6 +251,7 @@ async def get_costs(
         org_unassigned_components=buckets.get("org_unassigned_components") if isinstance(buckets, dict) else None,
         legacy_total=buckets.get("legacy_total") if isinstance(buckets, dict) else None,
         org_total=buckets.get("org_total") if isinstance(buckets, dict) else None,
+        org_run_count=buckets.get("org_run_count") if isinstance(buckets, dict) else None,
         has_more=bool(buckets.get("has_more", False)) if isinstance(buckets, dict) else False,
     )
 

@@ -9140,6 +9140,8 @@ export interface components {
             legacy_total?: string | null;
             /** Org Total */
             org_total?: string | null;
+            /** Org Run Count */
+            org_run_count?: number | null;
             /**
              * Has More
              * @default false
