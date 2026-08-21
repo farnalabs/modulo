@@ -2715,69 +2715,78 @@ The `Breadcrumb.vue` component walks the `parent` chain up to root, rendering ea
 
 #### 8.26.2 Sidebar Groups
 
-The sidebar is a set of four flat groups — no subgroups. It is driven by `frontend/src/manifest.yaml` as the single source of truth for routes, group membership, ordering, and tier/permission gating (§8.28). Each route declares `sidebar_group` + `sidebar_order`; detail and editor pages (`type: detail_page` or without a `sidebar_group`) are excluded from the sidebar.
+The sidebar is a set of six flat groups — no subgroups. It is driven by `frontend/src/manifest.yaml` as the single source of truth for routes, group membership, ordering, and tier/permission gating (§8.28). Each route declares `sidebar_group` + `sidebar_order`; detail and editor pages (`type: detail_page` or without a `sidebar_group`) are excluded from the sidebar. The six-group IA is the codified FAR-333 restructure: IMPROVE was promoted to a first-class group and the former ADMIN surface was split into CONFIGURE (product/workspace config) and SYSTEM (org/system-admin-only surface), alongside the original BUILD and MONITOR groups.
 
 **Sidebar structure:**
 
 ```
 BUILD (default expanded)
-  Dashboard           /
-  Analytics           /analytics         (requires analytics.query permission)
-  Pipelines           /pipelines
-  Library             /library
-  Runs                /runs
-  Lifecycle Maps      /lifecycle-maps
+  Dashboard            /
+  Pipelines            /pipelines
+  Library              /library
+  Runs                 /runs
+  Lifecycle Maps       /lifecycle-maps
 
 MONITOR (default expanded)
-  Output Diff         /runs/diff
-  Evals               /evals/editor
-  Eval Proposals      /evals/proposals
-  Variants            /variants/compare
-  AB Test Models      /variants/ab-test
-  Browser Monitoring  /settings/monitoring
-  Error Dashboard     /admin/errors
-  Notification Log    /admin/notification-delivery
+  Error Dashboard      /admin/errors
+  Output Diff          /runs/diff
+  Notification Log     /admin/notification-delivery
+  Browser Monitoring   /settings/monitoring
+  AB Test Models       /variants/compare/:batchId
+  Costs                /admin/costs
+  HITL Review          /settings/hitl-review
+  Analytics            /analytics
+
+IMPROVE (default collapsed)
+  Evals                /evals/editor
+  Eval Proposals       /evals/proposals
+  Variants             /variants/compare
+  AB Test Models       /variants/ab-test
 
 CONFIGURE (default collapsed)
-  Schemas             /schemas
-  Parameter Schemas   /admin/parameter-schemas
-  Model Backends      /admin/model-backends
-  MCP                 /settings/mcp
-  Triggers            /settings/triggers
-  Connectors          /admin/connectors
-  Runtime Config      /settings/runtime-config
-  Rate Limits         /settings/rate-limits
-  Environment Profiles /environment-profiles
+  Schemas              /schemas
+  Parameter Schemas    /admin/parameter-schemas
+  Model Backends       /admin/model-backends
+  MCP                  /settings/mcp
+  Guardrails           /settings/guardrails
+  Triggers             /settings/triggers
+  Connectors           /admin/connectors
+  Environment Profiles  /environment-profiles
+  Sandbox Concurrency  /admin/sandbox-concurrency
+  Remy Config          /admin/remy          (private_preview — dev mode only)
+  Remy Skills          /settings/remy       (private_preview — dev mode only)
 
 ADMIN (default collapsed)
-  Remy Config         /admin/remy          (private_preview — dev mode only)
-  Remy Skills         /settings/remy       (private_preview — dev mode only)
-  Teams               /settings/teams
-  SSO                 /settings/sso
-  License             /settings/license
-  Users               /admin/users
-  Org Settings        /admin/org
-  Audit Log           /admin/audit
-  Costs               /admin/costs
-  Node Categories     /admin/node-categories
-  Feature Flags       /admin/feature-flags
-  Environments        /admin/environments
-  Housekeeping        /admin/housekeeping
-  Run Retention       /admin/run-retention
-  Saved Views         /admin/views
-  Sandbox Concurrency /admin/sandbox-concurrency
-  HITL Review         /settings/hitl-review
-  Observability       /settings/observability
-  Error Forwarders    /settings/error-forwarders
-  Email               /settings/email
-  Plugins             /admin/plugins
-  Feedback Inbox      /feedback/inbox
+  Users                /admin/users
+  Teams                /settings/teams
+  Org Settings         /admin/org
+  Plugins              /admin/plugins
+  SSO                  /settings/sso
+  Audit Log            /admin/audit
+  Node Categories      /admin/node-categories
+  Saved Views          /admin/views
+  Environments         /admin/environments
+  Feedback Inbox       /feedback/inbox
+  Error Detail         /admin/errors/:id
+
+SYSTEM (default collapsed)
+  License              /settings/license
+  Error Forwarders     /settings/error-forwarders
+  Email                /settings/email
+  Feature Flags        /admin/feature-flags
+  Run Retention        /admin/run-retention
+  Housekeeping         /admin/housekeeping
+  Runtime Config       /settings/runtime-config
+  Rate Limits          /settings/rate-limits
+  Observability        /settings/observability
 ```
 
 Key structural points:
-- Four flat groups — BUILD, MONITOR, CONFIGURE, ADMIN — with no subgroups (`SidebarSubgroup.vue` removed). BUILD and MONITOR default expanded; CONFIGURE and ADMIN default collapsed.
-- Remy sits under ADMIN: Remy Config (`/admin/remy`) and Remy Skills (`/settings/remy`), both `private_preview` (dev mode only).
-- Settings/configure/admin pages are distributed across groups per the manifest (MCP, Triggers, Runtime Config, Rate Limits, Connectors, Model Backends under CONFIGURE; Teams, SSO, License, HITL Review, Observability, Error Forwarders, Email under ADMIN).
+- Six flat groups — BUILD, MONITOR, IMPROVE, CONFIGURE, ADMIN, SYSTEM — with no subgroups (`SidebarSubgroup.vue` removed). BUILD and MONITOR default expanded; IMPROVE, CONFIGURE, ADMIN and SYSTEM default collapsed.
+- IMPROVE holds the experiment/eval surface: Evals, Eval Proposals, Variants, AB Test Models.
+- CONFIGURE holds product/workspace config (Schemas, Model Backends, MCP, Guardrails, Triggers, Connectors, Environment Profiles, Sandbox Concurrency) plus Remy (Remy Config `/admin/remy` and Remy Skills `/settings/remy`, both `private_preview` — dev mode only).
+- ADMIN holds people/org/plugin surface (Users, Teams, Org Settings, Plugins, SSO, Audit Log, Node Categories, Saved Views, Environments, Feedback Inbox, Error Detail).
+- SYSTEM holds org/system-admin-only surface (License, Error Forwarders, Email, Feature Flags, Run Retention, Housekeeping, Runtime Config, Rate Limits, Observability).
 - Detail and editor pages (e.g. `/runs/:id`, `/admin/errors/:id`, `/lifecycle-maps/:id`, schema editor/infer) are not sidebar items.
 - The sidebar is driven by `frontend/src/manifest.yaml` as the single source of truth (§8.28): group membership, ordering, tiers, permissions, and dev-mode visibility all come from the manifest.
 
