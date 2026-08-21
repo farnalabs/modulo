@@ -404,6 +404,58 @@ async def clone_pipeline(
     if _on_step_a_committed is not None:
         await _on_step_a_committed()
 
+    cloned = await _clone_pipeline_config(
+        session,
+        snapshot,
+        org_id=org_id,
+        account_id=account_id,
+        pipeline_id=pipeline_id,
+        new_name=new_name,
+    )
+    edge_count = await _clone_edges(
+        session,
+        snapshot.edges,
+        source_id=pipeline_id,
+        cloned_id=cloned.id,
+        org_id=org_id,
+        account_id=account_id,
+    )
+    node_count = len(snapshot.graph_nodes_json)
+    snap_count = await _clone_snapshots(
+        session,
+        snapshot.snapshots,
+        source_id=pipeline_id,
+        cloned_id=cloned.id,
+        org_id=org_id,
+    )
+
+    await session.flush()
+    _log.info(
+        "Clone complete: %s -> %s (%d edges, %d nodes, %d snapshots)",
+        pipeline_id,
+        cloned.id,
+        edge_count,
+        node_count,
+        snap_count,
+    )
+    return cloned
+
+
+async def _clone_pipeline_config(
+    session: AsyncSession,
+    snapshot: _CloneSourceSnapshot,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    new_name: str | None,
+) -> Pipeline:
+    """Build and flush the cloned ``Pipeline`` row from the plain-data snapshot.
+
+    The clone deliberately copies the source's config fields (deep-copying the
+    mutable JSON blobs so the clone never shares references with the source),
+    giving it a fresh id before any dependent rows (edges, snapshots) are added.
+    """
     name = new_name or f"Copy of {snapshot.name}"
     _log.info("Copying pipeline config for %s -> '%s'", pipeline_id, name)
     cloned = Pipeline(
@@ -424,13 +476,30 @@ async def clone_pipeline(
     session.add(cloned)
     await session.flush()
     _log.info("Pipeline config copied: new id=%s", cloned.id)
+    return cloned
 
-    _log.info("Copying edges for pipeline %s -> %s", pipeline_id, cloned.id)
+
+async def _clone_edges(
+    session: AsyncSession,
+    edges: list[dict[str, Any]],
+    *,
+    source_id: uuid.UUID,
+    cloned_id: uuid.UUID,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> int:
+    """Copy the source's first-class edges onto the clone.
+
+    Returns the number of edges copied. Any gated edge (non-None
+    ``hitl_gate_config``) is collected and, if at least one exists, emitted as a
+    single batched ``edge_created_with_gate`` audit event after the flush.
+    """
+    _log.info("Copying edges for pipeline %s -> %s", source_id, cloned_id)
     gated_cloned_edges: list[PipelineEdge] = []
-    for edge in snapshot.edges:
+    for edge in edges:
         cloned_edge = PipelineEdge(
             organisation_id=org_id,
-            pipeline_id=cloned.id,
+            pipeline_id=cloned_id,
             source_node_id=edge["source_node_id"],
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
@@ -440,8 +509,6 @@ async def clone_pipeline(
         if edge["hitl_gate_config"] is not None:
             gated_cloned_edges.append(cloned_edge)
     await session.flush()
-    edge_count = len(snapshot.edges)
-    node_count = len(snapshot.graph_nodes_json)
     if gated_cloned_edges:
         await append_audit_event(
             session,
@@ -449,16 +516,31 @@ async def clone_pipeline(
             event_type="edge_created_with_gate",
             actor_user_id=account_id,
             resource_type="pipeline",
-            resource_id=cloned.id,
+            resource_id=cloned_id,
             payload_json={"edge_ids": [str(e.id) for e in gated_cloned_edges]},
         )
+    return len(edges)
 
-    _log.info("Copying snapshots for pipeline %s -> %s", pipeline_id, cloned.id)
+
+async def _clone_snapshots(
+    session: AsyncSession,
+    snapshots: list[dict[str, Any]],
+    *,
+    source_id: uuid.UUID,
+    cloned_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> int:
+    """Copy the source's snapshots (and their schema pins) onto the clone.
+
+    Returns the number of snapshots copied. The JSON blobs are deep-copied so
+    the cloned snapshots are fully independent of the source.
+    """
+    _log.info("Copying snapshots for pipeline %s -> %s", source_id, cloned_id)
     snap_count = 0
-    for snap in snapshot.snapshots:
+    for snap in snapshots:
         cloned_snap = PipelineSnapshot(
             organisation_id=org_id,
-            pipeline_id=cloned.id,
+            pipeline_id=cloned_id,
             snapshot_version=snap["snapshot_version"],
             account_id=snap["account_id"],
             environment_profile_id=snap["environment_profile_id"],
@@ -490,17 +572,91 @@ async def clone_pipeline(
                 )
             )
         snap_count += 1
+    return snap_count
 
-    await session.flush()
-    _log.info(
-        "Clone complete: %s -> %s (%d edges, %d nodes, %d snapshots)",
-        pipeline_id,
-        cloned.id,
-        edge_count,
-        node_count,
-        snap_count,
-    )
-    return cloned
+
+def _edge_to_plain_dict(e: PipelineEdge) -> dict[str, Any]:
+    """Flatten a ``PipelineEdge`` row into the plain-data shape used by both
+    the clone snapshot and the graph-replace read path."""
+    return {
+        "source_node_id": e.source_node_id,
+        "target_node_id": e.target_node_id,
+        "edge_type": e.edge_type,
+        "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+    }
+
+
+def _snapshot_pin_to_dict(p: SnapshotSchemaPin) -> dict[str, Any]:
+    """Flatten a ``SnapshotSchemaPin`` row into plain data."""
+    return {
+        "node_id": p.node_id,
+        "direction": p.direction,
+        "schema_id": p.schema_id,
+        "schema_version": p.schema_version,
+    }
+
+
+def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dict[str, Any]:
+    """Flatten a ``PipelineSnapshot`` row into plain data, deep-copying its JSON
+    blobs so the clone never shares references with the source."""
+    return {
+        "snapshot_version": snap.snapshot_version,
+        "account_id": snap.account_id,
+        "environment_profile_id": snap.environment_profile_id,
+        "graph_json": copy.deepcopy(snap.graph_json),
+        "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
+        "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
+        "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
+        "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
+        "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
+        "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
+        "tag": snap.tag,
+        "notes": snap.notes,
+        "default_autonomy_level": snap.default_autonomy_level,
+        "config_json": copy.deepcopy(snap.config_json),
+        "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
+        "pins": pins,
+    }
+
+
+def _resolve_read_session_factory(
+    session: AsyncSession,
+    read_factory: Callable[[], AsyncSession] | None,
+) -> tuple[Callable[[], AsyncSession], AsyncEngine | None]:
+    """Return ``(factory, read_engine)`` for the clone's step-(a) read session.
+
+    When the caller supplies a *read_factory* it is used as-is (no engine to
+    dispose). Otherwise one is derived from the caller's session binding:
+    ``session.bind`` is the ``AsyncEngine`` the session was created with;
+    ``session.get_bind()`` returns the *sync* ``Engine`` (SQLAlchemy 2.0) which
+    ``async_sessionmaker`` rejects ("AsyncEngine expected"). If no usable
+    binding exists a ``RuntimeError`` is raised and *read_engine* is None.
+    """
+    if read_factory is not None:
+        return read_factory, None
+
+    bind = session.bind
+    if isinstance(bind, AsyncEngine):
+        return async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession), None
+
+    if bind is None:
+        try:
+            raw = session.get_bind()
+        except InvalidRequestError:
+            raise RuntimeError("cannot derive an async read URL from the clone source session") from None
+        async_url: Any = raw.engine.url if isinstance(raw, Connection) else raw.url
+    elif isinstance(bind, AsyncConnection):
+        conn = bind.sync_connection
+        if conn is None:
+            raise RuntimeError("AsyncConnection has no bound sync connection; cannot derive read URL")
+        async_url = conn.engine.url
+    else:
+        async_url = None
+
+    if async_url is None:
+        raise RuntimeError("cannot derive an async read URL from the clone source session")
+    read_engine = create_async_engine(async_url, poolclass=NullPool)
+    return async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession), read_engine
 
 
 async def _read_clone_source_snapshot(
@@ -521,33 +677,7 @@ async def _read_clone_source_snapshot(
     ``set_rls_user_context`` (when *org_role* is given) makes team-scoped
     pipelines visible via ``app.user_id`` / ``app.org_role``.
     """
-    factory = read_factory
-    read_engine: AsyncEngine | None = None
-    if factory is None:
-        # ``session.bind`` is the AsyncEngine the session was created with;
-        # ``session.get_bind()`` returns the *sync* ``Engine`` (SQLAlchemy 2.0)
-        # which ``async_sessionmaker`` rejects ("AsyncEngine expected").
-        bind = session.bind
-        if isinstance(bind, AsyncEngine):
-            factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
-        else:
-            if bind is None:
-                try:
-                    raw = session.get_bind()
-                except InvalidRequestError:
-                    raise RuntimeError("cannot derive an async read URL from the clone source session") from None
-                async_url = raw.engine.url if isinstance(raw, Connection) else raw.url
-            elif isinstance(bind, AsyncConnection):
-                conn = bind.sync_connection
-                if conn is None:
-                    raise RuntimeError("AsyncConnection has no bound sync connection; cannot derive read URL")
-                async_url = conn.engine.url
-            else:
-                async_url = None
-            if async_url is None:
-                raise RuntimeError("cannot derive an async read URL from the clone source session")
-            read_engine = create_async_engine(async_url, poolclass=NullPool)
-            factory = async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession)
+    factory, read_engine = _resolve_read_session_factory(session, read_factory)
 
     try:
         async with factory() as read_session, read_session.begin():
@@ -570,12 +700,7 @@ async def _read_clone_source_snapshot(
                 await on_step_a_held()
 
             edges = [
-                {
-                    "source_node_id": e.source_node_id,
-                    "target_node_id": e.target_node_id,
-                    "edge_type": e.edge_type,
-                    "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
-                }
+                _edge_to_plain_dict(e)
                 for e in (
                     await read_session.execute(
                         select(PipelineEdge)
@@ -596,38 +721,14 @@ async def _read_clone_source_snapshot(
             snapshots: list[dict[str, Any]] = []
             for snap in snap_rows:
                 pins = [
-                    {
-                        "node_id": p.node_id,
-                        "direction": p.direction,
-                        "schema_id": p.schema_id,
-                        "schema_version": p.schema_version,
-                    }
+                    _snapshot_pin_to_dict(p)
                     for p in (
                         await read_session.execute(
                             select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
                         )
                     ).scalars()
                 ]
-                snapshots.append(
-                    {
-                        "snapshot_version": snap.snapshot_version,
-                        "account_id": snap.account_id,
-                        "environment_profile_id": snap.environment_profile_id,
-                        "graph_json": copy.deepcopy(snap.graph_json),
-                        "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
-                        "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
-                        "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
-                        "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
-                        "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
-                        "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
-                        "tag": snap.tag,
-                        "notes": snap.notes,
-                        "default_autonomy_level": snap.default_autonomy_level,
-                        "config_json": copy.deepcopy(snap.config_json),
-                        "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
-                        "pins": pins,
-                    }
-                )
+                snapshots.append(_snapshot_to_dict(snap, pins))
 
             return _CloneSourceSnapshot(
                 name=source.name,
