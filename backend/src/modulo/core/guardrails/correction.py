@@ -465,13 +465,14 @@ def _resolve_redaction_leaf(redacted: dict[str, Any], segments: Sequence[str]) -
     ``None`` when any intermediate segment is missing or not a dict (the path
     is left untouched, matching the "missing paths are left untouched" rule).
     """
-    current: Any = redacted
+    current: dict[str, Any] = redacted
     for segment in segments[:-1]:
         if not isinstance(current, dict) or segment not in current:
             return None
-        current = current[segment]
-    if not isinstance(current, dict):
-        return None
+        value: Any = current[segment]
+        if not isinstance(value, dict):
+            return None
+        current = value
     return current
 
 
