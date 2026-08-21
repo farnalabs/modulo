@@ -68,6 +68,23 @@ def upgrade() -> None:
         )
     )
 
+    # Row-level security — metrics_staging is org-scoped (OrgScoped base).
+    op.execute(
+        sa.text(
+            """
+            ALTER TABLE "metrics_staging" ENABLE ROW LEVEL SECURITY
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE POLICY rls_org_isolation ON "metrics_staging"
+            USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)
+            """
+        )
+    )
+
 
 def downgrade() -> None:
     # Non-reversible reconciliation migration

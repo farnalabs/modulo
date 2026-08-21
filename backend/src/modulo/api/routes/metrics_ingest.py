@@ -78,7 +78,7 @@ def _sanitize_route_template(route: str | None, request: Request) -> str:
     app = request.app
     for r in app.routes:
         template = getattr(r, "path", None)
-        if template and route == template:
+        if isinstance(template, str) and route == template:
             return template
     return "unknown"
 
