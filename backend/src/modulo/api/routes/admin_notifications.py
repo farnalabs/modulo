@@ -9,7 +9,6 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from cryptography.fernet import Fernet
@@ -36,6 +35,7 @@ from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+from modulo.util import is_valid_http_url
 
 _CODE_ADMIN_NOTIFICATION_MANAGE = "admin.notification.manage"
 _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING = "notifications.delivery_table_missing"
@@ -85,7 +85,7 @@ class WebhookCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str) -> str:
-        if urlparse(v).scheme not in ("http", "https"):
+        if not is_valid_http_url(v):
             raise ValueError("url must start with http:// or https://")
         return v
 
@@ -110,7 +110,7 @@ class WebhookUpdate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str | None) -> str | None:
-        if v is not None and urlparse(v).scheme not in ("http", "https"):
+        if v is not None and not is_valid_http_url(v):
             raise ValueError("url must start with http:// or https://")
         return v
 

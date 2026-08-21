@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 from pydantic import BaseModel, Field, field_validator
+
+from modulo.util import is_valid_http_url
 
 
 class ErrorNotificationRuleCreate(BaseModel):
@@ -32,7 +32,7 @@ class ErrorNotificationRuleCreate(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def _validate_webhook(cls, v: str | None) -> str | None:
-        if v is not None and urlparse(v).scheme not in ("http", "https"):
+        if v is not None and not is_valid_http_url(v):
             raise ValueError("webhook_url must start with http:// or https://")
         return v
 
@@ -64,7 +64,7 @@ class ErrorNotificationRuleUpdate(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def _validate_webhook(cls, v: str | None) -> str | None:
-        if v is not None and urlparse(v).scheme not in ("http", "https"):
+        if v is not None and not is_valid_http_url(v):
             raise ValueError("webhook_url must start with http:// or https://")
         return v
 
