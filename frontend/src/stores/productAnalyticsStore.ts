@@ -67,20 +67,28 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     return !result.error && !!data
   }
 
+  async function callConsent(
+    method: 'GET' | 'POST' | 'PUT',
+    body?: Record<string, unknown>,
+  ): Promise<boolean> {
+    return runRequest(() =>
+      (api as any)[method](
+        '/api/v1/admin/product-analytics/consent',
+        body ? { body } : undefined,
+      ),
+    )
+  }
+
   async function fetchConsent(): Promise<void> {
-    await runRequest(() => (api as any).GET('/api/v1/admin/product-analytics/consent'))
+    await callConsent('GET')
   }
 
   async function submitConsent(action: 'accept' | 'decline' | 'dismiss'): Promise<boolean> {
-    return runRequest(() =>
-      (api as any).POST('/api/v1/admin/product-analytics/consent', { body: { action } }),
-    )
+    return callConsent('POST', { action })
   }
 
   async function updateLevel(level: 'off' | 'all'): Promise<boolean> {
-    return runRequest(() =>
-      (api as any).PUT('/api/v1/admin/product-analytics/consent', { body: { level } }),
-    )
+    return callConsent('PUT', { level })
   }
 
   return {
