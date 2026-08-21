@@ -863,7 +863,7 @@ async def _create_manual_run(
         )
     await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
     rate_limit_key = await _enforce_trigger_rate_limit(session, pipeline, req.input_payload)
-    return await create_run(
+    run = await create_run(
         session,
         org_id=principal.organisation_id,
         pipeline_id=pipeline.id,
@@ -872,6 +872,14 @@ async def _create_manual_run(
         input_payload=req.input_payload,
         rate_limit_key=rate_limit_key,
     )
+    # Attach the already-loaded pipeline so _build_run_response can read
+    # run.pipeline.name without a lazy load. Otherwise the relationship is
+    # lazy-loaded after the transaction has committed, which raises
+    # "Autobegin is disabled" on sessions configured with autobegin=False
+    # (e.g. the integration-test session) and turns POST /api/v1/runs into a
+    # 500 even though the run was created successfully.
+    run.pipeline = pipeline
+    return run
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
