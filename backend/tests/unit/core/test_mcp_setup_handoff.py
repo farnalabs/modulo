@@ -79,7 +79,11 @@ async def test_create_handoff_builds_setup_url() -> None:
 
     assert result["setup_url"].startswith("https://app.example.com/setup/model-backend/")
     assert str(_RESOURCE_ID) in result["setup_url"]
+    # Token must live in the URL FRAGMENT (#token=...), never the query string —
+    # query params are sent to the server and leak via access logs / Referer headers.
     assert "token=" in result["setup_url"]
+    assert "#token=" in result["setup_url"]
+    assert "?token=" not in result["setup_url"]
 
 
 async def test_create_handoff_strips_trailing_slash_from_public_url() -> None:

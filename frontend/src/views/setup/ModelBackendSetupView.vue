@@ -47,8 +47,16 @@ const route = useRoute()
 const router = useRouter()
 const { post } = useApi()
 
+// The one-time setup token is delivered in the URL FRAGMENT (#token=...) — never
+// the query string — so it is not sent to the server nor leaked via Referer/access
+// logs. Read it from the hash, then strip it from the address bar / browser history
+// so it does not linger after the handoff is consumed.
+const token = parseFragmentToken(window.location.hash)
+if (token) {
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+}
+
 const backendId = route.params.id as string
-const token = route.query.token as string
 const apiKey = ref('')
 const success = ref(false)
 const backendName = ref('')
@@ -73,4 +81,9 @@ const { loading, error, mutate: submit } = useMutation(async () => {
     throw new Error('Setup failed. Please try again.')
   }
 })
+
+function parseFragmentToken(hash: string): string | null {
+  if (!hash || hash.length < 2) return null
+  return new URLSearchParams(hash.slice(1)).get('token')
+}
 </script>
