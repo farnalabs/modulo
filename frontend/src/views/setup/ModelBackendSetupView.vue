@@ -12,6 +12,12 @@
         </Button>
       </div>
 
+      <div v-else-if="!token" class="space-y-4">
+        <div class="rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.
+        </div>
+      </div>
+
       <form v-else @submit.prevent="() => submit()" class="space-y-4">
         <div>
           <span class="mb-1 block text-sm font-medium">API Key</span>
@@ -84,6 +90,7 @@ const { loading, error, mutate: submit } = useMutation(async () => {
 
 function parseFragmentToken(hash: string): string | null {
   if (!hash || hash.length < 2) return null
-  return new URLSearchParams(hash.slice(1)).get('token')
+  const t = new URLSearchParams(hash.slice(1)).get('token')
+  return t ? t : null
 }
 </script>

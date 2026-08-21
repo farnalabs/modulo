@@ -63,4 +63,52 @@ describe('ModelBackendSetupView', () => {
 
     expect(window.location.hash).toBe('')
   })
+
+  it('hides the API-key form and shows the missing-token message when there is no fragment token', () => {
+    window.location.hash = ''
+    const wrapper = mount(ModelBackendSetupView, {
+      global: {
+        stubs: {
+          PageHeader: true,
+          Button: true,
+          InputText: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.text()).toContain('missing its one-time token')
+  })
+
+  it('treats an empty fragment value (#token=) as missing', () => {
+    window.location.hash = '#token='
+    const wrapper = mount(ModelBackendSetupView, {
+      global: {
+        stubs: {
+          PageHeader: true,
+          Button: true,
+          InputText: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.text()).toContain('missing its one-time token')
+  })
+
+  it('renders the API-key form when a fragment token is present', () => {
+    window.location.hash = '#token=secret-token-123'
+    const wrapper = mount(ModelBackendSetupView, {
+      global: {
+        stubs: {
+          PageHeader: true,
+          Button: true,
+          InputText: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('form').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('missing its one-time token')
+  })
 })
