@@ -65,7 +65,7 @@ def _org_analytics_level(org: Any) -> str | None:
     if not isinstance(pa_block, dict):
         return None
     level = pa_block.get("level")
-    if level in ("all", "off"):
+    if isinstance(level, str) and level in ("all", "off"):
         return level
     return None
 
