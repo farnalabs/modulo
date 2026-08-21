@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import get_config, set_config
 
@@ -85,7 +85,7 @@ def _merge(entry: Any | None) -> dict[str, Any]:
     return {**DEFAULT_CONFIG, **value}
 
 
-@router.get("", response_model=MonitorConfigResponse)
+@router.get("", response_model=MonitorConfigResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("admin.monitor_config.get_monitor_config")
 async def get_monitor_config(
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
@@ -117,7 +117,7 @@ async def get_monitor_config(
     return _merge(entry)
 
 
-@router.put("", response_model=MonitorConfigResponse)
+@router.put("", response_model=MonitorConfigResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("admin.monitor_config.set_monitor_config")
 async def set_monitor_config(
     req: MonitorConfigUpdate,

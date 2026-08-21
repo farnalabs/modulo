@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from modulo.api.models.error import ErrorEventInput
+from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -28,7 +29,7 @@ _BREADCRUMBS = [
 
 
 def _make_ingest_app():
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.api.routes.errors import router as errors_router
     from modulo.auth.dependencies import get_current_user
     from modulo.auth.jwt import AuthenticatedPrincipal
@@ -58,6 +59,7 @@ def _make_ingest_app():
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_plan_context] = lambda: all_features()
     return app
 
 
@@ -200,7 +202,7 @@ class TestBreadcrumbSerialization:
         assert detail["breadcrumbs"] is None
 
     def test_detail_endpoint_returns_breadcrumbs(self):
-        from modulo.api.dependencies import get_db_session
+        from modulo.api.dependencies import get_db_session, get_plan_context
         from modulo.api.routes.errors import router as errors_router
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
@@ -230,6 +232,7 @@ class TestBreadcrumbSerialization:
 
         app.dependency_overrides[get_current_user] = _override_user
         app.dependency_overrides[get_db_session] = _override_db
+        app.dependency_overrides[get_plan_context] = lambda: all_features()
 
         group = MagicMock()
         group.id = uuid.uuid4()
