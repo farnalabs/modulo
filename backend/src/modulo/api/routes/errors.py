@@ -117,6 +117,11 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
     return _key_store
 
 
+# Ingestion routes are intentionally NOT gated behind require_feature("error_tracking"):
+# SDK error collection stays free on the community tier (recording is free-tier per PRD §8.25);
+# only the read/dashboard/management routes are team-gated.
+
+
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("errors.create_session_key")
 async def create_session_key(

@@ -31,8 +31,9 @@ const BACKEND_ONLY_EXCEPTIONS = new Set(['scim', 'external_secrets'])
  * route gate yet:
  *   - pipeline_delete: UI hard-delete button is featureEnabled-gated but the
  *     DELETE /api/v1/pipelines route has no require_feature("pipeline_delete")
- *     yet. Tracked as a known unenforced team flag in the backend parity test
- *     (test_team_feature_parity.py KNOWN_UNENFORCED_TEAM_FLAGS).
+ *     yet. It IS frontend-enforced (so it is not in the backend test's
+ *     KNOWN_UNENFORCED_TEAM_FLAGS gap set), but the backend route gate is
+ *     still missing — hence this exception.
  */
 const FRONTEND_ONLY_EXCEPTIONS = new Set(['pipeline_delete'])
 
@@ -95,6 +96,33 @@ describe('team feature backend <-> frontend parity', () => {
   const backendFeatures = collectBackendTeamFeatures()
   const frontendRefs = collectFrontendFeatureRefs()
   const teamFeatures = collectTeamFeatureNames()
+
+  it('parsed feature sets are non-empty (vacuity guard)', () => {
+    expect(teamFeatures.size).toBeGreaterThan(0)
+    expect(backendFeatures.size).toBeGreaterThan(0)
+    expect(frontendRefs.size).toBeGreaterThan(0)
+  })
+
+  it('frontend-only exceptions are tracked as gaps or frontend-enforced', () => {
+    const backendTestPath = join(REPO_ROOT, 'backend', 'tests', 'unit', 'test_team_feature_parity.py')
+    const text = readFileSync(backendTestPath, 'utf-8')
+    const match = text.match(/KNOWN_UNENFORCED_TEAM_FLAGS[^=]*=\s*\{([^}]*)\}/)
+    expect(match).not.toBeNull()
+    const backendKnown = new Set(
+      (match![1].match(/"([a-z_]+)"/g) ?? []).map((s) => s.replace(/"/g, '')),
+    )
+    for (const f of FRONTEND_ONLY_EXCEPTIONS) {
+      // A frontend-only exception must either be tracked in the backend's
+      // KNOWN_UNENFORCED_TEAM_FLAGS (a genuine gap in both layers) or be a
+      // real featureEnabled UI gate in this codebase (a gate that simply
+      // lacks a backend route gate yet — e.g. pipeline_delete). A flag that
+      // is NEITHER is a stale exception that must be cleaned up.
+      expect(
+        backendKnown.has(f) || frontendRefs.has(f),
+        `${f} is neither in backend KNOWN_UNENFORCED_TEAM_FLAGS nor featureEnabled-gated in the frontend — remove it from FRONTEND_ONLY_EXCEPTIONS`,
+      ).toBe(true)
+    }
+  })
 
   it('every backend-gated feature has a frontend FeatureGate reference', () => {
     const missing = [...backendFeatures].filter(
