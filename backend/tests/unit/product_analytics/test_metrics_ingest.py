@@ -1,5 +1,7 @@
 """Unit tests for POST /api/v1/metrics/events (FAR-355)."""
 
+from __future__ import annotations
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -7,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import Insert as PGInsert
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
@@ -17,6 +21,25 @@ from tests.unit.api.mock_session import configure_mock_session
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+def _insert_calls(mock_session: AsyncMock) -> list:
+    """Return the pg_insert statements actually handed to ``session.execute``."""
+    return [c.args[0] for c in mock_session.execute.call_args_list if isinstance(c.args[0], PGInsert)]
+
+
+def _inserted_payload(mock_session: AsyncMock, index: int = -1) -> dict:
+    """Compile the captured insert at *index* and return its ``payload`` value.
+
+    The mock ``session.execute`` discards the staged row, so we recover the
+    observable write by compiling the captured ``pg_insert(...).values(...)``
+    statement against the Postgres dialect and reading the bound ``payload``.
+    """
+    stmt = _insert_calls(mock_session)[index]
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    payload = compiled.params.get("payload")
+    assert isinstance(payload, dict), "captured insert must carry a payload dict"
+    return payload
 
 
 def _make_settings() -> Settings:
@@ -202,6 +225,11 @@ class TestApiErrorDailyCap:
         events = [_valid_event(f"evt-{i}", "api_error") for i in range(5)]
         resp = _post_events(client, events)
         assert resp.status_code == 204
+        # Prove-the-fix: at the cap, every api_error event must be SKIPPED, so
+        # no insert statement is ever handed to the session (the cap guard
+        # ``continue``s before building the pg_insert). If the guard is removed,
+        # this assertion fails because 5 inserts would appear.
+        assert _insert_calls(mock_session) == [], "api_error events must be skipped once the daily cap is reached"
 
     @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
     @patch("modulo.api.routes.metrics_ingest.get_organisation")
@@ -221,6 +249,10 @@ class TestApiErrorDailyCap:
         events = [_valid_event(f"evt-{i}", "api_error") for i in range(5)]
         resp = _post_events(client, events)
         assert resp.status_code == 204
+        # Prove-the-fix: with headroom (95 + 5 = 100, the cap inclusive check is
+        # ``>=``), all 5 events must be staged. If the cap guard is broken, fewer
+        # inserts would be produced.
+        assert len(_insert_calls(mock_session)) == 5, "all 5 api_error events under the cap must be staged"
 
 
 class TestRouteSanitizer:
@@ -243,3 +275,9 @@ class TestRouteSanitizer:
         event["payload"] = {"route": "/some/unknown/path", "status": 500}
         resp = _post_events(client, [event])
         assert resp.status_code == 204
+        # Prove-the-fix: the core behaviour of ``_sanitize_route_template`` is
+        # the staged payload's ``route`` being replaced with ``"unknown"`` (the
+        # mock execute discards the row, so we compile the captured insert).
+        payload = _inserted_payload(mock_session)
+        assert payload["route"] == "unknown", "unmatched route must be sanitized to 'unknown' in the staged payload"
+        assert payload["status"] == 500, "non-route fields must be preserved"
