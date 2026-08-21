@@ -716,23 +716,26 @@ def _accumulate_tool_call_chunks(chunk: AIMessageChunk, buffers: dict[int, dict[
     if not chunk.tool_call_chunks:
         return
     for chunk_call in chunk.tool_call_chunks:
-        idx = chunk_call.get("index")
-        if idx is None:
-            idx = 0
-        buf = buffers.get(idx)
-        if buf is None:
-            buffers[idx] = {
-                "id": chunk_call.get("id", "") or "",
-                "name": chunk_call.get("name", "") or "",
-                "args": chunk_call.get("args", "") or "",
-            }
-        else:
-            if chunk_call.get("id"):
-                buf["id"] = chunk_call["id"] or ""
-            if chunk_call.get("name"):
-                buf["name"] = chunk_call["name"] or ""
-            if chunk_call.get("args"):
-                buf["args"] += chunk_call["args"] or ""
+        _accumulate_one_tool_call(chunk_call, buffers)
+
+
+def _accumulate_one_tool_call(chunk_call: dict[str, Any], buffers: dict[int, dict[str, Any]]) -> None:
+    """Merge a single tool-call chunk into the index-keyed buffers."""
+    idx = chunk_call.get("index") or 0
+    buf = buffers.get(idx)
+    if buf is None:
+        buffers[idx] = {
+            "id": chunk_call.get("id", "") or "",
+            "name": chunk_call.get("name", "") or "",
+            "args": chunk_call.get("args", "") or "",
+        }
+        return
+    if chunk_call.get("id"):
+        buf["id"] = chunk_call["id"] or ""
+    if chunk_call.get("name"):
+        buf["name"] = chunk_call["name"] or ""
+    if chunk_call.get("args"):
+        buf["args"] += chunk_call["args"] or ""
 
 
 async def _auto_name_stream_session(
@@ -1495,14 +1498,18 @@ async def stream_chat(
                 if api_key_error is not None:
                     yield f"event: error\ndata: {json.dumps({'detail': api_key_error})}\n\n"
                     return
-                assert api_key is not None
+                if api_key is None:
+                    yield f"event: error\ndata: {json.dumps({'detail': 'Failed to resolve API key for streaming'})}\n\n"
+                    return
 
                 # 2. Create backend (needed before system prompt for supports_tools)
                 backend, backend_error = _build_stream_backend(req, api_key)
                 if backend_error is not None:
                     yield f"event: error\ndata: {json.dumps({'detail': backend_error})}\n\n"
                     return
-                assert backend is not None
+                if backend is None:
+                    yield f"event: error\ndata: {json.dumps({'detail': 'Failed to build model backend'})}\n\n"
+                    return
 
                 # 3. Construct system prompt from config + skills
                 supports_tools = getattr(backend, "supports_tools", False)
