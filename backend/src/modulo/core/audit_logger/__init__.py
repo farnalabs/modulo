@@ -25,7 +25,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
-
 APPEND_MAX_RETRIES = 3
 RETRY_BASE_DELAY_S = 0.1
 VERIFY_MAX_EVENTS = 10000
