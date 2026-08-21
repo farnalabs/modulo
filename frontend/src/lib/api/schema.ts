@@ -7699,6 +7699,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/product-analytics/transparency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Transparency */
+        get: operations["get_transparency_api_v1_product_analytics_transparency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -14804,6 +14821,33 @@ export interface components {
         ToggleFlagRequest: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** TransparencyResponse */
+        TransparencyResponse: {
+            /** Last Successful Dump At */
+            last_successful_dump_at?: string | null;
+            /**
+             * Dump Count Total
+             * @default 0
+             */
+            dump_count_total: number;
+            /**
+             * Consent Level
+             * @default off
+             */
+            consent_level: string;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Enforcement Enabled
+             * @default false
+             */
+            enforcement_enabled: boolean;
+            /** Warning */
+            warning?: string | null;
         };
         /** TrendBucket */
         TrendBucket: {
@@ -34129,6 +34173,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WebVitalTimeSeriesPoint"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_transparency_api_v1_product_analytics_transparency_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransparencyResponse"];
                 };
             };
             /** @description Validation Error */
