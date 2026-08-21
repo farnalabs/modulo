@@ -46,78 +46,46 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     return isPartnerLicence.value && consent.value.level !== 'all'
   })
 
-  async function fetchConsent(): Promise<void> {
+  async function runRequest(
+    request: () => Promise<{ error?: unknown; data?: ConsentResponse }>,
+  ): Promise<boolean> {
     loading.value = true
     error.value = null
     try {
-      const resp = await (api as any).GET('/api/v1/admin/product-analytics/consent')
+      const resp = await request()
       if (resp.error) {
         error.value = String(resp.error)
-        return
+        return false
       }
       if (resp.data) {
-        const data = resp.data as ConsentResponse
+        const data = resp.data
         consent.value = data.consent
         instanceEnabled.value = data.instance_enabled
         isPartnerLicence.value = data.is_partner_licence
       }
+      return true
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
+      return false
     } finally {
       loading.value = false
     }
+  }
+
+  async function fetchConsent(): Promise<void> {
+    await runRequest(() => (api as any).GET('/api/v1/admin/product-analytics/consent'))
   }
 
   async function submitConsent(action: 'accept' | 'decline' | 'dismiss'): Promise<boolean> {
-    loading.value = true
-    error.value = null
-    try {
-      const resp = await (api as any).POST('/api/v1/admin/product-analytics/consent', {
-        body: { action },
-      })
-      if (resp.error) {
-        error.value = String(resp.error)
-        return false
-      }
-      if (resp.data) {
-        const data = resp.data as ConsentResponse
-        consent.value = data.consent
-        instanceEnabled.value = data.instance_enabled
-        isPartnerLicence.value = data.is_partner_licence
-      }
-      return true
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
-      return false
-    } finally {
-      loading.value = false
-    }
+    return runRequest(() =>
+      (api as any).POST('/api/v1/admin/product-analytics/consent', { body: { action } }),
+    )
   }
 
   async function updateLevel(level: 'off' | 'all'): Promise<boolean> {
-    loading.value = true
-    error.value = null
-    try {
-      const resp = await (api as any).PUT('/api/v1/admin/product-analytics/consent', {
-        body: { level },
-      })
-      if (resp.error) {
-        error.value = String(resp.error)
-        return false
-      }
-      if (resp.data) {
-        const data = resp.data as ConsentResponse
-        consent.value = data.consent
-        instanceEnabled.value = data.instance_enabled
-        isPartnerLicence.value = data.is_partner_licence
-      }
-      return true
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
-      return false
-    } finally {
-      loading.value = false
-    }
+    return runRequest(() =>
+      (api as any).PUT('/api/v1/admin/product-analytics/consent', { body: { level } }),
+    )
   }
 
   return {

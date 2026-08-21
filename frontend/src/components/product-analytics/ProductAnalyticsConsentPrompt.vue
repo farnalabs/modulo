@@ -1,8 +1,7 @@
 <template>
-  <div
+  <output
     v-if="shouldShow"
-    class="rounded-lg border bg-card p-4"
-    role="status"
+    class="block rounded-lg border bg-card p-4"
     :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
     data-testid="product-analytics-consent-prompt"
   >
@@ -12,7 +11,7 @@
       role="alert"
     >
       {{ store.error }}
-      <button class="ml-2 underline" @click="store.error = null">{{ $t('views.ProductAnalytics.dismiss_error') }}</button>
+      <button type="button" class="ml-2 underline" @click="store.error = null">{{ $t('views.ProductAnalytics.dismiss_error') }}</button>
     </div>
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex-1 space-y-1">
@@ -48,6 +47,7 @@
           {{ $t('views.ProductAnalytics.decline') }}
         </Button>
         <button
+          type="button"
           class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
           :disabled="store.loading"
           data-testid="product-analytics-dismiss"
@@ -69,6 +69,7 @@
           {{ $t('views.ProductAnalytics.partner_enable') }}
         </Button>
         <button
+          type="button"
           class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
           :disabled="store.loading"
           data-testid="product-analytics-partner-stay-community"
@@ -78,7 +79,7 @@
         </button>
       </div>
     </div>
-  </div>
+  </output>
 </template>
 
 <script setup lang="ts">

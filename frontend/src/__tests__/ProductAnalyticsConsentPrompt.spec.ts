@@ -63,7 +63,11 @@ describe('ProductAnalyticsConsentPrompt', () => {
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
   })
 
-  it('calls submitConsent with accept on accept button click', async () => {
+  it.each([
+    ['accept', 'product-analytics-accept'],
+    ['decline', 'product-analytics-decline'],
+    ['dismiss', 'product-analytics-dismiss'],
+  ])('calls submitConsent with %s on %s button click', async (action, testid) => {
     const store = useProductAnalyticsStore()
     store.instanceEnabled = true
     store.isPartnerLicence = false
@@ -72,37 +76,9 @@ describe('ProductAnalyticsConsentPrompt', () => {
     const submitSpy = vi.spyOn(store, 'submitConsent').mockResolvedValue(true)
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
-    await wrapper.find('[data-testid="product-analytics-accept"]').trigger('click')
+    await wrapper.find(`[data-testid="${testid}"]`).trigger('click')
 
-    expect(submitSpy).toHaveBeenCalledWith('accept')
-  })
-
-  it('calls submitConsent with decline on decline button click', async () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.isPartnerLicence = false
-    store.consent.prompted = null
-    store.consent.level = 'off'
-    const submitSpy = vi.spyOn(store, 'submitConsent').mockResolvedValue(true)
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    await wrapper.find('[data-testid="product-analytics-decline"]').trigger('click')
-
-    expect(submitSpy).toHaveBeenCalledWith('decline')
-  })
-
-  it('calls submitConsent with dismiss on dismiss button click', async () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.isPartnerLicence = false
-    store.consent.prompted = null
-    store.consent.level = 'off'
-    const submitSpy = vi.spyOn(store, 'submitConsent').mockResolvedValue(true)
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    await wrapper.find('[data-testid="product-analytics-dismiss"]').trigger('click')
-
-    expect(submitSpy).toHaveBeenCalledWith('dismiss')
+    expect(submitSpy).toHaveBeenCalledWith(action)
   })
 
   it('renders partner carve-out variant with enable and stay-community buttons', () => {
