@@ -2268,6 +2268,45 @@ async def _save_locked_graph(
     )
 
 
+async def _finalize_locked_graph_save(
+    exc: Exception,
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+) -> None:
+    """Translate a locked-graph save error into the correct HTTP response.
+
+    ``HitlGateWeakeningDenied`` is recorded (the guarded write already rolled
+    back) and control returns to the caller, which then raises the 404
+    saved-graph response. The other two errors are translated directly into an
+    ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
+    endpoints, which only differ in how they prepare ``nodes``/``edges``.
+    """
+    if isinstance(exc, HitlGateWeakeningDenied):
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
+        return
+    if isinstance(exc, GuardrailBindingStripDenied):
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from exc
+    if isinstance(exc, ProgrammingError):
+        logger.exception(_CODE_ROUTES_PIPELINES)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    raise exc
+
+
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
     response_model=PipelineGraphResponse,
@@ -2363,27 +2402,8 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            pipeline_id=pipeline_id,
-            exc=exc,
-            request_id=getattr(principal, "request_id", None),
-        )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -2477,27 +2497,8 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            pipeline_id=pipeline_id,
-            exc=exc,
-            request_id=getattr(principal, "request_id", None),
-        )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
