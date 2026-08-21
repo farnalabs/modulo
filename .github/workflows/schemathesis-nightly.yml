@@ -24,7 +24,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
       - name: Start Postgres
         working-directory: backend
         shell: bash
@@ -55,7 +55,7 @@ jobs:
         working-directory: backend
         shell: bash
         timeout-minutes: 60
-        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=600
+        run: uv run --no-build --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=600
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           REDIS_URL: "redis://localhost:6379/0"

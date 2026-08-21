@@ -34,9 +34,9 @@ import math
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -64,6 +64,11 @@ from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     build_telemetry,
 )
+from modulo.core.cost_controller.system_config import (
+    acquire_kv_lock,
+    read_system_config,
+    write_system_config,
+)
 from modulo.core.lifecycle_map.advancement import advance_journeys
 from modulo.core.lifecycle_map.reconcile import (
     record_journey_advance,
@@ -89,6 +94,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -98,6 +104,21 @@ __all__ = [
     "finalize_cost",
     "load_live_components",
 ]
+
+
+class _TerminalWrite(NamedTuple):
+    """Fields for the terminal (or empty) run-status write.
+
+    Groups the scalar finalization fields that ``finalize_cost`` passes to
+    ``update_run_status`` / ``_ledger_block`` / ``_write_empty_terminal``,
+    cutting the argument counts of those helpers.
+    """
+
+    status: str
+    error_code: str | None
+    error_detail: str | None
+    claim_token: str | None
+
 
 # Union JSON size guardrail — log-only, not a cap (§4.2).
 _UNION_SIZE_GUARDRAIL_BYTES = 8 * 1024 * 1024
@@ -207,22 +228,46 @@ def _split_merge_outputs(
     stored_out = stored_outputs if isinstance(stored_outputs, dict) else {}
     stored_tel = stored_telemetry if isinstance(stored_telemetry, dict) else {}
 
+    _merge_stored_outputs(merged_outputs, merged_telemetry, stored_out, stored_tel, node_type_map, run_id)
+    _merge_segment_outputs(merged_outputs, merged_telemetry, segment, stored_tel, node_type_map, run_id)
+
+    return merged_outputs, merged_telemetry
+
+
+def _merge_stored_outputs(
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    stored_out: dict[str, Any],
+    stored_tel: dict[str, Any],
+    node_type_map: dict[str, str],
+    run_id: str | None,
+) -> None:
+    """Split-then-merge every stored (already-persisted) output row."""
     for node_id, value in stored_out.items():
         _merge_stored_output(merged_outputs, merged_telemetry, str(node_id), value, stored_tel, node_type_map, run_id)
 
-    if isinstance(segment, dict):
-        for node_id, seg_value in segment.items():
-            _merge_segment_output(
-                merged_outputs,
-                merged_telemetry,
-                str(node_id),
-                seg_value,
-                stored_tel,
-                node_type_map,
-                run_id,
-            )
 
-    return merged_outputs, merged_telemetry
+def _merge_segment_outputs(
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    segment: Any,
+    stored_tel: dict[str, Any],
+    node_type_map: dict[str, str],
+    run_id: str | None,
+) -> None:
+    """Split-then-merge every segment output row (fresh split)."""
+    if not isinstance(segment, dict):
+        return
+    for node_id, seg_value in segment.items():
+        _merge_segment_output(
+            merged_outputs,
+            merged_telemetry,
+            str(node_id),
+            seg_value,
+            stored_tel,
+            node_type_map,
+            run_id,
+        )
 
 
 def _store_split_result(
@@ -417,12 +462,17 @@ def _enrich_union(
             if is_terminal:
                 _record_node_schema_drift(output_obj, map_type)
 
+    _log_node_type_summary(missing_node_type, executed_types)
+
+    return union
+
+
+def _log_node_type_summary(missing_node_type: list[str], executed_types: Counter[str]) -> None:
+    """Log the schema-drift provenance map-completeness + type distribution."""
     if missing_node_type:
         _log.warning("cost_components_missing_node_type", extra={"node_ids": missing_node_type})
     if executed_types:
         _log.info("cost_components_node_type_ratio", extra={"executed_types": dict(executed_types)})
-
-    return union
 
 
 def _enrich_node_fields(
@@ -895,40 +945,83 @@ async def _ledger_block(
         ok, reason = False, "whole_tx_abort"
 
     if not ok and reason is not None and reason.startswith("daily_limit_exceeded"):
-        # LIMIT-REFUSED — expected healthy enforcement, NOT a ledger failure.
-        locked.ledger_refused_at = datetime.now(UTC)
-        record_limit_refused(str(owner_team_id or "none"))
-        _log.info("cost_ledger.limit_reached", extra={"run_id": str(run_id)})
-        await session.flush()
+        await _handle_limit_refused(session, locked, run_id, owner_team_id)
         return
 
     if not ok:
-        # REDUCED terminalize-without-ledger escape, write_failure ONLY.
-        _log.error(
-            "cost_ledger.finalize_deferred",
-            extra={"reason": reason or "unknown", "run_id": str(run_id)},
-        )
-        record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
-        await _reduced_escape(
+        await _handle_ledger_write_failure(
             session,
             run_id,
             org_id,
             status,
             finalize_fields,
             session_factory,
-            claim_token=claim_token,
+            claim_token,
+            owner_team_id,
+            reason,
         )
         return
 
     locked.ledger_written = True
     await session.flush()
+    await _check_circuit_breaker(session, locked, org_id, total, run_id)
 
-    # FAR-105 cost-control circuit breaker — check the pipeline's monthly spend
-    # threshold now that this run's cost is recorded. The monthly sum EXCLUDES
-    # the current run (its cost is already persisted and is added back as
-    # ``total``), so the comparison is "accumulated this month + this run" vs
-    # the threshold. FAIL-OPEN: a breaker failure must never fail the terminal
-    # write (the ledger is the enforcement; the trip is best-effort control).
+
+async def _handle_limit_refused(
+    session: AsyncSession,
+    locked: Run,
+    run_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None,
+) -> None:
+    """LIMIT-REFUSED — expected healthy enforcement, NOT a ledger failure."""
+    locked.ledger_refused_at = datetime.now(UTC)
+    record_limit_refused(str(owner_team_id or "none"))
+    _log.info("cost_ledger.limit_reached", extra={"run_id": str(run_id)})
+    await session.flush()
+
+
+async def _handle_ledger_write_failure(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    status: str,
+    finalize_fields: dict[str, Any],
+    session_factory: Callable[[], Any] | None,
+    claim_token: str | None,
+    owner_team_id: uuid.UUID | None,
+    reason: str | None,
+) -> None:
+    """REDUCED terminalize-without-ledger escape, write_failure ONLY."""
+    _log.error(
+        "cost_ledger.finalize_deferred",
+        extra={"reason": reason or "unknown", "run_id": str(run_id)},
+    )
+    record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
+    await _reduced_escape(
+        session,
+        run_id,
+        org_id,
+        status,
+        finalize_fields,
+        session_factory,
+        claim_token=claim_token,
+    )
+
+
+async def _check_circuit_breaker(
+    session: AsyncSession,
+    locked: Run,
+    org_id: uuid.UUID,
+    total: Decimal,
+    run_id: uuid.UUID,
+) -> None:
+    """FAR-105 cost-control circuit breaker — best-effort monthly-spend trip.
+
+    The monthly sum EXCLUDES the current run (its cost is already persisted and
+    is added back as ``total``). FAIL-OPEN: a breaker failure must never fail
+    the terminal write (the ledger is the enforcement; the trip is
+    best-effort control).
+    """
     try:
         await check_pipeline_circuit_breaker(
             session,
@@ -956,14 +1049,6 @@ async def _record_duplicate_terminal_event(session: AsyncSession, run_id: uuid.U
     probe trims on read). Never raises — a duplicate guard firing must not fail
     the terminal path.
     """
-    from datetime import UTC, datetime, timedelta
-
-    from modulo.core.cost_controller.system_config import (
-        acquire_kv_lock,
-        read_system_config,
-        write_system_config,
-    )
-
     key = "duplicate_terminal_events"
     try:
         await acquire_kv_lock(session, key)
@@ -971,23 +1056,31 @@ async def _record_duplicate_terminal_event(session: AsyncSession, run_id: uuid.U
         if not isinstance(events, list):
             events = []
         events.append({"run_id": str(run_id), "ts": datetime.now(UTC).isoformat()})
-        cutoff = datetime.now(UTC) - timedelta(seconds=10 * 60)
-        kept = []
-        for event in events[-200:]:
-            ts = event.get("ts")
-            try:
-                from datetime import datetime as _dt
-
-                parsed = _dt.fromisoformat(ts) if ts else None
-            except (ValueError, TypeError):
-                parsed = None
-            if parsed is None or parsed >= cutoff:
-                kept.append(event)
-        await write_system_config(session, key, kept[-100:])
+        kept = _trim_duplicate_events(events)
+        await write_system_config(session, key, kept)
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("cost_ledger.duplicate_event_record_failed", extra={"run_id": str(run_id)})
+
+
+def _trim_duplicate_events(events: list[Any]) -> list[dict[str, Any]]:
+    """Keep the most recent 100 events, dropping stale (>10 min) entries.
+
+    Only the last 200 events are inspected; unparseable timestamps are kept
+    (a stale event log is harmless — the probe trims on read).
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=10 * 60)
+    kept: list[dict[str, Any]] = []
+    for event in events[-200:]:
+        ts = event.get("ts")
+        try:
+            parsed = datetime.fromisoformat(ts) if ts else None
+        except (ValueError, TypeError):
+            parsed = None
+        if parsed is None or parsed >= cutoff:
+            kept.append(event)
+    return kept[-100:]
 
 
 async def _confirm_reported_refs(
@@ -1149,31 +1242,68 @@ async def _advance_journeys_on_terminal(
                 is_replay=bool(run.is_replay),
                 variant_group_id=run.variant_group_id,
             )
-            record_journey_advance(advanced)
-            unmatched = max(len(reported) - len(confirmed), 0)
-            if counters["malformed"]:
-                record_journey_parse_failure(writer, counters["malformed"])
-            if counters["capped"]:
-                record_self_report_refs_capped(counters["capped"])
-            if unmatched:
-                record_unmatched_self_report_refs(unmatched)
-            record_journey_finalise_attempt(writer, len(raw))
-            await _record_journey_fact(session, run, writer, counters["malformed"], len(raw))
-            _log.info(
-                "cost_finalize.journey_advanced",
-                extra={
-                    "run_id": str(run.id),
-                    "writer": writer,
-                    "parsed": counters["valid"],
-                    "confirmed": len(confirmed),
-                    "malformed": counters["malformed"],
-                    "capped": counters["capped"],
-                },
+            await _record_journey_outcome(
+                session,
+                run,
+                writer,
+                advanced,
+                raw,
+                reported,
+                confirmed,
+                counters,
             )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("cost_finalize.journey_advance_failed", extra={"run_id": str(run.id)})
+
+
+async def _record_journey_outcome(
+    session: AsyncSession,
+    run: Run,
+    writer: str,
+    advanced: int,
+    raw: list[dict[str, Any]],
+    reported: list[dict[str, Any]],
+    confirmed: list[dict[str, Any]],
+    counters: dict[str, int],
+) -> None:
+    """Record the FAR-143 observability counters + persisted fact denominators.
+
+    Runs inside the outer journey savepoint, so a throw rolls back only the
+    journey work and is swallowed by the caller.
+    """
+    record_journey_advance(advanced)
+    unmatched = max(len(reported) - len(confirmed), 0)
+    if counters["malformed"]:
+        record_journey_parse_failure(writer, counters["malformed"])
+    if counters["capped"]:
+        record_self_report_refs_capped(counters["capped"])
+    if unmatched:
+        record_unmatched_self_report_refs(unmatched)
+    record_journey_finalise_attempt(writer, len(raw))
+    await _record_journey_fact(session, run, writer, counters["malformed"], len(raw))
+    _log.info(
+        "cost_finalize.journey_advanced",
+        extra={
+            "run_id": str(run.id),
+            "writer": writer,
+            "parsed": counters["valid"],
+            "confirmed": len(confirmed),
+            "malformed": counters["malformed"],
+            "capped": counters["capped"],
+        },
+    )
+
+
+def _log_union_size_guardrail(enriched: dict[str, dict[str, Any]], run_id: uuid.UUID) -> None:
+    """Log-only guardrail on the enriched-union JSON size (§4.2)."""
+    size_bytes = len(str(enriched).encode("utf-8"))
+    if size_bytes > _UNION_SIZE_GUARDRAIL_BYTES:
+        _log.warning(
+            "cost_union.size_guardrail",
+            extra={"run_id": str(run_id), "size_bytes": size_bytes},
+        )
 
 
 async def finalize_cost(
@@ -1235,10 +1365,7 @@ async def finalize_cost(
         await _write_empty_terminal(
             session,
             run_id,
-            status,
-            error_code,
-            error_detail,
-            claim_token,
+            _TerminalWrite(status, error_code, error_detail, claim_token),
             is_terminal,
             run,
             merged_outputs,
@@ -1255,8 +1382,6 @@ async def finalize_cost(
             is_terminal=is_terminal,
             merged_telemetry=merged_telemetry,
         )
-        from modulo.settings import get_settings
-
         telemetry, per_node_cost = build_telemetry(enriched, live_components)
         breakdown, total = build_cost_breakdown(telemetry, live_components, settings=get_settings())
         enriched = _write_back_node_cost(enriched, per_node_cost)
@@ -1269,11 +1394,7 @@ async def finalize_cost(
         status, error_code, error_detail = await _apply_agent_budget_override(
             session, run, enriched, is_terminal, status, error_code, error_detail
         )
-        if len(str(enriched).encode("utf-8")) > _UNION_SIZE_GUARDRAIL_BYTES:
-            _log.warning(
-                "cost_union.size_guardrail",
-                extra={"run_id": str(run_id), "size_bytes": len(str(enriched).encode("utf-8"))},
-            )
+        _log_union_size_guardrail(enriched, run_id)
         await update_run_status(
             session,
             run_id,
@@ -1376,10 +1497,7 @@ async def _apply_agent_budget_override(
 async def _write_empty_terminal(
     session: AsyncSession,
     run_id: uuid.UUID,
-    status: str,
-    error_code: str | None,
-    error_detail: str | None,
-    claim_token: str | None,
+    write: _TerminalWrite,
     is_terminal: bool,
     run: Run,
     merged_outputs: dict[str, Any],
@@ -1388,12 +1506,12 @@ async def _write_empty_terminal(
     await update_run_status(
         session,
         run_id,
-        status,
-        error_code=error_code,
-        error_detail=error_detail,
+        write.status,
+        error_code=write.error_code,
+        error_detail=write.error_detail,
         total_cost_usd=Decimal(0),
         total_tokens=0,
-        claim_token=claim_token,
+        claim_token=write.claim_token,
     )
     if is_terminal:
         # Refresh AFTER the status write — the fenced UPDATE bypasses the
@@ -1404,7 +1522,7 @@ async def _write_empty_terminal(
         await record_run_facts(session, run)
         # FAR-143 — even with empty outputs the run still advances from its
         # create-stamped refs (zero-cost terminal).
-        await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_EARLY_RETURN)
+        await _advance_journeys_on_terminal(session, run, write.status, merged_outputs, writer=_WRITER_EARLY_RETURN)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:

@@ -671,7 +671,7 @@ class TestAdminUpdateTeamOptimisticLock:
             ),
             patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
             patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
         ):
             resp = admin_rls_client.put(
                 f"{self.URL}/{team.id}",
