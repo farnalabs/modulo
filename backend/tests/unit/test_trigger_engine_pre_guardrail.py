@@ -196,9 +196,9 @@ class TestCanonicalPayloadHash:
         assert canonical_payload_hash({"a": 1, "b": 2}) == canonical_payload_hash({"b": 2, "a": 1})
 
     def test_whitespace_irrelevant(self) -> None:
-        assert canonical_payload_hash({"a": [1, 2], "b": {"c": "x"}}) == canonical_payload_hash(
-            {"a": [1, 2], "b": {"c": "x"}}
-        )
+        left = {"a": [1, 2], "b": {"c": "x"}}
+        right = {"a": [1, 2], "b": {"c": "x"}}
+        assert canonical_payload_hash(left) == canonical_payload_hash(right)
 
     def test_unicode_escapes_normalised(self) -> None:
         # "\u00e9" in a parsed dict is the same Python str as "é" — both

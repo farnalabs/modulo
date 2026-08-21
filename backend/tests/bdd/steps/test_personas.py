@@ -1859,10 +1859,10 @@ def modulo_app_starts(ctx):
     assert client is not None, "Test client not created"
     try:
         resp = client.get("/healthz")
-        assert resp.status_code in (200, 307), f"Health endpoint returned {resp.status_code}"
-        ctx["_health_ok"] = True
     except Exception as exc:
         pytest.fail(f"Application did not start: {exc}")
+    assert resp.status_code in (200, 307), f"Health endpoint returned {resp.status_code}"
+    ctx["_health_ok"] = True
 
 
 # ===========================================================================
@@ -1957,7 +1957,7 @@ def ui_accessible(ctx):
     assert client is not None
     try:
         resp = client.get("/healthz", follow_redirects=False)
-        assert resp.status_code in (200, 301, 302, 307), f"Health endpoint returned {resp.status_code}"
-        ctx["_ui_ok"] = True
     except Exception as exc:
         pytest.fail(f"UI not accessible: {exc}")
+    assert resp.status_code in (200, 301, 302, 307), f"Health endpoint returned {resp.status_code}"
+    ctx["_ui_ok"] = True

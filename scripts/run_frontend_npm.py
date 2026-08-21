@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,8 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 PACKAGE_JSON = os.path.join(FRONTEND_DIR, "package.json")
+
+_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_./-]*$")
 
 
 def find_package_manager() -> str | None:
@@ -41,6 +44,10 @@ def main() -> int:
         return 2
 
     script = sys.argv[1]
+
+    if not _SCRIPT_NAME_RE.match(script):
+        print(f"{os.path.basename(__file__)}: invalid script name {script!r}", file=sys.stderr)
+        return 2
 
     if not os.path.isfile(PACKAGE_JSON):
         print(f"{os.path.basename(__file__)}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)

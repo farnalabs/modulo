@@ -927,7 +927,8 @@ async def remove_member_endpoint(
             # SECURITY (#1194): operator cannot remove someone with equal or
             # higher team role — prevents intra-org privilege interference.
             if not is_admin:
-                assert caller_membership is not None  # nosec B101 -- genuine invariant: non-admin path already required caller membership above
+                if caller_membership is None:
+                    raise RuntimeError("caller membership unexpectedly None on non-admin path")
                 target_level = TEAM_ROLE_HIERARCHY.get(membership.role, -1)
                 caller_level = TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1)
                 if target_level >= caller_level:
@@ -1054,7 +1055,8 @@ async def change_member_role_endpoint(
             # SECURITY (#1194): operator cannot demote someone with equal or
             # higher team role — prevents intra-org privilege interference.
             if not is_admin:
-                assert caller_membership is not None  # nosec B101 -- genuine invariant: non-admin path already required caller membership above
+                if caller_membership is None:
+                    raise RuntimeError("caller membership unexpectedly None on non-admin path")
                 target_level = TEAM_ROLE_HIERARCHY.get(old_role, -1)
                 caller_level = TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1)
                 if target_level >= caller_level:
