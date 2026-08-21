@@ -120,6 +120,110 @@ def _check_additional_properties(
             errors.append(f"{path}: extra properties {extra} not allowed (additionalProperties: false)")
 
 
+def _resolve_parameter_schema(
+    node_id: str,
+    raw_schema_id: object,
+    schemas: dict[uuid.UUID, ParameterSchema],
+    result: ValidationResult,
+) -> uuid.UUID | None:
+    """Parse + resolve a node's parameter_schema_id; emits an error and returns None when invalid."""
+    schema_id = try_parse_uuid(raw_schema_id)
+    if schema_id is None:
+        result.error(
+            "PARAMETER_SCHEMA_INVALID_ID",
+            f"Node '{node_id}': parameter_schema_id is not a valid UUID",
+            node_id=node_id,
+        )
+        return None
+    if schemas.get(schema_id) is None:
+        result.error(
+            "PARAMETER_SCHEMA_NOT_FOUND",
+            f"Node '{node_id}': ParameterSchema '{schema_id}' not found",
+            node_id=node_id,
+        )
+        return None
+    return schema_id
+
+
+def _resolve_parameter_set(
+    node_id: str,
+    raw_set_id: object,
+    sets: dict[uuid.UUID, ParameterSet],
+    result: ValidationResult,
+) -> uuid.UUID | None:
+    """Parse + resolve a node's parameter_set_id; emits an error and returns None when invalid."""
+    set_id = try_parse_uuid(raw_set_id)
+    if set_id is None:
+        result.error(
+            "PARAMETER_SET_INVALID_ID",
+            f"Node '{node_id}': parameter_set_id is not a valid UUID",
+            node_id=node_id,
+        )
+        return None
+    if sets.get(set_id) is None:
+        result.error(
+            "PARAMETER_SET_NOT_FOUND",
+            f"Node '{node_id}': ParameterSet '{set_id}' not found or belongs to a different org",
+            node_id=node_id,
+        )
+        return None
+    return set_id
+
+
+def _check_parameter_set_schema_match(
+    node_id: str,
+    schema_id: uuid.UUID,
+    set_id: uuid.UUID,
+    ps: ParameterSet,
+    result: ValidationResult,
+) -> None:
+    """A ParameterSet pinned alongside a schema must belong to that exact schema."""
+    if schema_id != ps.parameter_schema_id:
+        result.error(
+            "PARAMETER_SET_SCHEMA_MISMATCH",
+            f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
+            f"'{ps.parameter_schema_id}', not '{schema_id}'",
+            node_id=node_id,
+        )
+
+
+def _schema_parameters_missing_from_set(schema: ParameterSchema, ps: ParameterSet) -> set[str]:
+    """Parameters the schema defines that the set's values do not cover."""
+    schema_param_names: set[str] = set()
+    for param in schema.parameters or []:
+        if isinstance(param, dict) and "name" in param:
+            schema_param_names.add(param["name"])
+    set_param_names: set[str] = set(ps.values.keys()) if isinstance(ps.values, dict) else set()
+    return schema_param_names - set_param_names
+
+
+def _check_parameter_set_drift(
+    node_id: str,
+    schema: ParameterSchema,
+    set_id: uuid.UUID,
+    ps: ParameterSet,
+    result: ValidationResult,
+) -> None:
+    """Warn when a ParameterSet predates its schema (version drift) or misses schema params."""
+    if schema.version > ps.schema_version:
+        result.warning(
+            "PARAMETER_SCHEMA_DRIFT",
+            f"Node '{node_id}': ParameterSchema '{schema.id}' has been updated to "
+            f"version {schema.version} but ParameterSet '{set_id}' was created against "
+            f"version {ps.schema_version}. Consider updating the set.",
+            node_id=node_id,
+        )
+    missing_from_set = _schema_parameters_missing_from_set(schema, ps)
+    if missing_from_set:
+        result.warning(
+            "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
+            f"Node '{node_id}': ParameterSchema '{schema.id}' defines parameters "
+            f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
+            f"Default values will be used.",
+            node_id=node_id,
+        )
+
+
 def _check_parameter_node(
     node: dict[str, Any],
     schemas: dict[uuid.UUID, ParameterSchema],
@@ -131,79 +235,22 @@ def _check_parameter_node(
     raw_schema_id = node.get("parameter_schema_id")
     schema_id: uuid.UUID | None = None
     if raw_schema_id is not None:
-        schema_id = try_parse_uuid(raw_schema_id)
+        schema_id = _resolve_parameter_schema(node_id, raw_schema_id, schemas, result)
         if schema_id is None:
-            result.error(
-                "PARAMETER_SCHEMA_INVALID_ID",
-                f"Node '{node_id}': parameter_schema_id is not a valid UUID",
-                node_id=node_id,
-            )
-            return
-        schema = schemas.get(schema_id)
-        if schema is None:
-            result.error(
-                "PARAMETER_SCHEMA_NOT_FOUND",
-                f"Node '{node_id}': ParameterSchema '{schema_id}' not found",
-                node_id=node_id,
-            )
             return
 
     raw_set_id = node.get("parameter_set_id")
     if raw_set_id is None:
         return
-    set_id = try_parse_uuid(raw_set_id)
+    set_id = _resolve_parameter_set(node_id, raw_set_id, sets, result)
     if set_id is None:
-        result.error(
-            "PARAMETER_SET_INVALID_ID",
-            f"Node '{node_id}': parameter_set_id is not a valid UUID",
-            node_id=node_id,
-        )
         return
-    ps = sets.get(set_id)
-    if ps is None:
-        result.error(
-            "PARAMETER_SET_NOT_FOUND",
-            f"Node '{node_id}': ParameterSet '{set_id}' not found or belongs to a different org",
-            node_id=node_id,
-        )
-        return
-    # Check schema_version matches.
-    if raw_schema_id is not None:
-        schema_id = try_parse_uuid(raw_schema_id)
-        if schema_id is not None and schema_id != ps.parameter_schema_id:
-            result.error(
-                "PARAMETER_SET_SCHEMA_MISMATCH",
-                f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
-                f"'{ps.parameter_schema_id}', not '{schema_id}'",
-                node_id=node_id,
-            )
-    # Check for schema drift: has the schema been updated since the set was created?
-    if schema_id is not None:
-        schema = schemas.get(schema_id)
-        if schema is not None and schema.version > ps.schema_version:
-            result.warning(
-                "PARAMETER_SCHEMA_DRIFT",
-                f"Node '{node_id}': ParameterSchema '{schema_id}' has been updated to "
-                f"version {schema.version} but ParameterSet '{set_id}' was created against "
-                f"version {ps.schema_version}. Consider updating the set.",
-                node_id=node_id,
-            )
-        # Composite schema drift (RFC §6.5): when schema defines params that the set doesn't have.
-        if schema is not None:
-            schema_param_names: set[str] = set()
-            for param in schema.parameters or []:
-                if isinstance(param, dict) and "name" in param:
-                    schema_param_names.add(param["name"])
-            set_param_names: set[str] = set(ps.values.keys()) if isinstance(ps.values, dict) else set()
-            missing_from_set = schema_param_names - set_param_names
-            if missing_from_set:
-                result.warning(
-                    "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
-                    f"Node '{node_id}': ParameterSchema '{schema_id}' defines parameters "
-                    f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
-                    f"Default values will be used.",
-                    node_id=node_id,
-                )
+    ps = sets[set_id]
+
+    if raw_schema_id is not None and schema_id is not None:
+        _check_parameter_set_schema_match(node_id, schema_id, set_id, ps, result)
+        schema = schemas[schema_id]
+        _check_parameter_set_drift(node_id, schema, set_id, ps, result)
 
 
 def _check_composite_node(

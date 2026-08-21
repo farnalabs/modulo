@@ -32,6 +32,15 @@ _ROUTER_RE = re.compile(r"name:\s*'([a-z][a-z0-9-]*)'", re.IGNORECASE)
 _I18N_RE = re.compile(r'^\s{2}"(\w+)":\s*\{', re.MULTILINE)
 
 
+def _repo_safe_path(base: str, *parts: str) -> str:
+    """Resolve *parts* under *base* and verify the result stays within *base*."""
+    resolved = os.path.realpath(os.path.join(base, *parts))
+    base_resolved = os.path.realpath(base)
+    if resolved != base_resolved and not resolved.startswith(base_resolved + os.sep):
+        raise ValueError(f"path {resolved!r} is outside the allowed directory {base!r}")
+    return resolved
+
+
 def _write_err(msg: str, errors: list[str], args: argparse.Namespace) -> None:
     """Record an issue and, in --ci mode, print raw + exit 1 immediately."""
     errors.append(msg)
@@ -67,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: Manifest not found at {manifest_path}", file=sys.stderr)
         return 1
 
-    with open(manifest_path, encoding="utf-8") as fh:
+    with open(_repo_safe_path(repo_root, "frontend", "src", "manifest.yaml"), encoding="utf-8") as fh:
         manifest = yaml.safe_load(fh)
     if manifest is None:
         manifest = {}
@@ -88,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         for name in sorted(os.listdir(router_dir)):
             if not name.endswith(".ts"):
                 continue
-            with open(os.path.join(router_dir, name), encoding="utf-8") as fh:
+            with open(_repo_safe_path(repo_root, "frontend", "src", "router", name), encoding="utf-8") as fh:
                 content = fh.read()
             router_names.update(_ROUTER_RE.findall(content))
     for path, value in route_items:
@@ -153,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     top_level_keys: set[str] = set()
     i18n_file = os.path.join(repo_root, "frontend", "src", "locales", "en-US.js")
     if os.path.isfile(i18n_file):
-        with open(i18n_file, encoding="utf-8") as fh:
+        with open(_repo_safe_path(repo_root, "frontend", "src", "locales", "en-US.js"), encoding="utf-8") as fh:
             i18n_content = fh.read()
         top_level_keys.update(_I18N_RE.findall(i18n_content))
     for path, value in route_items:

@@ -49,11 +49,30 @@ def resolve_passphrase(args_passphrase: str | None) -> str:
     return getpass.getpass("Restore passphrase: ")
 
 
+def _validate_arg(value: str, name: str) -> str:
+    """Reject values that would be interpreted as CLI flags when passed as a
+    subprocess argument (defense against argument injection)."""
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
+    return value
+
+
+def _safe_output_path(path: str, name: str) -> str:
+    """Resolve *path* and require it to stay within the current directory's
+    real path (defense against path injection for derived output files)."""
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"invalid {name}: {path!r} resolves outside the working directory")
+    return resolved
+
+
 def decrypt_archive(enc_path: str, passphrase: str, output_path: str) -> None:
     print("Decrypting archive...")
     if not shutil.which("openssl"):
         print("ERROR: openssl not found. Install OpenSSL to decrypt backups.")
         sys.exit(1)
+    _validate_arg(passphrase, "passphrase")
     result = subprocess.run(
         [
             "openssl",
@@ -159,15 +178,18 @@ def pg_database_name(db_url: str) -> str:
 
 def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     dump_path = os.path.join(extract_dir, "modulo.pgdump")
+    _validate_arg(db_url, "database URL")
     if not os.path.exists(dump_path):
         print("ERROR: modulo.pgdump not found in archive")
         sys.exit(1)
 
     db_name = pg_database_name(db_url)
+    _validate_arg(db_name, "database name")
     print(f"Restoring Postgres to database '{db_name}'...")
 
     admin_db = "postgres"
     admin_url = db_url.rsplit("/", 1)[0] + f"/{admin_db}"
+    _validate_arg(admin_url, "admin database URL")
 
     print("  Terminating existing connections...")
     subprocess.run(

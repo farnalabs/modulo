@@ -61,6 +61,14 @@ def resolve_passphrase(args_passphrase: str | None) -> str:
     return getpass.getpass("Backup passphrase: ")
 
 
+def _validate_arg(value: str, name: str) -> str:
+    """Reject values that would be interpreted as CLI flags when passed as a
+    subprocess argument (defense against argument injection)."""
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
+    return value
+
+
 def check_disk_space(path: str, min_gb: int) -> None:
     usage = shutil.disk_usage(path)
     free_gb = usage.free / (1024**3)
@@ -165,6 +173,7 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
     if not shutil.which("openssl"):
         print("ERROR: openssl not found. Install OpenSSL to encrypt backups.")
         sys.exit(1)
+    _validate_arg(passphrase, "passphrase")
     result = subprocess.run(
         [
             "openssl",
@@ -194,6 +203,7 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
 
 def get_org_id(db_url: str) -> str:
     try:
+        _validate_arg(db_url, "database URL")
         result = subprocess.run(
             ["psql", "-d", db_url, "-t", "-A", "-c", "SELECT id FROM organisations ORDER BY created_at LIMIT 1"],
             capture_output=True,

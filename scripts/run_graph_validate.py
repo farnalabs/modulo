@@ -35,6 +35,15 @@ PRD_FILE = os.path.join(REPO_ROOT, "docs", "prd.md")
 BDD_ROOT = os.path.join(REPO_ROOT, "backend", "tests", "bdd", "features")
 
 
+def _repo_safe_path(base: str, *parts: str) -> str:
+    """Resolve *parts* under *base* and verify the result stays within *base*."""
+    resolved = os.path.realpath(os.path.join(base, *parts))
+    base_resolved = os.path.realpath(base)
+    if resolved != base_resolved and not resolved.startswith(base_resolved + os.sep):
+        raise ValueError(f"path {resolved!r} is outside the allowed directory {base!r}")
+    return resolved
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check product map graph integrity.")
     parser.add_argument("--fix", action="store_true", help="Regenerate _index.md")
@@ -44,7 +53,6 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_root = args.repo_root or REPO_ROOT
     product_map = os.path.join(repo_root, "docs", "product-map")
-    prd_file = os.path.join(repo_root, "docs", "prd.md")
 
     issues: list[str] = []
     entries: list[dict] = []
@@ -73,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 issues.append(f"REF|{e['id']}|depends-on '{d}' not found in any product map entry")
 
     # 4. Validate PRD section refs
-    with open(prd_file, encoding="utf-8") as fh:
+    with open(_repo_safe_path(repo_root, "docs", "prd.md"), encoding="utf-8") as fh:
         prd_lines = fh.read().splitlines()
     prd_metadata = get_prd_sections(prd_lines)
     prd_sections = prd_metadata["sections"]
@@ -108,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 6. Fix _index.md
     if args.fix:
-        idx = os.path.join(product_map, "_index.md")
+        idx = _repo_safe_path(repo_root, "docs", "product-map", "_index.md")
         with open(idx, encoding="utf-8") as fh:
             index_content = fh.read()
 
