@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -35,6 +36,16 @@ from modulo.db.models import (
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
+
+def _safe_output_path(path: Path) -> Path:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(str(path))
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"output path {str(path)!r} resolves outside the working directory")
+    return Path(resolved)
+
 
 # ---------------------------------------------------------------------------
 # 1.  Glossary parsing — PRD §5
@@ -450,7 +461,7 @@ async def main() -> None:
     )
 
     if args.output:
-        out_path = Path(args.output)
+        out_path = _safe_output_path(Path(args.output))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(primer, encoding="utf-8")
     else:

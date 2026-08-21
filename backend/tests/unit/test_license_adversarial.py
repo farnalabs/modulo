@@ -425,11 +425,12 @@ class TestLicenseKeyFuzz:
     def test_random_strings_dont_crash(self, key_input: str) -> None:
         try:
             result = parse_and_verify(key_input)
-            assert isinstance(result.valid, bool)
         except LicenseError:
             pass
         except Exception as exc:
             pytest.fail(f"parse_and_verify crashed on {key_input!r}: {exc}")
+        else:
+            assert isinstance(result.valid, bool)
 
 
 # ── Public key tampering ──────────────────────────────────────────────────
