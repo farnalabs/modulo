@@ -32,4 +32,6 @@ ENV SECRET_KEY=docker-mutation-secret-key-not-for-production
 ENV FERNET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 # Default runs all configured paths
-CMD ["uv", "run", "mutmut", "run"]
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+CMD ["uv", "run", "--frozen", "mutmut", "run"]
