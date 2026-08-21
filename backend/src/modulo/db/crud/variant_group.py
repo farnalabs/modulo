@@ -7,7 +7,7 @@ import logging
 import random
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import ProgrammingError
@@ -24,6 +24,14 @@ from modulo.db.models.run import Run
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
+
+
+class _RunDispatch(NamedTuple):
+    """Dispatch parameters shared by every run created from a variant group."""
+
+    org_id: uuid.UUID
+    account_id: uuid.UUID | None
+    trigger_type: str
 
 
 async def create_variant_group(
@@ -235,6 +243,37 @@ def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:
 _CONTROL_OVERRIDE_KEYS = ("model_backend_id", "prompt_version", "model")
 
 
+def _extract_agent_ids_from_graph(graph_json: Any) -> set[uuid.UUID]:
+    """Collect the ``agent_id`` set from a snapshot's pipeline graph JSON."""
+    agent_ids: set[uuid.UUID] = set()
+    for node in graph_json.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        agent_id = node.get("agent_id")
+        if not agent_id:
+            continue
+        try:
+            agent_ids.add(uuid.UUID(str(agent_id)))
+        except (ValueError, TypeError):
+            continue
+    return agent_ids
+
+
+def _agent_template_for_version(agent: Any, prompt_version: str) -> str | None:
+    """Resolve a single agent's active or versioned prompt template."""
+    if prompt_version == "current":
+        template = agent.prompt_template
+        return template if isinstance(template, str) and template else None
+    for entry in agent.prompt_version_history or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("version") == prompt_version:
+            tpl = entry.get("template")
+            if isinstance(tpl, str) and tpl:
+                return tpl
+    return None
+
+
 async def _resolve_prompt_template_override(
     session: AsyncSession,
     *,
@@ -265,35 +304,16 @@ async def _resolve_prompt_template_override(
     if not isinstance(graph_json, dict):
         return {}
 
-    agent_ids: set[uuid.UUID] = set()
-    for node in graph_json.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        agent_id = node.get("agent_id")
-        if not agent_id:
-            continue
-        try:
-            agent_ids.add(uuid.UUID(str(agent_id)))
-        except (ValueError, TypeError):
-            continue
+    agent_ids = _extract_agent_ids_from_graph(graph_json)
 
     resolved: dict[str, str] = {}
     for agent_id in sorted(agent_ids):
         agent = await get_agent(session, agent_id)
         if agent is None:
             continue
-        if prompt_version == "current":
-            template = agent.prompt_template
-            if template:
-                resolved[str(agent_id)] = template
-            continue
-        for entry in agent.prompt_version_history or []:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("version") == prompt_version:
-                tpl = entry.get("template")
-                if tpl:
-                    resolved[str(agent_id)] = tpl
+        template = _agent_template_for_version(agent, prompt_version)
+        if template:
+            resolved[str(agent_id)] = template
     return resolved
 
 
@@ -410,6 +430,87 @@ async def run_variant_weighted(
     }
 
 
+async def _fire_batch_variant(
+    session: AsyncSession,
+    *,
+    group: VariantGroup,
+    variant: dict[str, Any],
+    input_payload: dict[str, Any] | None,
+    dispatch: _RunDispatch,
+    batch_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Create one run for a single variant in a batch (PRD 8.19).
+
+    Merges the variant's ``run_context_overrides``, resolves any
+    ``prompt_version`` override to its per-agent templates, and freezes the
+    variant snapshot at fire time. Returns the run summary dict, or ``None``
+    when the variant is missing a ``snapshot_id`` (defensive — the batch
+    pre-flight already guarantees every variant has one).
+    """
+    overrides = variant.get("run_context_overrides", {})
+    if not isinstance(overrides, dict):
+        overrides = {}
+    snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+    if snapshot_id is None:
+        return None
+
+    payload, control_overrides = _merge_variant_payload(
+        variant, input_payload or {}, degraded_evals=group.degraded_evals
+    )
+
+    # FAR-342: resolve a prompt_version override to its per-agent templates
+    # so the node_runner can render the selected prompt for each node, not
+    # the snapshot-embedded one — keyed by agent so one agent's template
+    # never clobbers another's. Stored alongside the version label under
+    # ``_run_overrides`` in the frozen snapshot (the executor seeds it into
+    # run_context as a top-level system-reserved key, NEVER from caller
+    # input).
+    if control_overrides.get("prompt_version"):
+        resolved = await _resolve_prompt_template_override(
+            session,
+            snapshot_id=snapshot_id,
+            prompt_version=str(control_overrides["prompt_version"]),
+        )
+        if resolved:
+            control_overrides["prompt_templates"] = resolved
+
+    # Frozen snapshot/override capture at fire time — the single source of
+    # truth for "which input this variant ran with". The compare view reads
+    # this, never the live snapshot, so later group edits cannot rewrite
+    # history. ``variant_id`` is the stable persisted id (frontend-minted
+    # on Duplicate, FAR-332 3b); it may be absent on legacy variants. The
+    # system-reserved ``_run_overrides`` (model_backend_id / prompt_version /
+    # resolved prompt_templates) rides here, never in the input payload.
+    frozen_snapshot = {
+        "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
+        "variant_name": variant.get("name"),
+        "snapshot_id": str(snapshot_id),
+        "run_context_overrides": dict(overrides),
+        "_run_overrides": control_overrides,
+        "batch_id": str(batch_id),
+    }
+
+    run = await create_run(
+        session,
+        org_id=dispatch.org_id,
+        pipeline_id=group.pipeline_id,
+        snapshot_id=snapshot_id,
+        trigger_type=dispatch.trigger_type,
+        input_payload=payload,
+        account_id=dispatch.account_id,
+        variant_group_id=group.id,
+        batch_id=batch_id,
+        variant_config_snapshot=frozen_snapshot,
+    )
+    return {
+        "run_id": run.id,
+        "batch_id": batch_id,
+        "variant": variant,
+        "merged_payload": payload,
+        "frozen_snapshot": frozen_snapshot,
+    }
+
+
 async def run_variant_batch(
     session: AsyncSession,
     *,
@@ -454,72 +555,21 @@ async def run_variant_batch(
     # with the same value so the compare route can load the batch purely by it.
     batch_id = uuid.uuid4()
 
+    dispatch = _RunDispatch(org_id=org_id, account_id=account_id, trigger_type=trigger_type)
+
     results: list[dict[str, Any]] = []
     for variant in variants:
-        overrides = variant.get("run_context_overrides", {})
-        if not isinstance(overrides, dict):
-            overrides = {}
-        snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
-        if snapshot_id is None:
-            return None  # defensive — the pre-flight loop above already guarantees this
-
-        payload, control_overrides = _merge_variant_payload(
-            variant, input_payload or {}, degraded_evals=group.degraded_evals
-        )
-
-        # FAR-342: resolve a prompt_version override to its per-agent templates
-        # so the node_runner can render the selected prompt for each node, not
-        # the snapshot-embedded one — keyed by agent so one agent's template
-        # never clobbers another's. Stored alongside the version label under
-        # ``_run_overrides`` in the frozen snapshot (the executor seeds it into
-        # run_context as a top-level system-reserved key, NEVER from caller
-        # input).
-        if control_overrides.get("prompt_version"):
-            resolved = await _resolve_prompt_template_override(
-                session,
-                snapshot_id=snapshot_id,
-                prompt_version=str(control_overrides["prompt_version"]),
-            )
-            if resolved:
-                control_overrides["prompt_templates"] = resolved
-
-        # Frozen snapshot/override capture at fire time — the single source of
-        # truth for "which input this variant ran with". The compare view reads
-        # this, never the live snapshot, so later group edits cannot rewrite
-        # history. ``variant_id`` is the stable persisted id (frontend-minted
-        # on Duplicate, FAR-332 3b); it may be absent on legacy variants. The
-        # system-reserved ``_run_overrides`` (model_backend_id / prompt_version /
-        # resolved prompt_templates) rides here, never in the input payload.
-        frozen_snapshot = {
-            "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
-            "variant_name": variant.get("name"),
-            "snapshot_id": str(snapshot_id),
-            "run_context_overrides": dict(overrides) if isinstance(overrides, dict) else {},
-            "_run_overrides": control_overrides,
-            "batch_id": str(batch_id),
-        }
-
-        run = await create_run(
+        entry = await _fire_batch_variant(
             session,
-            org_id=org_id,
-            pipeline_id=group.pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type=trigger_type,
-            input_payload=payload,
-            account_id=account_id,
-            variant_group_id=group.id,
+            group=group,
+            variant=variant,
+            input_payload=input_payload,
+            dispatch=dispatch,
             batch_id=batch_id,
-            variant_config_snapshot=frozen_snapshot,
         )
-        results.append(
-            {
-                "run_id": run.id,
-                "batch_id": batch_id,
-                "variant": variant,
-                "merged_payload": payload,
-                "frozen_snapshot": frozen_snapshot,
-            }
-        )
+        if entry is None:
+            return None  # defensive — the pre-flight loop above already guarantees this
+        results.append(entry)
 
     await increment_run_count(session, group.id, delta=batch_size)
     return results
@@ -554,6 +604,50 @@ async def get_coverage_gaps(
     return gaps
 
 
+def _prompt_pins(snapshot: Any) -> dict[str, str | None]:
+    """Map agent_id → prompt_version_hash from a snapshot's prompt_pins_json."""
+    raw = snapshot.prompt_pins_json
+    if not isinstance(raw, list):
+        return {}
+    return {p.get("agent_id"): p.get("prompt_version_hash") for p in raw if p.get("agent_id")}
+
+
+def _prompt_diff_for_pair(
+    base_variant: dict[str, Any],
+    variant: dict[str, Any],
+    snapshots: dict[uuid.UUID, Any],
+) -> dict[str, Any] | None:
+    """Compute the agent-level prompt diff between a base and comparison variant."""
+    base_id = _coerce_snapshot_id(base_variant.get("snapshot_id"))
+    variant_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+    base_snapshot = snapshots.get(base_id) if base_id else None
+    variant_snapshot = snapshots.get(variant_id) if variant_id else None
+    if base_snapshot is None or variant_snapshot is None:
+        return None
+
+    base_pins = _prompt_pins(base_snapshot)
+    variant_pins = _prompt_pins(variant_snapshot)
+
+    agent_diffs: list[dict[str, str | None]] = []
+    for agent_id, variant_hash in variant_pins.items():
+        base_hash = base_pins.get(agent_id)
+        if base_hash and base_hash != variant_hash:
+            agent_diffs.append(
+                {
+                    "agent_id": agent_id,
+                    "base_hash": base_hash,
+                    "variant_hash": variant_hash,
+                }
+            )
+    if not agent_diffs:
+        return None
+    return {
+        "base_variant": base_variant,
+        "variant": variant,
+        "agent_diffs": agent_diffs,
+    }
+
+
 async def get_prompt_diffs(
     session: AsyncSession,
     group: VariantGroup,
@@ -580,56 +674,16 @@ async def get_prompt_diffs(
     result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids)))
     snapshots = {s.id: s for s in result.scalars()}
 
-    def _snapshot_uuid(v: dict[str, Any]) -> uuid.UUID | None:
-        sid = v.get("snapshot_id")
-        if sid is None:
-            return None
-        return uuid.UUID(str(sid)) if isinstance(sid, str) else sid
-
     base_sids = set(base_snapshot_ids or [])
-    base_variants = [v for v in group.variants if _snapshot_uuid(v) in base_sids]
-    comparison_variants = [v for v in group.variants if _snapshot_uuid(v) not in base_sids]
+    base_variants = [v for v in group.variants if _coerce_snapshot_id(v.get("snapshot_id")) in base_sids]
+    comparison_variants = [v for v in group.variants if _coerce_snapshot_id(v.get("snapshot_id")) not in base_sids]
 
     diffs: list[dict[str, Any]] = []
     for cv in comparison_variants:
-        cv_id = _snapshot_uuid(cv)
-        cv_snapshot = snapshots.get(cv_id) if cv_id else None
         for bv in base_variants:
-            bv_id = _snapshot_uuid(bv)
-            bv_snapshot = snapshots.get(bv_id) if bv_id else None
-            if cv_snapshot is None or bv_snapshot is None:
-                continue
-
-            def _pins(snapshot: Any) -> dict[str, str | None]:
-                raw = snapshot.prompt_pins_json
-                if not isinstance(raw, list):
-                    return {}
-                return {p.get("agent_id"): p.get("prompt_version_hash") for p in raw if p.get("agent_id")}
-
-            bv_pins = _pins(bv_snapshot)
-            cv_pins = _pins(cv_snapshot)
-
-            agent_diffs = []
-            for agent_id, cv_hash in cv_pins.items():
-                bv_hash = bv_pins.get(agent_id)
-                if bv_hash and bv_hash != cv_hash:
-                    agent_diffs.append(
-                        {
-                            "agent_id": agent_id,
-                            "base_hash": bv_hash,
-                            "variant_hash": cv_hash,
-                        }
-                    )
-
-            if agent_diffs:
-                diffs.append(
-                    {
-                        "base_variant": bv,
-                        "variant": cv,
-                        "agent_diffs": agent_diffs,
-                    }
-                )
-
+            entry = _prompt_diff_for_pair(bv, cv, snapshots)
+            if entry is not None:
+                diffs.append(entry)
     return diffs
 
 
@@ -693,6 +747,19 @@ async def get_batch_runs(
     return list(result.scalars().all())
 
 
+def _as_dict(raw: Any) -> dict[str, Any]:
+    """Coerce a value to a dict (``{}`` for anything that is not a dict)."""
+    return raw if isinstance(raw, dict) else {}
+
+
+def _override_diff(base: dict[str, Any], current: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Split override differences into added / removed / changed sets."""
+    added = {k: v for k, v in current.items() if k not in base}
+    removed = {k: v for k, v in base.items() if k not in current}
+    changed = {k: v for k, v in current.items() if k in base and base[k] != v}
+    return {"added": added, "removed": removed, "changed": changed}
+
+
 async def get_batch_compare(
     session: AsyncSession,
     *,
@@ -727,26 +794,13 @@ async def get_batch_compare(
     for run_id, total, passed in er_result.all():
         eval_stats[uuid.UUID(str(run_id))] = (int(total or 0), int(passed or 0))
 
-    def _frozen(run: Run) -> dict[str, Any]:
-        snap = run.variant_config_snapshot
-        return snap if isinstance(snap, dict) else {}
-
-    def _uuid(raw: Any) -> uuid.UUID | None:
-        if raw is None:
-            return None
-        return uuid.UUID(str(raw)) if not isinstance(raw, uuid.UUID) else raw
-
-    base_overrides = _frozen(runs[0]).get("run_context_overrides", {})
-    base_overrides = base_overrides if isinstance(base_overrides, dict) else {}
+    base_overrides = _as_dict(runs[0].variant_config_snapshot).get("run_context_overrides", {})
+    base_overrides = _as_dict(base_overrides)
 
     entries: list[dict[str, Any]] = []
     for run in runs:
-        frozen = _frozen(run)
-        overrides = frozen.get("run_context_overrides", {})
-        overrides = overrides if isinstance(overrides, dict) else {}
-        added = {k: v for k, v in overrides.items() if k not in base_overrides}
-        removed = {k: v for k, v in base_overrides.items() if k not in overrides}
-        changed = {k: v for k, v in overrides.items() if k in base_overrides and base_overrides[k] != v}
+        frozen = _as_dict(run.variant_config_snapshot)
+        overrides = _as_dict(frozen.get("run_context_overrides", {}))
         total, passed = eval_stats.get(run.id, (0, 0))
         entries.append(
             {
@@ -755,7 +809,7 @@ async def get_batch_compare(
                 "status": run.status,
                 "variant_id": frozen.get("variant_id"),
                 "variant_name": frozen.get("variant_name") or "unknown",
-                "snapshot_id": _uuid(frozen.get("snapshot_id")),
+                "snapshot_id": _coerce_snapshot_id(frozen.get("snapshot_id")),
                 "run_context_overrides": overrides,
                 "eval_pass_rate": round(passed / total, 4) if total else None,
                 "eval_count": total,
@@ -763,7 +817,7 @@ async def get_batch_compare(
                 "total_tokens": run.total_tokens,
                 "created_at": run.created_at,
                 "completed_at": run.completed_at,
-                "override_diff": {"added": added, "removed": removed, "changed": changed},
+                "override_diff": _override_diff(base_overrides, overrides),
             }
         )
     return entries
