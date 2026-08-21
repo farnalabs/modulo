@@ -34,6 +34,7 @@ from modulo.core.cron_helpers import (
     validate_cron_expression,
 )
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -1390,7 +1391,7 @@ async def list_trigger_events(
                         | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                     )
                 except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", cursor, exc_info=True)
+                    _log.warning("Malformed cursor ignored: %s", sanitise_log_value(cursor), exc_info=True)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()

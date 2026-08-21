@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -569,7 +570,7 @@ async def list_audit_events(
         except (ValueError, KeyError, TypeError):
             _log.warning(
                 "list_audit_events: failed to decode cursor %r — falling back to first page",
-                cursor,
+                sanitise_log_value(cursor),
                 exc_info=True,
             )
 
