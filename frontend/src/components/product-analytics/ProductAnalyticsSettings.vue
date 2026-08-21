@@ -51,10 +51,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import SectionCard from '../shared/SectionCard.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
 import ProductAnalyticsErrorAlert from './ProductAnalyticsErrorAlert.vue'
 
+const { t } = useI18n()
 const store = useProductAnalyticsStore()
 
 const statItems = computed(() => [
