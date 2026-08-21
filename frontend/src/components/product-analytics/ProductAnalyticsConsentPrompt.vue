@@ -15,61 +15,30 @@
           {{ promptDescription }}
         </p>
       </div>
-      <div
-        v-if="!store.isPartnerCarveOut"
-        class="flex shrink-0 items-center gap-2"
-      >
-        <Button
-          severity="secondary"
-          outlined
-          size="small"
-          :disabled="store.loading"
-          data-testid="product-analytics-accept"
-          @click="submit('accept')"
-        >
-          {{ $t('views.ProductAnalytics.accept') }}
-        </Button>
-        <Button
-          severity="secondary"
-          outlined
-          size="small"
-          :disabled="store.loading"
-          data-testid="product-analytics-decline"
-          @click="submit('decline')"
-        >
-          {{ $t('views.ProductAnalytics.decline') }}
-        </Button>
-        <button
-          type="button"
-          class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
-          :disabled="store.loading"
-          data-testid="product-analytics-dismiss"
-          @click="submit('dismiss')"
-        >
-          {{ $t('views.ProductAnalytics.dismiss') }}
-        </button>
-      </div>
-      <div
-        v-else
-        class="flex shrink-0 items-center gap-2"
-      >
-        <Button
-          size="small"
-          :disabled="store.loading"
-          data-testid="product-analytics-partner-enable"
-          @click="submit('accept')"
-        >
-          {{ $t('views.ProductAnalytics.partner_enable') }}
-        </Button>
-        <button
-          type="button"
-          class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
-          :disabled="store.loading"
-          data-testid="product-analytics-partner-stay-community"
-          @click="submit('decline')"
-        >
-          {{ $t('views.ProductAnalytics.partner_stay_community') }}
-        </button>
+      <div class="flex shrink-0 items-center gap-2">
+        <template v-for="action in promptActions" :key="action.key">
+          <Button
+            v-if="action.variant !== 'text'"
+            :severity="action.variant === 'button-secondary' ? 'secondary' : undefined"
+            :outlined="action.variant === 'button-secondary'"
+            size="small"
+            :disabled="store.loading"
+            :data-testid="action.testid"
+            @click="submit(action.action)"
+          >
+            {{ t(action.labelKey) }}
+          </Button>
+          <button
+            v-else
+            type="button"
+            class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
+            :disabled="store.loading"
+            :data-testid="action.testid"
+            @click="submit(action.action)"
+          >
+            {{ t(action.labelKey) }}
+          </button>
+        </template>
       </div>
     </div>
   </output>
@@ -93,6 +62,57 @@ const promptDescription = computed(() => {
   }
   return t('views.ProductAnalytics.consent_prompt_description')
 })
+
+type PromptAction = {
+  key: string
+  labelKey: string
+  testid: string
+  variant: 'button-secondary' | 'button' | 'text'
+  action: 'accept' | 'decline' | 'dismiss'
+}
+
+const promptActions = computed<PromptAction[]>(() =>
+  store.isPartnerCarveOut
+    ? [
+        {
+          key: 'partner-enable',
+          labelKey: 'views.ProductAnalytics.partner_enable',
+          testid: 'product-analytics-partner-enable',
+          variant: 'button',
+          action: 'accept',
+        },
+        {
+          key: 'partner-stay-community',
+          labelKey: 'views.ProductAnalytics.partner_stay_community',
+          testid: 'product-analytics-partner-stay-community',
+          variant: 'text',
+          action: 'decline',
+        },
+      ]
+    : [
+        {
+          key: 'accept',
+          labelKey: 'views.ProductAnalytics.accept',
+          testid: 'product-analytics-accept',
+          variant: 'button-secondary',
+          action: 'accept',
+        },
+        {
+          key: 'decline',
+          labelKey: 'views.ProductAnalytics.decline',
+          testid: 'product-analytics-decline',
+          variant: 'button-secondary',
+          action: 'decline',
+        },
+        {
+          key: 'dismiss',
+          labelKey: 'views.ProductAnalytics.dismiss',
+          testid: 'product-analytics-dismiss',
+          variant: 'text',
+          action: 'dismiss',
+        },
+      ],
+)
 
 onMounted(() => {
   if (!store.consent.prompted) {

@@ -35,22 +35,13 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
+        <div v-for="item in statItems" :key="item.label">
           <span class="text-xs font-medium text-muted-foreground">
-            {{ $t('views.ProductAnalytics.current_level') }}
+            {{ item.label }}
           </span>
-          <p class="mt-0.5">
-            <span :class="store.isOptedIn ? 'badge badge-status-success' : 'badge badge-status-muted'">
-              {{ store.isOptedIn ? $t('views.ProductAnalytics.level_all') : $t('views.ProductAnalytics.level_off') }}
-            </span>
-          </p>
-        </div>
-        <div>
-          <span class="text-xs font-medium text-muted-foreground">
-            {{ $t('views.ProductAnalytics.last_successful_dump') }}
-          </span>
-          <p class="mt-0.5 text-sm text-muted-foreground">
-            {{ $t('views.ProductAnalytics.coming_soon') }}
+          <p class="mt-0.5" :class="{ 'text-sm text-muted-foreground': !item.badge }">
+            <span v-if="item.badge" :class="item.badge">{{ item.value }}</span>
+            <template v-else>{{ item.value }}</template>
           </p>
         </div>
       </div>
@@ -59,12 +50,25 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import SectionCard from '../shared/SectionCard.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
 import ProductAnalyticsErrorAlert from './ProductAnalyticsErrorAlert.vue'
 
 const store = useProductAnalyticsStore()
+
+const statItems = computed(() => [
+  {
+    label: t('views.ProductAnalytics.current_level'),
+    value: store.isOptedIn ? t('views.ProductAnalytics.level_all') : t('views.ProductAnalytics.level_off'),
+    badge: store.isOptedIn ? 'badge badge-status-success' : 'badge badge-status-muted',
+  },
+  {
+    label: t('views.ProductAnalytics.last_successful_dump'),
+    value: t('views.ProductAnalytics.coming_soon'),
+    badge: null,
+  },
+])
 
 onMounted(() => {
   store.fetchConsent()

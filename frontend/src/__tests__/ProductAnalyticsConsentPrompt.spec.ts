@@ -63,7 +63,7 @@ describe('ProductAnalyticsConsentPrompt', () => {
 
   it.each(visibilityCases)(
     '%s',
-    (name: string, overrides: ConsentOverrides, expectedVisible: boolean) => {
+    (_name: string, overrides: ConsentOverrides, expectedVisible: boolean) => {
       setupConsentStore(overrides)
 
       const wrapper = mount(ProductAnalyticsConsentPrompt)
