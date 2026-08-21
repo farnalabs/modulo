@@ -65,6 +65,7 @@ export default {
       "allowed_models": "Allowed Models",
       "default_provider": "Default Provider",
       "save_current_access_list_configuration": "Save current access list configuration.",
+      "skill_description": "Skill description",
       "set_the_default_model_and_allowed_providers_for_remy": "Set the default model and allowed providers for Remy",
       "teams": "Teams",
       "failed_to_load_provider_status": "Failed to load provider status:",
@@ -2725,7 +2726,6 @@ export default {
         "view_full_analytics": "View full analytics"
       },
       "RemySkillManager": {
-        "skill_description_label": "Skill description",
         "triggers_commaseparated": "Triggers (comma-separated)",
         "failed_to_delete_skill": "Failed to delete skill:",
         "failed_to_create_skill": "Failed to create skill:",
