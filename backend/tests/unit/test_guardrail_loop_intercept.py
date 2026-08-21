@@ -655,10 +655,12 @@ def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
     assert "MODULO_BRIDGE_BLOCKED" not in out
 
 
-def test_load_config_resolves_patterns(tmp_path):
+def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
     import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.chdir(tmp_path)
 
     assert sb._load_config(None) == {"patterns": sb.DEFAULT_PATTERNS}
     assert sb._load_config(str(tmp_path / "missing.json")) == {"patterns": sb.DEFAULT_PATTERNS}

@@ -57,6 +57,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypeGuard
 
@@ -3251,34 +3252,116 @@ class _SandboxWatchdog:
             await self.kill_sandbox_for_budget(self._node_id, reason="wallclock_budget_exceeded")
 
 
+@dataclass(frozen=True)
+class _SandboxNodeConfig:
+    """Immutable per-node configuration for a sandbox-agent dispatch.
+
+    Groups the node_def-derived parameters that previously flowed into
+    ``_sandbox_agent_impl`` as ~20 separate keyword arguments. Building this
+    once at node-construction time (``make_sandbox_agent_fn``) gives the
+    dispatch path a single cohesive config object and removes the excess
+    argument surface. ``frozen=True`` keeps the config read-only for the
+    duration of a dispatch — a node must never mutate its own configuration.
+    """
+
+    node_id: str
+    node_def: dict[str, Any]
+    sandbox_mode: str
+    agent_command: str
+    agent_prompt_template: str
+    template_id: str
+    egress_policy: str | None
+    egress_allowlist: list[dict[str, Any]] | None
+    resource_limits: dict[str, Any] | None
+    read_only: bool
+    git_credentials: str | None
+    wallclock_budget_seconds: int | None
+    output_schema_json: dict[str, Any] | None
+    sandbox_timeout: int
+    stall_timeout_override: Any
+    context_files: dict[str, str]
+    enable_heartbeat: bool
+    watch_log_path: str | None
+    stdout_percentage_delta: float | None
+    watch_globs: list[str]
+    delivery_sentinel: str | None
+    loop_intercept_config: LoopInterceptConfig | None
+    session_factory: Callable[..., Any] | None
+    single_sandbox_node: bool
+
+
+def _check_wallclock_budget_pre_run(
+    *,
+    sandbox_mode: str,
+    wallclock_budget_seconds: int | None,
+    start_time: float,
+    watchdog: _SandboxWatchdog,
+    run_id: str,
+    node_id: str,
+) -> None:
+    """Raise ``ScriptBudgetKilledError`` when the wall-clock budget is already spent.
+
+    FAR-296 Phase 4a non-tick path: a slow provisioning / bridge / env-setup
+    sequence may already have consumed the wall-clock spend budget before the
+    script process starts. Script mode only — LLM-mode nodes take no wall-clock
+    budget, and raising the script-specific terminal error for an LLM-mode node
+    would be a misclassification. ``watchdog.budget_killed`` may already be set
+    by an earlier check, so it guards against a double kill/raise.
+    """
+    if (
+        sandbox_mode != "script"
+        or wallclock_budget_seconds is None
+        or (time.monotonic() - start_time) < wallclock_budget_seconds
+        or watchdog.budget_killed
+    ):
+        return
+    _log.warning(
+        "sandbox_agent.wallclock_budget_overrun_pre_run",
+        extra={
+            "run_id": run_id,
+            "node_id": node_id,
+            "budget_seconds": wallclock_budget_seconds,
+            "elapsed_seconds": round(time.monotonic() - start_time, 1),
+        },
+    )
+    watchdog._budget_killed = True
+    raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+
+
 async def _sandbox_agent_impl(
     state: dict[str, Any],
     *,
-    node_def: dict[str, Any],
-    sandbox_mode: str,
-    agent_command: str,
-    agent_prompt_template: str,
-    template_id: str,
-    egress_policy: str | None,
-    egress_allowlist: list[dict[str, Any]] | None,
-    resource_limits: dict[str, Any] | None,
-    read_only: bool,
-    git_credentials: str | None,
-    wallclock_budget_seconds: int | None,
-    output_schema_json: dict[str, Any] | None,
-    sandbox_timeout: int,
-    stall_timeout_override: Any,
-    context_files: dict[str, str],
-    enable_heartbeat: bool,
-    watch_log_path: str | None,
-    stdout_percentage_delta: float | None,
-    watch_globs: list[str],
-    delivery_sentinel: str | None,
-    loop_intercept_config: LoopInterceptConfig | None,
-    session_factory: Callable[..., Any] | None,
-    single_sandbox_node: bool,
-    node_id: str,
+    config: _SandboxNodeConfig,
 ) -> dict[str, Any]:
+    # Destructure the immutable config back to the local names the dispatch
+    # body uses, so the body is unchanged from the pre-dataclass form. Only the
+    # SIGNATURE narrows to a single config object — the running body behaves
+    # identically.
+    node_id = config.node_id
+    node_def = config.node_def
+    sandbox_mode = config.sandbox_mode
+    agent_command = config.agent_command
+    agent_prompt_template = config.agent_prompt_template
+    template_id = config.template_id
+    egress_policy = config.egress_policy
+    egress_allowlist = config.egress_allowlist
+    resource_limits = config.resource_limits
+    read_only = config.read_only
+    git_credentials = config.git_credentials
+    wallclock_budget_seconds = config.wallclock_budget_seconds
+    output_schema_json = config.output_schema_json
+    sandbox_timeout = config.sandbox_timeout
+    stall_timeout_override = config.stall_timeout_override
+    context_files = config.context_files
+    enable_heartbeat = config.enable_heartbeat
+    watch_log_path = config.watch_log_path
+    stdout_percentage_delta = config.stdout_percentage_delta
+    watch_globs = config.watch_globs
+    delivery_sentinel = config.delivery_sentinel
+    loop_intercept_config = config.loop_intercept_config
+    session_factory = config.session_factory
+    single_sandbox_node = config.single_sandbox_node
+
     from e2b import AsyncSandbox
     from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
@@ -3870,23 +3953,14 @@ async def _sandbox_agent_impl(
             # budget allocation. Script mode only: LLM-mode nodes do not take a
             # wall-clock budget; raising ScriptBudgetKilledError for an LLM-mode
             # node would be a misclassification.
-            if (
-                sandbox_mode == "script"
-                and wallclock_budget_seconds is not None
-                and (time.monotonic() - start_time) >= wallclock_budget_seconds
-                and not watchdog.budget_killed
-            ):
-                _log.warning(
-                    "sandbox_agent.wallclock_budget_overrun_pre_run",
-                    extra={
-                        "run_id": run_id,
-                        "node_id": node_id,
-                        "budget_seconds": wallclock_budget_seconds,
-                        "elapsed_seconds": round(time.monotonic() - start_time, 1),
-                    },
-                )
-                watchdog._budget_killed = True
-                raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+            _check_wallclock_budget_pre_run(
+                sandbox_mode=sandbox_mode,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                start_time=start_time,
+                watchdog=watchdog,
+                run_id=run_id,
+                node_id=node_id,
+            )
             # FAR-296 Phase 2 fencing lease (script mode only): persist the
             # execution claim IMMEDIATELY BEFORE the script process starts so
             # a durable marker proves the script RAN. Once claimed, any fault
@@ -3974,23 +4048,14 @@ async def _sandbox_agent_impl(
             # pre-lease check above (script mode) — guard against a double
             # kill/raise. Script mode only: same rationale as the pre-lease
             # check.
-            if (
-                sandbox_mode == "script"
-                and wallclock_budget_seconds is not None
-                and (time.monotonic() - start_time) >= wallclock_budget_seconds
-                and not watchdog.budget_killed
-            ):
-                _log.warning(
-                    "sandbox_agent.wallclock_budget_overrun_pre_run",
-                    extra={
-                        "run_id": run_id,
-                        "node_id": node_id,
-                        "budget_seconds": wallclock_budget_seconds,
-                        "elapsed_seconds": round(time.monotonic() - start_time, 1),
-                    },
-                )
-                watchdog._budget_killed = True
-                raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+            _check_wallclock_budget_pre_run(
+                sandbox_mode=sandbox_mode,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                start_time=start_time,
+                watchdog=watchdog,
+                run_id=run_id,
+                node_id=node_id,
+            )
             wrapped_command = f"( {_bridge_wrapped_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
             cmd_handle = await asyncio.wait_for(
                 sandbox.commands.run(
@@ -4892,30 +4957,32 @@ def make_sandbox_agent_fn(
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
         return await _sandbox_agent_impl(
             state,
-            node_def=node_def,
-            sandbox_mode=sandbox_mode,
-            agent_command=agent_command,
-            agent_prompt_template=agent_prompt_template,
-            template_id=template_id,
-            egress_policy=egress_policy,
-            egress_allowlist=egress_allowlist,
-            resource_limits=resource_limits,
-            read_only=read_only,
-            git_credentials=git_credentials,
-            wallclock_budget_seconds=wallclock_budget_seconds,
-            output_schema_json=output_schema_json,
-            sandbox_timeout=sandbox_timeout,
-            stall_timeout_override=stall_timeout_override,
-            context_files=context_files,
-            enable_heartbeat=enable_heartbeat,
-            watch_log_path=watch_log_path,
-            stdout_percentage_delta=stdout_percentage_delta,
-            watch_globs=watch_globs,
-            delivery_sentinel=delivery_sentinel,
-            loop_intercept_config=loop_intercept_config,
-            session_factory=session_factory,
-            single_sandbox_node=single_sandbox_node,
-            node_id=node_id,
+            config=_SandboxNodeConfig(
+                node_id=node_id,
+                node_def=node_def,
+                sandbox_mode=sandbox_mode,
+                agent_command=agent_command,
+                agent_prompt_template=agent_prompt_template,
+                template_id=template_id,
+                egress_policy=egress_policy,
+                egress_allowlist=egress_allowlist,
+                resource_limits=resource_limits,
+                read_only=read_only,
+                git_credentials=git_credentials,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                output_schema_json=output_schema_json,
+                sandbox_timeout=sandbox_timeout,
+                stall_timeout_override=stall_timeout_override,
+                context_files=context_files,
+                enable_heartbeat=enable_heartbeat,
+                watch_log_path=watch_log_path,
+                stdout_percentage_delta=stdout_percentage_delta,
+                watch_globs=watch_globs,
+                delivery_sentinel=delivery_sentinel,
+                loop_intercept_config=loop_intercept_config,
+                session_factory=session_factory,
+                single_sandbox_node=single_sandbox_node,
+            ),
         )
 
     _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"

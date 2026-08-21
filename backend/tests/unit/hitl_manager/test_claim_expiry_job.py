@@ -352,7 +352,13 @@ async def test_run_loop_ticks_then_sleeps_and_logs_expired() -> None:
     job = ClaimExpiryJob(engine)
     job._expire_once = AsyncMock(return_value=[{"claim_id": _CLAIM_ID_1}])
 
-    with patch("modulo.core.hitl_manager.expiry_job.asyncio.sleep", new=AsyncMock(side_effect=asyncio.CancelledError)):
+    with (
+        patch(
+            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
         await job._run()
 
     job._expire_once.assert_awaited_once()
@@ -382,7 +388,13 @@ async def test_run_loop_stops_when_sleep_cancelled() -> None:
     job = ClaimExpiryJob(engine)
     job._expire_once = AsyncMock(return_value=[])
 
-    with patch("modulo.core.hitl_manager.expiry_job.asyncio.sleep", new=AsyncMock(side_effect=asyncio.CancelledError)):
+    with (
+        patch(
+            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
         await job._run()
 
     job._expire_once.assert_awaited_once()
@@ -394,7 +406,13 @@ async def test_run_loop_stops_when_tick_cancelled() -> None:
     job = ClaimExpiryJob(engine)
     job._expire_once = AsyncMock(side_effect=asyncio.CancelledError)
 
-    with patch("modulo.core.hitl_manager.expiry_job.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+    with (
+        patch(
+            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            new=AsyncMock(),
+        ) as mock_sleep,
+        pytest.raises(asyncio.CancelledError),
+    ):
         await job._run()
 
     job._expire_once.assert_awaited_once()

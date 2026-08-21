@@ -170,11 +170,21 @@ class BridgeClient:
         return self.notify(tool_name, args, "after", result_summary)
 
 
+def _safe_config_path(path: str) -> str:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"config path {path!r} is outside the working directory")
+    return resolved
+
+
 def _load_config(config_path: str | None) -> dict[str, Any]:
     raw = {}
     if config_path:
         try:
-            with open(config_path, encoding="utf-8") as handle:
+            safe_path = _safe_config_path(config_path)
+            with open(safe_path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
             if isinstance(loaded, dict):
                 raw = loaded

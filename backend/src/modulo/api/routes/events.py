@@ -145,7 +145,7 @@ async def sse_event_stream(
                 except TimeoutError:
                     yield ": heartbeat\n\n"
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception:
             _log.warning("sse.event_loop_error", exc_info=True)
         finally:

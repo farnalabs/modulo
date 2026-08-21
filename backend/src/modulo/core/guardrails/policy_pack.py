@@ -43,6 +43,7 @@ framework only.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -330,6 +331,15 @@ def dump_pack(pack: PolicyPack) -> str:
     )
 
 
+def _safe_input_path(path: str) -> str:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise GuardrailConfigError(f"policy pack path {path!r} is outside the working directory")
+    return resolved
+
+
 def load_pack_file(path: str) -> PolicyPack:
     """Load and validate a policy pack YAML file from disk."""
     try:
@@ -351,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("pack_file", help="Path to a policy pack YAML file")
     args = parser.parse_args(argv)
     try:
-        pack = load_pack_file(args.pack_file)
+        pack = load_pack_file(_safe_input_path(args.pack_file))
         assert_pack_ci_ready(pack)
     except GuardrailConfigError as exc:
         print(f"policy-pack: {exc}", file=sys.stderr)  # noqa: T201 — CLI entry point
