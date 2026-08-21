@@ -1334,6 +1334,7 @@ class TestSaqWorkerSettings:
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",
+            "metrics_dump",
         }
         assert settings["after_process"] is not None
 
