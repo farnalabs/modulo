@@ -27,6 +27,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import JSON, bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -384,3 +385,65 @@ class TestApiErrorDailyCapRealDb:
         assert after_api_errors == before_api_errors, (
             f"api_error events over the cap must be skipped (before={before_api_errors}, after={after_api_errors})"
         )
+
+
+class TestRlsBlocksCrossTenantInsert:
+    async def test_policy_rejects_forged_org_insert(
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+    ) -> None:
+        """The ``rls_org_isolation`` policy must block a cross-tenant INSERT.
+
+        The policy is declared ``USING (organisation_id = app.organisation_id)``
+        with no explicit ``WITH CHECK``. For INSERT the ``USING`` clause doubles
+        as the WITH CHECK, so a non-superuser session running under org A's RLS
+        context must be unable to insert a row stamped with org B's id.
+
+        This is the brand-new infra called out in review: the API scoping test
+        (``TestCrossTenantIsolation.test_write_is_scoped_to_authenticated_org``)
+        proves the *application* never sends a forged org id, but only a direct
+        DB-level assertion proves the *policy itself* rejects it. Mirrors the
+        non-superuser ``SET ROLE`` pattern from ``test_rls_isolation.py``.
+        """
+        role = f"test_rls_insert_{uuid.uuid4().hex[:8]}"
+        forged_event = f"forged-{uuid.uuid4().hex[:8]}"
+
+        async with db_engine.connect() as conn:
+            await conn.execute(text(f'CREATE ROLE "{role}"'))
+            await conn.execute(text(f'GRANT INSERT, SELECT ON metrics_staging, organisations TO "{role}"'))
+            await conn.execute(text("COMMIT"))
+
+        try:
+            # The insert under org A's RLS context with a forged org B id must be
+            # rejected by the policy's WITH CHECK.
+            with pytest.raises(SQLAlchemyError):
+                async with db_engine.connect() as conn, conn.begin():
+                    await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
+                    await conn.execute(
+                        text("SELECT set_config('app.organisation_id', :oid, true)"),
+                        {"oid": str(org_a)},
+                    )
+                    await conn.execute(
+                        text(
+                            "INSERT INTO metrics_staging (organisation_id, event_id, event_type) "
+                            "VALUES (:oid, :eid, 'pipeline_created')"
+                        ),
+                        {"oid": str(org_b), "eid": forged_event},
+                    )
+
+            # As superuser (RLS bypassed) confirm no row was ever written.
+            async with db_engine.connect() as conn, conn.begin():
+                written = (
+                    await conn.execute(
+                        text("SELECT count(*) FROM metrics_staging WHERE event_id = :eid"),
+                        {"eid": forged_event},
+                    )
+                ).scalar()
+            assert written == 0, "forged cross-tenant insert must not be written"
+        finally:
+            async with db_engine.connect() as conn:
+                await conn.execute(text(f'DROP OWNED BY "{role}"'))
+                await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+                await conn.execute(text("COMMIT"))
