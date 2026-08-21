@@ -177,7 +177,7 @@ jobs:
       - name: Security audit
         working-directory: backend
         run: |
-          uv run --no-build pip-audit
+          uv run --no-build --no-sync pip-audit
           (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
 
       - name: Stop containers
