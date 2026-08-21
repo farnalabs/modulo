@@ -4586,7 +4586,10 @@ async def _sandbox_agent_impl(
         if _drain_fn is not None and sandbox is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT)
-            except asyncio.CancelledError:
+            # NOSONAR: deliberate — nested cancellation during idempotency-gate cleanup must
+            # not re-raise early or the delivery-done marker is skipped (FAR-228 fix); the
+            # original cancellation re-raises at line 4566.
+            except asyncio.CancelledError:  # NOSONAR
                 _uncancel_current_task()
             except Exception:
                 _log.exception(
@@ -4621,7 +4624,10 @@ async def _sandbox_agent_impl(
                         attempt_key=attempt_key,
                         marker=_cancel_marker,
                     )
-                except asyncio.CancelledError:
+                # NOSONAR: deliberate — nested cancellation during idempotency-gate cleanup must
+                # not re-raise early or the delivery-done marker is skipped (FAR-228 fix); the
+                # original cancellation re-raises at line 4566.
+                except asyncio.CancelledError:  # NOSONAR
                     _uncancel_current_task()
                 except Exception:
                     _log.exception(
