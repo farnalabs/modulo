@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -77,7 +78,7 @@ class LevelUpdateResponse(BaseModel):
 
 async def _get_org_or_404(
     session: AsyncSession,
-    org_id: str,
+    org_id: uuid.UUID,
     *,
     for_update: bool = False,
 ) -> Organisation:
@@ -106,9 +107,9 @@ def _build_consent_response(
     egress = is_egress_allowed(instance_enabled, str(consent.get("level", DEFAULT_LEVEL)))
     return ConsentResponse(
         level=str(consent.get("level", DEFAULT_LEVEL)),
-        prompted=consent.get("prompted"),  # type: ignore[arg-type]
-        prompted_at=consent.get("prompted_at"),  # type: ignore[arg-type]
-        level_changed_at=consent.get("level_changed_at"),  # type: ignore[arg-type]
+        prompted=consent.get("prompted"),
+        prompted_at=consent.get("prompted_at"),
+        level_changed_at=consent.get("level_changed_at"),
         instance_enabled=instance_enabled,
         egress_allowed=egress,
         prompt_eligible=is_prompt_eligible(consent),
@@ -228,7 +229,7 @@ async def update_product_analytics_level(
 
             return LevelUpdateResponse(
                 level=updated_consent["level"],
-                level_changed_at=updated_consent.get("level_changed_at"),  # type: ignore[arg-type]
+                level_changed_at=updated_consent.get("level_changed_at"),
             )
     except HTTPException:
         raise
