@@ -24,18 +24,24 @@
 
     <div v-if="showForm" class="remy-skill-form p-3 space-y-3 border-b">
       <input
+        id="remyskill-name-input"
         v-model="form.name"
         class="remy-skill-input"
+        :aria-label="$t('components.remy.RemySkillDialog.skill_name')"
         :placeholder="$t('components.remy.RemySkillDialog.skill_name')"
       />
       <input
+        id="remyskill-description-input"
         v-model="form.description"
         class="remy-skill-input"
-        placeholder="Description"
+        :aria-label="$t('components.remy.RemySkillManager.description')"
+        :placeholder="$t('components.remy.RemySkillManager.description')"
       />
       <input
+        id="remyskill-triggers-input"
         v-model="form.triggersText"
         class="remy-skill-input"
+        :aria-label="$t('components.remy.RemySkillManager.triggers_commaseparated')"
         :placeholder="$t('components.remy.RemySkillManager.triggers_commaseparated')"
       />
       <textarea

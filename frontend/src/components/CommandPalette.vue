@@ -11,8 +11,10 @@
         <div class="flex items-center gap-2 border-b px-4">
           <SvgIcon name="Search" class="h-4 w-4 shrink-0 text-muted-foreground" />
           <input
+            id="commandpalette-search-input"
             ref="inputRef"
             v-model="query"
+            aria-label="Search pages"
             placeholder="Search pages..."
             class="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             @keydown.down.prevent="selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1)"
