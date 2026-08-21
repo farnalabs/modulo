@@ -5905,7 +5905,7 @@ export interface paths {
          * @description Set the org's guardrails kill-switch (admin only).
          *
          *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
-         *     start — never a full disable. Enabling fires an audit event AND a
+         *     start -- never a full disable. Enabling fires an audit event AND a
          *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
          *     silent. Disabling restores full enforcement.
          */
