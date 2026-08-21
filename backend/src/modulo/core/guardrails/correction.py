@@ -152,6 +152,78 @@ class CorrectionRedactionPattern(BaseModel):
     replacement: str = REDACTION_MASK
 
 
+def _declared_detection_type(config: Mapping[str, Any]) -> str | None:
+    """Return the guardrail detection type declared by *config*, if it is a known one.
+
+    Checks both the top-level ``type`` key and the ``detection`` envelope's
+    ``type`` key (the fired guardrail's detection family). ``None`` when neither
+    carries a known guardrail detection type.
+    """
+    envelope = config.get("detection")
+    if isinstance(envelope, dict):
+        env_type = envelope.get("type")
+        if env_type in GUARDRAIL_DETECTION_TYPES:
+            return str(env_type)
+    top_type = config.get("type")
+    if top_type in GUARDRAIL_DETECTION_TYPES:
+        return str(top_type)
+    return None
+
+
+def _config_declares_schema(config: Mapping[str, Any]) -> bool:
+    """True when *config* carries a JSON Schema (top-level or in the envelope)."""
+    envelope = config.get("detection")
+    return isinstance(config.get("schema"), dict) or (
+        isinstance(envelope, dict) and isinstance(envelope.get("schema"), dict)
+    )
+
+
+def _revalidation_backend_error(defn: CorrectionDefinition) -> str | None:
+    """Return the config error message for an LLM-judge revalidation backend.
+
+    The ``llm_judge`` family requires a re-validation model backend AND it must
+    differ from the correction backend (never two LLM-judges from the same
+    backend). ``None`` when the family is not ``llm_judge`` or the binding is
+    valid.
+    """
+    if defn.revalidation_detector_family != CorrectionDetectorFamily.LLM_JUDGE:
+        return None
+    if not defn.revalidation_model_backend_id:
+        return (
+            "revalidation_detector_family='llm_judge' requires revalidation_model_backend_id "
+            "(never two LLM-judges from the same backend)"
+        )
+    if defn.revalidation_model_backend_id == defn.model_backend_id:
+        return (
+            "revalidation llm_judge must use a DIFFERENT backend than the correction backend "
+            "(never two LLM-judges from the same backend)"
+        )
+    return None
+
+
+def _regex_revalidation_config_error(defn: CorrectionDefinition) -> str | None:
+    """Return the config error message for a REGEX revalidator, or ``None``.
+
+    A REGEX-family correction REQUIRES a non-empty ``pattern`` and ``field`` in
+    ``revalidation_config`` — a regex revalidator with no pattern would fail
+    open (marked resolved with no actual re-validation).
+    """
+    if defn.revalidation_detector_family != CorrectionDetectorFamily.REGEX:
+        return None
+    regex_config = defn.revalidation_config or {}
+    if not str(regex_config.get("pattern") or "").strip():
+        return (
+            "revalidation_detector_family='regex' requires revalidation_config.pattern "
+            "(a REGEX revalidator with no pattern would fail open)"
+        )
+    if not str(regex_config.get("field") or "").strip():
+        return (
+            "revalidation_detector_family='regex' requires revalidation_config.field "
+            "(the engine cannot re-validate without a field to scan)"
+        )
+    return None
+
+
 class CorrectionDefinition(BaseModel):
     """Definition of a single-node correction bound to one guardrail.
 
@@ -198,51 +270,19 @@ class CorrectionDefinition(BaseModel):
 
     @model_validator(mode="after")
     def _revalidation_backend_requirement(self) -> CorrectionDefinition:
-        if (
-            self.revalidation_detector_family == CorrectionDetectorFamily.LLM_JUDGE
-            and not self.revalidation_model_backend_id
-        ):
-            raise ValueError(
-                "revalidation_detector_family='llm_judge' requires revalidation_model_backend_id "
-                "(never two LLM-judges from the same backend)"
-            )
-        if (
-            self.revalidation_detector_family == CorrectionDetectorFamily.LLM_JUDGE
-            and self.revalidation_model_backend_id == self.model_backend_id
-        ):
-            raise ValueError(
-                "revalidation llm_judge must use a DIFFERENT backend than the correction backend "
-                "(never two LLM-judges from the same backend)"
-            )
-        if self.revalidation_detector_family == CorrectionDetectorFamily.REGEX:
-            regex_config = self.revalidation_config or {}
-            if not str(regex_config.get("pattern") or "").strip():
-                raise ValueError(
-                    "revalidation_detector_family='regex' requires revalidation_config.pattern "
-                    "(a REGEX revalidator with no pattern would fail open)"
-                )
-            if not str(regex_config.get("field") or "").strip():
-                raise ValueError(
-                    "revalidation_detector_family='regex' requires revalidation_config.field "
-                    "(the engine cannot re-validate without a field to scan)"
-                )
+        message = _revalidation_backend_error(self) or _regex_revalidation_config_error(self)
+        if message is not None:
+            raise ValueError(message)
         return self
 
     @staticmethod
     def guardrail_detection_family(guardrail: EvalDefinition) -> str:
         """Return the fired guardrail's detection family (``regex``/``json_schema``)."""
         config = guardrail.config or {}
-        envelope = config.get("detection")
-        if isinstance(envelope, dict):
-            env_type = envelope.get("type")
-            if env_type in GUARDRAIL_DETECTION_TYPES:
-                return str(env_type)
-        top_type = config.get("type")
-        if top_type in GUARDRAIL_DETECTION_TYPES:
-            return str(top_type)
-        if isinstance(config.get("schema"), dict) or (
-            isinstance(envelope, dict) and isinstance(envelope.get("schema"), dict)
-        ):
+        declared = _declared_detection_type(config)
+        if declared is not None:
+            return declared
+        if _config_declares_schema(config):
             return EvalType.JSON_SCHEMA.value
         return EvalType.REGEX.value
 
@@ -399,6 +439,43 @@ def build_idempotency_key(
     return fingerprint_state(raw)
 
 
+def _coerce_redaction_pattern(raw: CorrectionRedactionPattern | Mapping[str, Any]) -> CorrectionRedactionPattern:
+    """Normalize a pattern entry to a :class:`CorrectionRedactionPattern`."""
+    if isinstance(raw, CorrectionRedactionPattern):
+        return raw
+    return CorrectionRedactionPattern.model_validate(dict(raw))
+
+
+def _compile_redaction_regex(pattern: CorrectionRedactionPattern) -> re.Pattern[str] | None:
+    """Compile a redaction pattern's regex, logging (and skipping) invalid ones."""
+    try:
+        return re.compile(pattern.pattern)
+    except re.error as exc:
+        _log.warning(
+            "guardrails.correction.redaction_pattern_invalid path=%s error=%s",
+            pattern.path,
+            type(exc).__name__,
+        )
+        return None
+
+
+def _resolve_redaction_leaf(redacted: dict[str, Any], segments: Sequence[str]) -> dict[str, Any] | None:
+    """Walk *segments* (minus the leaf) into *redacted*; return the parent dict.
+
+    ``None`` when any intermediate segment is missing or not a dict (the path
+    is left untouched, matching the "missing paths are left untouched" rule).
+    """
+    current: dict[str, Any] = redacted
+    for segment in segments[:-1]:
+        if not isinstance(current, dict) or segment not in current:
+            return None
+        value: Any = current[segment]
+        if not isinstance(value, dict):
+            return None
+        current = value
+    return current
+
+
 def redact_payload(
     payload: Mapping[str, Any],
     patterns: Sequence[CorrectionRedactionPattern | Mapping[str, Any]],
@@ -412,31 +489,53 @@ def redact_payload(
     """
     redacted = copy.deepcopy(dict(payload))
     for raw in patterns:
-        pattern = (
-            raw if isinstance(raw, CorrectionRedactionPattern) else CorrectionRedactionPattern.model_validate(dict(raw))
-        )
+        pattern = _coerce_redaction_pattern(raw)
         segments = [segment for segment in pattern.path.split(".") if segment]
         if not segments:
             continue
-        try:
-            regex = re.compile(pattern.pattern)
-        except re.error as exc:
-            _log.warning(
-                "guardrails.correction.redaction_pattern_invalid path=%s error=%s",
-                pattern.path,
-                type(exc).__name__,
-            )
+        regex = _compile_redaction_regex(pattern)
+        if regex is None:
             continue
-        current = redacted
-        for segment in segments[:-1]:
-            if not isinstance(current, dict) or segment not in current:
-                break
-            current = current[segment]
-        else:
-            leaf = current.get(segments[-1])
-            if isinstance(leaf, str):
-                current[segments[-1]] = regex.sub(pattern.replacement, leaf)
+        parent = _resolve_redaction_leaf(redacted, segments)
+        if parent is None:
+            continue
+        leaf = parent.get(segments[-1])
+        if isinstance(leaf, str):
+            parent[segments[-1]] = regex.sub(pattern.replacement, leaf)
     return redacted
+
+
+def _collect_prior_fingerprints(prior_states: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Collect every previously-seen input/output fingerprint from *prior_states*."""
+    seen: set[str] = set()
+    for state in prior_states:
+        if not isinstance(state, dict):
+            continue
+        for key in ("input_fingerprint", "output_fingerprint"):
+            value = state.get(key)
+            if isinstance(value, str):
+                seen.add(value)
+    return seen
+
+
+def _prior_metric_is_strictly_worse(
+    current_violation_metric: Mapping[str, Any],
+    prior_states: Sequence[Mapping[str, Any]],
+) -> bool:
+    """True when *current_violation_metric* is strictly-worse than ANY recorded prior state's.
+
+    ``violation_metric`` is the canonical key; the ``input_violation_metric`` /
+    ``output_violation_metric`` keys are the persisted split used by the retry
+    loop (input stripped on retries, output preserved).
+    """
+    for state in prior_states:
+        if not isinstance(state, dict):
+            continue
+        for metric_key in ("violation_metric", "input_violation_metric", "output_violation_metric"):
+            prior_metric = state.get(metric_key)
+            if isinstance(prior_metric, dict) and _is_strictly_worse(current_violation_metric, prior_metric):
+                return True
+    return False
 
 
 def convergence_verdict(
@@ -460,28 +559,12 @@ def convergence_verdict(
 
     See module docstring invariant 4 for the enforced strictly-worse ordering.
     """
+    if current_violation_metric is not None and _prior_metric_is_strictly_worse(current_violation_metric, prior_states):
+        return CorrectionVerdict.CONVERGED
+    seen = _collect_prior_fingerprints(prior_states)
     candidates: list[str] = [fingerprint_state(redacted_input)]
     if produced_output is not None:
         candidates.append(fingerprint_state(produced_output))
-    seen: set[str] = set()
-    for state in prior_states:
-        if not isinstance(state, dict):
-            continue
-        for key in ("input_fingerprint", "output_fingerprint"):
-            value = state.get(key)
-            if isinstance(value, str):
-                seen.add(value)
-        if current_violation_metric is not None:
-            # The current state is strictly-worse than ANY recorded prior
-            # state's violation metric -> HITL immediately (no budget burn).
-            # ``violation_metric`` is the canonical key; the
-            # ``input_violation_metric`` / ``output_violation_metric`` keys are
-            # the persisted split used by the retry loop (input stripped on
-            # retries, output preserved).
-            for metric_key in ("violation_metric", "input_violation_metric", "output_violation_metric"):
-                prior_metric = state.get(metric_key)
-                if isinstance(prior_metric, dict) and _is_strictly_worse(current_violation_metric, prior_metric):
-                    return CorrectionVerdict.CONVERGED
     for candidate in candidates:
         if candidate in seen:
             return CorrectionVerdict.CONVERGED
@@ -532,6 +615,24 @@ def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]
     return parsed
 
 
+def _flatten_content_blocks(content: Any) -> str:
+    """Join the text parts of a structured LM reply's ``content`` into one string.
+
+    ``content`` may be a plain string, a list of string blocks, or a list of
+    ``{"text": ...}`` dict blocks (provider-specific shapes). Anything else is
+    stringified as-is.
+    """
+    if not isinstance(content, list):
+        return str(content)
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "\n".join(parts)
+
+
 async def _invoke_correction_backend(
     backend: CorrectionBackend,
     *,
@@ -556,16 +657,7 @@ async def _invoke_correction_backend(
         {"role": "user", "content": user_message},
     ]
     reply = await backend.invoke(messages)
-    content = getattr(reply, "content", reply)
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        content = "\n".join(parts)
-    return str(content)
+    return _flatten_content_blocks(getattr(reply, "content", reply))
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +844,155 @@ async def claim_correction_slot(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _CorrectionRunContext:
+    """Pre-computed state shared across the single-node correction helpers.
+
+    Grouped so the execution helpers take one cohesive input instead of a long
+    positional chain. ``prior_states`` is normalized to a list; the violation
+    metric for the redacted input is computed once at build time.
+    """
+
+    correction: CorrectionDefinition
+    guardrail: EvalDefinition
+    backend: CorrectionBackend
+    engine: EvalEngine
+    attempt: int
+    idempotency_key: str
+    resolved_family: CorrectionDetectorFamily
+    redacted_input: dict[str, Any]
+    bound_guardrails: list[EvalDefinition]
+    input_violation_metric: Mapping[str, Any]
+    prior_states: Sequence[Mapping[str, Any]]
+    revalidation_config: dict[str, Any] | None
+    judge_callable: LLMJudgeCallable | None
+
+
+def _build_run_context(
+    *,
+    correction: CorrectionDefinition,
+    guardrail: EvalDefinition,
+    node_input: dict[str, Any],
+    backend: CorrectionBackend,
+    engine: EvalEngine | None,
+    prior_states: Sequence[Mapping[str, Any]] | None,
+    idempotency_key: str | None,
+    attempt: int,
+    revalidation_config: dict[str, Any] | None,
+    judge_callable: LLMJudgeCallable | None,
+    bound_guardrails: Sequence[EvalDefinition] | None,
+) -> _CorrectionRunContext:
+    """Pre-redact the input and pre-compute the shared correction state."""
+    engine = engine or EvalEngine()
+    redacted_input = redact_payload(node_input, correction.input_redaction_patterns)
+    idem_key = idempotency_key or build_idempotency_key(
+        org_id=guardrail.org_id,
+        run_id=uuid.uuid4(),
+        node_id=guardrail.node_id or "",
+        correction_id=correction.id,
+        redacted_input=redacted_input,
+    )
+    bound_guardrails = list(bound_guardrails or [])
+    return _CorrectionRunContext(
+        correction=correction,
+        guardrail=guardrail,
+        backend=backend,
+        engine=engine,
+        attempt=int(attempt),
+        idempotency_key=idem_key,
+        resolved_family=CorrectionDetectorFamily(correction.revalidation_detector_family),
+        redacted_input=redacted_input,
+        bound_guardrails=bound_guardrails,
+        input_violation_metric=compute_violation_metric(redacted_input, bound_guardrails),
+        prior_states=list(prior_states or []),
+        revalidation_config=revalidation_config,
+        judge_callable=judge_callable,
+    )
+
+
+def _build_correction_state(
+    ctx: _CorrectionRunContext,
+    produced_output: Mapping[str, Any] | None = None,
+    output_violation_metric: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the persisted correction state (idempotency + convergence data).
+
+    The ``produced_output`` (already redacted) is persisted IN the state so
+    ``resume_interrupted_correction`` can re-validate it without re-running the
+    LM. The per-state violation metric (``input_violation_metric`` /
+    ``output_violation_metric``) is persisted so the next attempt's convergence
+    check can compare current severity against the recorded prior states
+    (strictly-worse ordering). A state WITHOUT ``produced_output`` (e.g. an LM
+    error / parse failure) resumes as ``correction_interrupted`` ("no recorded
+    produced output").
+    """
+    state: dict[str, Any] = {
+        "idempotency_key": ctx.idempotency_key,
+        "input_fingerprint": fingerprint_state(ctx.redacted_input),
+        "attempt": ctx.attempt,
+    }
+    if ctx.input_violation_metric is not None:
+        state["input_violation_metric"] = dict(ctx.input_violation_metric)
+    if produced_output is not None:
+        state["output_fingerprint"] = fingerprint_state(produced_output)
+        state["produced_output"] = dict(produced_output)
+        if output_violation_metric is not None:
+            state["output_violation_metric"] = dict(output_violation_metric)
+    return state
+
+
+def _convergence_check(
+    ctx: _CorrectionRunContext,
+    *,
+    produced_output: Mapping[str, Any] | None,
+    current_violation_metric: Mapping[str, Any],
+) -> CorrectionVerdict | None:
+    """Run the convergence check against the recorded prior states."""
+    return convergence_verdict(
+        redacted_input=ctx.redacted_input,
+        produced_output=produced_output,
+        prior_states=ctx.prior_states,
+        current_violation_metric=current_violation_metric,
+    )
+
+
+def _escalated_outcome(
+    ctx: _CorrectionRunContext,
+    verdict: CorrectionVerdict,
+    *,
+    detail: str,
+    produced_output: dict[str, Any] | None = None,
+    output_violation_metric: Mapping[str, Any] | None = None,
+    revalidation_result: EvalResult | None = None,
+) -> CorrectionOutcome:
+    """Build a terminal HITL outcome (converged / LM error / still violating)."""
+    return CorrectionOutcome(
+        verdict=verdict,
+        detail=detail,
+        produced_output=produced_output,
+        revalidation_result=revalidation_result,
+        needs_human_review=True,
+        state=_build_correction_state(ctx, produced_output, output_violation_metric),
+    )
+
+
+def _resolved_outcome(
+    ctx: _CorrectionRunContext,
+    produced_redacted: dict[str, Any],
+    revalidation: EvalResult,
+    output_violation_metric: Mapping[str, Any],
+) -> CorrectionOutcome:
+    """Build the RESOLVED outcome (continuing-suspicious, no HITL)."""
+    return CorrectionOutcome(
+        verdict=CorrectionVerdict.RESOLVED,
+        detail="different-family re-validation passed; output remains continuing-suspicious",
+        produced_output=produced_redacted,
+        revalidation_result=revalidation,
+        needs_human_review=False,
+        state=_build_correction_state(ctx, produced_redacted, output_violation_metric),
+    )
+
+
 async def run_single_node_correction(
     *,
     correction: CorrectionDefinition,
@@ -795,68 +1036,60 @@ async def run_single_node_correction(
     prior fingerprints + violation metrics).
     """
     correction.validate_guardrail_binding(guardrail)
-
-    engine = engine or EvalEngine()
-    redacted_input = redact_payload(node_input, correction.input_redaction_patterns)
-    idem_key = idempotency_key or build_idempotency_key(
-        org_id=guardrail.org_id,
-        run_id=uuid.uuid4(),
-        node_id=guardrail.node_id or "",
-        correction_id=correction.id,
-        redacted_input=redacted_input,
+    ctx = _build_run_context(
+        correction=correction,
+        guardrail=guardrail,
+        node_input=node_input,
+        backend=backend,
+        engine=engine,
+        prior_states=prior_states,
+        idempotency_key=idempotency_key,
+        attempt=attempt,
+        revalidation_config=revalidation_config,
+        judge_callable=judge_callable,
+        bound_guardrails=bound_guardrails,
     )
-    resolved_family = CorrectionDetectorFamily(correction.revalidation_detector_family)
-    bound_guardrails = list(bound_guardrails or [])
-    input_metric = compute_violation_metric(redacted_input, bound_guardrails)
 
-    converged = convergence_verdict(
-        redacted_input=redacted_input,
-        produced_output=None,
-        prior_states=list(prior_states or []),
-        current_violation_metric=input_metric,
-    )
+    converged = _convergence_check(ctx, produced_output=None, current_violation_metric=ctx.input_violation_metric)
     if converged is not None:
-        return CorrectionOutcome(
-            verdict=converged,
+        return _escalated_outcome(
+            ctx,
+            converged,
             detail=(
                 "convergence check: previously-seen or strictly-worse input state, "
                 "escalating to HITL (no oscillation burn / no budget burn)"
             ),
-            needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     try:
         raw_output = await _invoke_correction_backend(
-            backend,
-            correction=correction,
-            redacted_input=redacted_input,
+            ctx.backend,
+            correction=ctx.correction,
+            redacted_input=ctx.redacted_input,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.exception("guardrails.correction.backend_error correction_id=%s", correction.id)
-        return CorrectionOutcome(
-            verdict=CorrectionVerdict.LM_ERROR,
+        _log.exception("guardrails.correction.backend_error correction_id=%s", ctx.correction.id)
+        return _escalated_outcome(
+            ctx,
+            CorrectionVerdict.LM_ERROR,
             detail=f"correction backend error: {type(exc).__name__}",
-            needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     try:
-        produced = _parse_structured_output(raw_output, correction.output_schema)
+        produced = _parse_structured_output(raw_output, ctx.correction.output_schema)
     except CorrectionConfigError as exc:
-        _log.warning("guardrails.correction.output_invalid correction_id=%s: %s", correction.id, exc)
-        return CorrectionOutcome(
-            verdict=CorrectionVerdict.STILL_VIOLATING,
+        _log.warning("guardrails.correction.output_invalid correction_id=%s: %s", ctx.correction.id, exc)
+        return _escalated_outcome(
+            ctx,
+            CorrectionVerdict.STILL_VIOLATING,
             detail=str(exc),
-            needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     # Redact the produced output BEFORE persistence (never persisted raw).
-    produced_redacted = redact_payload(produced, correction.input_redaction_patterns)
-    output_metric = compute_violation_metric(produced_redacted, bound_guardrails)
+    produced_redacted = redact_payload(produced, ctx.correction.input_redaction_patterns)
+    output_metric = compute_violation_metric(produced_redacted, ctx.bound_guardrails)
 
     # Convergence on the PRODUCED OUTPUT: a retry that reproduces a previously
     # seen output is oscillation -> HITL immediately (no oscillation burn),
@@ -865,75 +1098,42 @@ async def run_single_node_correction(
     # spuriously converge on its own repeat). A produced output whose violation
     # severity is STRICTLY WORSE than every recorded prior state -> HITL
     # immediately (no budget burn).
-    repeated = convergence_verdict(
-        redacted_input=redacted_input,
-        produced_output=produced_redacted,
-        prior_states=list(prior_states or []),
-        current_violation_metric=output_metric,
-    )
+    repeated = _convergence_check(ctx, produced_output=produced_redacted, current_violation_metric=output_metric)
     if repeated is not None:
-        return CorrectionOutcome(
-            verdict=repeated,
+        return _escalated_outcome(
+            ctx,
+            repeated,
+            produced_output=produced_redacted,
+            output_violation_metric=output_metric,
             detail=(
                 "convergence check: previously-seen or strictly-worse produced output, "
                 "escalating to HITL (no oscillation burn / no budget burn)"
             ),
-            produced_output=produced_redacted,
-            needs_human_review=True,
-            state=_build_state(
-                idem_key,
-                redacted_input,
-                produced_redacted,
-                attempt,
-                input_violation_metric=input_metric,
-                output_violation_metric=output_metric,
-            ),
         )
 
     revalidation = await _run_different_family_revalidation(
-        engine,
+        ctx.engine,
         produced_redacted,
-        family=resolved_family,
-        correction=correction,
-        revalidation_config=revalidation_config,
-        judge_callable=judge_callable,
+        family=ctx.resolved_family,
+        correction=ctx.correction,
+        revalidation_config=ctx.revalidation_config,
+        judge_callable=ctx.judge_callable,
     )
 
     if not revalidation.passed:
-        return CorrectionOutcome(
-            verdict=CorrectionVerdict.STILL_VIOLATING,
-            detail=f"different-family re-validation failed: {revalidation.detail}",
+        return _escalated_outcome(
+            ctx,
+            CorrectionVerdict.STILL_VIOLATING,
             produced_output=produced_redacted,
+            output_violation_metric=output_metric,
             revalidation_result=revalidation,
-            needs_human_review=True,
-            state=_build_state(
-                idem_key,
-                redacted_input,
-                produced_redacted,
-                attempt,
-                input_violation_metric=input_metric,
-                output_violation_metric=output_metric,
-            ),
+            detail=f"different-family re-validation failed: {revalidation.detail}",
         )
 
     # The corrected output is continuing-suspicious: never auto-clear the
     # suspicious signal downstream (the caller owns the correction_violated
     # escalation against ALL bound guardrails).
-    return CorrectionOutcome(
-        verdict=CorrectionVerdict.RESOLVED,
-        detail="different-family re-validation passed; output remains continuing-suspicious",
-        produced_output=produced_redacted,
-        revalidation_result=revalidation,
-        needs_human_review=False,
-        state=_build_state(
-            idem_key,
-            redacted_input,
-            produced_redacted,
-            attempt,
-            input_violation_metric=input_metric,
-            output_violation_metric=output_metric,
-        ),
-    )
+    return _resolved_outcome(ctx, produced_redacted, revalidation, output_metric)
 
 
 async def _run_different_family_revalidation(
@@ -985,39 +1185,21 @@ async def _run_different_family_revalidation(
         )
 
 
-def _build_state(
-    idempotency_key: str,
-    redacted_input: Mapping[str, Any],
-    produced_output: Mapping[str, Any] | None,
-    attempt: int,
-    input_violation_metric: Mapping[str, Any] | None = None,
-    output_violation_metric: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build the persisted correction state (idempotency + convergence data).
+def _first_violating_guardrail(
+    engine: EvalEngine,
+    guardrails: Sequence[EvalDefinition],
+    payload: Mapping[str, Any],
+) -> str | None:
+    """Return the name of the first *guardrails* entry that fires on *payload*."""
+    from modulo.core.guardrails import _interpret_violation, _resolve_detection, evaluate_guardrails
 
-    The ``produced_output`` (already redacted) is persisted IN the state so
-    ``resume_interrupted_correction`` can re-validate it without re-running the
-    LM. The per-state violation metric (``input_violation_metric`` /
-    ``output_violation_metric``) is persisted so the next attempt's convergence
-    check can compare current severity against the recorded prior states
-    (strictly-worse ordering). A caller persisting just ``outcome.state`` gets a
-    resumable record; a state WITHOUT ``produced_output`` (e.g. an LM error /
-    parse failure) resumes as ``correction_interrupted`` ("no recorded produced
-    output").
-    """
-    state: dict[str, Any] = {
-        "idempotency_key": idempotency_key,
-        "input_fingerprint": fingerprint_state(redacted_input),
-        "attempt": int(attempt),
-    }
-    if input_violation_metric is not None:
-        state["input_violation_metric"] = dict(input_violation_metric)
-    if produced_output is not None:
-        state["output_fingerprint"] = fingerprint_state(produced_output)
-        state["produced_output"] = dict(produced_output)
-        if output_violation_metric is not None:
-            state["output_violation_metric"] = dict(output_violation_metric)
-    return state
+    # raise_on_block=False: we only need to know whether any fired.
+    results = evaluate_guardrails(engine, guardrails, dict(payload), raise_on_block=False)
+    for result, guardrail in zip(results, guardrails, strict=True):
+        detection_type, _ = _resolve_detection(guardrail)
+        if _interpret_violation(detection_type, result):
+            return guardrail.name
+    return None
 
 
 async def check_corrected_output_violates_guardrails(
@@ -1035,19 +1217,11 @@ async def check_corrected_output_violates_guardrails(
     ``correction_violated`` — the output is never silently accepted. ``None``
     means no bound guardrail fired on the corrected output.
     """
-    from modulo.core.guardrails import _interpret_violation, _resolve_detection, evaluate_guardrails
-
     try:
         other_guardrails = [g for g in guardrails if g.name != exclude_name]
         if not other_guardrails:
             return None
-        engine = EvalEngine()
-        # raise_on_block=False: we only need to know whether any fired.
-        results = evaluate_guardrails(engine, other_guardrails, dict(corrected_output), raise_on_block=False)
-        for result, guardrail in zip(results, other_guardrails, strict=True):
-            detection_type, _ = _resolve_detection(guardrail)
-            if _interpret_violation(detection_type, result):
-                return guardrail.name
+        return _first_violating_guardrail(EvalEngine(), other_guardrails, corrected_output)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1055,7 +1229,6 @@ async def check_corrected_output_violates_guardrails(
         # Fail closed: an unreadable violation check must not silently accept
         # the corrected output — escalate as correction_violated.
         return "<correction_violated_check_failed>"
-    return None
 
 
 async def dispatch_single_node_correction(
@@ -1106,6 +1279,30 @@ async def dispatch_single_node_correction(
     return outcome
 
 
+def _resume_revalidation_failure(
+    produced_redacted: dict[str, Any],
+    revalidation: EvalResult,
+    state: dict[str, Any],
+    detail: str,
+    budget_exhausted: bool,
+) -> CorrectionOutcome:
+    """Build the HITL outcome when a resumed re-validation fails.
+
+    A budget-exhausted mid-resume AND still-violating produced output is
+    ``correction_interrupted`` (the caller records it); otherwise the resumed
+    re-validation failure is ``still_violating``.
+    """
+    verdict = CorrectionVerdict.INTERRUPTED if budget_exhausted else CorrectionVerdict.STILL_VIOLATING
+    return CorrectionOutcome(
+        verdict=verdict,
+        detail=detail,
+        produced_output=produced_redacted,
+        revalidation_result=revalidation,
+        needs_human_review=True,
+        state=dict(state),
+    )
+
+
 async def resume_interrupted_correction(
     *,
     correction: CorrectionDefinition,
@@ -1120,10 +1317,11 @@ async def resume_interrupted_correction(
 
     Re-validates the produced output recorded in *state* against the
     different-family detector. *state* MUST carry the recorded produced output
-    under ``produced_output`` for resume to work — ``_build_state`` writes it
-    (redacted) whenever a produced output exists; a state without it resumes as
-    ``correction_interrupted``. If the budget is exhausted mid-resume, the
-    outcome is ``correction_interrupted`` (the caller records it).
+    under ``produced_output`` for resume to work — ``_build_correction_state``
+    writes it (redacted) whenever a produced output exists; a state without it
+    resumes as ``correction_interrupted``. If the budget is exhausted
+    mid-resume, the outcome is ``correction_interrupted`` (the caller records
+    it).
     """
     engine = engine or EvalEngine()
     state = dict(state or {})
@@ -1146,26 +1344,13 @@ async def resume_interrupted_correction(
         judge_callable=judge_callable,
     )
     if not revalidation.passed:
-        if attempt >= correction.max_attempts:
-            # Budget exhausted mid-resume AND the produced output is still
-            # violating -> correction_interrupted (the caller records it).
-            return CorrectionOutcome(
-                verdict=CorrectionVerdict.INTERRUPTED,
-                detail=f"correction_interrupted: budget exhausted mid-resume (attempt {attempt}): "
-                f"{revalidation.detail}",
-                produced_output=produced_redacted,
-                revalidation_result=revalidation,
-                needs_human_review=True,
-                state=dict(state),
-            )
-        return CorrectionOutcome(
-            verdict=CorrectionVerdict.STILL_VIOLATING,
-            detail=f"resumed re-validation failed: {revalidation.detail}",
-            produced_output=produced_redacted,
-            revalidation_result=revalidation,
-            needs_human_review=True,
-            state=dict(state),
+        budget_exhausted = attempt >= correction.max_attempts
+        detail = (
+            f"correction_interrupted: budget exhausted mid-resume (attempt {attempt}): {revalidation.detail}"
+            if budget_exhausted
+            else f"resumed re-validation failed: {revalidation.detail}"
         )
+        return _resume_revalidation_failure(produced_redacted, revalidation, state, detail, budget_exhausted)
     return CorrectionOutcome(
         verdict=CorrectionVerdict.RESOLVED,
         detail="resumed correction: produced output re-validated (LM never re-run)",
