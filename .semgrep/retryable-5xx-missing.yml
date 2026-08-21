@@ -1,0 +1,17 @@
+rules:
+  - id: retryable-5xx-missing
+    patterns:
+      - pattern-either:
+          - pattern: |
+              _RETRYABLE_STATUSES = frozenset({...})
+          - pattern: |
+              _RETRYABLE_STATUSES: frozenset = frozenset({...})
+      - pattern-not: |
+          _RETRYABLE_STATUSES = frozenset({..., 502, ...})
+      - pattern-not: |
+          _RETRYABLE_STATUSES: frozenset = frozenset({..., 502, ...})
+    message: "_RETRYABLE_STATUSES must include 502, 503, 504 for server-error retry (current set: $VALUE). These are transient errors where retry is safe and necessary for resilience."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/modulo/connectors/**"]

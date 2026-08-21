@@ -1,0 +1,15 @@
+# Mirrors semgrep's default ignore list EXCEPT the test-path entries
+# (`test/`, `tests/`, `*_test.go`). Those are intentionally omitted so the
+# test-focused QA lenses (.semgrep/*.yml with `paths.include` for tests) run
+# against backend/tests in CI, which scans from this directory.
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+.semgrep_logs/

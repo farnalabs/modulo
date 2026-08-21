@@ -1,0 +1,140 @@
+---
+id: feat-variants-variant-groups
+prd: 8.19
+delivery-tasks: [task-nv3-variant-group]
+bdd:
+  - backend/tests/bdd/features/pipelines/run_variants.feature
+  - backend/tests/bdd/features/variants/variant_groups.feature
+code:
+  - backend/src/modulo/api/routes/variants.py
+  - backend/src/modulo/db/models/variant_group.py
+  - backend/src/modulo/db/crud/variant_group.py
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
+unit-tests:
+  - backend/tests/unit/api/test_variants.py
+  - backend/tests/unit/db/crud/test_variant_group.py
+  - backend/tests/bdd/steps/test_variant_groups.py
+  - backend/tests/integration/crud/test_variant_group.py
+depends-on: [feat-core-run-context, feat-evals-eval-engine]
+status: partial
+---
+
+# Variant Groups
+
+A/B test variant management — named sets of runs against the same pipeline that differ only in `run_context_overrides`.
+
+## Behaviours
+
+### CRUD operations
+
+- [x] Create a variant group with name, description, pipeline_id, and 2+ variant definitions (each with snapshot_id, name, weight, run_context_overrides, eval_definition_ids)
+- [x] Create a variant group with optional `selection_strategy` (default "weighted"), `max_concurrent_runs` (default 5), `degraded_evals` (default false)
+- [x] List variant groups with pagination (page, page_size, max 100), ordered by created_at desc
+- [x] List variant groups filtered by pipeline_id
+- [x] Get a variant group by ID
+- [x] Update a variant group — change name, description, variants, selection_strategy, max_concurrent_runs, degraded_evals
+- [x] Delete a variant group by ID
+- [x] RLS org context set on every CRUD endpoint via `set_rls_org`
+
+### Variant selection
+
+- [x] Weighted random selection picks a variant proportionally to each variant's weight
+- [x] Single-variant group short-circuits — returns the only variant directly (no random call)
+- [x] Empty variants list returns None
+- [x] All-zero weights fall back to uniform random selection
+- [x] Missing weight key defaults to 1.0
+- [x] Selection strategy constrained to `'weighted'` or `'single'` (DB CHECK constraint)
+
+### Running variants
+
+- [x] `POST /{group_id}/run` selects a variant via weighted random, merges `run_context_overrides` into `input_payload`, creates a run with the variant's `snapshot_id`, and returns `{run_id, variant_name, merged_payload}`
+- [x] `POST /{group_id}/batch-run` fires one run per variant (all-or-nothing): pre-flight checks (variants exist, every variant has a `snapshot_id`, `active + N <= max_concurrent_runs` via `check_pipeline_run_quota_for_batch`) run before any run is created, runs are created in variant insertion order, and 429 `variant_group_quota_exceeded` is returned when the batch would breach quota — no partial firing
+- [x] `snapshot_id` accepted as both `str` and `uuid.UUID` in variant definitions
+- [x] `degraded_evals=true` injects `_degraded_evals: True` into merged payload
+- [x] Run count incremented on the variant group after each successful run
+- [x] Batch run count incremented by N (batch size) in one locked update (`increment_run_count(delta=N)`)
+- [x] `trigger_type` defaults to `"manual"` for variant-triggered runs
+- [x] 404 if variant group not found when running
+- [x] 429 if pipeline concurrent run quota exceeded (`check_pipeline_run_quota`)
+- [x] 429 if no variant selected or quota exceeded in `run_variant_weighted`
+
+### Coverage gap detection
+
+- [x] `GET /{group_id}/coverage-gaps` returns variants whose `eval_definition_ids` don't cover all eval definitions for the pipeline
+- [x] Eval definitions loaded from `EvalDefinition` table filtered by pipeline_id
+- [x] Empty eval definitions list for pipeline → no gaps reported
+- [x] All evals present in variant's `eval_definition_ids` → no gap reported
+- [x] 404 if variant group not found
+- [x] RLS enforced
+
+### Prompt diff comparison
+
+- [x] `GET /{group_id}/prompt-diffs` compares `prompt_pins_json` across variant snapshots
+- [x] Returns agent-level diffs: `{agent_id, base_hash, variant_hash}` when hashes differ
+- [x] Handles `base_snapshot_ids` parameter for explicitly marking base vs comparison variants
+- [x] Missing snapshots are skipped (not a hard error)
+- [x] No snapshots or no variants → returns empty list
+- [x] 404 if variant group not found
+- [x] RLS enforced
+
+### Error handling
+
+- [x] `except ProgrammingError → 501 Not Implemented` on all 8 route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
+- [x] `except SQLAlchemyError → 503 Service Unavailable` on all 8 route handlers
+- [x] `except IntegrityError → 409 Conflict` on create, update, delete, and run endpoints
+- [x] `except Exception → 500 Internal Server Error` on all 8 route handlers (guards against Python-level errors)
+- [x] 404 on GET/PUT/DELETE for unknown group_id
+- [x] 204 No Content on successful DELETE
+- [x] 404 on run_variant when group not found
+- [x] 429 on run_variant when quota exceeded
+- [x] ForeignKey `RESTRICT` on pipeline deletion (pipeline with variant groups cannot be deleted)
+- [x] Check constraint enforces `selection_strategy IN ('weighted', 'single')`
+
+### Pipeline limits
+
+- [x] Concurrent run limit enforced per pipeline per variant group via `check_pipeline_run_quota` (`active < max_concurrent_runs`)
+
+### Resilience
+
+- [x] Concurrent run quota enforced per pipeline via `check_pipeline_run_quota` (429 on exceeded)
+- [x] Row-level locking (`SELECT ... FOR UPDATE`) in `run_variant_weighted` prevents quota race conditions between concurrent variant runs
+- [x] Empty variants list returns 429 with descriptive message ("no variants configured")
+- [x] `check_pipeline_run_quota` handles zero `max_concurrent_runs` (always blocks)
+- [x] `run_variant_weighted` re-fetches group with `FOR UPDATE` lock before quota check
+
+### Edge cases
+
+- [x] `snapshot_id` accepted as both `str` and `uuid.UUID` in variant definitions (CRUD normalizes with `uuid.UUID(str(...))`)
+- [x] Missing `weight` key defaults to 1.0 in `pick_variant_weighted`
+- [x] All-zero weights fall back to uniform random selection (avoids division by zero)
+- [x] Single-variant group short-circuits in `pick_variant_weighted` — returns directly, no random call
+- [x] `run_context_overrides` with non-dict value is silently skipped (`isinstance(overrides, dict)` guard)
+- [x] `variant_to_response` handles `None` `run_count` (defaults to 0)
+- [x] List pagination caps `page_size` at 100 (FastAPI `Query(le=100)`)
+- [x] 429 for empty variants in run endpoint (variant group with no variants configured)
+- [x] Prompt diffs skip missing snapshots (not a hard error — `continue` on `None` snapshot)
+- [x] ForeignKey `RESTRICT` prevents deletion of pipelines that have variant groups
+- [x] Check constraint enforces `selection_strategy IN ('weighted', 'single')` at DB level
+
+## Known Gaps
+
+- No comparison view: no frontend, no endpoint for side-by-side eval scores / token cost / HITL outcomes / per-node output diff
+- No eval coverage signal UI: `coverage-gaps` endpoint exists but no UI surfaces the "Variants diverged but evals did not differentiate" warning
+- No HITL partial completion: no handling for one variant reaching `awaiting_human` while others complete
+- No cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
+- No prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
+- `base_snapshot_ids` parameter for prompt diffs exists in CRUD layer but not exposed as route query parameter
+
+## Test coverage gaps
+
+- [x] Unit tests exist for `run_variant_weighted` (5 test methods in `test_variant_group.py`)
+- [x] Unit tests exist for `get_prompt_diffs` (4 test methods in `test_variant_group.py`)
+
+## QA History
+
+- 2026-07-06: qa-iterate — Fixed CRITICAL: consolidated error handling sections into one complete section with all exception types (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500). Fixed MAJOR: designated this file as canonical for weighted selection, coverage gap, and prompt diff behaviours; removed duplicate copies from variant-execution.md and variant-ab-testing.md. Status: partial.
+- 2026-08-13: improve-architecture — **RESOLVED 2 known gaps** — "No batch run endpoint" + "No all-or-nothing N-variant pre-flight quota". `POST /{group_id}/batch-run` (`run_variant_batch` + `check_pipeline_run_quota_for_batch` in `db/crud/variant_group.py`) fires one run per variant in insertion order with an all-or-nothing pre-flight (`active + N <= max_concurrent_runs`); any pre-flight failure rejects the whole group with 429 `variant_group_quota_exceeded` — no partial firing. `increment_run_count` gained a `delta` param. 10 new CRUD unit tests + 6 new route unit tests in `test_variant_group.py`/`test_variants.py`; 2 `variant_groups.feature` BDD scenarios promoted from `@awaiting-implementation` to wired. Status: partial.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0012_variant_groups.py` renamed in v2 squash → `0005_v2_features_system.py` (creates `variant_groups` table).

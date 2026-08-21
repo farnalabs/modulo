@@ -1,0 +1,277 @@
+"""Param registry + telemetry builder for the cost breakdown engine.
+
+The registry is the fixed identifier surface operators may reference in a
+formula (§2.2). Every identifier's v1 consumer is stated. The engine is
+fail-closed: an identifier not in the registry (for the component's kind) is
+rejected at save time AND eval time.
+
+The telemetry builder (``build_telemetry``) is the SINGLE classification
+authority: a node is self-reporting iff (1) positive ``model_cost_usd`` >=
+floor, (2) ``sandbox_by_map`` (from the run-frozen node-type map via the
+enriched union), and (3) an enabled consuming ``self_reported`` component's
+``report_key`` matches. Token sums are SERVER-MEASURED ONLY — agent-supplied
+``token_usage`` is never folded in.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+
+from modulo.core.cost_controller.breakdown.constants import (
+    MAX_REPORTABLE_USD_MIN,
+)
+
+_log = logging.getLogger(__name__)
+
+__all__ = [
+    "CALCULATED_ALLOWED_IDENTS",
+    "REGISTERED_RATE_FALLBACKS",
+    "CostComponentConfig",
+    "RunCostTelemetry",
+    "build_params",
+    "build_telemetry",
+]
+
+# The ONLY registered rate-fallback name. CRUD rejects any other name with a
+# 422 listing this set. A typo can no longer silently zero ``sandbox_infra``
+# via an unresolved fallback.
+REGISTERED_RATE_FALLBACKS = frozenset({"e2b_rate"})
+
+# Built-in, read-only default token rates (today's constants in executor.py).
+INPUT_TOKEN_RATE = Decimal("0.00001")
+OUTPUT_TOKEN_RATE = Decimal("0.00003")
+
+# The param registry — identifier -> (type, meaning, v1 consumer). The
+# formula-visible surface. The internal telemetry field for wall-clock is
+# ``wall_clock_elapsed_s`` (NEVER a registry identifier); ``wall_clock_hours``
+# is the SOLE wall-clock identifier.
+_PARAM_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "rate": ("Decimal", "rate_usd; null -> rate_fallback", "sandbox_infra"),
+    "e2b_rate": ("Decimal", "Settings.e2b_sandbox_usd_per_hour", "sandbox_infra fallback"),
+    "input_token_rate": ("Decimal", "default input token rate (built-in, read-only)", "llm_tokens"),
+    "output_token_rate": ("Decimal", "default output token rate (built-in, read-only)", "llm_tokens"),
+    "wall_clock_hours": ("Decimal", "sum of sandbox elapsed over ALL completed sandbox nodes", "sandbox_infra"),
+    "tokens_input": ("int", "sum over ESTIMATED nodes (server-measured only)", "llm_tokens"),
+    "tokens_output": ("int", "sum over ESTIMATED nodes (server-measured only)", "llm_tokens"),
+    "tokens_estimated": ("int", "estimated-only token total (formula input)", "llm_tokens basis"),
+    "node_count": ("int", "count of completed nodes", "llm_tokens basis + operator formulas"),
+    "nodes_estimated": ("int", "count of estimated nodes", "llm_tokens basis + operator formulas"),
+    "reported": ("Decimal", "sum of report_key across self-reporting nodes (self_reported kind only)", "model_tokens"),
+}
+
+# Dead params — assert ABSENT (grep-asserted in tests).
+_DEAD_PARAMS = frozenset(
+    {
+        "minutes_per_hour",
+        "wall_clock_seconds",
+        "wall_clock_minutes",
+        "nodes_reported",
+        "tokens_total",
+        "tokens_input_reported",
+        "tokens_output_reported",
+    }
+)
+
+# ``calculated`` components may reference everything EXCEPT ``reported``.
+CALCULATED_ALLOWED_IDENTS = frozenset(name for name in _PARAM_REGISTRY if name != "reported")
+# ``self_reported`` formulas are IMPLICIT ``reported`` — the stored formula is
+# NULL; validate_formula is never called for them.
+SELF_REPORTED_ALLOWED_IDENTS = frozenset({"reported"})
+
+# The node-absent-from-map classification defaults (plan §1.6): a map-absent
+# node is sandbox for wall-clock summing (fail-safe toward real sandbox time),
+# non-sandbox for self-report classification.
+_MISSING_MAP_IS_SANDBOX_WALLCLOCK = True
+_MISSING_MAP_SELF_REPORT_ELIGIBLE = False
+
+
+@dataclass(frozen=True)
+class CostComponentConfig:
+    """Live cost-component row in the shape the engine consumes (no DB coupling)."""
+
+    name: str
+    display_name: str
+    kind: str
+    rate_usd: Decimal | None = None
+    rate_fallback: str | None = None
+    formula: str | None = None
+    report_key: str | None = None
+    enabled: bool = True
+    sort_order: int = 0
+
+
+@dataclass
+class RunCostTelemetry:
+    """The telemetry summary the formula engine evaluates over.
+
+    ``wall_clock_elapsed_s`` is the INTERNAL field (never a registry
+    identifier); the formula-visible identifier is ``wall_clock_hours``.
+    """
+
+    wall_clock_elapsed_s: Decimal
+    tokens_input: int = 0
+    tokens_output: int = 0
+    tokens_estimated: int = 0
+    node_count: int = 0
+    nodes_estimated: int = 0
+    # Count of sandbox-by-map nodes (the class that CAN self-report). Used to
+    # decide whether ``missing_self_report`` is rendered (ABSENT when no
+    # eligible nodes exist).
+    eligible_sandbox_node_count: int = 0
+    reported: dict[str, Decimal] = field(default_factory=dict)
+    clamped_nodes: list[str] = field(default_factory=list)
+    raw_reported: dict[str, float] = field(default_factory=dict)
+    orphan_report_nodes: list[str] = field(default_factory=list)
+    missing_report_keys: set[str] = field(default_factory=set)
+    suspect_report_nodes: list[tuple[str, float]] = field(default_factory=list)
+    per_node_cost: dict[str, Decimal] = field(default_factory=dict)
+
+
+def _coerce_decimal(value: Any) -> Decimal | None:
+    """Coerce a JSON-float/Decimal to Decimal via str() — never Decimal(float())."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        d = Decimal(str(value))
+    except (ValueError, TypeError, ArithmeticError):
+        return None
+    if not d.is_finite():
+        return None
+    return d
+
+
+def build_params(
+    telemetry: RunCostTelemetry,
+    component: CostComponentConfig,
+    settings: Any = None,
+) -> dict[str, Decimal]:
+    """Build the evaluation param dict for a component from telemetry.
+
+    ``rate`` resolves from ``component.rate_usd``; when NULL and a registered
+    ``rate_fallback`` is present, the fallback value is used (currently exactly
+    ``e2b_rate`` -> ``Settings.e2b_sandbox_usd_per_hour``). All values are
+    Decimal-typed (ints too).
+    """
+    rate: Decimal | None = _coerce_decimal(component.rate_usd)
+    if rate is None and component.rate_fallback == "e2b_rate" and settings is not None:
+        try:
+            rate = Decimal(str(settings.e2b_sandbox_usd_per_hour))
+        except Exception:
+            _log.warning("cost_params.e2b_rate_unavailable", exc_info=True)
+            rate = None
+    hours = telemetry.wall_clock_elapsed_s / Decimal(3600)
+
+    params: dict[str, Decimal] = {
+        "input_token_rate": INPUT_TOKEN_RATE,
+        "output_token_rate": OUTPUT_TOKEN_RATE,
+        "wall_clock_hours": hours,
+        "tokens_input": Decimal(telemetry.tokens_input),
+        "tokens_output": Decimal(telemetry.tokens_output),
+        "tokens_estimated": Decimal(telemetry.tokens_estimated),
+        "node_count": Decimal(telemetry.node_count),
+        "nodes_estimated": Decimal(telemetry.nodes_estimated),
+    }
+    if component.kind == "self_reported" and component.report_key is not None:
+        params["reported"] = telemetry.reported.get(component.report_key, Decimal(0))
+    if rate is not None:
+        params["rate"] = rate
+    return params
+
+
+def build_telemetry(
+    node_token_usage: dict[str, dict[str, Any]] | None,
+    components: list[CostComponentConfig] | None,
+) -> tuple[RunCostTelemetry, dict[str, Decimal]]:
+    """Classify every node and build the telemetry summary + per-node cost.
+
+    ``node_token_usage`` is the ENRICHED union (per-node dicts carrying
+    ``wall_clock_time_ms``, ``model_cost_usd``, ``model_cost_raw_usd``,
+    ``model_cost_clamped``, ``model_cost_out_of_band_high``,
+    ``is_sandbox_for_wallclock``, ``sandbox_by_map``, and the SERVER token
+    entries). The union is a telemetry input ONLY in this enriched shape —
+    ``outputs_json`` is never read directly.
+
+    Returns ``(telemetry, per_node_cost)`` where ``per_node_cost`` is the
+    SINGLE authority for the per-node ``cost_usd`` column.
+    """
+    telemetry = RunCostTelemetry(wall_clock_elapsed_s=Decimal(0))
+    per_node_cost: dict[str, Decimal] = {}
+    consuming: dict[str, CostComponentConfig] = {}
+    for component in components or []:
+        if component.enabled and component.kind == "self_reported" and component.report_key:
+            consuming[component.report_key] = component
+
+    entries = node_token_usage or {}
+    floor = MAX_REPORTABLE_USD_MIN
+
+    for node_id, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        wall_ms = entry.get("wall_clock_time_ms")
+        if isinstance(wall_ms, (int, float)) and wall_ms > 0:
+            telemetry.wall_clock_elapsed_s += Decimal(str(wall_ms)) / Decimal(1000)
+
+        sandbox_by_map = entry.get("sandbox_by_map") is True
+        is_sandbox_wallclock = entry.get("is_sandbox_for_wallclock") is True
+        # Map-absent node: sandbox for wall-clock, non-sandbox for self-report.
+        if sandbox_by_map is False and "sandbox_by_map" not in entry:
+            sandbox_by_map = _MISSING_MAP_SELF_REPORT_ELIGIBLE
+        if not is_sandbox_wallclock and "is_sandbox_for_wallclock" not in entry:
+            is_sandbox_wallclock = _MISSING_MAP_IS_SANDBOX_WALLCLOCK
+        if sandbox_by_map:
+            telemetry.eligible_sandbox_node_count += 1
+
+        raw_usd = _coerce_decimal(entry.get("model_cost_raw_usd"))
+        if raw_usd is None:
+            raw_usd = _coerce_decimal(entry.get("model_cost_usd"))
+        reported_usd = _coerce_decimal(entry.get("model_cost_usd"))
+
+        self_reporting = False
+        consuming_comp: CostComponentConfig | None = None
+        if sandbox_by_map and reported_usd is not None and reported_usd >= floor:
+            # Match a consuming self_reported component by report_key.
+            for rk, comp in consuming.items():
+                if entry.get("report_key") == rk or rk == "model_cost_usd":
+                    consuming_comp = comp
+                    break
+            if consuming_comp is None and entry.get("model_cost_usd") is not None:
+                consuming_comp = consuming.get("model_cost_usd")
+            if consuming_comp is not None:
+                self_reporting = True
+
+        if self_reporting and consuming_comp is not None:
+            rk = consuming_comp.report_key or "model_cost_usd"
+            amount = reported_usd if reported_usd is not None else Decimal(0)
+            telemetry.reported[rk] = telemetry.reported.get(rk, Decimal(0)) + amount
+            if raw_usd is not None:
+                telemetry.raw_reported[node_id] = float(raw_usd)
+            if entry.get("model_cost_clamped") is True:
+                telemetry.clamped_nodes.append(node_id)
+            per_node_cost[node_id] = amount
+        else:
+            # Estimated node — token-derived (SERVER-measured tokens only).
+            telemetry.nodes_estimated += 1
+            if sandbox_by_map and reported_usd is not None and raw_usd is not None:
+                telemetry.orphan_report_nodes.append(node_id)
+            in_tokens = entry.get("input_tokens") or 0
+            out_tokens = entry.get("output_tokens") or 0
+            telemetry.tokens_input += int(in_tokens)
+            telemetry.tokens_output += int(out_tokens)
+            telemetry.tokens_estimated += int(in_tokens) + int(out_tokens)
+            per_node_cost[node_id] = (
+                Decimal(str(in_tokens)) * INPUT_TOKEN_RATE + Decimal(str(out_tokens)) * OUTPUT_TOKEN_RATE
+            )
+        telemetry.node_count += 1
+
+    # missing_report_keys — enabled report_keys not present in any reported node
+    # output. Populated regardless of eligible sandbox node count; the eligible-
+    # node gate is applied at breakdown render (see aggregate.py).
+    reported_keys = set(telemetry.reported)
+    for rk in consuming:
+        if rk not in reported_keys:
+            telemetry.missing_report_keys.add(rk)
+
+    return telemetry, per_node_cost

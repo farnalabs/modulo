@@ -1,0 +1,155 @@
+---
+id: feat-integration-tiering
+prd: 8.6
+delivery-tasks: []
+bdd: [backend/tests/bdd/features/library/tiering.feature]
+code:
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
+  - backend/src/modulo/db/models/connector_instance.py
+  - backend/src/modulo/db/models/model_backend.py
+  - backend/src/modulo/db/models/library_primitive.py
+  - backend/src/modulo/db/crud/connector_instance.py
+  - backend/src/modulo/db/crud/model_backend.py
+  - backend/src/modulo/db/crud/library_primitive.py
+  - backend/src/modulo/api/routes/connectors.py
+  - backend/src/modulo/api/routes/model_backends.py
+  - backend/src/modulo/api/routes/library.py
+  - backend/src/modulo/core/library_service/__init__.py
+  - frontend/src/views/AdminConnectorsView.vue
+  - frontend/src/views/AdminModelBackendsView.vue
+  - frontend/src/views/LibraryView.vue
+unit-tests:
+  - backend/tests/unit/api/test_api_contract.py
+  - backend/tests/unit/api/test_connectors_endpoint.py
+  - backend/tests/unit/api/test_model_backends_endpoint.py
+  - frontend/src/__tests__/AdminConnectorsView.spec.ts
+  - frontend/src/__tests__/AdminModelBackendsView.spec.ts
+  - frontend/src/__tests__/LibraryView.spec.ts
+  - backend/tests/unit/crud/test_connector_instance_tier.py
+  - backend/tests/unit/crud/test_model_backend_tier.py
+  - backend/tests/unit/crud/test_library_primitive_tier.py
+depends-on: [feat-connectors-hub, feat-model-backends-hub, feat-pipelines-library]
+status: partial
+---
+
+# Integration Tier Classification (Native / Preview / In-Dev)
+
+Every connector, model backend, and library primitive carries a `tier` field
+(`native` | `preview` | `in_dev`) signalling maturity. Native items are
+surfaced prominently; Preview items are segregated behind a collapsed
+disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
+
+## Behaviours
+
+### Schema & migration
+
+- [x] `tier` column (String(20), NOT NULL, `server_default="native"`) added to `connector_instances`, `model_backends`, and `library_primitives` via migration `0062_add_integration_tier`
+- [x] CHECK constraint `ck_<table>_tier` restricts values to `native`, `preview`, `in_dev` on all three tables
+- [x] Existing rows default to `native` on migration (server_default), so no pre-existing connector/backend/workflow silently disappears from the UI
+
+### API — request/response models
+
+- [x] `ConnectorCreate`/`ConnectorResponse` (`connectors.py`) include `tier: Literal["native","preview","in_dev"]`, defaulting to `"native"` on create
+- [x] `ConnectorUpdate` accepts optional `tier` for changing classification
+- [x] `ModelBackendCreate`/`ModelBackendResponse`/`ModelBackendUpdate` mirror the same `tier` contract
+- [x] `LibraryPrimitiveCreate`/`LibraryPrimitiveResponse`/`LibraryPrimitiveUpdate` mirror the same `tier` contract
+- [x] Contract tests (`test_api_contract.py`) assert `tier` is present and typed on connector responses
+
+### Frontend — tier-aware rendering
+
+- [x] `AdminConnectorsView.vue`: `nativeConnectors` computed filters out `preview`/`in_dev`; treated as the primary/default list
+- [x] `AdminConnectorsView.vue`: `previewConnectors` computed (`tier === 'preview'`) rendered inside a collapsed `<details data-testid="connectors-preview-section">` only when non-empty
+- [x] `AdminModelBackendsView.vue` follows the identical native/preview split pattern
+- [x] `LibraryView.vue` Native section: `nativePrimitives` computed excludes `preview`/`in_dev`; `previewPrimitives` shown in a collapsed `<details data-testid="library-preview-section">`
+- [x] In-Dev (`tier === 'in_dev'`) items are excluded from every rendered list on all three views — no admin toggle exists to reveal them
+- [x] A connector/backend/primitive without a `tier` value (legacy data) defaults to `native` treatment client-side (`?? 'native'`)
+
+### Server-side enforcement
+
+- [x] `in_dev` items ARE filtered server-side: `list_connector_instances` and `list_model_backends` CRUD both default to `excluded_tiers=["in_dev"]` and exclude `in_dev` rows from total/item queries. The library `list_primitives` service applies the same exclusion to org, modulo, and community items. Every list endpoint silently filters `in_dev` via the CRUD/service layer by default.
+- [x] `GET /api/v1/connectors?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` (no tier filter) instead of the default `None` → `["in_dev"]` so operators can list In-Dev connectors for testing
+- [x] `GET /api/v1/model-backends?include_in_dev=true` bypasses the exclusion identically
+- [x] `GET /api/v1/libraries?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` through `list_primitives`, keeping In-Dev org, modulo, and community items
+- [x] The In-Dev reveal is operator-gated (security review 2026-08-13): each endpoint keeps its base viewer-level list permission (`connector.list` / `model_backend.list` / `library.search`), but `include_in_dev=true` additionally requires the `*.list.in_dev` / `library.search.in_dev` permission which resolves to `operator` — a viewer/runner calling with `?include_in_dev=true` gets 403 (fail-closed, never lifted by the org authz kill switch, ADR 017 DECISION 3). Enforcement is via `require_in_dev_operator` in `api/dependencies.py`
+- [x] Omitting `include_in_dev` (or `?include_in_dev=false`) preserves the default `in_dev` exclusion — backwards compatible, no behaviour change for existing clients
+
+### Error Handling
+
+- [x] All three route files (`connectors.py`, `model_backends.py`, `library.py`) wrap every DB operation in `try/except ProgrammingError` returning 501 Not Implemented with a migration hint
+- [x] All three route files also wrap in `except SQLAlchemyError` returning 503 Service Unavailable with a descriptive message
+- [x] The `create_connector_endpoint` has a separate `ProgrammingError` catch for the DB insert, distinct from the GitHub scope verification which raises 422
+- [x] `list_library_primitives_endpoint` has nested `try/except` blocks: the outer block catches `HTTPException` (re-raises) and generic `Exception` (500), while inner blocks catch `ProgrammingError` (501) and `model_validate` failures (500 with schema-sync message)
+- [x] `model_backends.py` CRUD `list_model_backends` wraps the `total_query` in `try/except ProgrammingError` returning an empty `PageResult` (graceful degradation when table doesn't exist yet)
+- [x] `connector_instance.py` CRUD `list_connector_instances` wraps BOTH `total_query` AND `items_stmt` in `try/except ProgrammingError` returning empty PageResult (graceful degradation when table doesn't exist yet)
+- [x] `model_backend.py` CRUD `list_model_backends` wraps BOTH `total_query` AND `items_stmt` in `try/except ProgrammingError` returning empty PageResult (graceful degradation when table doesn't exist yet)
+- [x] `connectors.py` all 5 routes catch `except HTTPException` (re-raise) and `except Exception` returning 500 with structured logging (consistency with `model_backends.py` pattern)
+- [x] `model_backends.py` all 5 routes catch `except HTTPException` (re-raise) and `except Exception` returning 500 with structured logging
+- [ ] `library_primitive.py` CRUD `list_library_primitives` catches `SQLAlchemyError` on both count and items queries but does NOT catch `ProgrammingError` separately — the route-level catch handles it, but with less specific messaging
+
+### Edge Cases
+
+- [x] `model_backend.py` route `create_model_backend_endpoint` already validates `tier` via `Literal["native", "preview", "in_dev"]` — Pydantic rejects invalid values with 422 before reaching the handler body
+- [x] `ConnectorUpdate` makes `tier` optional (`None = None`) so PATCH without `tier` leaves the existing value unchanged
+- [x] `ConnectorResponse.tier` is typed as plain `str` (not `Literal`) — the Pydantic model accepts any string value from the DB, so an invalid DB value (e.g. from a direct SQL insert) would serialize but fail to re-parse if sent back to a Create/Update endpoint
+- [x] `copy_to_adapt` in `library_primitive.py` CRUD AND `library_service.copy_to_adapt` now propagate `tier` from the source (2026-08-06) — a `preview` primitive copied via copy-to-adapt stays `preview` in the target org instead of silently downgrading to `native`
+- [x] Unit tests (`test_connector_instance_tier.py`, `test_model_backend_tier.py`, `test_library_primitive_tier.py`) and integration tests exercise the `excluded_tiers` parameter of all three list CRUD functions to verify that `in_dev` items are actually excluded from queries
+
+### 2026-07-12 — Round 3 QA (improve-architecture batch 2)
+
+**Fixed (MINOR):** Added `from None` to 3 `except IntegrityError: raise HTTPException(...)` catch blocks in `connectors.py` (list, get, delete endpoints) to fix B904 lint warnings. The `create` and `update` endpoint handlers already had `from None`; these 3 were inconsistent.
+
+**Status:** partial (5 known gaps unchanged — `copy_to_adapt` tier propagation resolved 2026-08-06).
+
+## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the single unchecked item (`list_library_primitives` in library_primitive.py CRUD catches SQLAlchemyError but not ProgrammingError separately on count/items queries) remains a genuine minor gap — the route-level `handle_db_errors` catch still maps it to 501 with less specific messaging; the CRUD file is outside this sweep's scope so it was not modified. 35/36 behaviours covered.**
+
+### 2026-08-13 — security review: `include_in_dev` reveal operator-gated (PR #1176)
+
+**Fixed (MAJOR):** the In-Dev reveal was previously available to ANY tenant member — each list endpoint relied on its base viewer-level permission (`connector.list`, `model_backend.list`, `library.search`), so `GET /api/v1/connectors?include_in_dev=true` let any viewer disclose pre-release In-Dev items that ADR 010 deliberately hides. The override is now gated behind the operator role:
+
+- New permission keys in `auth/permissions.py`: `connector.list.in_dev`, `model_backend.list.in_dev`, `library.search.in_dev` — all resolve to `operator` (import-time validated like every registry key).
+- New shared helper `require_in_dev_operator(principal, permission)` in `api/dependencies.py`: enforced when `include_in_dev=true`; raises 403 for viewers/runners. It passes `kill_switch_eligible=False` to `assert_org_role` so the org authz kill switch (ADR 017 DECISION 3) can never lift the In-Dev disclosure control — the base list permissions stay viewer-level, so ordinary listing is unchanged.
+- Each list handler now calls the gate before any DB work: `connectors.py`, `model_backends.py`, `library.py`.
+- **Tests:** 3 unit tests per endpoint (viewer → 403 asserting the permission key; operator/admin → 200 with the actual response JSON containing an `in_dev` item — replacing the previous mock-kwargs-only assertions; `include_in_dev=false` keeps the default exclusion) + 1 BDD scenario in `tiering.feature` (`viewers cannot reveal in_dev library primitives` → 403). 21 focused unit tests + 4/4 in_dev BDD scenarios pass.
+
+### 2026-08-13 — improve-architecture: `?include_in_dev=true` API override RESOLVED
+
+**RESOLVED the "No API override for In-Dev visibility" known gap.** All three list endpoints now accept an `include_in_dev` query param (boolean, default `false`) that bypasses the server-side `in_dev` tier exclusion so operators can reveal In-Dev connectors/backends/primitives for testing without querying the DB directly:
+
+- `GET /api/v1/connectors` → passes `excluded_tiers=[]` to `list_connector_instances` when `include_in_dev=true` (default `None` → CRUD's `["in_dev"]`)
+- `GET /api/v1/model-backends` → same wiring into `list_model_backends`
+- `GET /api/v1/libraries` → same wiring into the `list_primitives` service (covers org + modulo + community items)
+- `?include_in_dev=false` and omitting the param are identical — default exclusion preserved (backwards compatible)
+
+**Tests:** 9 new route unit tests (`test_connectors_endpoint.py`, `test_model_backends_endpoint.py`, `test_library_endpoint.py` — default `excluded_tiers=None`, `include_in_dev=true` → `[]`, `include_in_dev=false` → `None` on each endpoint) + 3 new BDD scenarios in `tiering.feature` (default listing excludes In-Dev, `include_in_dev=true` reveals it, `include_in_dev=false` keeps exclusion) with 4 new step definitions. **Fixed 2 pre-existing broken tiering.feature scenarios** (`Then the response status is 201` referenced the unset `request.node._resp` — the create step now records it). Regenerated `frontend/src/lib/api/schema.ts` (additive: `include_in_dev?: boolean` on all 3 list operations). 157 focused unit tests pass, 5/5 tiering BDD scenarios pass, ruff check + format clean, mypy --strict clean. Status: partial.
+
+### 2026-08-06 — improve-architecture (product-map walk)
+
+**Fixed (MAJOR):** `copy_to_adapt` now propagates `tier`. Both the raw CRUD function (`db/crud/library_primitive.py`) and the service wrapper (`core/library_service.copy_to_adapt`) set `tier=source.tier` on the copied primitive, so a `preview` (or `in_dev`) primitive stays classified instead of silently downgrading to `native` via `server_default`. Added unit tests: service-level (`test_copy_to_adapt_propagates_tier`, `test_copy_to_adapt_native_tier_defaults`) and CRUD-level (`test_copy_to_adapt_propagates_tier`, `test_copy_to_adapt_native_tier_preserved`).
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 288)
+
+**Fixed (CRITICAL):** Added `except HTTPException: raise` + `except Exception → 500` with `logger.exception` guards to all 5 connector routes in `connectors.py` (list, create, get, update, delete). Previously only caught `ProgrammingError→501` and `SQLAlchemyError→503`, allowing Python-level errors (TypeError, KeyError, ValueError from model_validate/dict processing) to propagate as opaque 500 to CatchAllMiddleware. `model_backends.py` already had these guards — `connectors.py` was inconsistent.
+
+**Fixed (MAJOR):** Wrapped `items_stmt` in `try/except ProgrammingError` in both `connector_instance.py` and `model_backend.py` CRUD `list_*` functions. Previously only `total_query` had the guard — a ProgrammingError on the items query would propagate unhandled.
+
+**Fixed (MAJOR):** Replaced `String(err)` / `e instanceof Error ? e.message : String(e)` with `formatApiError(err)` in all 3 error handlers (create, update, delete) in `AdminConnectorsView.vue` frontend. API errors from openapi-fetch are objects, not strings — bare `String(err)` produced `[object Object]` on API failures.
+
+**Remaining gaps unchanged:** No API override for in-dev visibility, no tier promotion workflow, copy_to_adapt doesn't propagate tier, no migration rollback test, ConnectorResponse.tier typed as str.
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 348)
+
+**Stale claims corrected:** Marked `excluded_tiers` test checkbox `[x]` — tests exist in `test_connector_instance_tier.py`, `test_model_backend_tier.py`, `test_library_primitive_tier.py`. Added these to `unit-tests:` frontmatter. Added `backend/tests/bdd/features/library/tiering.feature` to `bdd:` frontmatter. Updated Known Gaps to reflect that BDD coverage now exists for library primitives (but is still missing for connectors/model backends).
+
+## Known Gaps
+
+- ~~**No API override for In-Dev visibility.** Server-side filtering of `in_dev` items is hardcoded in the CRUD/service layer — there is no query parameter (`?include_in_dev=true`) that an admin could use to reveal In-Dev entries for testing. The frontend has no debug toggle either (ADR 010 open question).~~ **RESOLVED (2026-08-13)**: `?include_in_dev=true` now reveals In-Dev items on all three list endpoints (`GET /api/v1/connectors`, `GET /api/v1/model-backends`, `GET /api/v1/libraries`); the frontend debug toggle remains an open ADR 010 question.
+- **No tier promotion/demotion workflow.** Changing a connector/backend/primitive from `preview` to `native` (or vice versa) is a raw `PATCH` with no approval process, audit trail, or changelog entry — flagged as an open question in ADR 010.
+- **`copy_to_adapt` tier propagation** — ~~does not propagate tier~~ **RESOLVED (2026-08-06)**: both the raw CRUD `copy_to_adapt` and the service-level `library_service.copy_to_adapt` now carry `source.tier` onto the copied primitive; unit tests cover `preview` and `native` sources.
+- **Connector/ModelBackend tiering still lacks BDD coverage.** Only library primitives have BDD scenarios (`tiering.feature` — 2 scenarios covering create-with-tier and default-tier). Connector and ModelBackend tier creation/sorting lacks BDD coverage entirely.
+- **No dedicated migration rollback test** — `0062_add_integration_tier` has a `downgrade()` but no automated test exercises drop-and-recreate of the `tier` column/constraint.
+- **`ConnectorResponse.tier` is typed as `str` not `Literal`.** An invalid DB value would serialize to JSON correctly but a subsequent PATCH round-trip would fail Pydantic validation with 422. Consider using `Literal` on response models or adding a `@field_validator`.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0062_add_integration_tier.py` was renamed in the v2 squash → `0005_v2_features_system.py` (creates `tier_catalog` + tier gating).

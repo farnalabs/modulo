@@ -1,0 +1,1320 @@
+"""Unit tests for the analytics query builder + bucketing (ADR 020).
+
+Covers: allowlist rejection (injection strings can never construct an enum),
+compiled-SQL assertions per dialect (org predicate present, bound params,
+placeholder count, no string interpolation, no LIMIT before bucketing), and
+the Python bucketing/zero-fill logic.
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import UTC, date, datetime, timedelta, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy.dialects import postgresql, sqlite
+
+from modulo.core.analytics.builder import (
+    CONCURRENCY_MAX_RAW_ROWS,
+    HOUR_GROUPBY_MAX_RANGE_DAYS,
+    AnalyticsDimension,
+    AnalyticsGroupBy,
+    AnalyticsQuery,
+    AnalyticsStatus,
+    AnalyticsTriggerType,
+    _accumulate_row,
+    _bucket_dim_keys,
+    _build_time_grid,
+    _emit_bucket_row,
+    _empty_bucket,
+    _row_dimension_key,
+    bucket_concurrency_rows,
+    bucket_rows,
+    build_concurrency_query,
+    build_facts_query,
+    hour_groupby_span_exceeds,
+    resolve_group_by,
+    to_utc_aware,
+)
+
+_ORG = uuid.UUID("11111111-1111-4111-8111-111111111111")
+
+
+def _query(**overrides) -> AnalyticsQuery:
+    defaults = {
+        "org_id": _ORG,
+        "group_by": AnalyticsGroupBy.DAY,
+        "date_from": date(2026, 8, 1),
+        "date_to": date(2026, 8, 31),
+    }
+    defaults.update(overrides)
+    return AnalyticsQuery(**defaults)
+
+
+def _row(
+    day: date,
+    count: int = 1,
+    complete: int | None = None,
+    total_cost_usd: float | None = None,
+    total_tokens: int | None = None,
+    avg_duration_ms: float | None = None,
+    **extra,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        run_date=day,
+        count=count,
+        complete_count=count if complete is None else complete,
+        total_cost_usd=total_cost_usd,
+        total_tokens=total_tokens,
+        avg_duration_ms=avg_duration_ms,
+        **extra,
+    )
+
+
+class TestAllowlistRejection:
+    def test_group_by_rejects_sql_injection_string(self) -> None:
+        with pytest.raises(ValueError, match="not a valid AnalyticsGroupBy"):
+            AnalyticsGroupBy("status; DROP TABLE runs")
+
+    def test_dimension_rejects_sql_injection_string(self) -> None:
+        with pytest.raises(ValueError, match="not a valid AnalyticsDimension"):
+            AnalyticsDimension("status; DROP TABLE runs")
+
+    def test_trigger_type_rejects_sql_injection_string(self) -> None:
+        with pytest.raises(ValueError, match="not a valid AnalyticsTriggerType"):
+            AnalyticsTriggerType("manual OR 1=1")
+
+    def test_status_rejects_sql_injection_string(self) -> None:
+        with pytest.raises(ValueError, match="not a valid AnalyticsStatus"):
+            AnalyticsStatus("complete; DROP TABLE runs")
+
+    def test_non_allowlisted_dimension_literal_raises(self) -> None:
+        # A dimension value that is NOT an AnalyticsDimension member can never
+        # reach the allowlist dict lookup; a raw string is rejected.
+        from modulo.core.analytics.builder import _DIMENSION_COLUMNS
+
+        with pytest.raises(KeyError):
+            _DIMENSION_COLUMNS["trigger_type; DROP TABLE runs"]  # type: ignore[index]
+
+
+class TestCompiledSql:
+    def _compile(self, query: AnalyticsQuery, dialect):
+        stmt, _params = build_facts_query(query)
+        return str(stmt.compile(dialect=dialect))
+
+    def test_org_predicate_present_on_both_dialects(self) -> None:
+        for dialect in (postgresql.dialect(), sqlite.dialect()):
+            sql = self._compile(_query(), dialect)
+            assert "organisation_id" in sql, "every analytics statement must carry the org predicate"
+
+    def test_org_value_never_interpolated_into_sql(self) -> None:
+        # The org id must be a bound param, never an f-string literal.
+        for dialect in (postgresql.dialect(), sqlite.dialect()):
+            sql = self._compile(_query(), dialect)
+            assert str(_ORG) not in sql, "the org uuid must be a bound param, not interpolated"
+
+    def test_no_limit_before_bucketing(self) -> None:
+        for dialect in (postgresql.dialect(), sqlite.dialect()):
+            sql = self._compile(_query(limit=5), dialect)
+            assert "LIMIT" not in sql.upper(), "limit must be applied post-bucketing, never in SQL"
+
+    def test_bound_params_match_placeholder_count_postgres(self) -> None:
+        stmt, params = build_facts_query(
+            _query(
+                trigger_type=AnalyticsTriggerType.CRON,
+                status=AnalyticsStatus.FAILED,
+                pipeline_ids=(uuid.UUID("22222222-2222-4222-8222-222222222222"),),
+            )
+        )
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        placeholder_count = len(re.findall(r"%\(\w+\)s", sql))
+        # Every explicit param is bound (the aggregate FILTERs add internal
+        # status bindings of their own, so the count is AT LEAST len(params)).
+        assert placeholder_count >= len(params)
+        assert "failed" not in sql.lower(), "filter values must be bound, never interpolated"
+        assert "cron" not in sql.lower(), "filter values must be bound, never interpolated"
+
+    def test_bound_params_match_placeholder_count_sqlite(self) -> None:
+        stmt, _params = build_facts_query(_query(folder_id=uuid.UUID("33333333-3333-4333-8333-333333333333")))
+        compiled = stmt.compile(dialect=sqlite.dialect())
+        sql = str(compiled)
+        placeholder_count = len(re.findall(r"\?", sql))
+        assert placeholder_count >= 4
+
+    def test_filters_are_allowlisted_bound_scalars(self) -> None:
+        # The filter columns referenced in the SQL are the allowlisted literal
+        # keys (enum members), rendered as bound comparisons — never raw text.
+        stmt, _ = build_facts_query(_query(status=AnalyticsStatus.COMPLETE, trigger_type=AnalyticsTriggerType.WEBHOOK))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "status" in sql
+        assert "trigger_type" in sql
+        assert "'complete'" not in sql, "filter values must be bound, never literal"
+        assert "'webhook'" not in sql, "filter values must be bound, never literal"
+
+
+class TestFAR102Filters:
+    """Multi-value pipeline filter + error_code filter (FAR-102, Part B)."""
+
+    def test_multiple_pipeline_ids_become_bound_in_clause(self) -> None:
+        pid_a = uuid.UUID("22222222-2222-4222-8222-222222222222")
+        pid_b = uuid.UUID("33333333-3333-4333-8333-333333333333")
+        stmt, params = build_facts_query(_query(pipeline_ids=(pid_a, pid_b)))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "IN" in sql.upper(), "a multi-value pipeline filter must render an IN clause"
+        assert str(pid_a) not in sql, "pipeline ids must be bound, never interpolated"
+        assert str(pid_b) not in sql, "pipeline ids must be bound, never interpolated"
+        assert params["pipeline_ids"] == [pid_a, pid_b]
+        assert "pipeline_id" in sql
+
+    def test_single_pipeline_id_remains_backward_compatible(self) -> None:
+        # The REST surface maps a single ?pipeline_id= to a one-element tuple —
+        # an IN clause over one bound value must still filter correctly.
+        pid = uuid.UUID("44444444-4444-4444-8444-444444444444")
+        stmt, params = build_facts_query(_query(pipeline_ids=(pid,)))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert str(pid) not in sql, "single pipeline id must be bound, never interpolated"
+        assert params["pipeline_ids"] == [pid]
+        assert "IN" in sql.upper()
+
+    def test_empty_pipeline_ids_no_filter(self) -> None:
+        stmt, params = build_facts_query(_query())
+        assert "pipeline_id" not in str(stmt.compile(dialect=postgresql.dialect()))
+        assert "pipeline_ids" not in params
+
+    def test_team_id_filter_joins_pipeline_for_null_facts(self) -> None:
+        team = uuid.UUID("55555555-5555-4555-8555-555555555555")
+        stmt, params = build_facts_query(_query(team_id=team))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "pipelines" in sql, "a team filter must join pipelines to fall back for NULL-stamped facts"
+        assert "COALESCE" in sql.upper(), "the effective owner must coalesce the fact team with the pipeline owner"
+        assert str(team) not in sql, "team id must be bound, never interpolated"
+        assert params["team_id"] == team
+
+        concurrency_stmt, concurrency_params = build_concurrency_query(_query(team_id=team))
+        concurrency_sql = str(concurrency_stmt.compile(dialect=postgresql.dialect()))
+        assert "pipelines" in concurrency_sql
+        assert "COALESCE" in concurrency_sql.upper()
+        assert concurrency_params["team_id"] == team
+
+    def test_team_id_filter_absent_for_org_wide_query(self) -> None:
+        stmt, params = build_facts_query(_query())
+        assert "COALESCE" not in str(stmt.compile(dialect=postgresql.dialect())).upper()
+        assert "team_id" not in params
+
+    def test_error_code_filter_is_bound(self) -> None:
+        stmt, params = build_facts_query(_query(error_code="executor_stalled"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "executor_stalled" not in sql, "error_code must be bound, never interpolated"
+        assert set(params["error_codes"]) == {"executor_stalled", "agent.stall"}
+        assert "error_code" in sql
+
+    def test_error_code_filter_expands_dotted_input_to_raw_variants(self) -> None:
+        # The runs API emits dotted codes but the facts table stores the raw DB
+        # value — a dotted filter must also match the legacy alias.
+        stmt, params = build_facts_query(_query(error_code="harness.worker_failed"))
+        assert set(params["error_codes"]) == {"harness.worker_failed", "task_failure"}
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "task_failure" not in sql, "variants must be bound, never interpolated"
+        assert "harness.worker_failed" not in sql, "variants must be bound, never interpolated"
+        assert "IN" in sql.upper()
+
+        _concurrency_stmt, concurrency_params = build_concurrency_query(_query(error_code="harness.worker_failed"))
+        assert set(concurrency_params["error_codes"]) == {"harness.worker_failed", "task_failure"}
+
+    def test_error_code_aggregate_unknown_filter_matches_complement_of_known_codes(self) -> None:
+        # Filtering on the "Unknown error" slice (harness.unknown) must match
+        # the same raw rows the dimension buckets into that slice — every raw
+        # code NOT in known_error_codes(), since the facts table stores raw
+        # codes and never the literal dotted harness.unknown. A plain IN-clause
+        # over the literal would match zero rows while the chart shows the
+        # slice populated (the QA finding this test pins).
+        from modulo.core.pipeline_engine.error_codes import known_error_codes
+
+        stmt, params = build_facts_query(_query(error_code="harness.unknown"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "NOT IN" in sql.upper(), "the aggregate unknown filter must be a NOT IN over the complement"
+        assert set(params["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "task_failure" in params["error_codes"], "mapped raw codes must be excluded from the unknown slice"
+        assert "executor_stalled" in params["error_codes"]
+        assert "agent.failed" in params["error_codes"]
+        assert "harness.unknown" not in params["error_codes"], "literal harness.unknown rows ARE in the slice"
+        for code in params["error_codes"]:
+            assert code not in sql, f"excluded code {code!r} must be bound, never interpolated"
+
+        # The concurrency query applies the identical aggregate filter.
+        _cstmt, cparams = build_concurrency_query(_query(error_code="harness.unknown"))
+        assert set(cparams["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "NOT IN" in str(_cstmt.compile(dialect=postgresql.dialect())).upper()
+
+    def test_error_code_specific_unmapped_input_keeps_in_clause(self) -> None:
+        # A specific unmapped code keeps the expand_code_variants IN-clause
+        # behaviour: it matches only its own literal rows, never the whole
+        # unknown slice.
+        stmt, params = build_facts_query(_query(error_code="SomeMysteryError"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert set(params["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+        assert "IN" in sql.upper()
+        assert "NOT IN" not in sql.upper()
+
+        _cstmt, cparams = build_concurrency_query(_query(error_code="SomeMysteryError"))
+        assert set(cparams["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+
+    def test_error_code_dimension_selects_raw_key(self) -> None:
+        stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.ERROR_CODE))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "error_code" in keys, "the raw error_code column must be selected for the dimension"
+        assert "key_label" not in keys
+
+    def test_stall_error_codes_are_bound_not_interpolated(self) -> None:
+        stmt, params = build_facts_query(_query())
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        from modulo.core.analytics.builder import STALL_ERROR_CODES
+
+        for code in STALL_ERROR_CODES:
+            assert code not in sql, f"stall error code {code!r} must be bound, never interpolated"
+        assert set(params["stall_error_codes"]) == set(STALL_ERROR_CODES)
+
+
+class TestFAR102Metrics:
+    """The FAR-102 bucket metrics: failure/stall counts + queue/idle/output averages."""
+
+    def test_bucket_metrics_aggregate_from_rows(self) -> None:
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=2,
+                complete_count=1,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=100.0,
+                failure_count=1,
+                stall_count=1,
+                avg_queue_wait_ms=200.0,
+                avg_final_idle_ms=300.0,
+                avg_output_bytes=400.0,
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=0,
+                total_cost_usd=0.0,
+                total_tokens=0,
+                avg_duration_ms=500.0,
+                failure_count=1,
+                stall_count=0,
+                avg_queue_wait_ms=None,
+                avg_final_idle_ms=None,
+                avg_output_bytes=None,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        bucket = out[0]
+        assert bucket["failure_count"] == 2
+        assert bucket["stall_count"] == 1
+        assert bucket["avg_queue_wait_ms"] == 200.0
+        assert bucket["avg_final_idle_ms"] == 300.0
+        assert bucket["avg_output_bytes"] == 400.0
+
+    def test_zero_fill_metrics_are_null_safe(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 1),
+        )
+        bucket = out[0]
+        assert bucket["failure_count"] == 0
+        assert bucket["stall_count"] == 0
+        assert bucket["avg_queue_wait_ms"] is None
+        assert bucket["avg_final_idle_ms"] is None
+        assert bucket["avg_output_bytes"] is None
+
+    def test_weighted_average_uses_row_count(self) -> None:
+        # Two rows for the same day: one has avg 100 for 2 runs, one has avg 400
+        # for 1 run → weighted avg = (100*2 + 400*1)/3 = 200.
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=2,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                avg_queue_wait_ms=100.0,
+                avg_final_idle_ms=100.0,
+                avg_output_bytes=100.0,
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                avg_queue_wait_ms=400.0,
+                avg_final_idle_ms=400.0,
+                avg_output_bytes=400.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["avg_queue_wait_ms"] == 200.0
+        assert out[0]["avg_final_idle_ms"] == 200.0
+        assert out[0]["avg_output_bytes"] == 200.0
+
+    def test_stall_error_codes_constant_members(self) -> None:
+        from modulo.core.analytics.builder import STALL_ERROR_CODES
+
+        assert "executor_stalled" in STALL_ERROR_CODES
+        assert "node_timeout" in STALL_ERROR_CODES
+        assert "TimeoutError" in STALL_ERROR_CODES
+
+
+class TestDimensionedSelect:
+    """The dimension column must be in the SELECT list, not just GROUP BY.
+
+    bucket_rows resolves each bucket's key from the row attributes — a column
+    present only in GROUP BY never reaches the row, so every bucket would
+    collapse under key=None (regression: PR #740 review round 3).
+    """
+
+    @pytest.mark.parametrize(
+        ("dimension", "key_attr"),
+        [
+            (AnalyticsDimension.TRIGGER_TYPE, "trigger_type"),
+            (AnalyticsDimension.STATUS, "status"),
+            (AnalyticsDimension.FOLDER, "folder_id"),
+        ],
+    )
+    def test_raw_dimension_key_is_selected(self, dimension: AnalyticsDimension, key_attr: str) -> None:
+        stmt, _ = build_facts_query(_query(dimension=dimension))
+        keys = {k.name for k in stmt.selected_columns}
+        assert key_attr in keys, (
+            f"{dimension.value} dimension: the {key_attr} column must be in the SELECT "
+            "so bucket_rows can resolve a non-None key"
+        )
+        assert "key_label" not in keys, "non-label dimensions must not emit key_label"
+
+    @pytest.mark.parametrize(
+        ("dimension", "key_attr"),
+        [
+            (AnalyticsDimension.PIPELINE, "pipeline_id"),
+            (AnalyticsDimension.TEAM, "team_id"),
+        ],
+    )
+    def test_label_dimension_selects_both_label_and_raw_key(self, dimension: AnalyticsDimension, key_attr: str) -> None:
+        stmt, _ = build_facts_query(_query(dimension=dimension))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "key_label" in keys, "label dimensions must select the MIN(snapshot label)"
+        assert key_attr in keys, (
+            f"{dimension.value} dimension: the raw {key_attr} column must be selected so a NULL "
+            "snapshot label still buckets by the UUID (the documented fallback was dead code)"
+        )
+
+    def test_build_then_bucket_rows_returns_non_none_keys(self) -> None:
+        # End-to-end within a DB-free unit test: build a trigger_type dimensioned
+        # statement, verify the raw key is selected, then feed bucket_rows rows
+        # shaped exactly like the compiled SELECT would return and assert the
+        # buckets carry the non-None dimension keys.
+        query = _query(
+            dimension=AnalyticsDimension.TRIGGER_TYPE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        stmt, _ = build_facts_query(query)
+        keys = {k.name for k in stmt.selected_columns}
+        assert "trigger_type" in keys
+
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=1,
+                total_cost_usd=1.25,
+                total_tokens=100,
+                avg_duration_ms=500.0,
+                trigger_type="manual",
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=0,
+                total_cost_usd=0.5,
+                total_tokens=10,
+                avg_duration_ms=100.0,
+                trigger_type="cron",
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=query.group_by,
+            dimension=query.dimension,
+            date_from=query.date_from,
+            date_to=query.date_to,
+        )
+        assert {b["key"] for b in out} == {"manual", "cron"}
+        assert all(b["key"] is not None for b in out), "dimensioned buckets must never collapse under None"
+
+
+class TestBucketing:
+    def test_zero_fill_day_grid(self) -> None:
+        day_from = date(2026, 8, 1)
+        day_to = date(2026, 8, 3)
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=day_from,
+            date_to=day_to,
+        )
+        assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
+        assert all(b["count"] == 0 for b in out)
+        assert all(b["total_cost_usd"] is None and b["success_rate"] is None for b in out)
+
+    def test_week_bucketing_iso_monday(self) -> None:
+        # 2026-08-03 is a Monday; 2026-08-05 (Wed) and 2026-08-06 (Thu) share it.
+        rows = [
+            _row(date(2026, 8, 3), count=2, complete=2, total_cost_usd=10.0, total_tokens=50),
+            _row(date(2026, 8, 6), count=1, complete=1, total_cost_usd=5.0, total_tokens=25),
+            _row(date(2026, 8, 10), count=1, complete=0),  # Monday of the next ISO week
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.WEEK,
+            dimension=None,
+            date_from=date(2026, 8, 3),
+            date_to=date(2026, 8, 16),
+        )
+        weeks = [b["date"] for b in out]
+        assert weeks == ["2026-08-03", "2026-08-10"]
+        assert out[0]["count"] == 3, "Mon..Sun of the same ISO week must collapse into one bucket"
+        assert out[0]["total_cost_usd"] == 15.0
+        assert out[0]["total_tokens"] == 75
+        assert out[1]["count"] == 1
+
+    def test_success_rate(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=2, complete=1),
+            _row(date(2026, 8, 6), count=1, complete=1),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 6),
+        )
+        assert out[0]["success_rate"] == 0.5
+        assert out[1]["success_rate"] == 1.0
+
+    def test_limit_applied_post_bucketing(self) -> None:
+        rows = [_row(date(2026, 8, 1) + timedelta(days=i)) for i in range(10)]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 10),
+            limit=3,
+        )
+        assert len(out) == 3, "limit must truncate AFTER bucketing"
+        assert out[-1]["date"] == "2026-08-10", "the most recent buckets win"
+
+    def test_dimension_bucket_keys(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), key_label="manual", trigger_type="manual"),
+            _row(date(2026, 8, 5), key_label="cron", trigger_type="cron"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TRIGGER_TYPE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"cron", "manual"}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_folder_dimension_with_uuid_keys_does_not_crash(self) -> None:
+        folder = uuid.UUID("44444444-4444-4444-8444-444444444444")
+        rows = [
+            _row(date(2026, 8, 5), folder_id=folder),
+            _row(date(2026, 8, 6), folder_id=folder),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 6),
+        )
+        assert {b["key"] for b in out} == {str(folder)}
+        assert all(b["key"] is None or isinstance(b["key"], str) for b in out), "keys must be str | None, never UUID"
+
+    def test_folder_dimension_null_key_mix_does_not_crash(self) -> None:
+        # Some runs have no folder → keys are {None, <uuid>} for the same day.
+        # This must NOT raise TypeError on sort (None vs UUID incomparable).
+        folder = uuid.UUID("55555555-5555-4555-8555-555555555555")
+        rows = [
+            _row(date(2026, 8, 5), folder_id=folder),
+            _row(date(2026, 8, 5), folder_id=None),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {str(folder), None}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_pipeline_dimension_null_snapshot_label_falls_back_to_uuid(self) -> None:
+        # A NULL pipeline_name (backfilled fact for a since-deleted pipeline)
+        # falls back to the pipeline_id UUID. Mixing a named and a NULL-label
+        # pipeline on the same day must not crash bucketing.
+        pipeline_a = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        pipeline_b = uuid.UUID("77777777-7777-4777-8777-777777777777")
+        rows = [
+            _row(date(2026, 8, 5), key_label="Pipeline A", pipeline_id=pipeline_a),
+            _row(date(2026, 8, 5), key_label=None, pipeline_id=pipeline_b),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.PIPELINE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"Pipeline A", str(pipeline_b)}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_team_dimension_null_snapshot_label_falls_back_to_uuid(self) -> None:
+        team_a = uuid.UUID("88888888-8888-4888-8888-888888888888")
+        team_b = uuid.UUID("99999999-9999-4999-8999-999999999999")
+        rows = [
+            _row(date(2026, 8, 5), key_label="Team A", team_id=team_a),
+            _row(date(2026, 8, 5), key_label=None, team_id=team_b),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TEAM,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"Team A", str(team_b)}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_error_code_dimension_canonicalizes_keys_to_dotted(self) -> None:
+        # The facts table stores RAW codes; the dimension series must present
+        # dotted codes matching the runs UI, and legacy/dotted variants of the
+        # same code must collapse into one chart slice.
+        rows = [
+            _row(date(2026, 8, 5), count=2, error_code="task_failure"),
+            _row(date(2026, 8, 5), count=1, error_code="harness.worker_failed"),
+            _row(date(2026, 8, 5), count=1, error_code="node_timeout"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        by_key = {b["key"]: b for b in out}
+        assert set(by_key) == {"harness.worker_failed", "node.timeout"}
+        assert by_key["harness.worker_failed"]["count"] == 3, "raw + dotted variants must collapse into one slice"
+        assert "task_failure" not in by_key, "raw legacy codes must never surface on the wire"
+        assert sum(b["count"] for b in out) == 4
+
+    def test_error_code_dimension_unknown_code_falls_back_to_dotted_unknown(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=1, error_code="some_mystery_code"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"harness.unknown"}
+
+    def test_dimensioned_empty_range_zero_fills(self) -> None:
+        # A dimensioned query over an empty range must still return a zero-filled
+        # series (aligned with the non-dimensioned shape), never [].
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 3),
+        )
+        assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
+        assert all(b["count"] == 0 for b in out)
+        assert all(b["key"] is None for b in out)
+
+
+class TestExtractedBucketHelpers:
+    """Direct coverage for the helpers extracted from ``bucket_rows`` (FAR-310).
+
+    The public ``bucket_rows`` tests above exercise the composed path; these
+    pin the extracted helpers' own contracts for edge cases that are hard to
+    reach compositionally: fresh-bucket independence, None-safe dimension key
+    normalization (UUID + legacy error-code canonicalization), inclusive
+    time-grid boundaries, and zero-filled emission.
+    """
+
+    def test_empty_bucket_returns_fresh_dict_per_call(self) -> None:
+        b1 = _empty_bucket()
+        b1["count"] = 7
+        b1["cost"] = Decimal("3.50")
+        b2 = _empty_bucket()
+        assert b2["count"] == 0
+        assert b2["cost"] is None
+        assert b2["tokens"] is None
+        assert b2["duration_sum"] == 0.0
+        assert b2["duration_n"] == 0
+        assert b2["output_bytes_n"] == 0
+
+    def test_row_dimension_key_none_dimension_returns_none(self) -> None:
+        assert _row_dimension_key(SimpleNamespace(key_label="manual"), None) is None
+
+    def test_row_dimension_key_prefers_key_label_over_raw_attr(self) -> None:
+        pid = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        row = SimpleNamespace(key_label="Pipeline A", pipeline_id=pid)
+        assert _row_dimension_key(row, AnalyticsDimension.PIPELINE) == "Pipeline A"
+
+    def test_row_dimension_key_null_label_falls_back_to_uuid_string(self) -> None:
+        pid = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        row = SimpleNamespace(key_label=None, pipeline_id=pid)
+        key = _row_dimension_key(row, AnalyticsDimension.PIPELINE)
+        assert key == str(pid)
+        assert isinstance(key, str), "keys must be str | None, never a raw UUID"
+
+    def test_row_dimension_key_missing_attrs_returns_none(self) -> None:
+        assert _row_dimension_key(SimpleNamespace(key_label=None), AnalyticsDimension.FOLDER) is None
+
+    def test_row_dimension_key_error_code_canonicalizes_legacy_to_dotted(self) -> None:
+        legacy = SimpleNamespace(error_code="task_failure")
+        dotted = SimpleNamespace(error_code="harness.worker_failed")
+        assert _row_dimension_key(legacy, AnalyticsDimension.ERROR_CODE) == "harness.worker_failed"
+        assert _row_dimension_key(dotted, AnalyticsDimension.ERROR_CODE) == "harness.worker_failed"
+
+    def test_row_dimension_key_error_code_unknown_maps_to_harness_unknown(self) -> None:
+        row = SimpleNamespace(error_code="some_mystery_code")
+        assert _row_dimension_key(row, AnalyticsDimension.ERROR_CODE) == "harness.unknown"
+
+    def test_accumulate_row_none_cost_and_tokens_stay_none(self) -> None:
+        bucket = _empty_bucket()
+        row = SimpleNamespace(
+            count=2,
+            complete_count=2,
+            failure_count=0,
+            stall_count=0,
+            total_cost_usd=None,
+            total_tokens=None,
+            avg_duration_ms=500.0,
+        )
+        _accumulate_row(bucket, row, cnt=2)
+        assert bucket["count"] == 2
+        assert bucket["cost"] is None
+        assert bucket["tokens"] is None
+        assert bucket["duration_sum"] == 1000.0
+        assert bucket["duration_n"] == 2
+
+    def test_accumulate_row_sums_real_values(self) -> None:
+        bucket = _empty_bucket()
+        _accumulate_row(
+            bucket,
+            SimpleNamespace(
+                count=1,
+                complete_count=1,
+                failure_count=0,
+                stall_count=0,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=100.0,
+                avg_queue_wait_ms=20.0,
+                avg_final_idle_ms=5.0,
+                avg_output_bytes=1024.0,
+            ),
+            cnt=1,
+        )
+        _accumulate_row(
+            bucket,
+            SimpleNamespace(
+                count=1,
+                complete_count=1,
+                failure_count=0,
+                stall_count=0,
+                total_cost_usd=5.0,
+                total_tokens=25,
+                avg_duration_ms=300.0,
+                avg_queue_wait_ms=10.0,
+                avg_final_idle_ms=1.0,
+                avg_output_bytes=512.0,
+            ),
+            cnt=1,
+        )
+        assert bucket["count"] == 2
+        assert bucket["complete"] == 2
+        assert bucket["cost"] == Decimal("15.0")
+        assert bucket["tokens"] == 75
+        assert bucket["duration_sum"] == 400.0
+        assert bucket["duration_n"] == 2
+        assert bucket["queue_wait_sum"] == 30.0
+        assert bucket["final_idle_sum"] == 6.0
+        assert bucket["output_bytes_sum"] == 1536.0
+
+    def test_build_time_grid_day_inclusive_span(self) -> None:
+        grid = _build_time_grid(AnalyticsGroupBy.DAY, date(2026, 8, 1), date(2026, 8, 3))
+        assert grid == [date(2026, 8, 1), date(2026, 8, 2), date(2026, 8, 3)]
+
+    def test_build_time_grid_week_anchors_on_mondays(self) -> None:
+        # 2026-08-05 (Wed) .. 2026-08-16 (Sun) spans two ISO weeks starting
+        # Mon 2026-08-03 and Mon 2026-08-10 — the grid must be the week starts.
+        grid = _build_time_grid(AnalyticsGroupBy.WEEK, date(2026, 8, 5), date(2026, 8, 16))
+        assert grid == [date(2026, 8, 3), date(2026, 8, 10)]
+
+    def test_build_time_grid_hour_single_day_has_24_buckets(self) -> None:
+        grid = _build_time_grid(AnalyticsGroupBy.HOUR, date(2026, 8, 6), date(2026, 8, 6))
+        assert len(grid) == 24
+        assert grid[0] == datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
+        assert grid[-1] == datetime(2026, 8, 6, 23, 0, tzinfo=UTC)
+
+    def test_bucket_dim_keys_no_dimension_returns_singleton_none(self) -> None:
+        assert _bucket_dim_keys({}, None) == [None]
+
+    def test_bucket_dim_keys_empty_agg_falls_back_to_none(self) -> None:
+        assert _bucket_dim_keys({}, AnalyticsDimension.FOLDER) == [None]
+
+    def test_bucket_dim_keys_sorts_strings_then_none(self) -> None:
+        agg = {
+            (date(2026, 8, 5), "cron"): _empty_bucket(),
+            (date(2026, 8, 5), None): _empty_bucket(),
+            (date(2026, 8, 5), "manual"): _empty_bucket(),
+        }
+        # Sort key is ``(k is None, k or "")`` — False < True, so the string
+        # keys sort before the None key.
+        assert _bucket_dim_keys(agg, AnalyticsDimension.TRIGGER_TYPE) == ["cron", "manual", None]
+
+    def test_emit_bucket_row_none_bucket_zero_fills(self) -> None:
+        out = _emit_bucket_row(None, date(2026, 8, 5), "manual")
+        assert out["date"] == "2026-08-05"
+        assert out["key"] == "manual"
+        assert out["count"] == 0
+        assert out["total_cost_usd"] is None
+        assert out["total_tokens"] is None
+        assert out["success_rate"] is None
+        assert out["failure_count"] == 0
+        assert out["stall_count"] == 0
+        assert out["avg_duration_ms"] is None
+
+    def test_emit_bucket_row_populated_bucket_computes_aggregates(self) -> None:
+        b = {
+            "count": 4,
+            "complete": 3,
+            "cost": Decimal("10.0"),
+            "tokens": 100,
+            "duration_sum": 800.0,
+            "duration_n": 4,
+            "failure": 1,
+            "stall": 0,
+            "queue_wait_sum": 40.0,
+            "queue_wait_n": 2,
+            "final_idle_sum": 10.0,
+            "final_idle_n": 2,
+            "output_bytes_sum": 2048.0,
+            "output_bytes_n": 2,
+        }
+        out = _emit_bucket_row(b, datetime(2026, 8, 6, 10, 0, tzinfo=UTC), None)
+        assert out["date"] == "2026-08-06T10:00:00"
+        assert out["count"] == 4
+        assert out["total_cost_usd"] == 10.0
+        assert out["total_tokens"] == 100
+        assert out["avg_duration_ms"] == 200.0
+        assert out["success_rate"] == 0.75
+        assert out["failure_count"] == 1
+        assert out["avg_queue_wait_ms"] == 20.0
+        assert out["avg_final_idle_ms"] == 5.0
+        assert out["avg_output_bytes"] == 1024.0
+
+
+class TestHourGranularity:
+    def test_hour_group_by_truncates_created_at(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "date_trunc" in sql, "hour grouping must truncate created_at"
+        assert "created_at" in sql
+        assert "run_date" in sql, "the truncated expression must be labelled run_date"
+
+    def test_hour_group_by_selects_run_date_label(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "run_date" in keys, "bucket_rows reads row.run_date — the label must be selected"
+
+    def test_hour_grid_zero_fills_iso_datetimes(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
+        assert out[0]["date"] == "2026-08-06T00:00:00"
+        assert out[23]["date"] == "2026-08-06T23:00:00"
+        assert all(b["count"] == 0 for b in out)
+
+    def test_hour_buckets_aggregate_by_truncated_hour(self) -> None:
+        rows = [
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=2,
+                complete_count=2,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=500.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=1,
+                complete_count=0,
+                total_cost_usd=2.0,
+                total_tokens=10,
+                avg_duration_ms=100.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 14, 0, tzinfo=UTC),
+                count=1,
+                complete_count=1,
+                total_cost_usd=5.0,
+                total_tokens=25,
+                avg_duration_ms=200.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        by_hour = {b["date"]: b for b in out}
+        assert by_hour["2026-08-06T10:00:00"]["count"] == 3, "rows in the same truncated hour must collapse"
+        assert by_hour["2026-08-06T10:00:00"]["total_cost_usd"] == 12.0
+        assert by_hour["2026-08-06T14:00:00"]["count"] == 1
+        assert len(out) == 24
+
+
+class TestResolveGroupBy:
+    def test_hour_for_span_three_days_or_less(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=3)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(None, base, base + timedelta(days=1)) == AnalyticsGroupBy.HOUR
+
+    def test_day_for_span_up_to_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=4)) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=90)) == AnalyticsGroupBy.DAY
+
+    def test_week_for_span_over_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=91)) == AnalyticsGroupBy.WEEK
+
+    def test_explicit_group_by_passes_through(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.HOUR, base, base + timedelta(days=100)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(AnalyticsGroupBy.WEEK, base, base + timedelta(days=2)) == AnalyticsGroupBy.WEEK
+
+    def test_missing_range_returns_day(self) -> None:
+        assert resolve_group_by(AnalyticsGroupBy.DAY, None, None) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(None, None, None) == AnalyticsGroupBy.DAY
+
+    def test_non_utc_offset_converts_to_utc_before_span(self) -> None:
+        # A -05:00 date_from crosses a date boundary in UTC: 2026-07-31T21:00-05:00
+        # is 2026-08-01T02:00Z, so the 3-day span to 2026-08-04 resolves to HOUR.
+        # Pre-fix the offset was re-labelled as UTC (2026-07-31T21:00Z → 4-day
+        # span → DAY), so this asserts the conversion, not the re-labelling.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        to = date(2026, 8, 4)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, frm, to) == AnalyticsGroupBy.HOUR
+
+    def test_mixed_aware_naive_inputs_do_not_raise(self) -> None:
+        # Mixing an aware datetime with a naive datetime must not raise TypeError
+        # (offset-naive vs offset-aware) — both are normalised to aware UTC first.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        to = datetime(2026, 8, 4, 12, 0, 0)  # naive
+        assert resolve_group_by(None, frm, to) == AnalyticsGroupBy.HOUR
+
+
+class TestToUtcAware:
+    def test_naive_datetime_gets_utc_tzinfo(self) -> None:
+        out = to_utc_aware(datetime(2026, 8, 6, 14, 0, 0))
+        assert out == datetime(2026, 8, 6, 14, 0, 0, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_non_utc_offset_converts_to_utc(self) -> None:
+        # +05:00 14:00 must become 09:00 UTC — never keep the +05:00 offset.
+        out = to_utc_aware(datetime(2026, 8, 6, 14, 0, 0, tzinfo=timezone(timedelta(hours=5))))
+        assert out == datetime(2026, 8, 6, 9, 0, 0, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_negative_offset_converts_to_utc_across_date_boundary(self) -> None:
+        out = to_utc_aware(datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5))))
+        assert out == datetime(2026, 8, 1, 2, 0, 0, tzinfo=UTC)
+
+    def test_bare_date_expands_to_midnight_and_end_of_day(self) -> None:
+        assert to_utc_aware(date(2026, 8, 6)) == datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
+        assert to_utc_aware(date(2026, 8, 6), end_of_day=True) == datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
+
+    def test_midnight_datetime_expands_to_end_of_day(self) -> None:
+        # FastAPI parses a date-only query param like ``?date_to=2026-08-06``
+        # into a midnight datetime. With end_of_day it must expand to 23:59:59 —
+        # otherwise a single-day hour query produces zero buckets.
+        out = to_utc_aware(datetime(2026, 8, 6, 0, 0, 0), end_of_day=True)
+        assert out == datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_non_midnight_datetime_not_expanded(self) -> None:
+        # A datetime carrying a real time-of-day must be left unchanged even
+        # with end_of_day=True — it is an explicit instant, not a bare date.
+        assert to_utc_aware(datetime(2026, 8, 6, 14, 0, 0), end_of_day=True) == datetime(
+            2026, 8, 6, 14, 0, 0, tzinfo=UTC
+        )
+
+    def test_mixed_naive_aware_compare_safely(self) -> None:
+        # A naive date_from and an aware date_to must normalise so the range
+        # checks never hit TypeError (the pre-fix 500 path).
+        frm = to_utc_aware(datetime(2026, 8, 6))  # naive
+        to = to_utc_aware(datetime(2026, 8, 7, 14, 0, 0, tzinfo=UTC))  # aware
+        assert frm <= to
+        assert (to - frm).days >= 1
+
+
+class TestHourGroupByCap:
+    def test_span_within_cap_is_allowed(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 14)) is False
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 15)) is False
+
+    def test_span_over_cap_exceeds(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is True
+
+    def test_cap_default_matches_constant(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is (
+            (date(2026, 8, 16) - date(2026, 8, 1)).days > HOUR_GROUPBY_MAX_RANGE_DAYS
+        )
+
+    def test_mixed_aware_naive_inputs_do_not_raise(self) -> None:
+        frm = datetime(2026, 8, 6, 14, 0, 0, tzinfo=timezone(timedelta(hours=5)))
+        to = datetime(2026, 8, 30, 14, 0, 0)  # naive
+        assert hour_groupby_span_exceeds(frm, to) is True
+
+    def test_non_utc_offset_range_is_measured_from_converted_instant(self) -> None:
+        # 2026-07-31T21:00-05:00 is 2026-08-01T02:00Z; the span to 2026-08-14
+        # (end-of-day) is 13 days → within cap. Re-labelling the offset as UTC
+        # would make it 14 days → still within, so this guards the boundary by
+        # asserting the conversion keeps it inside the cap.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        assert hour_groupby_span_exceeds(frm, date(2026, 8, 14)) is False
+
+
+class TestReconcileCooldown:
+    """Cooldown-keyed reconcile alerts (maintenance.py, ADR 020).
+
+    The cooldown dict is bounded by org count but unbounded over time — stale
+    entries must be pruned so the map never grows without bound.
+    """
+
+    def _module(self):
+        from modulo.core.analytics import maintenance as maintenance_mod
+
+        return maintenance_mod
+
+    def test_allows_then_suppresses_within_window_then_prunes_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        maintenance_mod = self._module()
+        maintenance_mod._reconcile_cooldown.clear()
+        now = [1000.0]
+        monkeypatch.setattr(maintenance_mod.time, "monotonic", lambda: now[0])
+        org = uuid.uuid4()
+        drift_type = "ledger_exceeds_facts"
+
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is True
+        now[0] += 60
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is False, "within cooldown → suppressed"
+        now[0] += maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS + 1
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is True, "after window → allowed again"
+        assert len(maintenance_mod._reconcile_cooldown) == 1, "stale entries pruned; only the fresh re-entry remains"
+        maintenance_mod._reconcile_cooldown.clear()
+
+    def test_prune_removes_only_stale_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        maintenance_mod = self._module()
+        maintenance_mod._reconcile_cooldown.clear()
+        now = [1000.0]
+        monkeypatch.setattr(maintenance_mod.time, "monotonic", lambda: now[0])
+        maintenance_mod._reconcile_cooldown[("org-a", "ledger_exceeds_facts")] = (
+            now[0] - maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS - 10
+        )
+        maintenance_mod._reconcile_cooldown[("org-b", "ledger_exceeds_facts")] = now[0] - 10
+
+        maintenance_mod._reconcile_cooldown_prune(now[0])
+
+        assert ("org-a", "ledger_exceeds_facts") not in maintenance_mod._reconcile_cooldown
+        assert ("org-b", "ledger_exceeds_facts") in maintenance_mod._reconcile_cooldown
+        maintenance_mod._reconcile_cooldown.clear()
+
+
+def _conc_row(
+    created: datetime | None = None,
+    started: datetime | None = None,
+    completed: datetime | None = None,
+) -> SimpleNamespace:
+    """A raw concurrency input row shaped exactly like build_concurrency_query selects."""
+    created = created or started or datetime(2026, 8, 6, 9, 0, tzinfo=UTC)
+    return SimpleNamespace(
+        run_date=created.date(),
+        created_at=created,
+        started_at=started,
+        completed_at=completed,
+    )
+
+
+class TestConcurrencyCompiledSql:
+    """build_concurrency_query selects RAW instants + filters — no bucketing SQL."""
+
+    def test_org_predicate_present_and_bound(self) -> None:
+        for dialect in (postgresql.dialect(), sqlite.dialect()):
+            stmt, _ = build_concurrency_query(_query())
+            sql = str(stmt.compile(dialect=dialect))
+            assert "organisation_id" in sql, "the org predicate is the ONLY isolation control"
+            assert str(_ORG) not in sql, "the org uuid must be bound, never interpolated"
+
+    def test_no_group_by_only_raw_row_cap_limit(self) -> None:
+        stmt, _ = build_concurrency_query(_query(limit=5))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled).upper()
+        assert "GROUP BY" not in sql, "overlap counting happens in Python, never SQL GROUP BY"
+        assert "LIMIT" in sql, "the raw-row cap must bound the SQL scan"
+        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values(), (
+            "the only SQL LIMIT must be the raw-row cap sentinel (cap+1), never the user limit"
+        )
+
+    def test_raw_row_cap_binds_cap_plus_one_sentinel(self) -> None:
+        # Regression guard: the scan is capped at CONCURRENCY_MAX_RAW_ROWS + 1
+        # rows so the service can detect overflow (len(rows) > cap) and reject —
+        # never silently truncate into wrong max/avg counts.
+        stmt, _ = build_concurrency_query(_query())
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values()
+
+    def test_selects_raw_instants(self) -> None:
+        stmt, _ = build_concurrency_query(_query())
+        keys = {k.name for k in stmt.selected_columns}
+        assert {"run_date", "created_at", "started_at", "completed_at"} <= keys
+
+    def test_filters_are_bound(self) -> None:
+        pid = uuid.UUID("22222222-2222-4222-8222-222222222222")
+        stmt, params = build_concurrency_query(
+            _query(
+                trigger_type=AnalyticsTriggerType.CRON,
+                status=AnalyticsStatus.FAILED,
+                pipeline_ids=(pid,),
+            )
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "cron" not in sql.lower(), "filter values must be bound, never interpolated"
+        assert "failed" not in sql.lower(), "filter values must be bound, never interpolated"
+        assert str(pid) not in sql, "pipeline ids must be bound, never interpolated"
+        assert params["trigger_type"] == "cron"
+        assert params["status"] == "failed"
+        assert params["pipeline_ids"] == [pid]
+
+
+class TestConcurrencyBucketing:
+    """Overlap math: a run spanning a boundary counts in both buckets; queued
+    vs active attribution follows the created/started instants."""
+
+    def _by_hour(self, rows: list[SimpleNamespace]) -> dict[str, dict]:
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.HOUR,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        return {b["date"]: b for b in out}
+
+    def test_run_spanning_bucket_boundary_counts_in_both_buckets(self) -> None:
+        # [09:30, 10:30) overlaps the 09:00 bucket (09:30..10:00) AND the 10:00
+        # bucket (10:00..10:30) — both must report max_active >= 1.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 20, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 9, 30, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            )
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T09:00:00"]["max_active"] == 1, "active from 09:30 into the 09:00 bucket"
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 1, "active through 10:30 into the 10:00 bucket"
+        assert by_hour["2026-08-06T11:00:00"]["max_active"] == 0
+        assert len(by_hour) == 24, "a single day at hour granularity must zero-fill 24 buckets"
+
+    def test_created_in_bucket_a_started_in_bucket_b(self) -> None:
+        # Created 09:30, started 10:30: the 09:00 bucket sees it queued (not
+        # active); the 10:00 bucket sees it queued for the first half AND active
+        # for the second half.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 30, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 11, 0, tzinfo=UTC),
+            )
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T09:00:00"]["max_queued"] == 1, "created in bucket A → queued in A"
+        assert by_hour["2026-08-06T09:00:00"]["max_active"] == 0, "not started yet → not active in A"
+        assert by_hour["2026-08-06T10:00:00"]["max_queued"] == 1, "queued 10:00..10:30 in B"
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 1, "started 10:30 → active in B"
+
+    def test_never_started_run_counts_as_queued_through_range(self) -> None:
+        # started_at NULL (never started / capacity-deferred / stuck) → queued
+        # from creation through the end of the bucket, never active.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 23, 0, tzinfo=UTC),
+                started=None,
+                completed=None,
+            )
+        ]
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 1
+        assert out[0]["max_queued"] == 1
+        assert out[0]["max_active"] == 0
+
+    def test_overlapping_runs_peak_active_count(self) -> None:
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 15, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 11, 0, tzinfo=UTC),
+            ),
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 2, "runs 1+2 overlap 10:15..10:30"
+
+    def test_avg_active_is_time_weighted_mean(self) -> None:
+        # Two runs: both active 10:00..10:30 (2 x 1800s), one continues to
+        # 10:45 (1 x 900s), then 900s idle -> avg = (2*1800 + 1*900)/3600 = 1.25.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            ),
+        ]
+        by_hour = self._by_hour(rows)
+        bucket = by_hour["2026-08-06T10:00:00"]
+        assert bucket["max_active"] == 2
+        assert bucket["avg_active"] == 1.25
+
+    def test_week_buckets_anchor_iso_monday(self) -> None:
+        # 2026-08-05 (Wednesday) belongs to the ISO week anchored 2026-08-03.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 5, 8, 0, tzinfo=UTC),
+                started=datetime(2026, 8, 5, 8, 5, tzinfo=UTC),
+                completed=datetime(2026, 8, 5, 8, 10, tzinfo=UTC),
+            ),
+        ]
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.WEEK,
+            date_from=date(2026, 8, 3),
+            date_to=date(2026, 8, 9),
+        )
+        assert [b["date"] for b in out] == ["2026-08-03"]
+        assert out[0]["max_active"] == 1
+
+    def test_empty_range_zero_fills(self) -> None:
+        out = bucket_concurrency_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 1
+        assert out[0]["max_active"] == 0
+        assert out[0]["avg_active"] == 0.0
+        assert out[0]["max_queued"] == 0
+        assert out[0]["avg_queued"] == 0.0
+
+    def test_limit_applied_post_bucketing(self) -> None:
+        out = bucket_concurrency_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 10),
+            limit=3,
+        )
+        assert len(out) == 3, "limit must truncate AFTER bucketing"
+        assert out[-1]["date"] == "2026-08-10", "the most recent buckets win"
+
+
+# ---------------------------------------------------------------------------
+# ongoing trigger type (FAR-158) — analytics attribution
+# ---------------------------------------------------------------------------
+
+
+class TestOngoingTriggerType:
+    def test_ongoing_enum_stringifies_to_ongoing(self) -> None:
+        assert AnalyticsTriggerType.ONGOING == "ongoing"
+        assert str(AnalyticsTriggerType.ONGOING) == "ongoing"
+
+    def test_ongoing_trigger_type_query_binds_ongoing(self) -> None:
+        stmt, params = build_facts_query(_query(trigger_type=AnalyticsTriggerType.ONGOING))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        # The value is a bound param, never interpolated into the SQL.
+        assert "ongoing" not in sql.lower()
+        assert any(str(v) == "ongoing" for v in params.values()), f"expected an 'ongoing' bound param, got {params}"

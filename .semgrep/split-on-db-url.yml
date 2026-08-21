@@ -1,0 +1,12 @@
+rules:
+  - id: split-on-db-url
+    patterns:
+      - pattern: $URL.split("?")[0]
+      - metavariable-regex:
+          metavariable: $URL
+          regex: .*(?:DATABASE_URL|url|URL).*
+    message: "Don't strip query params from DATABASE_URL — sslmode and other params are needed"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

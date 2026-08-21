@@ -1,0 +1,8 @@
+rules:
+  - id: except-sqlalchemy-in-migration
+    pattern-regex: 'except\s+SQLAlchemyError\s*:'
+    message: "In migration code, use except ProgrammingError to distinguish missing tables from real data errors"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/modulo/db/migrations/**", "**/alembic/**", "**/db/migrations/**"]

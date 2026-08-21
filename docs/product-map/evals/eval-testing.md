@@ -1,0 +1,214 @@
+---
+id: feat-evals-eval-testing
+prd: 8.17
+delivery-tasks: [task-nv2-eval-bdd-tests]
+bdd:
+  - backend/tests/bdd/features/evals/eval_regex.feature
+  - backend/tests/bdd/features/evals/eval_llm_judge.feature
+  - backend/tests/bdd/features/evals/eval_block.feature
+  - backend/tests/bdd/features/eval/eval_run.feature
+  - backend/tests/bdd/features/eval/eval_suite_crud.feature
+  - backend/tests/bdd/features/eval/eval_scorer.feature
+  - backend/tests/bdd/features/ui/eval_dashboard.feature
+  - backend/tests/bdd/features/eval/feedback_system.feature
+  - backend/tests/bdd/features/eval/conditional_hitl.feature
+code:
+  - backend/src/modulo/core/eval_engine/
+  - backend/src/modulo/api/routes/admin.py
+unit-tests:
+  - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/unit/api/test_evals_dashboard.py
+  - backend/tests/unit/api/test_evals_compare.py
+  - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/core/test_eval_engine.py
+  - backend/tests/unit/api/test_error_handling.py
+  - backend/tests/bdd/steps/test_eval.py
+  - backend/tests/bdd/steps/test_eval_block_steps.py
+depends-on: [feat-evals-eval-engine, feat-evals-eval-gates]
+status: partial
+---
+
+# Eval Testing
+
+Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests validate the Eval System (8.17) across BDD acceptance and unit levels, covering eval definitions, run lifecycle, regex/LLM-judge/block eval types, suite aggregation, dashboard, comparison, coverage, regression alerts, and gate enforcement.
+
+## Behaviours
+
+### Eval definition CRUD
+- [x] Create eval definition with all fields (pipeline_id, name, eval_type, config_json, failure_behaviour, pass_threshold, suite_id) returns 201
+- [x] Create eval definition with optional fields omitted returns 201 with null defaults
+- [x] Create eval definition requires admin role (runner gets 403)
+- [x] Create eval definition with invalid eval_type returns 422
+- [x] List eval definitions returns paginated results with total, items, page, page_size
+- [x] List eval definitions filtered by pipeline_id
+- [x] List eval definitions empty returns total 0, items []
+- [x] Get eval definition by ID returns 200
+- [x] Get eval definition returns 404 for unknown ID
+- [x] Update eval definition returns 200 with updated fields
+- [x] Update eval definition returns 404 for unknown ID
+- [x] Update eval definition requires admin role
+- [x] Delete eval definition returns 204
+- [x] Delete eval definition returns 404 for unknown ID
+- [x] Delete eval definition requires admin role
+- [x] Unauthenticated requests return 401/403 on all CRUD endpoints
+
+### Eval run lifecycle
+- [ ] Trigger eval run (POST /api/pipelines/{name}/evals) returns 202 with status "pending" — NOT WIRED (corrected from an overclaim 2026-08-15): no such route exists in pipelines.py; the eval_run.feature “Trigger an eval run” scenario has no real endpoint and is step-stubbed only. See the eval-engine.md Known Gap "No eval run trigger via API".
+- [x] Eval run scores each test case individually
+- [x] Eval run computes aggregate score from per-case scores
+- [x] Eval run below pass_threshold fails with status "failed"
+- [ ] Eval results page shows per-case scores and aggregate score (frontend UI — eval_dashboard.feature placeholder)
+
+### Regex eval
+- [x] Regex pattern matches output field → passed=true, score=1.0
+- [x] Regex pattern does not match → passed=false, score=0.0
+- [x] Regex eval on a nested JSON field
+- [x] Regex eval with block behaviour on match raises EvalBlockedError
+- [x] Regex eval with warn behaviour on match logs warning and continues
+- [x] Regex eval with missing config returns passed=false, score=0.0
+- [x] Regex pattern matches anywhere in the field value (substring, not full match)
+- [x] Regex eval field coerced to string when input is numeric
+
+### LLM judge eval
+- [x] Rubric-based scoring passes above pass_threshold
+- [x] Score below pass_threshold fails the eval
+- [x] LLM judge uses dedicated model_backend_id (not the agent's own)
+- [x] Custom rubric_prompt is sent to the judge model
+- [x] LLM judge with no callable configured returns passed=false, score=0.0
+- [x] LLM judge block behaviour stops pipeline: EvalBlockedError raised, run transitions to eval_failed
+
+### Eval gate enforcement
+- [x] Block behaviour raises EvalBlockedError with eval detail
+- [x] Block behaviour transitions run to eval_failed status with error_code eval_blocked
+- [x] Warn behaviour logs warning and does not halt pipeline
+- [x] Suite-level pass_threshold blocks run on aggregate failure (eval_suite_blocked)
+- [x] Suite-level pass_threshold passes on aggregate success
+- [x] Block failure recorded in AuditEvent with type eval_blocked — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked"); eval_block.feature scenario + step defs exist
+- [x] Multiple evals on one node: first failure blocks remaining evals, EvalBlockedError raised
+
+### Eval suite aggregation
+- [x] Suite with aggregate score >= threshold passes
+- [x] Suite with aggregate score == threshold passes
+- [x] Suite with aggregate score < threshold fails
+- [x] Suite without pass_threshold always passes
+- [x] Suite with mixed pass/fail results returns correct counts and blocking_failures list
+- [x] Empty suite always passes (aggregate_score=1.0, total_evals=0)
+- [x] SuiteEvalResult exposes all model fields: suite_id, total_evals, passed_evals, aggregate_score, passed, blocking_failures
+
+### Eval dashboard
+- [x] GET /api/v1/admin/evals/dashboard returns 200 for admin
+- [x] Dashboard requires admin role (operator and runner get 403)
+- [x] Unauthenticated returns 401
+- [x] Summary section: total_results, passed, failed, pass_rate, total_definitions
+- [x] Trend section: bucketed daily totals with pass/fail counts
+- [x] By-type breakdown: totals per eval_type (llm_judge, regex, json_schema)
+- [x] Coverage gaps: nodes without eval definitions listed with pipeline_id, pipeline_name, node_id
+- [x] Coverage gaps empty when all nodes have eval definitions
+- [x] Recent results section with eval_name, eval_type, passed, score
+- [x] All five response keys present: summary, trend, by_type, coverage_gaps, recent_results
+- [x] Empty database returns zeroed-out response (pass_rate=0.0, empty arrays)
+
+### Eval compare
+- [x] POST /api/v1/evals/compare returns side-by-side eval results with delta
+- [x] Run not found returns 404
+- [x] Compare with no shared results returns empty results list
+
+### JSON Schema eval
+- [x] JSON Schema validation passes for valid data matching schema
+- [x] JSON Schema validation fails for data not matching schema
+- [x] JSON Schema scorer dispatches correctly for json_schema eval_type
+- [x] JSON Schema eval with block behaviour raises EvalBlockedError on mismatch
+- [x] JSON Schema eval config stores schema + field and validates against the output field (field-scoped validation — covered by test_field_scoped_validation in test_eval_engine.py)
+
+### Custom function eval
+- [x] Custom function scorer executes correctly for configured function path
+- [x] Custom function returns score 0-1 and passed bool
+- [x] Unknown eval type raises error
+- [x] Custom function with missing config returns passed=false, score=0.0
+- [ ] Custom function registered via modulo.evals entry-point group — NOT implemented; engine uses an explicit `config["functions"]` registry dict instead (deliberate security choice — no arbitrary imports). PRD §8.17 mentions the entry-point group; the code deviates. PRD file not updated (docs/prd.md outside this worktree's allowlist).
+
+### Eval coverage
+- [x] GET /api/v1/evals/coverage returns node-level eval coverage with has_evals flag per node, covered/uncovered counts, coverage_pct
+- [x] Pipeline not found returns 404
+- [x] Empty pipeline (no nodes) returns zero coverage
+
+### Eval from-run (eval proposal creation from run output)
+- [x] POST /api/v1/evals/from-run returns 201 with sample_output and config_json
+- [x] Requires admin role
+- [x] Run not found returns 404
+- [x] Prepopulates config_json by eval type (regex gets field, json_schema gets field, etc.)
+
+### Eval regression alerts
+- [x] No results returns empty alerts list
+- [x] Declining pass rate (drop above threshold) triggers alert with trend "declining", drop_pct, affected_run_ids
+- [x] Improving pass rate still returned with trend "improving"
+- [x] Stable pass rate returned with trend "stable"
+- [x] Drop below configurable threshold returns trend "stable"
+- [x] No baseline data (baseline_total=0) → alert skipped
+- [x] No recent data (recent_total=0) → alert skipped
+- [x] Multiple evals with mixed trends each returned correctly
+- [x] Affected_run_ids empty when no recent failures
+- [x] GET /api/v1/admin/evals/regressions returns expected shape: alerts, total_regressions, threshold, recent_window_ratio, lookback_days
+- [x] Custom days and threshold query parameters accepted
+- [x] Custom recent_window_ratio query parameter accepted (0.5 widens the recent window)
+- [x] Empty database returns total_regressions 0, alerts []
+
+### Error Handling
+- [x] All 9 CRUD routes in evals.py catch ProgrammingError→501
+- [x] All 9 CRUD routes in evals.py catch SQLAlchemyError→503
+- [x] Compare endpoint catches ProgrammingError in both session blocks
+- [x] Compare endpoint catches SQLAlchemyError in both session blocks
+- [x] OKR progress endpoint catches ProgrammingError→501
+- [x] OKR progress endpoint catches SQLAlchemyError→503
+- [x] Eval dashboard endpoint catches ProgrammingError→501 (admin.py)
+- [x] Eval dashboard endpoint catches SQLAlchemyError→503 (admin.py)
+- [x] Eval regressions endpoint catches ProgrammingError→501 (admin.py)
+- [x] Eval regressions endpoint catches TimeoutError→503 (admin.py)
+- [x] Eval regressions endpoint catches SQLAlchemyError→503 (admin.py)
+- [x] Engine-internal errors (invalid regex, custom function exception, LLM judge failure) return failed EvalResult, not 500
+- [x] ContentTooLongError caught in LLM judge → returned as failed EvalResult
+- [x] Missing eval type raises ValueError (propagated as 500 — deferred fix)
+- [x] Unauthenticated requests return 401 on all eval endpoints
+- [x] Non-admin users receive 403 on eval CRUD/dashboard/regressions/from-run
+
+### Edge Cases
+- [x] Empty eval definitions list returns total:0, items:[]
+- [x] Empty dashboard returns zeroed-out response
+- [x] Empty eval suite always passes (aggregate_score=1.0)
+- [x] Suite without pass_threshold always passes
+- [x] Drop below configurable threshold returns trend "stable"
+- [x] No baseline data → alert skipped
+- [x] No recent data → alert skipped
+- [x] Compare with no shared results returns empty list
+- [x] Empty pipeline returns zero coverage
+- [x] Suite not found in DB returns 404
+- [x] Suite_id with special characters — endpoint handles encoding
+
+### Resilience & Integration Robustness
+- [x] All 9 CRUD routes in evals.py catch ProgrammingError→501 and SQLAlchemyError→503
+- [x] Compare endpoint catches ProgrammingError/SQLAlchemyError in both session blocks
+- [x] Eval dashboard endpoint catches ProgrammingError→501 and SQLAlchemyError→503
+- [x] Eval regressions endpoint catches ProgrammingError→501, TimeoutError→503, SQLAlchemyError→503
+- [x] OKR progress endpoint catches ProgrammingError→501 and SQLAlchemyError→503
+- [x] Engine-internal errors (invalid regex, custom function exception, LLM judge failure) return failed EvalResult, not 500
+- [x] ContentTooLongError caught in LLM judge → returned as failed EvalResult
+- [ ] Eval results UI placeholder scenario — no Playwright test for eval results display
+- [ ] No integration test for eval blocking in pipeline run lifecycle
+- [ ] No retry/backoff on eval engine DB queries
+- [ ] No circuit breaker on repeated eval engine failures
+
+### QA History
+- 2026-08-15: Coverage completion (FAR-231/FAR-233 distribute batch). **Corrected an overclaim**: "Trigger eval run (POST /api/pipelines/{name}/evals) returns 202" was marked [x] but no such endpoint exists in pipelines.py — the eval_run.feature scenario is not wired to a real route. Now documented as a gap (consistent with the eval-engine.md Known Gap). The remaining 5 unchecked items (eval results UI page/Playwright scenario, entry-point-group custom-function registration, eval-blocking integration test, retry/backoff, circuit breaker) are genuine gaps. Marked no new [x] items — every other claim in this entry was re-verified against the code paths (CRUD routes in evals.py, dashboard/regressions in admin.py, engine error handling in eval_engine).
+
+- 2026-08-15: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — verified wired at executor level (executor.py:1394-1409, 1876-1891 write append_audit_event event_type="eval.blocked"; eval_block.feature scenario + step defs exist), the "BDD step defs are stubs" note was stale. (2) "JSON Schema eval config stores schema ref and validates against output field" — field-scoped validation already covered by test_field_scoped_validation. Clarified custom_function entry-point-group gap (not implemented — engine uses explicit registry dict; PRD deviation documented, PRD file not editable within this worktree's allowlist). Remaining unchecked items are genuine gaps (eval results UI, integration test for eval blocking, retry/backoff, circuit breaker).
+- 2026-07-06: Cross-cutting QA (index 229). Fixed CRITICAL — eval_dashboard route in admin.py was missing SQLAlchemyError→503 catch (connection/deadlock failures propagated as 500). Fixed CRITICAL — okr_progress route in admin.py was missing SQLAlchemyError→503 catch (same pattern). Added except SQLAlchemyError handlers + 4 new tests (dashboard + regressions + okr_progress SQLAlchemyError→503, okr_progress ProgrammingError→501). Added json_schema and custom_function eval type behaviour sections to product map. Added Resilience section. Status: partial.
+- 2026-07-07: Cross-cutting QA (index 324). Fixed CRITICAL — detect_regressions() only returned alerts for declining trends; improving/stable trends were silently dropped despite product map claiming they were returned. Unit tests (test_improving_not_alerted, test_stable_not_alerted) caught the gap — moved alerts.append() outside the if/elif/else block so all trends produce alerts. Status: covered.
+
+## Known Gaps
+- **eval_scorer.feature is wired, not a placeholder**: 7 real Gherkin scenarios with step definitions in test_eval.py (regex pass/fail, block/warn, JSON Schema, custom function, unknown type, LLM judge). Stale "placeholder" claims removed.
+- **eval_dashboard.feature is a placeholder**: 4 UI scenarios with no concrete selectors, routes, or assertions.
+- **eval_run.feature "results UI" scenario is a placeholder**: navigation step references eval_dashboard which is stub-only.
+- **Missing eval_type ValueError propagates as 500**: unknown eval type raises ValueError which is not caught at the route handler level, producing a raw 500 traceback instead of a structured 422.
+- **No integration test for eval blocking in pipelines**: eval gate enforcement tested at BDD level (eval_block.feature) but no end-to-end pipeline run → eval block → eval_failed lifecycle test.
+- **Custom function registration deviates from PRD**: PRD §8.17 says functions register via the `modulo.evals` entry-point group; the engine uses an explicit `config["functions"]` registry dict instead (deliberate security choice — no arbitrary imports). PRD file not updated (outside this worktree's allowlist).

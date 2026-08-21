@@ -1,0 +1,267 @@
+{
+  "title": "Modulo HITL Review",
+  "uid": "modulo-hitl-review",
+  "tags": ["modulo", "hitl", "review"],
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "30s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "current": { "type": "prometheus" }
+      },
+      {
+        "name": "pipeline",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$datasource" },
+        "query": "label_values(modulo_hitl_gates_total, pipeline_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Gates Reached per Day",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "{{pipeline_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gates",
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        }
+      },
+      "options": {
+        "legend": { "showLegend": true, "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Avg Time-to-Review",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "avg(rate(modulo_hitl_review_time_seconds_sum{pipeline_name=~\"$pipeline\"}[$__rate_interval]) / rate(modulo_hitl_review_time_seconds_count{pipeline_name=~\"$pipeline\"}[$__rate_interval]))",
+          "legendFormat": "Avg Review Time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "options": {
+        "legend": { "showLegend": true, "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Approval Rate",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) / sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) * 100",
+          "legendFormat": "Approval Rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 50 },
+              { "color": "green", "value": 80 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["mean"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "id": 4,
+      "title": "Pending Gates",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(modulo_hitl_gates_active{pipeline_name=~\"$pipeline\"})",
+          "legendFormat": "Pending"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 5,
+      "title": "HITL by Pipeline",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "approved",
+          "format": "table"
+        },
+        {
+          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"rejected\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "rejected",
+          "format": "table"
+        },
+        {
+          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "total",
+          "format": "table"
+        },
+        {
+          "expr": "avg(modulo_hitl_review_time_seconds{pipeline_name=~\"$pipeline\"}) by (pipeline_name)",
+          "legendFormat": "avg_review_time_s",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "align": "left", "displayMode": "auto", "minWidth": 80 }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg_review_time_s" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "transformations": [],
+      "options": {
+        "sortBy": [{ "displayName": "total", "desc": true }],
+        "footer": { "show": false },
+        "showHeader": true
+      }
+    },
+    {
+      "id": 6,
+      "title": "Claim Token Expiry (Daily)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(increase(modulo_hitl_claim_tokens_total{pipeline_name=~\"$pipeline\", status=\"claimed\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "claimed - {{pipeline_name}}"
+        },
+        {
+          "expr": "sum(increase(modulo_hitl_claim_tokens_total{pipeline_name=~\"$pipeline\", status=\"expired\"}[$__interval])) by (pipeline_name)",
+          "legendFormat": "expired - {{pipeline_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tokens",
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" },
+            "axisGridShow": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "/expired/" },
+            "properties": [
+              { "id": "color", "value": { "fixed": "red" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "/claimed/" },
+            "properties": [
+              { "id": "color", "value": { "fixed": "green" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    }
+  ]
+}

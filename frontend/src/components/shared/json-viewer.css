@@ -1,0 +1,141 @@
+/* json-viewer overrides — pinned by JsonViewer.override.spec.ts and tests/e2e/json-viewer.spec.ts */
+
+.json-viewer .vjs-tree {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  color: hsl(var(--foreground));
+}
+
+.json-viewer .vjs-key {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-value-string {
+  color: hsl(var(--success));
+}
+
+.json-viewer .vjs-value-number,
+.json-viewer .vjs-value-boolean {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-value-null,
+.json-viewer .vjs-value-undefined {
+  color: hsl(var(--warning));
+}
+
+.json-viewer .vjs-comment {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-tree-brackets {
+  color: hsl(var(--foreground));
+}
+
+.json-viewer .vjs-tree-brackets:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-carets {
+  color: inherit;
+}
+
+.json-viewer .vjs-carets:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-tree-node:hover,
+.json-viewer .vjs-tree-node.is-highlight,
+.json-viewer .vjs-tree-node.dark:hover,
+.json-viewer .vjs-tree-node.dark.is-highlight {
+  background-color: hsla(var(--primary) / 0.08);
+}
+
+.json-viewer .vjs-tree-node-actions,
+.json-viewer .vjs-tree-node.dark .vjs-tree-node-actions {
+  background-color: hsla(var(--primary) / 0.08);
+}
+
+.json-viewer .vjs-tree-node-actions .vjs-tree-node-actions-item {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-tree-node-actions .vjs-tree-node-actions-item:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-indent-unit.has-line {
+  border-left-color: hsla(var(--border) / 0.6);
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 4px;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+.json-viewer .vjs-tree {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+/* Long-string truncation (FAR-123): truncated preview + expand/collapse toggle. */
+
+.json-viewer .json-viewer-string-truncated {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.json-viewer .json-viewer-string-truncated-text {
+  overflow-wrap: anywhere;
+}
+
+.json-viewer .json-viewer-string-count {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.json-viewer .json-viewer-string-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  background: hsl(var(--background));
+  padding: 0.125rem 0.5rem;
+  font-size: 11px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.json-viewer .json-viewer-string-toggle:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+}
+
+.json-viewer .json-viewer-string-expanded {
+  display: block;
+}
+
+.json-viewer .json-viewer-string-expanded-text {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -1,0 +1,17 @@
+{
+  "name": "pr-review-input",
+  "description": "Input payload for a pull-request review pipeline",
+  "definition": {
+    "title": "PR Review Input",
+    "description": "Identifiers for the pull request a reviewer pipeline should review",
+    "type": "object",
+    "properties": {
+      "number": {"type": "integer", "description": "Pull request number"},
+      "repository": {"type": "string", "description": "Repository in 'owner/name' format"},
+      "head-ref": {"type": "string", "description": "Name of the head (source) branch"},
+      "head-sha": {"type": "string", "description": "SHA of the head commit"},
+      "action": {"type": "string", "description": "Triggering event action (e.g. opened, synchronize)"}
+    },
+    "required": ["number", "repository", "head-ref", "head-sha"]
+  }
+}

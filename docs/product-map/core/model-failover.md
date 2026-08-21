@@ -1,0 +1,220 @@
+---
+id: feat-core-model-failover
+prd: 8.1
+delivery-tasks: [task-nv9-model-failover]
+bdd:
+  - backend/tests/bdd/features/model_backends/backend_selection.feature
+  - backend/tests/bdd/features/model_backends/backend_health_check.feature
+  - backend/tests/bdd/features/model_backends/backend_crud.feature
+  - backend/tests/bdd/features/model_backends/backend_error_handling.feature
+  - backend/tests/bdd/features/model_backends/rate_limiting.feature
+code:
+  - backend/src/modulo/core/model_backend_hub/__init__.py
+  - backend/src/modulo/api/routes/model_backends.py
+  - backend/src/modulo/db/models/model_backend.py
+  - backend/src/modulo/db/crud/model_backend.py
+  - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
+unit-tests:
+  - backend/tests/unit/core/model_backend_hub/test_failover.py
+  - backend/tests/unit/api/test_model_backends_endpoint.py
+  - backend/tests/unit/db/crud/test_model_backend_referencing.py
+  - backend/tests/integration/crud/test_model_backend.py
+depends-on: [feat-core-run-context]
+status: partial
+---
+
+# Model Backend Failover
+
+Automatic failover when a model backend is unhealthy. The `ModelBackendHub`
+selects a configured fallback (or scans all registered backends) and emits an
+audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
+
+## Behaviours
+
+### Registration & Lifecycle
+
+- [x] Hub registers a backend by UUID and returns it via `get()`
+- [x] `get()` raises `BackendNotFoundError` for unregistered ID
+- [x] `__aexit__` clears all backends and health state
+- [x] `backend_ids` property returns frozen set of registered IDs
+- [x] Hub is not thread-safe; each run gets its own instance
+
+### Initialise
+
+- [x] Decrypts Fernet-encrypted API key from secrets backend and builds backend object
+- [x] Reads `fallback_backend_ids` from ORM row and populates `_fallbacks`
+- [x] Handles ORM rows missing `fallback_backend_ids` attribute (pre-migration) without crashing
+- [x] Raises `BackendDecryptError` on decryption failure
+- [x] Raises `ValueError` for unknown provider (not in built-in list or plugin registry)
+- [x] Raises `ValueError` when credentials lack `api_key`
+- [x] Fallback ID reference validation at create/update time — `_validate_fallback_ids()` rejects unknown/foreign org backend IDs with 422 before any DB write; the hub itself skips unregistered fallbacks gracefully at runtime (documented below)
+
+### Health Check
+
+- [x] Pings backend with minimal inference call, updates health state
+- [x] Returns `HealthResult(ok=True)` on success
+- [x] Returns `HealthResult(ok=False)` on timeout (sets unhealthy)
+- [x] Returns `HealthResult(ok=False)` on exception (sets unhealthy, detail truncated to 500 chars)
+- [x] Returns `HealthResult(ok=False, detail="Backend not registered")` for unknown ID
+- [x] `mark_unhealthy()` explicitly sets health flag to False
+- [x] Health check recovers a previously marked-unhealthy backend
+
+### Failover — `get()`
+
+- [x] Returns healthy primary directly
+- [x] Raises `BackendUnavailableError` when primary is unhealthy and no fallbacks configured
+- [x] Fails over to first healthy fallback when primary is unhealthy
+- [x] Tries fallbacks in configured order
+- [x] Raises `BackendUnavailableError` when all fallbacks are unhealthy
+- [x] Skips unregistered fallback IDs gracefully
+- [x] Calls audit logger with `event_type: "model_failover"`, `primary_id`, `fallback_id` on failover
+- [x] Does not call audit logger when primary is healthy
+
+### Failover — `get_with_rotation()`
+
+- [x] Returns primary unrotated when healthy
+- [x] Rotates to configured fallback when primary unhealthy
+- [x] Scans all registered backends when no fallback list configured
+- [x] Raises `BackendUnavailableError` for unregistered ID (same exception as unhealthy, not `BackendNotFoundError`)
+- [x] Does not emit audit events (no audit_logger parameter)
+
+### API — CRUD
+
+- [x] Create endpoint accepts `fallback_backend_ids` as list of UUIDs
+- [x] Update endpoint accepts `fallback_backend_ids`
+- [x] Response includes `fallback_backend_ids` field
+- [x] Response excludes credentials ciphertext — only `has_credentials` boolean
+- [x] Credentials encrypted with Fernet before storage
+- [x] 404 on get/update/delete of unknown backend
+- [x] 401/403 on unauthenticated list
+- [x] Create/update reject fallback IDs that reference no existing org backend (422, `fallback_backend_ids` loc)
+- [x] Create/update allow fallback IDs that reference existing org backends (passed through to storage)
+- [x] Update with explicit `fallback_backend_ids: null` clears the chain (no reference validation)
+- [x] Delete of a backend referenced as a fallback by another org backend returns 409 naming the referencer(s)
+- [x] Delete of a backend referenced by no other backend succeeds (204)
+- [x] Create fires `model_backend.created` audit event (name, provider, model_id, tier, fallback ids, has_credentials)
+- [x] Non-credential update fires `model_backend.updated` audit event (backend_id + changed non-credential fields)
+- [x] Credential rotation fires PRD §8.12 `model_backend_credentials_updated` audit event (backend_id, provider, model_id)
+- [x] Delete fires `model_backend.deleted` audit event (entity details captured pre-delete)
+- [x] Audit appends are failure-isolated — a broken append never fails a completed create/update/delete (api_keys gold pattern: `CancelledError: raise` + broad `except Exception` → logged warning)
+- [x] A 404 on update/delete emits no audit event
+- [x] Raw API key never appears in any audit payload
+
+### Error Handling
+
+- [x] List returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] Create returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] Get returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] Update returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] Delete returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] All 5 routes catch SQLAlchemyError → 503 Service Unavailable (non-migration DB errors)
+- [x] All 5 routes catch generic Exception → 500 Internal Server Error (Python-level errors)
+- [x] `_validate_provider` logs plugin registry failures instead of silently swallowing them
+
+### Database
+
+- [x] Migration adds `fallback_backend_ids` JSON column to `model_backends`
+- [x] Column is nullable (backends without fallbacks)
+- [x] Downgrade drops the column
+- [x] Empty fallback_backend_ids list round-trips as `[]` not `None` in API response
+- [x] App-level enforcement: fallback IDs must reference an existing org backend (JSON column has no FK) — 422 on create/update
+- [x] Deletion protection: deleting a backend referenced as a fallback elsewhere returns 409 (org-scoped JSON scan via `list_backends_referencing_fallback`)
+
+### BDD
+
+BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature files (`backend_selection`, `backend_health_check`, `backend_crud`, `backend_error_handling`, `rate_limiting`) are wired with real given/when/then steps. However, steps simulate backend resolution at the mock level, not via actual API calls.
+
+#### backend_selection.feature
+- [x] Scenario: Node uses configured backend override (real step defs)
+- [x] Scenario: Default backend used when no override exists
+- [x] Scenario: Fallback chain activates on primary failure
+- [x] Scenario: Unknown backend returns error
+
+#### backend_health_check.feature
+- [x] Scenario: Save-time validation blocks on unhealthy backend
+- [x] Scenario: Run-time validation blocks on unhealthy backend
+- [x] Scenario: Healthy backend passes validation
+- [x] Scenario: Never-checked backend passes validation
+
+#### backend_crud.feature
+- [x] Scenario: Create a model backend with valid data
+- [x] Scenario: List model backends returns backends in the org
+- [x] Scenario: Get a specific model backend by ID
+- [x] Scenario: Update a model backend name and model ID
+- [x] Scenario: Update a model backend API key
+- [x] Scenario: Delete a model backend
+- [x] Scenario: Get non-existent backend returns 404
+- [x] Scenario: Delete non-existent backend returns 404
+- [x] Scenario: Create backend with duplicate name returns error → 409 via `with_for_update()` name check in create route (test_create_model_backend_duplicate_name_returns_409; BDD step exists)
+- [x] Scenario: Create backend with invalid provider returns error → 422 via `_validate_provider()` (test_create_model_backend_invalid_provider_returns_422; BDD step exists)
+- [x] Scenario: Create backend with missing required fields returns error
+- [x] Scenario: Create backend with an unknown fallback ID returns error → 422 via `_validate_fallback_ids()` (unknown id cannot reference a nonexistent org backend; unit + BDD coverage)
+- [x] Scenario: Delete a backend referenced as a fallback is rejected → 409 via `list_backends_referencing_fallback` (unit + BDD coverage)
+
+#### backend_error_handling.feature
+- [x] Scenario: Invalid API key on invoke returns auth error
+- [x] Scenario: Network error on invoke returns service error
+- [x] Scenario: Rate-limited response from provider is handled
+- [x] Scenario: Timeout during invoke returns timeout error
+- [x] Scenario: Unknown provider returns configuration error
+- [x] Scenario: Empty response from provider is handled
+
+#### Missing BDD (unit test coverage exists)
+- [x] Scenario: healthy primary returns immediately (covered by test_get_returns_healthy_primary)
+- [x] Scenario: unhealthy primary with healthy fallback (covered by test_get_fails_over_to_healthy_fallback)
+- [x] Scenario: all backends unhealthy returns error (covered by test_get_raises_when_all_fallbacks_unhealthy)
+- [x] Scenario: fallback list order is respected (covered by test_get_tries_fallbacks_in_order)
+- [x] Scenario: audit event emitted on failover (covered by test_get_calls_audit_logger_on_failover)
+- [x] Scenario: removing fallback from update removes it from rotation (covered by `test_update_model_backend_empty_list_removes_fallback`)
+
+### Edge Cases
+
+- [x] Primary unhealthy, fallback list empty — raises `BackendUnavailableError` (test_get_raises_when_unhealthy_no_fallback)
+- [x] Primary unhealthy, fallback list contains unregistered IDs — skipped (test_get_skips_unregistered_fallback)
+- [x] Primary unhealthy, fallback contains self-referencing ID — skipped, does not crash (test_initialise_self_referencing_fallback_does_not_crash)
+- [x] All registered backends unhealthy — falls through both steps, raises (test_get_raises_when_all_fallbacks_unhealthy)
+- [x] `get_with_rotation` with empty hub raises `BackendUnavailableError` (test_get_with_rotation_empty_hub_raises)
+- [x] Plugin provider build failure during initialise — propagates to caller (test_initialise_plugin_build_failure_propagates)
+
+### Security
+
+- [x] Credentials never exposed in API responses
+- [x] Fernet encryption at rest
+- [x] Audit trail on failover events
+- [x] Audit trail on CRUD operations (`model_backend.created` / `model_backend.updated` / `model_backend.deleted` / PRD `model_backend_credentials_updated`)
+
+## Known Gaps
+- ~~No ProgrammingError/501 catch on any of the 5 API routes (violates established pattern)~~ **RESOLVED** — all 5 routes have ProgrammingError→501 catch with unit tests
+- ~~No duplicate name check~~ **RESOLVED** — create route has duplicate name check returning 409 with unit test
+- ~~No provider validation at API level~~ **RESOLVED** — create route has `_validate_provider()` returning 422 with unit tests
+- No unique constraint on `(organisation_id, name)` in DB schema — duplicates silently allowed
+- ~~Fallback ID validation at create time not implemented — API accepts any UUID without verifying it references an existing backend~~ **RESOLVED (2026-08-15)**: `_validate_fallback_ids()` in `api/routes/model_backends.py` rejects fallback IDs that reference no existing org backend on both create and update with 422 (`Unknown model backend id(s) referenced as fallbacks: <ids>`), before any DB write; explicit `null` clears the chain without validation. Covered by 6 endpoint unit tests + 2 BDD scenarios.
+- ~~No deletion protection for backends referenced as fallbacks by other backends~~ **RESOLVED (2026-08-15)**: `list_backends_referencing_fallback()` in `db/crud/model_backend.py` (org-scoped scan of the JSON column, string-normalised comparison) + the delete route now return 409 naming the referencers. Covered by 5 CRUD unit tests (in-memory SQLite) + 1 BDD scenario + 2 endpoint unit tests.
+- No audit events on CRUD operations (create/update/delete) ~~**RESOLVED (2026-08-16)**: `model_backend.created` / `model_backend.updated` / `model_backend.deleted` plus the PRD §8.12 `model_backend_credentials_updated` are dispatched from the CRUD routes in fresh post-commit transactions (RLS re-established, failure-isolated — a broken append never fails the completed op; a 404 emits nothing; raw credentials never logged). Covered by 9 endpoint unit tests.~~
+- 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
+- `get_with_rotation()` has `audit_logger` parameter but scan-all-fallbacks path does not emit audit events (only configured-fallback path does)
+- No concurrent-access guards on `_healthy` dict (documented not thread-safe)
+- The hub does not validate fallback IDs at `initialise()` time — an unregistered fallback ID is skipped gracefully at failover (warn + continue); validation happens at the API create/update boundary (`_validate_fallback_ids` → 422)
+- 5 BDD scenarios only covered by unit tests, not wired as BDD step definitions (healthy primary, unhealthy+fallback, all unhealthy, fallback order, audit event)
+- ~~1 BDD scenario has zero coverage: "removing fallback from update removes it from rotation"~~ **RESOLVED (2026-08-15)**: `test_update_model_backend_empty_list_removes_fallback` covers the empty-list clearing path in `test_model_backends_endpoint.py`
+- ~~3 edge cases lack unit tests: self-referencing fallback ID, empty hub rotation, plugin build failure~~ **RESOLVED** — all 3 now tested
+
+## QA History
+- 2026-08-15: product-map coverage sweep (partial-small-a) — **RESOLVED the last zero-coverage BDD scenario** ("removing fallback from update removes it from rotation"): added `test_update_model_backend_empty_list_removes_fallback` to `test_model_backends_endpoint.py`, proving the PATCH route stringifies and writes an empty `fallback_backend_ids` list (removing the backend from rotation), alongside the existing `null`-clears test. Verified the fallback-ID-at-initialise claim: the hub does NOT validate at `initialise()` — unregistered IDs are skipped gracefully at failover (`_find_healthy_fallback` warn + skip); enforcement lives at the API boundary (`_validate_fallback_ids` → 422 on create/update). Converted the 2 remaining gap checkboxes (initialise-time validation, concurrent `_healthy` access) to Known Gap bullets. Marked 1 `[ ]`→`[x]` (removing fallback from update). Status: partial (107/109 — remaining unchecked items are documented gaps).
+- 2026-08-16: improve-architecture (index 193) — **RESOLVED the "No audit events on CRUD operations" known gap** (`api/routes/model_backends.py`). Backend registration, edits, credential rotation, and deletion were invisible in the audit trail. (1) **`model_backend.created`** — the create route appends it in a fresh post-commit transaction (RLS re-established via `set_rls_org` + `set_rls_user_context`), payload `name`/`provider`/`model_id`/`tier`/`fallback_backend_ids`/`has_credentials`, backend id as `resource_id`. (2) **`model_backend.updated`** — a non-credential PATCH appends it with `backend_id` + the changed non-credential fields (`_audit_safe_backend_fields` stringifies UUIDs and strips `credentials_ciphertext`). (3) **PRD §8.12 `model_backend_credentials_updated`** — a PATCH supplying an `api_key` appends it under its exact PRD name (backend_id/name/provider/model_id; the raw key never appears in any payload). (4) **`model_backend.deleted`** — the delete route captures the entity details pre-delete (a post-delete read would return nothing) and appends it after commit; a 404 emits nothing. All 4 dispatch sites are failure-isolated (api_keys/teams gold pattern: `asyncio.CancelledError: raise` + broad `except Exception` → logged `model_backends.audit_append_failed`, never fails the completed op). **Tests** — 9 new endpoint unit tests in `test_model_backends_endpoint.py` (create emits + create audit-failure isolation; update emits with changed-fields payload, credentials-rotation emits PRD event + no-key-leak assertion, update audit-failure isolation, 404-update no-emit; delete emits with pre-delete payload, delete audit-failure isolation, 404-delete no-emit). Updated product map `core/model-failover.md` (8 API-CRUD + 1 Security behaviour `[ ]`→`[x]`, Known Gap → RESOLVED, QA History) + `core/audit-trail.md` (PRD `model_backend_credentials_updated` row `[ ]`→`[x]`, 3 new implemented-event entries, PRD divergence count 8 → 7). Verification: 9/9 new + full `test_model_backends_endpoint.py` suite passes, ruff check + format clean, mypy --strict clean.
+- 2026-08-15: improve-architecture (index 183) — **RESOLVED 2 known gaps**: (1) fallback-backend reference validation — `_validate_fallback_ids()` (routes) rejects unknown org backend IDs on create+update with 422 before any DB write (dedupes ids, reports only missing ones); (2) delete protection — `list_backends_referencing_fallback()` (CRUD, org-scoped JSON scan) + 409 on delete naming the referencers. Added 6 endpoint unit tests + 5 CRUD unit tests (`test_model_backend_referencing.py`, in-memory SQLite) + 2 BDD scenarios in `backend_crud.feature` (unknown-fallback create → 422, referenced-fallback delete → 409) with 3 new step definitions. Updated product map (5 API/Database behaviours `[ ]`→`[x]`, both Known Gaps → RESOLVED, BDD section, QA History). 99 focused unit + BDD tests pass (49 endpoint + 5 CRUD + 27 BDD + 18 hub failover), ruff check + format clean, mypy --strict clean.
+- 2026-08-06: improve-architecture (product-map walk) — Marked 2 stale BDD-scenario checkboxes `[x]`: duplicate-name create → 409 and invalid-provider create → 422 are implemented in the create route (`with_for_update()` name check + `_validate_provider()`) with both unit tests (`test_create_model_backend_duplicate_name_returns_409`, `test_create_model_backend_invalid_provider_returns_422`) and real Gherkin scenarios + step definitions in `backend_crud.feature`. No code change required — product map was out of date with the code.
+- 2026-07-08: Cross-cutting QA (index 267) — Fixed CRITICAL — added `except Exception → 500` catches with `except HTTPException: raise` guard to all 5 CRUD routes in model_backends.py (previously missing generic exception guard — Python-level errors like TypeError, KeyError, ValueError from `_to_response` processing propagated as raw 500 to CatchAllMiddleware). Fixed MAJOR — `_validate_provider` bare `except Exception: pass` replaced with `logger.warning` so plugin registry failures are visible in logs (previously silently swallowed). Fixed MAJOR — `_to_response` changed `if raw_fallback_ids:` to `if raw_fallback_ids is not None:` so empty `[]` list round-trips correctly (previously returned `None` for empty lists). Added 6 new unit tests in `test_model_backends_endpoint.py` (5× Exception→500 for all routes + 1× empty fallback_ids round-trip). Updated product map Error Handling section (3 new [x] checkboxes) and Database section (1 new [x] checkbox). All 33 model backend endpoint tests + 13 hub failover tests pass. Merged to main at v0.3.218. Status: partial.
+- 2026-07-05: Cross-cutting QA (index 146) — Fixed 5 stale ProgrammingError→501 checkboxes [ ]→[x]; removed stale Known Gap #1; added 3 missing BDD feature files to frontmatter; documented BDD scenarios from all 5 feature files with coverage status; added duplicate name check (409) and provider validation (422) to create route; added 4 unit tests for duplicate name + provider validation; marked stale Edge Case boxes [x] where unit tests exist; added QA History section.
+- Unhandled ValueError from `_build_backend()` in create route — invalid provider causes 500, not 422
+- No duplicate name check — backend_crud.feature expects 409 but code allows duplicates
+- No fallback ID validation — API accepts any UUID, doesn't verify they reference existing backends
+- No deletion protection for backends referenced as fallbacks
+- No audit events on CRUD operations (create/update/delete)
+- 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
+- `get_with_rotation()` has `audit_logger` parameter but scan-all-fallbacks path does not emit audit events (only configured-fallback path does)
+- `_make_backend()` test helper sets `created_by` instead of `account_id` — causes mock attribute mismatch
+- No concurrent-access guards on `_healthy` dict (documented not thread-safe)
+- ~~3 edge cases lack unit tests~~ **RESOLVED** (index 174)
+- 2026-07-12: Cross-cutting QA (Round 2) — Fixed 5× B904 in `model_backends.py`: `IntegrityError` handlers now use `raise ... from None` instead of bare `raise` (list, create, get, update, delete endpoints). Fixed stale frontmatter: migration file path corrected from `0035_model_fallback.py` (does not exist) to `0003_v2_pipeline_runtime.py` (actual file). Fixed stale Known Gap #9: `get_with_rotation()` description updated to reflect it now has `audit_logger` parameter; the actual gap (scan-all-fallbacks path emitting no audit events) is preserved. Verified no CancelledError issues (all `except Exception:` blocks correctly don't catch `BaseException` in Python 3.12). Verified no dead code (all imports and variables used). Status: partial.
+- 2026-07-04: Cross-cutting QA (index 174) — Changed get_with_rotation() to raise BackendUnavailableError for unregistered IDs (matching product map spec); added SQLAlchemyError→503 catch to all 5 CRUD routes (matching established pattern); fixed integration test `created_by`→`account_id` param name (broken since column rename); added unit tests: empty hub rotation, self-referencing fallback, plugin build failure, get_with_rotation unregistered ID, 5 SQLAlchemyError→503 endpoint tests; updated product map checkboxes (5 [ ]→[x]); resolved 3 Known Gaps (unchecked edge cases).

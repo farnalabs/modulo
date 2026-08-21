@@ -1,0 +1,83 @@
+Feature: Lifecycle Map Versioning
+  As a user
+  I want versions to increment on content changes
+  So that I can track how the map evolves
+
+  Background:
+    Given I am authenticated as an admin in org "acme"
+
+  Scenario: Creating a new map starts at version 1
+    Given a lifecycle map named "Release Workflow" exists
+    When I get the lifecycle map by id
+    Then the response status is 200
+    And the lifecycle map has version 1
+
+  Scenario: Explicit content save creates new version
+    Given a lifecycle map named "Release Workflow" exists
+    When I update the lifecycle map content to include 1 stage
+    Then the response status is 200
+    And the lifecycle map has version 2
+
+  Scenario: Multiple content updates increment version
+    Given a lifecycle map named "Release Workflow" exists
+    When I update the lifecycle map content to include 1 stage
+    When I update the lifecycle map content to include 2 stages
+    Then the response status is 200
+    And the lifecycle map has version 3
+
+  Scenario: Metadata-only updates do not increment version
+    Given a lifecycle map named "Release Workflow" exists with version 5
+    When I update the lifecycle map description to "Updated description only"
+    Then the response status is 200
+    And the lifecycle map has version 5
+
+  Scenario: Sequential saves produce strictly increasing unique versions
+    Given a lifecycle map named "Release Workflow" exists with version 1
+    When I save a version of the lifecycle map with 1 stage
+    And I save a version of the lifecycle map with 2 stages
+    Then the response status is 201
+    And the lifecycle map has version 3
+
+  Scenario: Reading the version list returns the active version snapshot
+    Given a lifecycle map named "Release Workflow" exists with version 2
+    When I get the lifecycle map versions
+    Then the response status is 200
+    And the version list contains exactly 1 version at version 2
+
+  Scenario: Circular stage transitions are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with a circular transition
+    Then the response status is 422
+
+  Scenario: Dangling edge transitions are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with a dangling edge
+    Then the response status is 422
+
+  Scenario: Duplicate stage ids are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with duplicate stage ids
+    Then the response status is 422
+
+  Scenario: Version saves are recorded with a dedicated audit event
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map
+    Then the response status is 201
+    And a "lifecycle_map.version_saved" audit event was recorded for the map
+
+  Scenario: A saved version reports the saving account as created_by
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map as the current user
+    Then the response status is 201
+    And the saved version reports the current user as created_by
+
+  Scenario: A legacy map with dangling edges is unblocked by the legacy-content backfill
+    Given a lifecycle map with dangling legacy content exists
+    When the legacy content backfill cleans the map
+    Then the repaired map content is accepted by editor validation
+
+  Scenario: A workflow self-report with a stage_id advances the journey to that stage
+    Given a lifecycle map with an external stage "merge" exists
+    When I self-report "github_pr" "#123" with stage_id "merge"
+    Then the response status is 200
+    And the journey is at stage "merge"

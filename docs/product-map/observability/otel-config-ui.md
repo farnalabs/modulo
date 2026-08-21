@@ -1,0 +1,171 @@
+---
+id: feat-observability-otel-config-ui
+prd: 6.6
+delivery-tasks: [task-nv9-otel-config-ui]
+bdd:
+  - backend/tests/bdd/features/observability/otel_traces.feature
+code:
+  - backend/src/modulo/api/routes/observability.py
+  - backend/src/modulo/db/crud/observability.py
+  - backend/src/modulo/db/models/organisation.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
+  - backend/src/modulo/settings.py
+  - frontend/src/views/SettingsObservabilityView.vue
+  - frontend/src/lib/api/schema.ts
+depends-on: []
+unit-tests:
+  - backend/tests/unit/api/test_observability_routes.py
+  - backend/tests/bdd/steps/test_observability.py
+status: partial
+---
+
+# OTel Config UI
+
+Per-org OpenTelemetry exporter configuration: OTLP endpoint, dynamic headers, export
+interval, and LangSmith toggle + API key. Stored in `organisations.otel_config_json`.
+Settings page at `/settings/observability`.
+
+## Behaviours
+
+### Database — `organisations.otel_config_json`
+
+- [x] JSON column stores otlp_endpoint, otlp_headers, export_interval_seconds, langsmith_enabled, langsmith_api_key_ciphertext
+- [x] Column is NOT NULL with server_default `'{}'::json`
+- [x] Migration 0008 adds column to organisations table
+- [x] CRUD: get_otel_config() reads config for current org (RLS-scoped)
+- [x] CRUD: update_otel_config() writes config for current org
+- [x] Empty dict treated as default configuration (no OTLP, langsmith disabled, 10s interval)
+
+### REST API — `/api/v1/settings/observability`
+
+- [x] `GET` returns merged config (DB values + env var overrides) as OtelSettingsResponse
+- [x] `PUT` accepts OtelSettingsUpdate, encrypts LangSmith key with Fernet, persists, returns merged config
+- [x] `POST /test` sends a real OTLP span to the configured endpoint, returns success/failure with message
+- [x] `GET /preview` generates a sample span config without exporting
+- [x] All endpoints require authentication + RLS org scoping
+- [x] LangSmith API key never returned in plaintext — has_langsmith_api_key boolean on read
+- [x] Empty string LangSmith key on write clears stored key (sets null)
+- [x] Sensitive OTLP header keys masked on read (authorization, x-api-key, api-key, x-otlp-token → ••••••)
+- [x] Test endpoint distinguishes TimeoutException vs ConnectError vs generic errors with user-friendly messages
+- [x] Test endpoint returns 200 with `success: false` if no endpoint configured (not a 400 error — returns user-friendly error in message field)
+- [x] PUT returns 422 on invalid OTLP endpoint URL format
+- [x] Env var override: OTEL_EXPORTER_OTLP_ENDPOINT env var shadows DB config — effective_otlp_endpoint returned in response
+
+### UI — `/settings/observability`
+
+- [x] OTLP endpoint URL text input
+- [x] Dynamic OTLP headers: add/remove key-value rows
+- [x] Sensitive header values masked with •••••• in the UI
+- [x] Export interval number input (minimum 1 second)
+- [x] LangSmith toggle switch
+- [x] LangSmith API key password field with show/hide toggle
+- [x] "Key already stored" indicator when LangSmith key exists
+- [x] Test Connection button — POSTs test span, shows success/failure with auto-clear after 10s
+- [x] Save button with loading state and success/error feedback
+- [x] Reset button reverts to previously saved config
+- [x] Env override warning banner when OTEL_EXPORTER_OTLP_ENDPOINT is set
+- [x] Route registered at `/settings/observability`
+- [x] TypeScript types (OtelSettingsResponse, OtelSettingsUpdate, TestOtelConfig, TestSpanResult) in schema.ts
+
+### Startup — OTel Provider Configuration
+
+- [x] App startup calls setup_otel(service_name, telemetry_enabled) with module-level settings
+- [x] Telemetry disabled by default (opt-in via MODULO_TELEMETRY_ENABLED=true) — no-op TracerProvider
+- [x] Stdout exporter (ConsoleSpanExporter) active when telemetry enabled
+- [x] OTLP HTTP exporter conditionally added when OTEL_EXPORTER_OTLP_ENDPOINT env var set
+- [x] OTLP exporter failure caught gracefully (log warning, continue without OTLP)
+- [x] setup_otel is idempotent — replaces global TracerProvider on repeated calls
+- [x] Shutdown flushes all buffered spans
+- [x] Fernet encryption key for LangSmith secrets derived from MODULO_FERNET_KEY
+- [x] MODULO_OTEL_SERVICE_NAME configurable (default "modulo")
+- [x] Docker OTel Collector config provided (configs/otel-collector.yml) — OTLP gRPC :4317
+
+### BDD coverage
+
+- [x] 4 scenarios in otel_traces.feature: chain span capture, tool child spans, no credentials in attributes, disabled produces no spans
+- [ ] Step definitions exist but are mock-based — no DB-level or integration-level coverage
+
+### Test Coverage
+
+- [x] 6 cache unit tests (hit, miss, copy, invalidate, isolation, unknown org)
+- [x] 4 degraded-response unit tests (no cache, stale cache, field completeness, missing keys)
+- [x] 5 config-to-response unit tests (no env, env override, langsmith key true/false, sensitive masking)
+- [x] 4 GET resilience tests (timeout degraded, error degraded, timeout stale cache, error stale cache)
+- [x] 3 Preview resilience tests (timeout defaults, timeout stale cache, error defaults)
+- [x] 7 PUT resilience tests (timeout→500, error→500, success, langsmith key/clear, ProgrammingError→501, SQLAlchemyError→503)
+- [x] 6 POST /test endpoint tests (empty endpoint, timeout, connect error, server error, success, <s>formatApiError</s>)
+
+### Not yet implemented — gaps
+
+- [ ] ExportPreview wired into frontend UI — GET /preview API exists but no frontend button or display
+- [ ] Configurable trace sampling / rate-limiting (no head-based or tail-based sampling config)
+- [ ] BatchSpanProcessor (currently uses SimpleSpanProcessor — synchronous, one-at-a-time export)
+- [ ] Effective endpoint read-only display in normal mode (only shown in env-override banner)
+- [ ] Per-org telemetry toggle in UI (currently controlled by global env var only — per-org is DB-stored but needs UI control)
+
+### Error Handling
+
+- [x] `GET` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `PUT` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `GET /preview` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `POST /test` no DB access — no ProgrammingError risk
+- [x] All ProgrammingError catches use `except ProgrammingError` (not broad `except SQLAlchemyError`)
+- [x] `PUT` endpoint catches `SQLAlchemyError` → returns 503 Service Unavailable (connection/deadlock failures)
+- [x] `GET` endpoint catches `TimeoutError` → falls back to degraded response with cached/default config
+- [x] `PUT` endpoint catches `TimeoutError` → re-raises as 500
+- [x] `GET /preview` endpoint catches `TimeoutError` → falls back to cached/default config
+- [x] `GET` endpoint catches generic `Exception` → falls back to degraded response
+- [x] `PUT` endpoint catches generic `Exception` → re-raises as 500
+- [x] Wait-for-DB timeout enforced via `asyncio.wait_for` with `_DB_TIMEOUT` (10s)
+- [x] Timeout/error events logged with org_id context via `_log.warning` / `_log.exception`
+
+### Resilience
+
+- [x] In-memory cache (`_config_cache`) stores last successful DB read per org_id
+- [x] Cache TTL of 60 seconds (`_CACHE_TTL`) — avoids serving stale data for too long
+- [x] Cache returns defensive copy (`dict(entry)`) — callers cannot corrupt cached state
+- [x] Cache invalidated on successful write (`_invalidate_cache`)
+- [x] Degraded response (`_build_degraded_response`) returns cached config when DB unavailable
+- [x] Degraded response falls through to `_DEFAULT_OTEL_CONFIG` when no cache exists
+- [x] Default config provides safe fallback values for all fields (empty endpoint, 10s interval, disabled LangSmith)
+- [x] Sensitive header values masked with `••••••` in API responses — never leaked in degraded mode
+- [x] LangSmith API key never returned in plaintext — boolean `has_langsmith_api_key` only
+- [x] Empty LangSmith key on write clears stored key (`langsmith_api_key_ciphertext = None`)
+- [x] Fernet encryption for LangSmith API key at rest
+- [x] Test endpoint distinguishes TimeoutException vs ConnectError vs generic errors with user-friendly messages
+- [x] Test endpoint returns 200 with `success: false` if no endpoint configured
+
+## QA History
+
+### 2026-08-15 — coverage drive (product-map walk)
+
+- **Verified all `[x]` behaviours against code + tests**: the otel config JSON column + migration 0008 (`organisations.otel_config_json`), CRUD read/write, merged-config GET/PUT with env override, LangSmith key Fernet encryption + `has_langsmith_api_key` boolean + empty-key-clears, sensitive header masking, `POST /test` (Timeout/Connect/generic distinction, no-endpoint→200 success:false), `GET /preview`, and the startup OTel provider config (no-op default, stdout when enabled, conditional OTLP, graceful failure) all match the entry's claims. Test coverage counts in `test_observability_routes.py` verified (cache, degraded, config-to-response, resilience, preview, test-endpoint suites).
+- **Confirmed genuine gaps** (left unchecked, in "Not yet implemented — gaps"): ExportPreview not wired into the frontend UI (API exists), no trace-sampling/rate-limiting config, SimpleSpanProcessor (no BatchSpanProcessor), effective endpoint not displayed in normal mode, no per-org telemetry toggle in UI (global env var only). BDD step definitions remain mock-based.
+- No source changes required — the settings page at `/settings/observability` already covers OTLP endpoint, dynamic headers, export interval, LangSmith toggle + key, test connection, and reset.
+
+### 2026-07-10 — Cross-cutting QA (improve-architecture index 307)
+
+**Fixed (CRITICAL):** Added `except SQLAlchemyError → 503 Service Unavailable` catch to `PUT /api/v1/settings/observability` endpoint. Connection/deadlock failures (connection pool exhaustion, DB restart) previously fell through to `except Exception → 500` with generic "Internal server error" instead of the established project-wide 503 pattern.
+
+**Fixed (MAJOR):** Replaced `String(err)` and `e instanceof Error ? e.message : String(e)` with `formatApiError(err/e)` in both error paths of `testConnection()` in `SettingsObservabilityView.vue`. API errors from `openapi-fetch` are objects, not strings — bare `String(err)` produced `[object Object]` on API failures.
+
+**Fixed (MAJOR):** Added 3 new unit tests in `test_observability_routes.py`:
+- `test_put_returns_501_on_programming_error` — PUT endpoint returns 501 with migration hint when DB table missing
+- `test_put_returns_503_on_sqlalchemy_error` — PUT endpoint returns 503 when SQLAlchemyError raised
+- `test_get_returns_501_on_programming_error` — GET endpoint returns 501 with migration hint when DB table missing
+- `test_preview_returns_501_on_programming_error` — Preview endpoint returns 501 when DB table missing
+
+**Fixed (MAJOR):** Resolved 2 stale Known Gaps in product map:
+- "Frontend i18n gap: ~20+ hardcoded English strings" — template already uses `$t()` everywhere; gap removed from Known Gaps
+- "API error formatting in saveSettings/loadSettings" — both already use `formatApiError()`; gap was specific to `testConnection()` which is now fixed
+
+**Remaining gaps unchanged:** No website docs, no true BDD integration tests.
+
+## Known Gaps
+
+- **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
+- **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0008_otel_config.py` renamed in v2 squash → `0001_v2_identity_org.py` (creates `organisations.otel_config_json`).

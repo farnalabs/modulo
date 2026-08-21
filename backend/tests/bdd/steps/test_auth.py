@@ -1,0 +1,634 @@
+"""Step definitions for auth features: login, RBAC, API keys, tenant isolation.
+
+Designed to coexist with shared status steps in other step files:
+  - ``@then("the response status is 200")`` is defined in test_connectors.py
+    (checks ``request.node._resp is not None``).
+  - ``@then("the response status is 404")`` is defined in test_library.py
+    (injects ``ctx`` fixture and checks ``ctx["response"]``).
+
+This file provides a ``ctx`` fixture (mutable dict) so that the shared 404 step
+works for our scenarios.  Every When step stores the response in **three**
+locations for maximum compatibility:
+
+  - ``request.node.response``  — used by this file's custom Then steps
+  - ``request.node._resp``    — used by test_connectors.py's status_200 step
+  - ``ctx["response"]``       — used by test_library.py's status_404 step
+"""
+
+import contextlib
+import json
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import jwt as pyjwt
+import pytest
+from pytest_bdd import given, parsers, scenarios, then, when
+
+from tests.bdd.conftest import _active_client, _store_response
+
+# ---------------------------------------------------------------------------
+# Register feature files
+# ---------------------------------------------------------------------------
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/auth/login.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/auth/rbac.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/auth/api_keys.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/auth/tenant_isolation.feature")
+
+# ---------------------------------------------------------------------------
+# Constants matching conftest.py
+# ---------------------------------------------------------------------------
+_VALID_32 = "a" * 32
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+ALT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+
+
+# ---------------------------------------------------------------------------
+# Shared response context — makes ``ctx["response"]`` available so other
+# step files' ``@then("the response status is …")`` steps work here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ctx() -> dict[str, Any]:
+    """Mutable context dict shared across steps in this test.
+
+    Other step files (test_library.py, test_connectors.py) also define
+    ``ctx`` — each is scoped to its own module so there is no conflict.
+    """
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Response storage is provided by ``_store_response`` from conftest.py (the
+# shared implementation), so this file and sibling step modules stay in sync.
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# auth/login.feature  —  4 scenarios
+# ===========================================================================
+
+
+@given(
+    parsers.parse('a user exists with email "{email}" and password "{password}"'),
+)
+def user_exists(email: str, password: str) -> None:
+    """Context step: a valid user is registered.
+
+    No action needed — the mock in the When step controls whether
+    authentication succeeds or fails.
+    """
+    return
+
+
+@when(
+    parsers.parse('I POST /api/auth/login with email "{email}" and password "{password}"'),
+)
+def login(client: Any, email: str, password: str, request: Any, ctx: dict[str, Any]) -> Any:
+    """POST /api/v1/auth/login with the given credentials.
+
+    Mocks ``authenticate_user`` so the test controls success/failure.
+    """
+    with patch("modulo.api.routes.auth.authenticate_db_user") as mock_auth:
+        if email == "alice@example.com" and password == "correct-horse-battery":
+            mock_auth.return_value = True
+        else:
+            mock_auth.return_value = False
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": password},
+        )
+        _store_response(request, ctx, resp)
+        return resp
+
+
+@then("the response contains an access_token")
+def has_access_token(request: Any) -> None:
+    body = request.node.response.json()
+    assert "access_token" in body, f"Response missing access_token: {body}"
+    assert isinstance(body["access_token"], str), f"access_token is not a string: {body['access_token']}"
+    assert body["access_token"], "access_token is empty"
+
+
+@then("the token encodes org_id")
+def token_encodes_org_id(request: Any) -> None:
+    body = request.node.response.json()
+    token = body["access_token"]
+    payload: dict[str, object] = pyjwt.decode(token, _VALID_32, algorithms=["HS256"])
+    assert "org_id" in payload, f"Token payload missing org_id: {payload}"
+    assert payload["org_id"] is not None
+
+
+# -- Expired token scenario ------------------------------------------------
+
+
+@given(
+    parsers.parse('I have an expired JWT for org "{org_name}"'),
+)
+def expired_jwt(org_name: str, request: Any) -> None:
+    """Create a JWT whose ``exp`` is in the past."""
+    now = datetime.now(UTC)
+    payload = {
+        "sub": "testuser",
+        "org_id": str(ORG_ID),
+        "user_id": str(USER_ID),
+        "org_role": "admin",
+        "iat": now - timedelta(hours=48),
+        "exp": now - timedelta(hours=1),  # expired 1 hour ago
+    }
+    request.node._expired_token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
+
+
+@when("I make an authenticated request to /api/pipelines")
+def expired_auth_request(unauth_client: Any, request: Any, ctx: dict[str, Any]) -> None:
+    """GET /api/v1/pipelines with the expired JWT as Bearer."""
+    resp = unauth_client.get(
+        "/api/v1/pipelines",
+        headers={"Authorization": f"Bearer {request.node._expired_token}"},
+    )
+    _store_response(request, ctx, resp)
+
+
+# ===========================================================================
+# auth/rbac.feature  —  5 scenarios
+# ===========================================================================
+# The role-hierarchy steps live in tests/bdd/conftest.py so they are visible
+# to BOTH modules that load rbac.feature (test_auth.py and test_auth_rbac.py).
+
+
+# ===========================================================================
+# auth/rbac.feature — team CRUD, membership, feature gating, deletion
+#
+# The shared team CRUD / membership steps (``a team ... exists``, ``I create a
+# team ...``, ``I list teams``, ``I get team ...``, ``I rename team ...``,
+# ``I add user ... to team ...``, ``I remove user ... from team ...``, and the
+# response Then steps) live in conftest.py — the ancestor of every BDD module
+# — so each step text is defined exactly once instead of being redefined here
+# and in test_team_crud.py / test_team_membership.py / test_team_create.py.
+# Those steps drive the real ``/api/v1/teams`` routes with only the DB CRUD
+# functions patched, so the scenarios assert the actual API contract — status
+# codes, response shapes, and the router's own ``require_permission`` /
+# ``require_feature`` gates — rather than a hand-rolled response.  This file
+# keeps only the rbac.feature steps that are NOT shared with the sibling
+# modules.
+# ===========================================================================
+
+
+@given(parsers.parse('a team "{name}" does not exist'))
+def step_team_does_not_exist(name: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("teams", {}).pop(name, None)
+
+
+@given("the team has no resources")
+def step_team_no_resources(request: Any, ctx: dict[str, Any]) -> None:
+    # ``delete_team_endpoint`` counts owned resources via ``execute(...).scalar()``
+    # before deleting; a zero count lets the deletion through.
+    session = request.getfixturevalue("mock_session")
+    session.execute.return_value.scalar = MagicMock(return_value=0)
+    ctx["team_has_resources"] = False
+
+
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team}"'))
+def step_pipeline_owned_by_team(name: str, team: str, request: Any, ctx: dict[str, Any]) -> None:
+    # Owned resources block deletion — make the route's resource-count query
+    # report at least one owned pipeline.
+    session = request.getfixturevalue("mock_session")
+    session.execute.return_value.scalar = MagicMock(return_value=1)
+    ctx["team_has_resources"] = True
+
+
+@given("I do not have a Team license")
+def step_no_team_license(ctx: dict[str, Any]) -> None:
+    ctx["team_license"] = False
+
+
+@when(parsers.parse('I delete the team "{name}"'))
+def step_delete_team(request: Any, name: str, ctx: dict[str, Any], client: Any = None) -> None:
+    from tests.bdd.conftest import _make_mock_team
+
+    team = ctx.get("teams", {}).get(name, _make_mock_team(name))
+    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
+    _store_response(request, ctx, resp)
+
+
+@when("I GET /api/v1/teams")
+def step_get_teams_gated(request: Any, client: Any, ctx: dict[str, Any]) -> None:
+    """GET /api/v1/teams under a plan without ``team_rbac`` — the router-level
+    ``require_feature("team_rbac")`` gate returns a real 402."""
+
+    class _NoTeamRbacPlan:
+        def feature_enabled(self, name: str) -> bool:
+            return name != "team_rbac"
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "community"
+
+        def has_license_key(self) -> bool:
+            return False
+
+    from modulo.api.dependencies import get_plan_context
+    from modulo.api.main import app
+
+    previous = dict(app.dependency_overrides)
+    app.dependency_overrides[get_plan_context] = lambda: _NoTeamRbacPlan()
+    try:
+        resp = client.get("/api/v1/teams")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+    _store_response(request, ctx, resp)
+
+
+@then("the error indicates the team still has resources")
+def step_error_team_has_resources(request: Any) -> None:
+    body = request.node._resp.json()
+    detail = body.get("detail", "")
+    assert "resources" in detail, f"Expected a still-has-resources error, got {detail!r}"
+
+
+# ===========================================================================
+# auth/api_keys.feature  —  5 scenarios
+# ===========================================================================
+
+
+@given("I have a valid API key")
+def step_valid_api_key() -> None:
+    """Valid API key for scenario context — the mock controls validation."""
+
+
+@given("I have a revoked API key")
+def step_revoked_api_key() -> None:
+    """Revoked API key — the mock will reject it."""
+
+
+@given(parsers.parse('an API key "{name}" exists'))
+def step_api_key_exists(name: str, request: Any, ctx: dict[str, Any]) -> None:
+    """Mock that an API key exists for the org."""
+    key_id = uuid.uuid5(ORG_ID, name)
+    ctx["api_key_name"] = name
+    ctx["api_key_id"] = key_id
+    ctx["api_key_role"] = "operator"
+
+
+def _make_key_response(status_code, **kwargs):
+    """Build a SimpleNamespace that looks like a requests.Response for conftest steps."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        status_code=status_code,
+        ok=200 <= status_code < 300,
+        json=lambda: kwargs,
+        text=json.dumps(kwargs),
+    )
+
+
+@when(
+    parsers.parse('I POST /api/v1/api-keys with name "{name}" and role "{role}"'),
+)
+def step_create_api_key(
+    name: str,
+    role: str,
+    request: Any,
+    ctx: dict[str, Any],
+) -> None:
+    """Create an API key via business logic."""
+    if getattr(request.node, "_viewer_auth", False):
+        request.node._resp = _make_key_response(403, detail="Only admin users can perform this action")
+        return
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import create_api_key as create_key_fn
+
+    mock_session = AsyncMock()
+    mock_session.flush = AsyncMock()
+    mock_session.add = MagicMock()
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        key, full_key = loop.run_until_complete(
+            create_key_fn(
+                mock_session,
+                org_id=ORG_ID,
+                name=name,
+                role=role,
+                account_id=USER_ID,
+            )
+        )
+        ctx["api_key_name"] = name
+        ctx["api_key_role"] = role
+        ctx["api_key_id"] = key.id
+        ctx["api_key_full_key"] = full_key
+        request.node._resp = _make_key_response(201, name=name, full_key=full_key)
+    except Exception:
+        request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
+
+
+@when(
+    parsers.parse("I DELETE /api/v1/api-keys/{key_id}"),
+)
+def step_revoke_api_key(request: Any, ctx: dict[str, Any]) -> None:
+    """Revoke an API key via business logic."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import revoke_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    key_id = ctx.get("api_key_id", uuid.uuid4())
+    mock_session = AsyncMock()
+    mock_session.flush = AsyncMock()
+
+    # Mock OrgApiKey instance for the select result
+    mock_key = MagicMock(spec=OrgApiKey)
+    mock_key.id = key_id
+    mock_key.organisation_id = ORG_ID
+    mock_key.revoked_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_key
+    mock_session.execute.return_value = mock_result
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        revoked = loop.run_until_complete(revoke_api_key(mock_session, key_id, ORG_ID))
+        ctx["api_key_revoked"] = revoked
+        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
+    except Exception as exc:
+        ctx["_error"] = str(exc)
+        request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
+
+
+@when("I GET /api/v1/api-keys")
+def step_list_api_keys(request: Any, ctx: dict[str, Any]) -> None:
+    """List API keys via business logic."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import list_api_keys
+
+    mock_session = AsyncMock()
+
+    # Mock OrgApiKey instances for the select result
+    from datetime import UTC, datetime
+
+    mock_key = MagicMock()
+    mock_key.id = ctx.get("api_key_id", uuid.uuid4())
+    mock_key.name = ctx.get("api_key_name", "my-key")
+    mock_key.role = "operator"
+    mock_key.team_id = None
+    mock_key.lookup_prefix = "abc"
+    mock_key.last_used_at = None
+    mock_key.created_at = datetime.now(UTC)
+    mock_key.expires_at = None
+    mock_key.revoked_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value = [mock_key]
+    mock_session.execute.return_value = mock_result
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        keys = loop.run_until_complete(list_api_keys(mock_session, ORG_ID))
+        ctx["api_key_list"] = keys
+        request.node._resp = _make_key_response(200, items=keys)
+    except Exception as exc:
+        ctx["_error"] = str(exc)
+        request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
+
+
+@then('the response contains a full_key starting with "mk_"')
+def step_response_has_full_key(request: Any) -> None:
+    body = request.node._resp.json()
+    full_key = body.get("full_key")
+    assert full_key is not None, f"No full_key in response: {body}"
+    assert full_key.startswith("mk_"), f"full_key does not start with 'mk_': {full_key}"
+
+
+@then("the response indicates the key is revoked")
+def step_response_key_revoked(request: Any) -> None:
+    body = request.node._resp.json()
+    assert body.get("revoked") is True, f"Key not revoked: {body}"
+
+
+@then(parsers.parse('the response contains key "{name}"'))
+def step_response_contains_key(name: str, request: Any, ctx: dict[str, Any]) -> None:
+    body = request.node._resp.json()
+    items = body.get("items", [])
+    names = [k.get("name") for k in items]
+    assert name in names, f"Expected key {name!r} in response, got: {names}"
+
+
+@when("I make an authenticated request with the wrong API key")
+def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
+    """Validate an invalid API key — expect ApiKeyInvalidError."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import validate_api_key
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    mock_session.execute.return_value = mock_result
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(validate_api_key(mock_session, "mk_badkey_invalid"))
+        resp = _make_key_response(200)
+        request.node._resp = resp
+        request.node.response = resp
+    except Exception:
+        resp = _make_key_response(401)
+        request.node._resp = resp
+        request.node.response = resp
+    finally:
+        loop.close()
+
+
+# ===========================================================================
+# auth/tenant_isolation.feature  —  3 scenarios
+# ===========================================================================
+
+
+def _make_mock_pipeline(name: str, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> SimpleNamespace:
+    """Build a lightweight mock pipeline object."""
+    p = SimpleNamespace()
+    p.id = pipeline_id
+    p.organisation_id = org_id
+    p.name = name
+    p.description = None
+    p.visibility = "org"
+    p.max_concurrent_runs = 5
+    p.lock_wait_timeout_seconds = 300
+    p.node_timeout_seconds = 300
+    p.run_context_defaults = {}
+    p.created_by = USER_ID
+    p.created_at = datetime.now(UTC)
+    p.updated_at = datetime.now(UTC)
+    return p
+
+
+@given(
+    parsers.parse('organisation "{org}" has pipeline "{name}"'),
+)
+def org_has_pipeline(request: Any, org: str, name: str) -> None:
+    """Record that a named pipeline exists for the given org.
+
+    State is accumulated on ``request.node.pipelines`` so later steps
+    can decide what each org can see.
+    """
+    if not hasattr(request.node, "pipelines"):
+        request.node.pipelines = {}
+
+    org_id = ORG_ID if org == "acme" else ALT_ORG_ID
+    pipeline_id = uuid.uuid5(ORG_ID, name)  # deterministic per-name
+
+    request.node.pipelines[name] = {
+        "org": org,
+        "org_id": org_id,
+        "mock": _make_mock_pipeline(name, org_id, pipeline_id),
+    }
+
+
+@given(parsers.parse('I authenticate as a user in "{org}"'))
+@when(parsers.parse('I authenticate as a user in "{org}"'))
+def authenticate_org(request: Any, org: str) -> None:
+    """Remember which org the current user belongs to."""
+    request.node.current_org = org
+
+
+@when("I GET /api/v1/pipelines")
+def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str, Any]) -> Any:
+    """GET /api/v1/pipelines with the correct client for ``current_org``.
+
+    Mocks ``list_pipelines`` so only pipelines belonging to the active
+    organisation are returned (simulating RLS).
+    """
+    current = getattr(request.node, "current_org", "acme")
+    test_client = alt_org_client if current == "globex" else client
+    all_pipelines: dict[str, dict[str, Any]] = getattr(request.node, "pipelines", {})
+
+    with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
+        org_id = ORG_ID if current == "acme" else ALT_ORG_ID
+        visible = [p["mock"] for p in all_pipelines.values() if p["org_id"] == org_id]
+
+        mock_list.return_value = SimpleNamespace(
+            items=visible,
+            total=len(visible),
+            page=1,
+            page_size=20,
+            next_cursor=None,
+            has_more=False,
+        )
+
+        resp = test_client.get("/api/v1/pipelines")
+        _store_response(request, ctx, resp)
+        return resp
+
+
+@then(parsers.parse('I see "{name}"'))
+def see_pipeline(request: Any, name: str) -> None:
+    resp = request.node.response
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    names = [item["name"] for item in body.get("items", [])]
+    assert name in names, f"Expected to see pipeline '{name}', but it was not in the response: {names}"
+
+
+@then(parsers.parse('I do not see "{name}"'))
+def not_see_pipeline(request: Any, name: str) -> None:
+    resp = request.node.response
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    names = [item["name"] for item in body.get("items", [])]
+    assert name not in names, f"Pipeline '{name}' was visible but should not have been: {names}"
+
+
+# -- RLS enforced at the database layer ------------------------------------
+
+
+@when("a raw query runs without setting app.current_org_id")
+def step_raw_query_no_rls() -> None:
+    """Simulate a query that bypasses RLS.
+
+    In a real scenario this would execute a raw SELECT on the DB without
+    calling ``set_rls_org()``. Here the assertion logic lives in the
+    ``Then`` step which exercises the function outside a transaction.
+    """
+    return
+
+
+@then(parsers.parse("the query returns no rows for {expected}"))
+def step_rls_enforced(request: Any, expected: str) -> None:
+    """Verify that ``set_rls_org`` raises outside an active transaction."""
+    from modulo.api.routes.pipelines import set_rls_org
+
+    session = request.getfixturevalue("mock_session")
+    # ``session`` is an AsyncMock, whose ``in_transaction`` would return an
+    # un-awaited coroutine (truthy) when called synchronously — replace it
+    # with a sync mock so the guard actually observes "no active transaction".
+    session.in_transaction = MagicMock(return_value=False)
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(RuntimeError, match="requires an active transaction"):
+            loop.run_until_complete(set_rls_org(session, ORG_ID))
+    finally:
+        loop.close()
+
+
+# -- Cross-org pipeline run is forbidden -----------------------------------
+
+
+@when(
+    parsers.parse("I POST /api/pipelines/{pipeline_name}/runs"),
+)
+def cross_org_run(
+    request: Any,
+    alt_org_client: Any,
+    pipeline_name: str,
+    ctx: dict[str, Any],
+) -> Any:
+    """POST to /api/v1/runs with a pipeline_id derived from the name.
+
+    Mocks ``get_pipeline`` to return ``None`` (simulating RLS filtering
+    for a cross-org access).
+    """
+    pipeline_id = uuid.uuid5(ORG_ID, pipeline_name)
+
+    with patch("modulo.api.routes.runs.get_pipeline") as mock_get:
+        mock_get.return_value = None
+        resp = alt_org_client.post(
+            "/api/v1/runs",
+            json={
+                "pipeline_id": str(pipeline_id),
+                "input_payload": {},
+            },
+        )
+        _store_response(request, ctx, resp)
+        return resp

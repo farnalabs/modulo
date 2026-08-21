@@ -1,0 +1,464 @@
+"""Integration tests for agent_signal triggers with a real Postgres database.
+
+Creates a real Trigger row with trigger_type='agent_signal', calls
+fire_agent_signal(), and verifies TriggerEvent recording.
+"""
+
+import json
+import uuid
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+
+from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.rls import set_rls_org
+
+pytestmark = pytest.mark.integration
+
+# ---------------------------------------------------------------------------
+# Fixtures — inherited top-level: test_org, test_user
+# Override org name by using test_org ID but separate org_id alias for clarity.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def org_id(test_org: uuid.UUID) -> uuid.UUID:
+    """Alias for the shared test_org fixture — keeps test code readable."""
+    return test_org
+
+
+@pytest.fixture(scope="module")
+def user_id(test_user: uuid.UUID) -> uuid.UUID:
+    """Alias for the shared test_user fixture."""
+    return test_user
+
+
+@pytest_asyncio.fixture(scope="module")
+async def target_pipeline_id(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> uuid.UUID:
+    pid = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, visibility, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, "
+                "node_timeout_seconds, account_id, run_context_defaults, "
+                "graph_nodes_json) "
+                "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
+                "'{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pid),
+                "oid": str(org_id),
+                "name": "child-pipeline",
+                "uid": str(user_id),
+            },
+        )
+    return pid
+
+
+@pytest_asyncio.fixture(scope="module")
+async def snapshot_id(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    target_pipeline_id: uuid.UUID,
+) -> uuid.UUID:
+    sid = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, organisation_id, "
+                "pipeline_id, snapshot_version, graph_json, "
+                "connector_bindings_json, schema_pins_json, "
+                "prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :oid, :pid, 1, :graph, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {
+                "id": str(sid),
+                "oid": str(org_id),
+                "pid": str(target_pipeline_id),
+                "graph": '{"nodes":[],"edges":[]}',
+            },
+        )
+    return sid
+
+
+@pytest.fixture(scope="module")
+def source_pipeline_id() -> uuid.UUID:
+    """A UUID representing the pipeline being watched (not an FK row)."""
+    return uuid.uuid4()
+
+
+@pytest_asyncio.fixture(scope="module")
+async def source_run_id(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    target_pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+) -> uuid.UUID:
+    rid = uuid.uuid4()
+    thread_id = f"{org_id}:{rid}"
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, "
+                "snapshot_id, status, trigger_type, langgraph_thread_id, "
+                "input_hash, run_number) "
+                "VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', "
+                ":thread, :hash, :rn)",
+            ),
+            {
+                "id": str(rid),
+                "oid": str(org_id),
+                "pid": str(target_pipeline_id),
+                "sid": str(snapshot_id),
+                "thread": thread_id,
+                "hash": "0" * 64,
+                "rn": int(rid.int % 10**9) + 1,
+            },
+        )
+    return rid
+
+
+@pytest_asyncio.fixture(scope="module")
+async def trigger_id(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    target_pipeline_id: uuid.UUID,
+    user_id: uuid.UUID,
+    source_pipeline_id: uuid.UUID,
+) -> uuid.UUID:
+    tid = uuid.uuid4()
+    config_json = json.dumps(
+        {
+            "source_pipeline_id": str(source_pipeline_id),
+            "source_node_id": "extract",
+        }
+    )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "trigger_type, active, max_concurrent_runs, config_json, "
+                "account_id) "
+                "VALUES (:id, :oid, :pid, 'agent_signal', true, 5, "
+                "CAST(:config AS json), :uid)",
+            ),
+            {
+                "id": str(tid),
+                "oid": str(org_id),
+                "pid": str(target_pipeline_id),
+                "config": config_json,
+                "uid": str(user_id),
+            },
+        )
+    return tid
+
+
+# ===========================================================================
+# Tests
+# ===========================================================================
+
+
+class TestFireAgentSignalIntegration:
+    """End-to-end tests of fire_agent_signal with real DB rows."""
+
+    async def test_fires_child_run_and_logs_event(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        source_pipeline_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+        trigger_id: uuid.UUID,
+    ) -> None:
+        """Trigger matches → child run created + TriggerEvent recorded."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+
+            results = await fire_agent_signal(
+                session,
+                org_id=org_id,
+                source_run_id=source_run_id,
+                source_pipeline_id=source_pipeline_id,
+                completed_node_id="extract",
+                node_output={"result": "ok"},
+            )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+
+        # Verify TriggerEvent was created.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT validation_result, run_id, trigger_type "
+                        "FROM trigger_events "
+                        "WHERE organisation_id = :oid",
+                    ),
+                    {"oid": str(org_id)},
+                )
+            ).fetchall()
+
+        assert len(rows) >= 1
+        matching = [r for r in rows if r[0] == "signal_fired"]
+        assert len(matching) == 1, f"Expected 1 'signal_fired' event, got {len(matching)}: {rows}"
+        event = matching[0]
+        assert event[2] == "agent_signal"
+        assert event[1] is not None, "TriggerEvent should reference a run_id"
+
+    async def test_no_match_does_not_create_event(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+    ) -> None:
+        """Non-matching node returns empty and logs nothing."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+
+            results = await fire_agent_signal(
+                session,
+                org_id=org_id,
+                source_run_id=source_run_id,
+                source_pipeline_id=uuid.uuid4(),
+                completed_node_id="nonexistent-node",
+            )
+
+        assert results == []
+
+    async def test_concurrency_limit_skips_and_logs(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        target_pipeline_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Trigger with max_concurrent_runs=1 and 1 active run → skip."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        rid = uuid.uuid4()
+        thread_id = f"{org_id}:{rid}"
+        private_source_pipeline_id = uuid.uuid4()
+
+        # Create a trigger with concurrency limit 1. Uses a PRIVATE source
+        # pipeline so the module-scoped trigger (which watches
+        # source_pipeline_id/extract) cannot also match and fire.
+        tight_tid = uuid.uuid4()
+        config_json = json.dumps(
+            {
+                "source_pipeline_id": str(private_source_pipeline_id),
+                "source_node_id": "extract",
+            }
+        )
+
+        async with factory() as session:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                await session.execute(
+                    text(
+                        "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                        "trigger_type, active, max_concurrent_runs, config_json, "
+                        "account_id) "
+                        "VALUES (:id, :oid, :pid, 'agent_signal', true, 1, "
+                        "CAST(:config AS json), :uid)",
+                    ),
+                    {
+                        "id": str(tight_tid),
+                        "oid": str(org_id),
+                        "pid": str(target_pipeline_id),
+                        "config": config_json,
+                        "uid": str(user_id),
+                    },
+                )
+
+                # Create an active run linked to the tight trigger to hit the limit.
+                await session.execute(
+                    text(
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
+                        "snapshot_id, status, trigger_type, langgraph_thread_id, "
+                        "input_hash, trigger_id, run_number) "
+                        "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', "
+                        ":thread, :hash, :tid, :rn)",
+                    ),
+                    {
+                        "id": str(rid),
+                        "oid": str(org_id),
+                        "pid": str(target_pipeline_id),
+                        "sid": str(snapshot_id),
+                        "thread": thread_id,
+                        "hash": "0" * 64,
+                        "tid": str(tight_tid),
+                        "rn": int(rid.int % 10**9) + 1,
+                    },
+                )
+
+            # Call fire_agent_signal in a new transaction.
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                results = await fire_agent_signal(
+                    session,
+                    org_id=org_id,
+                    source_run_id=source_run_id,
+                    source_pipeline_id=private_source_pipeline_id,
+                    completed_node_id="extract",
+                )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "concurrency_limit"
+
+        # Verify concurrency_limit_reached TriggerEvent was logged.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT validation_result, error_detail "
+                        "FROM trigger_events "
+                        "WHERE organisation_id = :oid AND trigger_id = :tid",
+                    ),
+                    {"oid": str(org_id), "tid": str(tight_tid)},
+                )
+            ).fetchall()
+
+        assert len(rows) >= 1
+        matching = [r for r in rows if r[0] == "concurrency_limit_reached"]
+        assert len(matching) == 1, f"Expected 'concurrency_limit_reached' event, got: {rows}"
+
+    async def test_no_matching_trigger_in_org_returns_empty(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+    ) -> None:
+        """When no trigger matches in the current org, returns empty list."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # A fresh source pipeline id — the module-scoped trigger watches the
+        # shared source_pipeline_id fixture, so it must NOT match here.
+        unmatched_source_pipeline_id = uuid.uuid4()
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            results = await fire_agent_signal(
+                session,
+                org_id=org_id,
+                source_run_id=source_run_id,
+                source_pipeline_id=unmatched_source_pipeline_id,
+                completed_node_id="extract",
+            )
+
+        # No matching triggers exist — result is empty.
+        assert results == []
+
+    async def test_multiple_triggers_both_fire(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Two triggers watching the same source pipeline+node both fire."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # Private source pipeline so only the two triggers created below match
+        # (the module-scoped trigger watches the shared source_pipeline_id).
+        private_source_pipeline_id = uuid.uuid4()
+
+        pid_b = uuid.uuid4()
+        pid_c = uuid.uuid4()
+        config_json = json.dumps(
+            {
+                "source_pipeline_id": str(private_source_pipeline_id),
+                "source_node_id": "extract",
+            }
+        )
+
+        async with factory() as session:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+
+                # Pipelines for the two child runs.
+                for pid in (pid_b, pid_c):
+                    await session.execute(
+                        text(
+                            "INSERT INTO pipelines (id, organisation_id, name, "
+                            "visibility, max_concurrent_runs, "
+                            "lock_wait_timeout_seconds, node_timeout_seconds, "
+                            "account_id, run_context_defaults, graph_nodes_json) "
+                            "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
+                            "'{}'::json, '[]'::json)",
+                        ),
+                        {
+                            "id": str(pid),
+                            "oid": str(org_id),
+                            "name": f"multi-pipeline-{pid.hex[:6]}",
+                            "uid": str(user_id),
+                        },
+                    )
+
+                # Snapshots for both child pipelines.
+                for pid in (pid_b, pid_c):
+                    await session.execute(
+                        text(
+                            "INSERT INTO pipeline_snapshots (id, organisation_id, "
+                            "pipeline_id, snapshot_version, graph_json, "
+                            "connector_bindings_json, schema_pins_json, "
+                            "prompt_pins_json, model_backend_pins_json, "
+                            "run_context_defaults, config_json) "
+                            "VALUES (:id, :oid, :pid, 1, :graph, '[]'::json, "
+                            "'[]'::json, '[]'::json, '[]'::json, "
+                            "'{}'::json, '{}'::json)",
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "oid": str(org_id),
+                            "pid": str(pid),
+                            "graph": '{"nodes":[],"edges":[]}',
+                        },
+                    )
+
+                # Two triggers, same source config.
+                for pid in (pid_b, pid_c):
+                    await session.execute(
+                        text(
+                            "INSERT INTO triggers (id, organisation_id, "
+                            "pipeline_id, trigger_type, active, "
+                            "max_concurrent_runs, config_json, account_id) "
+                            "VALUES (:id, :oid, :pid, 'agent_signal', true, "
+                            "5, CAST(:config AS json), :uid)",
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "oid": str(org_id),
+                            "pid": str(pid),
+                            "config": config_json,
+                            "uid": str(user_id),
+                        },
+                    )
+
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                results = await fire_agent_signal(
+                    session,
+                    org_id=org_id,
+                    source_run_id=source_run_id,
+                    source_pipeline_id=private_source_pipeline_id,
+                    completed_node_id="extract",
+                    node_output={"result": "ok"},
+                )
+
+        assert len(results) == 2
+        assert all(r["status"] == "fired" for r in results)

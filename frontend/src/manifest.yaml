@@ -1,0 +1,841 @@
+schema_version: 1
+
+x-community: &community
+    required_tier: community
+    required_roles:
+    required_permissions:
+
+x-team: &team
+    required_tier: team
+    required_roles: [admin]
+    required_permissions:
+
+routes:
+    /:
+        name: dashboard
+        breadcrumb: Dashboard
+        parent:
+        product_map:
+        sidebar_group: core
+        sidebar_order: 1
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /analytics:
+        name: analytics
+        breadcrumb: Analytics
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 7
+        type: page
+        required_permissions: [analytics.query]
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /oauth/authorize:
+        name: oauth-authorize
+        breadcrumb: Authorize
+        parent:
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /library/:id/create-pipeline:
+        name: library-pipeline-wizard
+        breadcrumb: Create Pipeline
+        parent: /library
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /library/:id/create-pipeline
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /notifications:
+        name: notifications
+        breadcrumb: Notifications
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        deprecated: false
+
+    /pipelines:
+        name: pipeline-list
+        breadcrumb: Pipelines
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 2
+        type: list_page
+        exact: true
+        <<: *community
+        deprecated: false
+
+    /library:
+        name: library
+        breadcrumb: Library
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 3
+        type: list_page
+        <<: *community
+        deprecated: false
+
+    /pipelines/copy:
+        name: pipeline-copy
+        breadcrumb: Copy Pipeline
+        parent: /library
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /runs:
+        name: runs-list
+        breadcrumb: Runs
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 4
+        type: list_page
+        <<: *community
+        deprecated: false
+
+    /runs/diff:
+        name: runs-diff
+        breadcrumb: Output Diff
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 2
+        type: page
+        <<: *community
+        deprecated: false
+
+    /pipelines/:id/editor:
+        name: pipeline-editor
+        breadcrumb: Pipeline Editor
+        parent: /pipelines
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /pipelines/:id/editor
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /runs/:id:
+        name: run-detail
+        breadcrumb: Run Detail
+        parent: /runs
+        product_map:
+        sidebar_group: core
+        sidebar_order: 8
+        type: detail_page
+        pattern: /runs/:id
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /composites/:id/editor:
+        name: composite-editor
+        breadcrumb: Composite Editor
+        parent: /pipelines
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /composites/:id/editor
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /evals/editor:
+        name: eval-editor
+        breadcrumb: Evals
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 1
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /evals/proposals:
+        name: eval-proposals-queue
+        breadcrumb: Eval Proposals
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 2
+        type: list_page
+        <<: *community
+        deprecated: false
+
+    /variants/compare:
+        name: variant-compare
+        breadcrumb: Variants
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 3
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /variants/compare/:batchId:
+        name: variant-compare-detail
+        breadcrumb: Variant Batch Compare
+        parent: /variants/compare
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 5
+        type: detail_page
+        pattern: /variants/compare/:batchId
+        dynamic_params:
+        -   batchId
+        <<: *community
+        deprecated: false
+
+    /variants/ab-test:
+        name: ab-test-models
+        breadcrumb: AB Test Models
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 4
+        type: page
+        <<: *community
+        deprecated: false
+
+    /schemas:
+        name: schemas
+        breadcrumb: Schemas
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 1
+        type: list_page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /schemas/editor/:id:
+        name: schema-editor
+        breadcrumb: Schema Editor
+        parent: /schemas
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /schemas/editor/:id
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /schemas/infer:
+        name: schema-infer
+        breadcrumb: Schema Inference
+        parent: /schemas
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /admin/remy:
+        name: admin-remy
+        breadcrumb: Remy Config
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 10
+        type: form_page
+        <<: *team
+        visibility: private_preview
+        deprecated: false
+
+    /settings/remy:
+        name: settings-remy
+        breadcrumb: Remy Skills
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 11
+        type: form_page
+        <<: *community
+        visibility: private_preview
+        deprecated: false
+
+    /settings/teams:
+        name: settings-teams
+        breadcrumb: Teams
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 2
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /settings/sso:
+        name: settings-sso
+        breadcrumb: SSO
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 5
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /settings/license:
+        name: settings-license
+        breadcrumb: License
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 1
+        type: form_page
+        <<: *team
+        deprecated: false
+    /settings/mcp:
+        name: settings-mcp
+        breadcrumb: MCP
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 4
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /settings/triggers:
+        name: settings-triggers
+        breadcrumb: Triggers
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 6
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /settings/guardrails:
+        name: settings-guardrails
+        breadcrumb: Guardrails
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 5
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /settings/runtime-config:
+        name: settings-runtime-config
+        breadcrumb: Runtime Config
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 7
+        type: form_page
+        deprecated: false
+
+        <<: *team
+    /settings/rate-limits:
+        name: settings-rate-limits
+        breadcrumb: Rate Limits
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 8
+        type: form_page
+        deprecated: false
+
+        <<: *team
+    /settings/hitl-review:
+        name: settings-hitl-review
+        breadcrumb: HITL Review
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 6
+        type: page
+        <<: *community
+        deprecated: false
+
+    /settings/observability:
+        <<: *community
+        name: settings-observability
+        breadcrumb: Observability
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 9
+        type: form_page
+        visibility: private_preview
+        deprecated: false
+
+        required_permissions:
+    /settings/error-forwarders:
+        name: settings-error-forwarders
+        breadcrumb: Error Forwarders
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 2
+        type: form_page
+        deprecated: false
+
+        <<: *team
+    /settings/email:
+        name: settings-email
+        breadcrumb: Email
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 3
+        type: form_page
+        deprecated: false
+
+        <<: *team
+    /settings/monitoring:
+        name: settings-monitoring
+        breadcrumb: Browser Monitoring
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 4
+        type: form_page
+        <<: *community
+
+    /admin/users:
+        name: admin-users
+        breadcrumb: Users
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 1
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/org:
+        name: admin-org
+        breadcrumb: Organization
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 3
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/audit:
+        name: admin-audit
+        breadcrumb: Audit Log
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 6
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/costs:
+        name: admin-costs
+        breadcrumb: Costs
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 5
+        type: page
+        <<: *team
+        deprecated: false
+        exact: true
+
+    /admin/costs/limits:
+        name: admin-costs-limits
+        breadcrumb: Spend Limits
+        parent: /admin/costs
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/costs/controls:
+        name: admin-costs-controls
+        breadcrumb: Cost Controls
+        parent: /admin/costs
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/costs/components:
+        name: admin-costs-components
+        breadcrumb: Cost Components
+        parent: /admin/costs
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/connectors:
+        name: admin-connectors
+        breadcrumb: Connectors
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 7
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/model-backends:
+        name: admin-model-backends
+        breadcrumb: Model Backends
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 3
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/node-categories:
+        name: admin-node-categories
+        breadcrumb: Node Categories
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 7
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/feature-flags:
+        name: admin-feature-flags
+        breadcrumb: Feature Flags
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 4
+        type: list_page
+        deprecated: false
+
+        <<: *team
+    /admin/housekeeping:
+        name: admin-housekeeping
+        breadcrumb: Housekeeping
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 6
+        type: page
+        <<: *community
+        deprecated: false
+
+    /admin/environments:
+        name: admin-environments
+        breadcrumb: Run Environments
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 8
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/parameter-schemas:
+        name: admin-parameter-schemas
+        breadcrumb: Parameter Schemas
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 2
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/run-retention:
+        name: admin-run-retention
+        breadcrumb: Run Retention
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 5
+        type: form_page
+        deprecated: false
+
+        <<: *team
+    /admin/sandbox-concurrency:
+        name: admin-sandbox-concurrency
+        breadcrumb: Sandbox Concurrency
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 9
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/views:
+        name: admin-views
+        breadcrumb: Saved Views
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 7
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/errors:
+        name: admin-errors
+        breadcrumb: Error Dashboard
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 1
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/errors/:id:
+        name: admin-error-detail
+        breadcrumb: Error Detail
+        parent: /admin/errors
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 2
+        type: detail_page
+        pattern: /admin/errors/:id
+        dynamic_params:
+          - id
+        <<: *team
+        deprecated: false
+
+    /admin/notification-delivery:
+        name: admin-notification-delivery
+        breadcrumb: Notification Log
+        parent: /
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 3
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/plugins:
+        name: admin-plugins
+        breadcrumb: Plugins
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 4
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /lifecycle-maps:
+        name: lifecycle-maps
+        breadcrumb: Lifecycle Maps
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 5
+        type: list_page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /lifecycle-maps/:id/editor:
+        name: lifecycle-map-editor
+        breadcrumb: Lifecycle Map Editor
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /lifecycle-maps/:id/editor
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /feedback/inbox:
+        name: feedback-inbox
+        breadcrumb: Feedback Inbox
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 9
+        type: list_page
+        <<: *community
+        visibility: private_preview
+        deprecated: false
+
+    /lifecycle-maps/:id:
+        name: lifecycle-map-detail
+        breadcrumb: Lifecycle Map
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        pattern: /lifecycle-maps/:id
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
+    /lifecycle-maps/new:
+        name: lifecycle-map-new
+        breadcrumb: New Map
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /environment-profiles:
+        name: environment-profiles
+        breadcrumb: Environment Profiles
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 8
+        type: list_page
+        <<: *team
+        deprecated: false
+        exact: true
+
+    /environment-profiles/new:
+        name: environment-profiles-new
+        breadcrumb: New Profile
+        parent: /environment-profiles
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /environment-profiles/:id/edit:
+        name: environment-profiles-edit
+        breadcrumb: Edit Profile
+        parent: /environment-profiles
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /environment-profiles/:id/edit
+        dynamic_params:
+          - id
+        <<: *team
+        deprecated: false
+
+    /admin/my-profile:
+        name: my-profile
+        breadcrumb: My Profile
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        deprecated: false
+
+    /setup/model-backend/:id:
+        name: ModelBackendSetup
+        breadcrumb: Complete Setup
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        pattern: /setup/model-backend/:id
+        dynamic_params:
+          - id
+
+    /remy:
+        name: remy-only
+        breadcrumb: Remy
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        visibility: private_preview
+        deprecated: false
+        exact: true
+
+elements:
+    /admin/remy:
+      - testid: remy-access-save
+        type: button
+        label: Save Access List
+        dynamic_testid: false
+      - testid: remy-skills-add
+        type: button
+        label: Add Skill
+        dynamic_testid: false
+
+sidebar_groups:
+    core:
+        label: BUILD
+        order: 1
+        default_expanded: true
+        labelKey: components.SidebarNav.group_build
+    monitor:
+        label: MONITOR
+        order: 2
+        default_expanded: true
+        labelKey: components.SidebarNav.group_monitor
+    configure:
+        label: CONFIGURE
+        order: 3
+        default_expanded: false
+        labelKey: components.SidebarNav.group_configure
+    admin:
+        label: ADMIN
+        order: 4
+        default_expanded: false
+        labelKey: components.SidebarNav.group_admin

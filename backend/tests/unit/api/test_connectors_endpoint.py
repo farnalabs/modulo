@@ -1,0 +1,414 @@
+"""Unit tests for /api/v1/connectors endpoints.
+
+Credentials (raw credential strings) must NEVER appear in responses.
+Only `has_credentials: true/false` is exposed.
+"""
+
+import uuid
+from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
+
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.settings import Settings, get_settings
+
+_FERNET_KEY = Fernet.generate_key().decode()
+_VALID_32 = "a" * 32
+_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_CONNECTOR_ID = uuid.uuid4()
+_NOW = datetime(2025, 1, 1, tzinfo=UTC)
+
+_CRUD_PATCH_PREFIX = "modulo.api.routes.connectors."
+
+
+def _make_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_FERNET_KEY,
+        modulo_admin_password="testpass",
+    )
+
+
+def _make_connector(credentials_ciphertext: bytes = b"encrypted", tier: str = "native") -> MagicMock:
+    ci = MagicMock()
+    ci.id = _CONNECTOR_ID
+    ci.organisation_id = _ORG_ID
+    ci.name = "Test Connector"
+    ci.connector_type_id = "filesystem"
+    ci.credentials_ciphertext = credentials_ciphertext
+    ci.config_json = {}
+    ci.allowed_operations = []
+    ci.status = "active"
+    ci.visibility = "org"
+    ci.owner_team_id = None
+    ci.tier = tier
+    ci.created_at = _NOW
+    ci.updated_at = _NOW
+    return ci
+
+
+def _make_mock_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauth_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+_CREATE_BODY = {
+    "name": "Test Connector",
+    "connector_type_id": "filesystem",
+    "credentials": '{"token": "secret123"}',
+}
+
+
+def _crud_cases() -> list[dict[str, object]]:
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    connector = _make_connector()
+    updated = _make_connector()
+    updated.name = "Updated"
+    return [
+        {
+            "id": "list",
+            "method": "GET",
+            "url": "/api/v1/connectors",
+            "body": None,
+            "patches": [("list_connector_instances", page_result)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["total"] == 1,
+        },
+        {
+            "id": "get",
+            "method": "GET",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": None,
+            "patches": [("get_connector_instance", connector)],
+            "expected_status": 200,
+            "check": lambda resp: "credentials_ciphertext" not in resp.json() and resp.json()["has_credentials"],
+        },
+        {
+            "id": "get_not_found",
+            "method": "GET",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("get_connector_instance", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "update",
+            "method": "PATCH",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": {"name": "Updated"},
+            "patches": [("get_connector_instance", connector), ("update_connector_instance", updated)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["name"] == "Updated",
+        },
+        {
+            "id": "update_not_found",
+            "method": "PATCH",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": {"name": "x"},
+            "patches": [("get_connector_instance", None), ("update_connector_instance", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "delete",
+            "method": "DELETE",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": None,
+            "patches": [("delete_connector_instance", True)],
+            "expected_status": 204,
+        },
+        {
+            "id": "delete_not_found",
+            "method": "DELETE",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("delete_connector_instance", False)],
+            "expected_status": 404,
+        },
+    ]
+
+
+@pytest.mark.parametrize("case", _crud_cases(), ids=lambda c: c["id"])
+def test_crud(client: TestClient, case: dict[str, object]) -> None:
+    method = case["method"]
+    url = case["url"]
+    body = case.get("body")
+    expected_status = case["expected_status"]
+    check = case.get("check")
+
+    patchers = []
+    for func_name, ret in case["patches"]:
+        patchers.append(patch(f"{_CRUD_PATCH_PREFIX}{func_name}", return_value=ret))
+    patchers.append(patch(f"{_CRUD_PATCH_PREFIX}set_rls_org"))
+    patchers.append(patch(f"{_CRUD_PATCH_PREFIX}set_rls_user_context"))
+
+    for p in patchers:
+        p.start()
+
+    try:
+        if method == "GET":
+            resp = client.get(url)
+        elif method == "POST":
+            resp = client.post(url, json=body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, json=body or {})
+        elif method == "DELETE":
+            resp = client.delete(url)
+        elif method == "PUT":
+            resp = client.put(url, json=body or {})
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}: {resp.text}"
+        if check:
+            assert check(resp)
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def test_create_connector_does_not_expose_credentials(client: TestClient) -> None:
+    connector = _make_connector(credentials_ciphertext=b"encrypted_bytes")
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert "credentials_ciphertext" not in body
+    assert "credentials" not in body
+    assert body["has_credentials"] is True
+
+
+def _make_github_body(token: str) -> dict[str, str]:
+    return {
+        "name": "GitHub Connector",
+        "connector_type_id": "github",
+        "credentials": token,
+        "config_json": {},
+    }
+
+
+def test_create_github_fine_grained_token_accepted(client: TestClient) -> None:
+    """A fine-grained PAT (github_pat_ prefix) is not rejected by the classic scope check."""
+    token = "github_pat_11ABC"
+    connector = _make_connector(credentials_ciphertext=b"encrypted_bytes")
+    with (
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 201
+
+
+def test_create_github_fine_grained_missing_permission_reports_fine_grained_detail(client: TestClient) -> None:
+    """Fine-grained missing permissions surface the PRD §7.11 permission set, not classic scopes."""
+    token = "github_pat_11ABC"
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(return_value={"contents:write", "pull_requests:write"}),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "fine-grained permissions" in detail
+    assert "pull_requests:write" in detail
+    assert "repo" not in detail
+    assert "contents:write" in detail
+
+
+def test_create_github_classic_missing_scope_reports_classic_detail(client: TestClient) -> None:
+    """Classic tokens keep the classic OAuth-scope rejection detail."""
+    token = "ghp_classic123"
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(return_value={"repo"}),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "OAuth scopes" in detail
+    assert "repo" in detail
+
+
+def test_create_connector_encrypts_credentials(client: TestClient) -> None:
+    captured: list[bytes] = []
+
+    async def fake_create(session: object, **kwargs: object) -> MagicMock:
+        captured.append(kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
+        return _make_connector(credentials_ciphertext=kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
+
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", new=fake_create),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        client.post("/api/v1/connectors", json=_CREATE_BODY)
+
+    assert captured, "create_connector_instance was not called"
+    ciphertext = captured[0]
+    decrypted = Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode()
+    assert decrypted == '{"token": "secret123"}'
+    assert b"secret123" not in ciphertext
+
+
+def test_connector_no_credentials_shows_false(client: TestClient) -> None:
+    connector = _make_connector(credentials_ciphertext=b"")
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.json()["has_credentials"] is False
+
+
+def test_list_connectors_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
+    resp = unauth_client.get("/api/v1/connectors")
+    assert resp.status_code in (401, 403)
+
+
+def test_list_connectors_default_excludes_in_dev(client: TestClient) -> None:
+    """The list endpoint defaults to the CRUD in_dev exclusion (excluded_tiers=None)."""
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
+def test_list_connectors_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
+    """?include_in_dev=true reveals In-Dev connectors in the actual response JSON."""
+    in_dev = _make_connector(tier="in_dev")
+    page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors", params={"include_in_dev": "true"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert not mock_list.await_args.kwargs["excluded_tiers"]
+    tiers = [item["tier"] for item in resp.json()["items"]]
+    assert "in_dev" in tiers, f"Expected an in_dev connector in the response, got tiers: {tiers}"
+
+
+def test_list_connectors_include_in_dev_denied_for_viewer(viewer_client: TestClient) -> None:
+    """Viewers can list connectors but must NOT be able to reveal In-Dev items."""
+    resp = viewer_client.get("/api/v1/connectors", params={"include_in_dev": "true"})
+    assert resp.status_code == 403
+    assert "connector.list.in_dev" in resp.json()["detail"]
+
+
+def test_list_connectors_include_in_dev_operator_reveals_in_dev(client: TestClient) -> None:
+    """An operator+ principal (admin fixture) can list In-Dev connectors."""
+    in_dev = _make_connector(tier="in_dev")
+    page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors", params={"include_in_dev": "true"})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["tier"] == "in_dev"
+
+
+def test_list_connectors_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:
+    """?include_in_dev=false behaves exactly like omitting the parameter."""
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors", params={"include_in_dev": "false"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None

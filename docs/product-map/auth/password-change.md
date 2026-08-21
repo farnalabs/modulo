@@ -1,0 +1,92 @@
+---
+id: feat-auth-password-change
+prd: 9.4
+delivery-tasks: []
+bdd:
+  - backend/tests/bdd/features/auth/change_password.feature
+unit-tests:
+  - backend/tests/unit/api/test_me_password.py
+code:
+  - backend/src/modulo/api/routes/me.py
+  - frontend/src/views/MyProfileView.vue
+  - frontend/src/__tests__/MyProfileView.spec.ts
+depends-on:
+  - feat-auth-jwt-auth
+status: partial
+---
+
+# Password Change
+
+Logged-in users can change their own password via the My Profile page. Admins can also change their password through the same UI. Password change invalidates all existing JWT token families, forcing re-login.
+
+## Behaviours
+
+### API — `PUT /api/v1/me/password`
+
+- [x] Accepts `current_password` and `new_password` in JSON body
+- [x] Returns 200 with `{"detail": "Password changed successfully"}` on success
+- [x] Validates current password against stored bcrypt hash
+- [x] Returns 400 if current password is incorrect
+- [x] Returns 400 if user has no local password (SSO/OIDC/SAML user)
+- [x] Returns 400 if `new_password` is identical to `current_password` (no-op change rejected)
+- [x] Returns 422 if new password fails strength validation
+- [x] Returns 422 if new password is too short (< 8 chars)
+- [x] Returns 404 if authenticated user is not found in DB
+- [x] Returns 401 if request is unauthenticated (no JWT)
+- [x] Blacklists all token families for the user after password change
+- [x] Hashes new password with bcrypt before storing
+
+### Frontend — My Profile page (`/admin/my-profile`)
+
+- [x] Change Password form with Current Password, New Password, Confirm New Password fields
+- [x] Client-side validation: passwords must match
+- [x] Client-side validation: new password must be at least 8 characters
+- [x] Client-side validation: new password must differ from current password (blocks no-op submit before the API call)
+- [x] Shows success message on API success
+- [x] Shows error message on API failure
+- [x] Clears password fields after successful change
+- [x] Renders profile info (avatar initial, email, display name, role, member since)
+- [x] Role badge displayed next to user info
+- [x] Theme settings section (with get/set via `/me/settings`)
+- [x] Accessible via sidebar navigation under admin section
+
+### Security
+
+- [x] Token family invalidation on password change (all sessions revoked)
+- [x] Current password required to authorize change (prevents hijacked-session abuse)
+- [x] Password strength validation (entropy-based rejection of weak passwords)
+- [x] SSO users without local password cannot change password via this endpoint
+- [x] Password change logged to audit trail (fail-open `password_changed` event on the audit chain)
+
+## Error Handling
+- [x] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError) — fixed in QA (2026-07-06)
+- [x] PUT /api/v1/me/password returns 503 Service Unavailable on SQLAlchemyError (connection/deadlock failure) — fixed in QA (cross-cutting, 2026-07-08)
+- [x] GET /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
+- [x] PUT /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
+- [x] Token family blacklist failure during password change logs warning but does not fail the request — per-family try/except with savepoints; fixed in QA (2026-07-06)
+- [x] Unauthenticated requests return 401 (no JWT) — FastAPI HTTPBearer default (auto_error=True); verified by `test_password_change_needs_auth` (2026-08-15)
+
+## Known Gaps
+
+- Website docs page for password change does not exist — no stub at `Website/modulo-website/src/docs/auth/password-change.md`
+
+## QA History
+### 2026-08-15 — improve-architecture (FAR-244 partial-sso sweep)
+- Marked the "Unauthenticated requests return 401 (no JWT)" error-handling box `[ ]`→`[x]`: the behaviour is implemented via FastAPI's HTTPBearer default (`auto_error=True`) and verified by `test_password_change_needs_auth` (`test_me_password.py`), which asserts 401 on an unauthenticated `PUT /api/v1/me/password`. Re-verified all other `[x]` behaviours (current-password check, no-op rejection, strength/422, SSO-user 400, family blacklist, audit event, error handling) remain implemented and tested. No code changes required. Status: partial (missing website docs page remains the only Known Gap).
+
+### 2026-08-09 — improve-architecture (product-map walk)
+- **RESOLVED** "PUT /api/v1/me/password does not validate that `new_password` differs from `current_password`" — server: `change_password` now rejects a no-op change (400 `New password must be different from the current password`) after the current-password check and before hashing, so a user can no longer "change" to the same password and burn token families for nothing. Client: `MyProfileView` blocks the no-op submit client-side (`new_password_must_differ` i18n key) before calling the API. Added unit test `test_same_new_password_rejected` (`test_me_password.py`) + a BDD scenario ("Reusing the current password is rejected") in `change_password.feature` + a vitest case in `MyProfileView.spec.ts`. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap removed, QA History). 10/10 `test_me_password.py` + 7/7 change-password BDD scenarios pass (incl. `test_me_remy_skills`/`test_route_introspection`/`test_metrics` related tests), ruff clean, mypy --strict clean; 8/8 `MyProfileView.spec.ts` vitest + full frontend suite (717 tests) pass, eslint clean. Status: partial (missing website docs page remains).
+
+### 2026-08-08 — improve-architecture (product-map walk)
+- Fixed the audit-trail gap: `PUT /api/v1/me/password` now appends a fail-open `password_changed` audit event (`resource_type="account"`, actor = the changing user) inside the same transaction, after token families are blacklisted. Follows the `admin_orgs.py` pattern — `set_rls_org` runs in the outer transaction before the append, and any audit write failure is loudly logged without rolling back the password change. Added unit test `test_password_change_records_audit_event` + a BDD scenario ("Password change is recorded in the audit trail"). Updated product map (Security behaviour `[ ]`→`[x]`, Known Gap removed, QA History).
+
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Verified `@handle_db_errors` decorator provides complete CancelledError/IntegrityError/ProgrammingError/SQLAlchemyError coverage for all endpoints in me.py
+- Verified all internal ProgrammingError handlers use `from None` (B904)
+- No code changes needed — Round 2 already addressed all B904 and CancelledError issues via the decorator
+- Status: partial
+
+- 2026-07-05: QA-iterate (prodmap auth). Added Error Handling and QA History sections. Fixed status: covered → partial (audit trail gap).
+- 2026-07-06: Cross-cutting QA. Fixed 401 vs 403 status code in behaviours. Added Known Gaps for ProgrammingError, token blacklist isolation, missing website docs. Added ProgrammingError catch and per-family blacklist error isolation to the route handler.
+- 2026-07-08: Cross-cutting QA (index 258). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 11 DB-accessing routes in me.py (get_user_settings, update_user_settings, change_password, 4 remy skills, 3 context sources) — previously only caught ProgrammingError→501, allowing connection/deadlock failures to propagate as 500. Fixed CRITICAL — BDD step definitions in test_change_password.py patched wrong function names (`get_user_by_id`/`list_families_for_user` instead of `get_account_by_id`/`list_families_for_account`) — mocks silently didn't mock the real code path, BDD tests made real DB calls without isolation. Fixed MAJOR — moved lazy `verify_password` import from inside change_password handler to module level. Added 6 new unit tests in test_me_sqlalchemy_error.py (3× ProgrammingError→501, 3× SQLAlchemyError→503). All 14 me password tests pass. Merged to main at v.NEXT. Status: partial.
+- 2026-07-11: Round 2 re-QA (improve-architecture index 389). Fixed B904: added `from None` to all `except ProgrammingError` handlers in me.py (11 handlers across get_user_settings, update_user_settings, change_password, list_user_skills, create_user_skill, update_user_skill, delete_user_skill, get_user_context_sources, set_user_context_source, reset_user_context_sources). Fixed B904: added `asyncio.CancelledError: raise` guard to `except Exception` in blacklist_family handler inside change_password. Fixed systemic `@handle_db_errors` decorator: added `asyncio.CancelledError: raise` guard and `from None` to all exception handlers (IntegrityError, ProgrammingError, SQLAlchemyError, pydantic.ValidationError) — benefits all ~80 routes using this decorator.

@@ -1,0 +1,11 @@
+rules:
+  - id: new-date-without-guard
+    patterns:
+      - pattern: new Date($STR)
+      - pattern-not-inside: |
+          if (isNaN($VAR.getTime())) { ... }
+    message: "new Date(str) can produce an Invalid Date — guard with `if (isNaN(date.getTime()))` before using the value"
+    languages: [typescript, javascript]
+    severity: WARNING
+    paths:
+      include: ["**/frontend/src/**"]

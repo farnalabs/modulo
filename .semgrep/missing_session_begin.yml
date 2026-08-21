@@ -1,0 +1,12 @@
+rules:
+  - id: missing-session-begin
+    # Semgrep OSS does not expose Python AsyncWith blocks as a pattern-inside
+    # scope. Match the complete route and reject handlers that contain an
+    # explicit transaction instead of reporting every operation inside it.
+    pattern-regex: |
+      (?ms)^@[A-Za-z_][\w.]*\.(?:get|post|put|patch|delete)\([^\n]*\)\s*\n(?!(?:(?!^@).)*async with (?:session|db_session)\.begin\(\):)(?:(?!^@).)*(?:await (?:session|db_session)\.execute\(|(?:session|db_session)\.add\(|await (?:session|db_session)\.flush\(\))
+    message: "Route handler performs DB operations without an explicit session.begin() transaction (autobegin=False)"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**", "**/.semgrep/missing_session_begin.py"]
