@@ -51,7 +51,7 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     request: () => Promise<{ error?: unknown; data?: ConsentResponse }>,
   ): Promise<boolean> {
     loading.value = true
-    const result = await request().catch((e: unknown) => ({ error: e }))
+    const result = await request().catch((e: unknown) => ({ error: e, data: undefined }))
     if (result.error) {
       error.value = formatApiError(result.error)
       loading.value = false
