@@ -94,6 +94,7 @@ from modulo.api.routes.parameter_schemas import router as parameter_schemas_rout
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
+from modulo.api.routes.product_analytics_identity import router as product_analytics_identity_router
 from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
@@ -1207,6 +1208,7 @@ app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)
+app.include_router(product_analytics_identity_router)
 
 # Strip router lifespan contexts -- none of the 68+ routers register
 # on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.

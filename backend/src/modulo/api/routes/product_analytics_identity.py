@@ -1,0 +1,220 @@
+"""Routes for product analytics instance identity & secret rotation."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import defaultdict
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.product_analytics.hmac_verify import verify_hmac
+from modulo.core.product_analytics.instance_identity import (
+    get_or_create_instance_identity,
+    get_secret_exists,
+    rotate_secret,
+)
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/api/v1/product-analytics",
+    tags=["product-analytics-identity"],
+)
+
+# ── Rate limiter for rotation (in-memory, per-process) ─────────────────────
+
+_rotation_timestamps: dict[str, list[float]] = defaultdict(list)
+_MAX_ROTATIONS = 5
+_ROTATION_WINDOW = 3600.0  # 1 hour
+
+
+def _check_rotation_rate_limit(client_key: str) -> None:
+    """Raise 429 if the client has exceeded the rotation rate limit."""
+    now = time.time()
+    window_start = now - _ROTATION_WINDOW
+    timestamps = _rotation_timestamps[client_key]
+    # Prune old entries
+    _rotation_timestamps[client_key] = [t for t in timestamps if t > window_start]
+    if len(_rotation_timestamps[client_key]) >= _MAX_ROTATIONS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rotation rate limit exceeded. Max {_MAX_ROTATIONS} per hour.",
+        )
+    _rotation_timestamps[client_key].append(now)
+
+
+# ── Response models ─────────────────────────────────────────────────────────
+
+
+class IdentityResponse(BaseModel):
+    instance_id: str = Field(..., description="UUID of this Modulo instance")
+    secret_exists: bool = Field(..., description="Whether a shared secret has been minted")
+
+
+class RotateRequest(BaseModel):
+    old_secret: str = Field(..., description="Current secret used to authenticate the rotation")
+    timestamp: float = Field(..., description="Unix timestamp when the request was signed")
+    sequence: int = Field(..., description="Monotonic per-instance sequence number")
+    hmac_digest: str = Field(..., description="HMAC-SHA256 hex digest over (payload, timestamp, sequence)")
+
+
+class RotateResponse(BaseModel):
+    new_secret: str = Field(..., description="The newly generated secret")
+
+
+# ── Endpoints ───────────────────────────────────────────────────────────────
+
+
+@router.get("/identity", response_model=IdentityResponse)
+@handle_db_errors("product_analytics.get_identity")
+async def get_identity(
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    session: AsyncSession = Depends(get_db_session),
+) -> IdentityResponse:
+    """Return instance_id and whether a secret exists (never the secret itself).
+
+    System-admin only.
+    """
+    try:
+        async with session.begin():
+            instance_id, _secret = await get_or_create_instance_identity(session)
+            secret_exists = await get_secret_exists(session)
+        return IdentityResponse(
+            instance_id=str(instance_id),
+            secret_exists=secret_exists,
+        )
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        _log.exception("product_analytics.get_identity")
+        raise HTTPException(
+            status_code=501,
+            detail="Database not available. Run migrations.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("product_analytics.get_identity")
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except Exception:
+        _log.exception("product_analytics.get_identity")
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
+
+
+@router.post("/rotate", response_model=RotateResponse)
+@handle_db_errors("product_analytics.rotate_secret")
+async def rotate_identity_secret(
+    req: RotateRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> RotateResponse:
+    """Rotate the shared secret, authenticated by the old secret.
+
+    Rate-limited to 5 rotations per hour per client IP.
+    Distinguishes 401 (auth failure / clock skew) from 403 (permission) from 400.
+    """
+    client_key = request.client.host if request.client else "unknown"
+    _check_rotation_rate_limit(client_key)
+
+    try:
+        async with session.begin():
+            instance_id, current_secret = await get_or_create_instance_identity(session)
+
+            # Verify the old secret matches
+            if not _constant_time_equal(req.old_secret, current_secret):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication failed. Verify the old secret is correct.",
+                )
+
+            # Verify HMAC (replay protection)
+            # We use the old_secret for HMAC verification since that's what the
+            # client used to sign the request.
+            payload_bytes = str(instance_id).encode("utf-8")
+            if not verify_hmac(
+                current_secret,
+                payload_bytes,
+                req.timestamp,
+                req.sequence,
+                req.hmac_digest,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="HMAC verification failed. Check timestamp clock skew (5-min window).",
+                )
+
+            # Check sequence monotonicity — store last sequence in SystemConfig
+            last_seq = await _get_last_sequence(session, str(instance_id))
+            if req.sequence <= last_seq:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Sequence must be > {last_seq}. Out-of-order requests are rejected.",
+                )
+            await _set_last_sequence(session, str(instance_id), req.sequence)
+
+            new_secret = await rotate_secret(session)
+
+        return RotateResponse(new_secret=new_secret)
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        _log.exception("product_analytics.rotate_secret")
+        raise HTTPException(
+            status_code=501,
+            detail="Database not available. Run migrations.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("product_analytics.rotate_secret")
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except Exception:
+        _log.exception("product_analytics.rotate_secret")
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
+
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+
+_SEQUENCE_KEY_PREFIX = "product_analytics_last_sequence_"
+
+
+async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
+    """Read the last accepted sequence number for this instance."""
+    from modulo.db.crud.system_config import get_config
+
+    key = _SEQUENCE_KEY_PREFIX + instance_id
+    entry = await get_config(session, key)
+    if entry is None:
+        return 0
+    return int(entry.value)
+
+
+async def _set_last_sequence(session: AsyncSession, instance_id: str, seq: int) -> None:
+    """Persist the last accepted sequence number."""
+    from modulo.db.crud.system_config import set_config
+
+    key = _SEQUENCE_KEY_PREFIX + instance_id
+    await set_config(session, key, seq)
+
+
+def _constant_time_equal(a: str, b: str) -> bool:
+    """Compare two strings in constant time to prevent timing attacks."""
+    import hmac as _hmac
+
+    return _hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
