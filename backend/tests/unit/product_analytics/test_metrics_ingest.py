@@ -229,7 +229,7 @@ class TestApiErrorDailyCap:
         # no insert statement is ever handed to the session (the cap guard
         # ``continue``s before building the pg_insert). If the guard is removed,
         # this assertion fails because 5 inserts would appear.
-        assert _insert_calls(mock_session) == [], "api_error events must be skipped once the daily cap is reached"
+        assert not _insert_calls(mock_session), "api_error events must be skipped once the daily cap is reached"
 
     @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
     @patch("modulo.api.routes.metrics_ingest.get_organisation")

@@ -257,7 +257,8 @@ class TestCrossTenantIsolation:
 
         # Org A sees its own row.
         rows_a = await _staged_rows(app_engine, org_a)
-        assert len(rows_a) == 1 and rows_a[0][0] == "iso-1"
+        assert len(rows_a) == 1, "org A should have exactly one staged row"
+        assert rows_a[0][0] == "iso-1", "org A's staged row should be iso-1"
 
         # Org B's scoped session must see ZERO rows — the rls_org_isolation
         # policy must confine reads to the authenticated org.
@@ -288,7 +289,8 @@ class TestCrossTenantIsolation:
         assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text}"
 
         rows_b = await _staged_rows(app_engine, org_b)
-        assert len(rows_b) == 1 and rows_b[0][0] == "scope-1"
+        assert len(rows_b) == 1, "org B should have exactly one staged row"
+        assert rows_b[0][0] == "scope-1", "org B's staged row should be scope-1"
         # Org A must remain untouched by org B's write.
         rows_a = await _staged_rows(app_engine, org_a)
         assert all(r[0] != "scope-1" for r in rows_a), "org B's write leaked into org A"
