@@ -202,7 +202,7 @@ async def get_product_analytics(
 @handle_db_errors("product_analytics.update_level")
 async def update_product_analytics_level(
     body: LevelUpdateRequest,
-    current_user: TenantPrincipal = Depends(require_permission("org.settings.update")),
+    current_user: TenantPrincipal = require_permission("org.settings.update"),
     session: AsyncSession = Depends(get_db_session),
 ) -> LevelUpdateResponse:
     """Update the analytics level (admin toggle).
