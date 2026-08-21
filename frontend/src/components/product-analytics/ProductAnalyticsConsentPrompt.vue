@@ -5,12 +5,7 @@
       :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
       data-testid="product-analytics-consent-prompt"
     >
-      <ErrorAlert
-        v-if="store.error"
-        :message="errorMessage"
-        :on-dismiss="dismissError"
-        :dismiss-label="$t('views.ProductAnalytics.dismiss_error')"
-      />
+      <ProductAnalyticsError />
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex-1 space-y-1">
         <h3 class="text-sm font-semibold">
@@ -44,16 +39,11 @@
 import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
-import ErrorAlert from '../shared/ErrorAlert.vue'
+import ProductAnalyticsError from './ProductAnalyticsError.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
 
 const store = useProductAnalyticsStore()
 const { t } = useI18n()
-
-const errorMessage = computed(() => store.error ?? undefined)
-function dismissError() {
-  store.error = null
-}
 
 const shouldShow = computed(() => store.isPromptEligible)
 
