@@ -27,7 +27,10 @@ from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.crud.account import create_account, get_account_by_email
-from modulo.db.crud.org_membership import create_membership
+from modulo.db.crud.org_membership import (
+    create_membership,
+    get_membership_by_account_and_org,
+)
 from modulo.db.crud.organisation import (
     create_organisation,
     delete_organisation,
@@ -301,8 +304,6 @@ async def _existing_membership_conflict(session: AsyncSession, existing: Any, or
     already in this org, or when it is a local account with an existing
     password (password hash overwrite would adopt it cross-tenant).
     """
-    from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
     if existing is None:
         return
 
