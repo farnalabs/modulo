@@ -138,8 +138,13 @@ async def _read_org_pause_state(session: AsyncSession, organisation_id: uuid.UUI
     return org_triggers_paused, org_paused_at
 
 
-async def _serialize_trigger(session: AsyncSession, trigger: Trigger) -> dict[str, Any]:
-    """Serialize one trigger row to the API shape (runs INSIDE the RLS tx)."""
+def _trigger_to_dict(trigger: Trigger, *, in_flight: int, streak_status: dict[str, Any]) -> dict[str, Any]:
+    """Build the shared trigger API dict from precomputed ``in_flight``/``streak_status``.
+
+    Single source of truth for the trigger shape — both ``_serialize_trigger``
+    (list paths) and ``_serialize_trigger_detail`` (create/update/restore
+    responses) delegate here so the field set cannot drift between them.
+    """
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
@@ -152,10 +157,20 @@ async def _serialize_trigger(session: AsyncSession, trigger: Trigger) -> dict[st
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "created_by": str(trigger.account_id),
-        "in_flight": await _ongoing_in_flight(session, trigger),
-        "streak_status": await _streak_status_for(session, trigger),
+        "in_flight": in_flight,
+        "streak_status": streak_status,
     }
+
+
+async def _serialize_trigger(session: AsyncSession, trigger: Trigger) -> dict[str, Any]:
+    """Serialize one trigger row to the API shape (runs INSIDE the RLS tx)."""
+    data = _trigger_to_dict(
+        trigger,
+        in_flight=await _ongoing_in_flight(session, trigger),
+        streak_status=await _streak_status_for(session, trigger),
+    )
+    data["created_by"] = str(trigger.account_id)
+    return data
 
 
 async def _load_trigger_for_update(
@@ -293,21 +308,7 @@ def _bump_ongoing_next_fire(trigger: Trigger, changed: bool) -> None:
 
 def _serialize_trigger_detail(trigger: Trigger, *, in_flight: int, streak_status: dict[str, Any]) -> dict[str, Any]:
     """The full single-trigger API shape shared by the create/update/restore responses."""
-    return {
-        "id": str(trigger.id),
-        "pipeline_id": str(trigger.pipeline_id),
-        "trigger_type": trigger.trigger_type,
-        "active": trigger.active,
-        "max_concurrent_runs": trigger.max_concurrent_runs,
-        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
-        "config_json": mask_config_json(trigger.config_json),
-        "cron_expression": trigger.cron_expression,
-        "cron_timezone": trigger.cron_timezone,
-        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "in_flight": in_flight,
-        "streak_status": streak_status,
-    }
+    return _trigger_to_dict(trigger, in_flight=in_flight, streak_status=streak_status)
 
 
 def _resolve_cron_next_fire(
