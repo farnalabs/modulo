@@ -1751,7 +1751,8 @@ async def get_pipeline_graph_tool(
         pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
         if pid_err:
             return pid_err
-        assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+        if pid is None:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -2064,7 +2065,8 @@ async def bind_connector_to_node(
         cid, cid_err = _parse_uuid_param(connector_instance_id, "connector_instance_id")
         if cid_err:
             return cid_err
-        assert pid is not None and nid is not None and cid is not None  # nosec B101 -- parse helpers return error dicts on failure
+        if pid is None or nid is None or cid is None:
+            return {"error": "invalid_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             # Verify connector exists in org
@@ -2437,7 +2439,8 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         rid, rid_err = _parse_uuid_param(run_id, "run_id")
         if rid_err:
             return rid_err
-        assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+        if rid is None:
+            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -2536,7 +2539,8 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         rid, rid_err = _parse_uuid_param(run_id, "run_id")
         if rid_err:
             return rid_err
-        assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+        if rid is None:
+            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
         async with _session(org_id) as s:
             from modulo.db.crud.run import get_run
 
@@ -3614,7 +3618,8 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
         if tid_err:
             return tid_err
-        assert tid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+        if tid is None:
+            return {"error": "invalid_id", "field": "trigger_id", "detail": "UUID parse failed"}
 
         from sqlalchemy import select
 
