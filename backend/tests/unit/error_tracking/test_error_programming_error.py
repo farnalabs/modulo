@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PROGRAMMING_ERROR = ProgrammingError("mock", {}, None)
@@ -57,6 +58,15 @@ def _override_user():
     return _inner
 
 
+def _override_plan_context():
+    from modulo.api.dependencies import get_plan_context
+
+    async def _inner():
+        return all_features()
+
+    return {get_plan_context: _inner}
+
+
 INGEST_PAYLOAD = {
     "events": [
         {
@@ -97,6 +107,7 @@ def _make_errors_app():
 
     app.dependency_overrides[get_current_user] = _override_user()
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 
@@ -115,6 +126,7 @@ def _make_rules_app():
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 
@@ -133,26 +145,7 @@ def _make_fwd_app():
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
-
-    from modulo.api.dependencies import get_plan_context
-
-    class _AllFeatures:
-        def feature_enabled(self, name: str) -> bool:
-            return True
-
-        def list_enabled_features(self) -> list:
-            return []
-
-        def tier(self) -> str:
-            return "team"
-
-        def has_license_key(self) -> bool:
-            return True
-
-    async def _override_plan_context() -> _AllFeatures:
-        return _AllFeatures()
-
-    app.dependency_overrides[get_plan_context] = _override_plan_context
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 
