@@ -21,4 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --only-binary :all: psycopg2-binary==2.9.12 && \
     chmod +x entrypoint.sh
 
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+
 CMD ["./entrypoint.sh"]
