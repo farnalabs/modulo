@@ -626,526 +626,662 @@ class GitLabConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "projects":
-                params: dict[str, Any] = {"per_page": q.limit}
-                if "search" in q.filters:
-                    params["search"] = q.filters["search"]
-                if "membership" in q.filters:
-                    params["membership"] = q.filters["membership"]
-                if "visibility" in q.filters:
-                    params["visibility"] = q.filters["visibility"]
-                if "owned" in q.filters:
-                    params["owned"] = q.filters["owned"]
-                _paginate_params(params, q.cursor)
-                r = await self._call_api("GET", "/projects", params=params)
-                data = _safe_json(r)
-                return self._result(data, r)
+                return await self._query_projects(q)
             case "file":
-                project = self._require_filter(q.filters, "project", q.resource)
-                path = self._require_filter(q.filters, "path", q.resource)
-                _validate_path(path, q.resource)
-                ref = q.filters.get("ref", "main")
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
-                    params={"ref": ref},
-                )
-                info = _safe_json(r)
-                if "content" in info:
-                    info["content"] = base64.b64decode(info["content"]).decode("utf-8")
-                return ConnectorResult(records=[info], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_file(q)
             case "tree":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                tree_params: dict[str, Any] = {"per_page": q.limit}
-                if "path" in q.filters:
-                    path = q.filters["path"]
-                    _validate_path(path, q.resource)
-                    tree_params["path"] = path
-                if "ref" in q.filters:
-                    tree_params["ref"] = q.filters["ref"]
-                if q.filters.get("recursive"):
-                    tree_params["recursive"] = True
-                _paginate_params(tree_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/repository/tree",
-                    params=tree_params,
-                )
-                entries = _safe_json(r)
-                return self._result(entries, r)
+                return await self._query_tree(q)
             case "mrs" | "merge_requests":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                mr_params: dict[str, Any] = {"per_page": q.limit}
-                if "state" in q.filters:
-                    mr_params["state"] = q.filters["state"]
-                if "labels" in q.filters:
-                    mr_params["labels"] = q.filters["labels"]
-                if "milestone" in q.filters:
-                    mr_params["milestone"] = q.filters["milestone"]
-                _paginate_params(mr_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/merge_requests",
-                    params=mr_params,
-                )
-                mrs = _safe_json(r)
-                return self._result(mrs, r)
+                return await self._query_merge_requests(q)
             case "merge_request":
-                project = self._require_filter(q.filters, "project", q.resource)
-                mr_iid = self._require_filter(q.filters, "iid", q.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}",
-                )
-                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_merge_request(q)
             case "mr_changes":
-                project = self._require_filter(q.filters, "project", q.resource)
-                mr_iid = self._require_filter(q.filters, "iid", q.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/changes",
-                )
-                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_mr_changes(q)
             case "issues":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                params = {"per_page": q.limit}
-                for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
-                    if key in q.filters:
-                        params[key] = q.filters[key]
-                _paginate_params(params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/issues",
-                    params=params,
-                )
-                issues = _safe_json(r)
-                return self._result(issues, r)
+                return await self._query_issues(q)
             case "issue":
-                project = self._require_filter(q.filters, "project", q.resource)
-                issue_iid = self._require_filter(q.filters, "iid", q.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/issues/{issue_iid}",
-                )
-                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_issue(q)
             case "labels":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                label_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(label_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/labels",
-                    params=label_params,
-                )
-                labels = _safe_json(r)
-                return self._result(labels, r)
+                return await self._query_labels(q)
             case "label":
-                project = self._require_filter(q.filters, "project", q.resource)
-                label_id = self._require_filter(q.filters, "label_id", q.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/labels/{label_id}",
-                )
-                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_label(q)
             case "milestones":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                milestone_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(milestone_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/milestones",
-                    params=milestone_params,
-                )
-                milestones = _safe_json(r)
-                return self._result(milestones, r)
+                return await self._query_milestones(q)
             case "issue_notes":
-                project = self._require_filter(q.filters, "project", q.resource)
-                issue_iid = self._require_filter(q.filters, "iid", q.resource)
-                encoded = _project_path(project)
-                params = {"per_page": q.limit}
-                for key in ("sort", "order_by"):
-                    if key in q.filters:
-                        params[key] = q.filters[key]
-                _paginate_params(params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/issues/{issue_iid}/notes",
-                    params=params,
-                )
-                notes = _safe_json(r)
-                return self._result(notes, r)
+                return await self._query_issue_notes(q)
             case "issue_discussions":
-                project = self._require_filter(q.filters, "project", q.resource)
-                issue_iid = self._require_filter(q.filters, "iid", q.resource)
-                encoded = _project_path(project)
-                discussion_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(discussion_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/issues/{issue_iid}/discussions",
-                    params=discussion_params,
-                )
-                discussions = _safe_json(r)
-                return self._result(discussions, r)
+                return await self._query_issue_discussions(q)
             case "branch":
-                project = self._require_filter(q.filters, "project", q.resource)
-                branch_name = self._require_filter(q.filters, "name", q.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
-                )
-                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+                return await self._query_branch(q)
             case "branches":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                branch_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(branch_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/repository/branches",
-                    params=branch_params,
-                )
-                branches = _safe_json(r)
-                return self._result(branches, r)
+                return await self._query_branches(q)
             case "tags":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                tag_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(tag_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/repository/tags",
-                    params=tag_params,
-                )
-                tags = _safe_json(r)
-                return self._result(tags, r)
+                return await self._query_tags(q)
             case "pipelines":
-                project = self._require_filter(q.filters, "project", q.resource)
-                encoded = _project_path(project)
-                pipeline_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(pipeline_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/pipelines",
-                    params=pipeline_params,
-                )
-                pipelines = _safe_json(r)
-                return self._result(pipelines, r)
+                return await self._query_pipelines(q)
             case "jobs":
-                project = self._require_filter(q.filters, "project", q.resource)
-                pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
-                encoded = _project_path(project)
-                job_params: dict[str, Any] = {"per_page": q.limit}
-                _paginate_params(job_params, q.cursor)
-                r = await self._call_api(
-                    "GET",
-                    f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
-                    params=job_params,
-                )
-                jobs = _safe_json(r)
-                return self._result(jobs, r)
+                return await self._query_jobs(q)
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
+
+    async def _query_projects(self, q: ConnectorQuery) -> ConnectorResult:
+        """List projects accessible to the token."""
+        params: dict[str, Any] = {"per_page": q.limit}
+        if "search" in q.filters:
+            params["search"] = q.filters["search"]
+        if "membership" in q.filters:
+            params["membership"] = q.filters["membership"]
+        if "visibility" in q.filters:
+            params["visibility"] = q.filters["visibility"]
+        if "owned" in q.filters:
+            params["owned"] = q.filters["owned"]
+        _paginate_params(params, q.cursor)
+        r = await self._call_api("GET", "/projects", params=params)
+        data = _safe_json(r)
+        return self._result(data, r)
+
+    async def _query_file(self, q: ConnectorQuery) -> ConnectorResult:
+        """Read a single repository file, base64-decoding its content."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        path = self._require_filter(q.filters, "path", q.resource)
+        _validate_path(path, q.resource)
+        ref = q.filters.get("ref", "main")
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
+            params={"ref": ref},
+        )
+        info = _safe_json(r)
+        if "content" in info:
+            info["content"] = base64.b64decode(info["content"]).decode("utf-8")
+        return ConnectorResult(records=[info], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_tree(self, q: ConnectorQuery) -> ConnectorResult:
+        """List repository tree entries (optional recursive + path filters)."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        tree_params: dict[str, Any] = {"per_page": q.limit}
+        if "path" in q.filters:
+            path = q.filters["path"]
+            _validate_path(path, q.resource)
+            tree_params["path"] = path
+        if "ref" in q.filters:
+            tree_params["ref"] = q.filters["ref"]
+        if q.filters.get("recursive"):
+            tree_params["recursive"] = True
+        _paginate_params(tree_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/repository/tree",
+            params=tree_params,
+        )
+        entries = _safe_json(r)
+        return self._result(entries, r)
+
+    async def _query_merge_requests(self, q: ConnectorQuery) -> ConnectorResult:
+        """List project merge requests (filters: state, labels, milestone)."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        mr_params: dict[str, Any] = {"per_page": q.limit}
+        if "state" in q.filters:
+            mr_params["state"] = q.filters["state"]
+        if "labels" in q.filters:
+            mr_params["labels"] = q.filters["labels"]
+        if "milestone" in q.filters:
+            mr_params["milestone"] = q.filters["milestone"]
+        _paginate_params(mr_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/merge_requests",
+            params=mr_params,
+        )
+        mrs = _safe_json(r)
+        return self._result(mrs, r)
+
+    async def _query_merge_request(self, q: ConnectorQuery) -> ConnectorResult:
+        """Get a single merge request by IID."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        mr_iid = self._require_filter(q.filters, "iid", q.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/merge_requests/{mr_iid}",
+        )
+        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_mr_changes(self, q: ConnectorQuery) -> ConnectorResult:
+        """Get the diff/changed files of a merge request."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        mr_iid = self._require_filter(q.filters, "iid", q.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/merge_requests/{mr_iid}/changes",
+        )
+        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_issues(self, q: ConnectorQuery) -> ConnectorResult:
+        """List project issues (filters: state, labels, milestone, search, sort, order_by, assignee_id)."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        params = {"per_page": q.limit}
+        for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
+            if key in q.filters:
+                params[key] = q.filters[key]
+        _paginate_params(params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/issues",
+            params=params,
+        )
+        issues = _safe_json(r)
+        return self._result(issues, r)
+
+    async def _query_issue(self, q: ConnectorQuery) -> ConnectorResult:
+        """Get a single issue by IID."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        issue_iid = self._require_filter(q.filters, "iid", q.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/issues/{issue_iid}",
+        )
+        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_labels(self, q: ConnectorQuery) -> ConnectorResult:
+        """List project labels."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        label_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(label_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/labels",
+            params=label_params,
+        )
+        labels = _safe_json(r)
+        return self._result(labels, r)
+
+    async def _query_label(self, q: ConnectorQuery) -> ConnectorResult:
+        """Get a single label by ID."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        label_id = self._require_filter(q.filters, "label_id", q.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/labels/{label_id}",
+        )
+        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_milestones(self, q: ConnectorQuery) -> ConnectorResult:
+        """List project milestones."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        milestone_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(milestone_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/milestones",
+            params=milestone_params,
+        )
+        milestones = _safe_json(r)
+        return self._result(milestones, r)
+
+    async def _query_issue_notes(self, q: ConnectorQuery) -> ConnectorResult:
+        """List notes on an issue."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        issue_iid = self._require_filter(q.filters, "iid", q.resource)
+        encoded = _project_path(project)
+        params = {"per_page": q.limit}
+        for key in ("sort", "order_by"):
+            if key in q.filters:
+                params[key] = q.filters[key]
+        _paginate_params(params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/issues/{issue_iid}/notes",
+            params=params,
+        )
+        notes = _safe_json(r)
+        return self._result(notes, r)
+
+    async def _query_issue_discussions(self, q: ConnectorQuery) -> ConnectorResult:
+        """List discussions on an issue."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        issue_iid = self._require_filter(q.filters, "iid", q.resource)
+        encoded = _project_path(project)
+        discussion_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(discussion_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/issues/{issue_iid}/discussions",
+            params=discussion_params,
+        )
+        discussions = _safe_json(r)
+        return self._result(discussions, r)
+
+    async def _query_branch(self, q: ConnectorQuery) -> ConnectorResult:
+        """Get a single branch by name."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        branch_name = self._require_filter(q.filters, "name", q.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
+        )
+        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+
+    async def _query_branches(self, q: ConnectorQuery) -> ConnectorResult:
+        """List repository branches."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        branch_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(branch_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/repository/branches",
+            params=branch_params,
+        )
+        branches = _safe_json(r)
+        return self._result(branches, r)
+
+    async def _query_tags(self, q: ConnectorQuery) -> ConnectorResult:
+        """List repository tags."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        tag_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(tag_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/repository/tags",
+            params=tag_params,
+        )
+        tags = _safe_json(r)
+        return self._result(tags, r)
+
+    async def _query_pipelines(self, q: ConnectorQuery) -> ConnectorResult:
+        """List pipelines for a project."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = _project_path(project)
+        pipeline_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(pipeline_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/pipelines",
+            params=pipeline_params,
+        )
+        pipelines = _safe_json(r)
+        return self._result(pipelines, r)
+
+    async def _query_jobs(self, q: ConnectorQuery) -> ConnectorResult:
+        """List jobs for a pipeline."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
+        encoded = _project_path(project)
+        job_params: dict[str, Any] = {"per_page": q.limit}
+        _paginate_params(job_params, q.cursor)
+        r = await self._call_api(
+            "GET",
+            f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
+            params=job_params,
+        )
+        jobs = _safe_json(r)
+        return self._result(jobs, r)
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         await self._ensure_write_scope(payload.resource)
         match payload.resource:
             case "file":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                path = self._require_filter(payload.data, "path", payload.resource)
-                _validate_path(path, payload.resource)
-                encoded = _project_path(project)
-                body: dict[str, Any] = {
-                    "branch": payload.data.get("ref", "main"),
-                    "content": payload.data["content"],
-                    "commit_message": payload.data.get("message", "Update via Modulo"),
-                }
-                if payload.data.get("sha"):
-                    body["sha"] = payload.data["sha"]
-                r = await self._call_api(
-                    "PUT",
-                    f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_file(payload)
             case "files" | "commit":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                actions = self._require_filter(payload.data, "actions", payload.resource)
-                if not isinstance(actions, list) or not actions:
-                    raise ValueError(f"GitLab resource {payload.resource!r} requires a non-empty 'actions' list")
-                encoded = _project_path(project)
-                commit_body: dict[str, Any] = {
-                    "branch": payload.data.get("ref", payload.data.get("branch", "main")),
-                    "commit_message": payload.data.get("message", "Update via Modulo"),
-                    "actions": [],
-                }
-                for action in actions:
-                    if not isinstance(action, dict):
-                        raise ValueError(f"GitLab resource {payload.resource!r}: each action must be an object")
-                    action_type = action.get("action")
-                    if action_type not in _COMMIT_ACTIONS:
-                        raise ValueError(
-                            f"GitLab resource {payload.resource!r}: action {action_type!r} must be one of "
-                            f"{sorted(_COMMIT_ACTIONS)}",
-                        )
-                    file_path = action.get("file_path")
-                    if not file_path:
-                        raise ValueError(f"GitLab resource {payload.resource!r}: each action requires 'file_path'")
-                    _validate_path(file_path, payload.resource)
-                    normalized: dict[str, Any] = {"action": action_type, "file_path": file_path}
-                    if "content" in action:
-                        normalized["content"] = action["content"]
-                    if action_type == "move":
-                        previous_path = action.get("previous_path")
-                        if not previous_path:
-                            msg = f"GitLab resource {payload.resource!r}: move action requires 'previous_path'"
-                            raise ValueError(msg)
-                        _validate_path(previous_path, payload.resource)
-                        normalized["previous_path"] = previous_path
-                    commit_body["actions"].append(normalized)
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/repository/commits",
-                    json=commit_body,
-                )
-                return _safe_json_object(r)
+                return await self._write_files(payload)
             case "file_delete":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                path = self._require_filter(payload.data, "path", payload.resource)
-                _validate_path(path, payload.resource)
-                encoded = _project_path(project)
-                delete_params: dict[str, Any] = {
-                    "branch": payload.data.get("ref", payload.data.get("branch", "main")),
-                }
-                if payload.data.get("sha"):
-                    delete_params["sha"] = payload.data["sha"]
-                delete_body: dict[str, Any] = {
-                    "commit_message": payload.data.get("message", f"Delete {path} via Modulo"),
-                }
-                r = await self._call_api(
-                    "DELETE",
-                    f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
-                    params=delete_params,
-                    json=delete_body,
-                )
-                return _safe_json_object(r)
+                return await self._write_file_delete(payload)
             case "mr" | "merge_request":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
-                title = self._require_filter(payload.data, "title", payload.resource)
-                encoded = _project_path(project)
-                body = {
-                    "source_branch": source_branch,
-                    "target_branch": payload.data.get("target_branch", "main"),
-                    "title": title,
-                }
-                if "description" in payload.data:
-                    body["description"] = payload.data["description"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/merge_requests",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_merge_request(payload)
             case "mr_comment" | "mr_note":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                note_body = self._require_filter(payload.data, "body", payload.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
-                    json={"body": note_body},
-                )
-                return _safe_json_object(r)
+                return await self._write_mr_comment(payload)
             case "mr_merge":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                merge_body: dict[str, Any] = {}
-                if "merge_commit_message" in payload.data:
-                    merge_body["merge_commit_message"] = payload.data["merge_commit_message"]
-                if "squash" in payload.data:
-                    merge_body["squash"] = payload.data["squash"]
-                if "should_remove_source_branch" in payload.data:
-                    merge_body["should_remove_source_branch"] = payload.data["should_remove_source_branch"]
-                if "merge_when_pipeline_succeeds" in payload.data:
-                    merge_body["merge_when_pipeline_succeeds"] = payload.data["merge_when_pipeline_succeeds"]
-                r = await self._call_api(
-                    "PUT",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/merge",
-                    json=merge_body,
-                )
-                return _safe_json_object(r)
+                return await self._write_mr_merge(payload)
             case "mr_approve":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                approve_body: dict[str, Any] = {}
-                if "sha" in payload.data:
-                    approve_body["sha"] = payload.data["sha"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
-                    json=approve_body,
-                )
-                return _safe_json_object(r)
+                return await self._write_mr_approve(payload)
             case "mr_approval_request":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                user_ids = payload.data.get("user_ids") or []
-                user_emails = payload.data.get("user_emails") or []
-                if not user_ids and not user_emails:
-                    raise ValueError(
-                        f"GitLab resource {payload.resource!r} requires 'user_ids' and/or 'user_emails'",
-                    )
-                rule_body: dict[str, Any] = {
-                    "name": payload.data.get("name", "Requested approvers"),
-                    "rule_type": "approval",
-                    "approvals_required": payload.data.get("approvals_required", 1),
-                }
-                if user_ids:
-                    rule_body["user_ids"] = user_ids
-                if user_emails:
-                    rule_body["user_emails"] = user_emails
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/approval_rules",
-                    json=rule_body,
-                )
-                return _safe_json_object(r)
+                return await self._write_mr_approval_request(payload)
             case "mr_labels":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                labels = self._require_filter(payload.data, "labels", payload.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "PUT",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}",
-                    json={"labels": labels},
-                )
-                return _safe_json_object(r)
+                return await self._write_mr_labels(payload)
             case "issue":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                title = self._require_filter(payload.data, "title", payload.resource)
-                encoded = _project_path(project)
-                body = {
-                    "title": title,
-                }
-                if "description" in payload.data:
-                    body["description"] = payload.data["description"]
-                if "labels" in payload.data:
-                    body["labels"] = payload.data["labels"]
-                if "milestone_id" in payload.data:
-                    body["milestone_id"] = payload.data["milestone_id"]
-                if "assignee_ids" in payload.data:
-                    body["assignee_ids"] = payload.data["assignee_ids"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/issues",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_issue(payload)
             case "issue_update":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                body = {}
-                for key in ("state_event", "title", "description"):
-                    if key in payload.data:
-                        body[key] = payload.data[key]
-                r = await self._call_api(
-                    "PUT",
-                    f"/projects/{encoded}/issues/{issue_iid}",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_issue_update(payload)
             case "issue_note":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                body = self._require_filter(payload.data, "body", payload.resource)
-                body = {
-                    "body": body,
-                }
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/issues/{issue_iid}/notes",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_issue_note(payload)
             case "issue_label":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-                encoded = _project_path(project)
-                labels = self._require_filter(payload.data, "labels", payload.resource)
-                body = {
-                    "labels": labels,
-                }
-                r = await self._call_api(
-                    "PUT",
-                    f"/projects/{encoded}/issues/{issue_iid}",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_issue_label(payload)
             case "label":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                name = self._require_filter(payload.data, "name", payload.resource)
-                encoded = _project_path(project)
-                body = {
-                    "name": name,
-                    "color": payload.data.get("color", "#428BCA"),
-                }
-                if "description" in payload.data:
-                    body["description"] = payload.data["description"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/labels",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_label(payload)
             case "milestone":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                title = self._require_filter(payload.data, "title", payload.resource)
-                encoded = _project_path(project)
-                body = {
-                    "title": title,
-                }
-                if "description" in payload.data:
-                    body["description"] = payload.data["description"]
-                if "due_date" in payload.data:
-                    body["due_date"] = payload.data["due_date"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/milestones",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_milestone(payload)
             case "pipeline_run":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                ref = self._require_filter(payload.data, "ref", payload.resource)
-                encoded = _project_path(project)
-                body = {
-                    "ref": ref,
-                }
-                if "variables" in payload.data:
-                    body["variables"] = payload.data["variables"]
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/pipeline",
-                    json=body,
-                )
-                return _safe_json_object(r)
+                return await self._write_pipeline_run(payload)
             case _:
                 raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")
+
+    async def _write_file(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create/update a repository file."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        path = self._require_filter(payload.data, "path", payload.resource)
+        _validate_path(path, payload.resource)
+        encoded = _project_path(project)
+        body: dict[str, Any] = {
+            "branch": payload.data.get("ref", "main"),
+            "content": payload.data["content"],
+            "commit_message": payload.data.get("message", "Update via Modulo"),
+        }
+        if payload.data.get("sha"):
+            body["sha"] = payload.data["sha"]
+        r = await self._call_api(
+            "PUT",
+            f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_files(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Batch file operations in one commit via the Commits API."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        actions = self._require_filter(payload.data, "actions", payload.resource)
+        if not isinstance(actions, list) or not actions:
+            raise ValueError(f"GitLab resource {payload.resource!r} requires a non-empty 'actions' list")
+        encoded = _project_path(project)
+        commit_body: dict[str, Any] = {
+            "branch": payload.data.get("ref", payload.data.get("branch", "main")),
+            "commit_message": payload.data.get("message", "Update via Modulo"),
+            "actions": [],
+        }
+        for action in actions:
+            if not isinstance(action, dict):
+                raise ValueError(f"GitLab resource {payload.resource!r}: each action must be an object")
+            action_type = action.get("action")
+            if action_type not in _COMMIT_ACTIONS:
+                raise ValueError(
+                    f"GitLab resource {payload.resource!r}: action {action_type!r} must be one of "
+                    f"{sorted(_COMMIT_ACTIONS)}",
+                )
+            file_path = action.get("file_path")
+            if not file_path:
+                raise ValueError(f"GitLab resource {payload.resource!r}: each action requires 'file_path'")
+            _validate_path(file_path, payload.resource)
+            normalized: dict[str, Any] = {"action": action_type, "file_path": file_path}
+            if "content" in action:
+                normalized["content"] = action["content"]
+            if action_type == "move":
+                previous_path = action.get("previous_path")
+                if not previous_path:
+                    msg = f"GitLab resource {payload.resource!r}: move action requires 'previous_path'"
+                    raise ValueError(msg)
+                _validate_path(previous_path, payload.resource)
+                normalized["previous_path"] = previous_path
+            commit_body["actions"].append(normalized)
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/repository/commits",
+            json=commit_body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_file_delete(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Delete a repository file."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        path = self._require_filter(payload.data, "path", payload.resource)
+        _validate_path(path, payload.resource)
+        encoded = _project_path(project)
+        delete_params: dict[str, Any] = {
+            "branch": payload.data.get("ref", payload.data.get("branch", "main")),
+        }
+        if payload.data.get("sha"):
+            delete_params["sha"] = payload.data["sha"]
+        delete_body: dict[str, Any] = {
+            "commit_message": payload.data.get("message", f"Delete {path} via Modulo"),
+        }
+        r = await self._call_api(
+            "DELETE",
+            f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
+            params=delete_params,
+            json=delete_body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_merge_request(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create a merge request."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
+        title = self._require_filter(payload.data, "title", payload.resource)
+        encoded = _project_path(project)
+        body = {
+            "source_branch": source_branch,
+            "target_branch": payload.data.get("target_branch", "main"),
+            "title": title,
+        }
+        if "description" in payload.data:
+            body["description"] = payload.data["description"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/merge_requests",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_mr_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Add a note to a merge request."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+        note_body = self._require_filter(payload.data, "body", payload.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
+            json={"body": note_body},
+        )
+        return _safe_json_object(r)
+
+    async def _write_mr_merge(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Merge a merge request."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        merge_body: dict[str, Any] = {}
+        if "merge_commit_message" in payload.data:
+            merge_body["merge_commit_message"] = payload.data["merge_commit_message"]
+        if "squash" in payload.data:
+            merge_body["squash"] = payload.data["squash"]
+        if "should_remove_source_branch" in payload.data:
+            merge_body["should_remove_source_branch"] = payload.data["should_remove_source_branch"]
+        if "merge_when_pipeline_succeeds" in payload.data:
+            merge_body["merge_when_pipeline_succeeds"] = payload.data["merge_when_pipeline_succeeds"]
+        r = await self._call_api(
+            "PUT",
+            f"/projects/{encoded}/merge_requests/{mr_iid}/merge",
+            json=merge_body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_mr_approve(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Approve a merge request."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        approve_body: dict[str, Any] = {}
+        if "sha" in payload.data:
+            approve_body["sha"] = payload.data["sha"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
+            json=approve_body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_mr_approval_request(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Request approval from specific users via an approval rule."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        user_ids = payload.data.get("user_ids") or []
+        user_emails = payload.data.get("user_emails") or []
+        if not user_ids and not user_emails:
+            raise ValueError(
+                f"GitLab resource {payload.resource!r} requires 'user_ids' and/or 'user_emails'",
+            )
+        rule_body: dict[str, Any] = {
+            "name": payload.data.get("name", "Requested approvers"),
+            "rule_type": "approval",
+            "approvals_required": payload.data.get("approvals_required", 1),
+        }
+        if user_ids:
+            rule_body["user_ids"] = user_ids
+        if user_emails:
+            rule_body["user_emails"] = user_emails
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/merge_requests/{mr_iid}/approval_rules",
+            json=rule_body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_mr_labels(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Set labels on a merge request."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+        labels = self._require_filter(payload.data, "labels", payload.resource)
+        encoded = _project_path(project)
+        r = await self._call_api(
+            "PUT",
+            f"/projects/{encoded}/merge_requests/{mr_iid}",
+            json={"labels": labels},
+        )
+        return _safe_json_object(r)
+
+    async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create an issue."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        title = self._require_filter(payload.data, "title", payload.resource)
+        encoded = _project_path(project)
+        body = {
+            "title": title,
+        }
+        if "description" in payload.data:
+            body["description"] = payload.data["description"]
+        if "labels" in payload.data:
+            body["labels"] = payload.data["labels"]
+        if "milestone_id" in payload.data:
+            body["milestone_id"] = payload.data["milestone_id"]
+        if "assignee_ids" in payload.data:
+            body["assignee_ids"] = payload.data["assignee_ids"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/issues",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Update an issue (close/reopen, edit title/description)."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        issue_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        body = {}
+        for key in ("state_event", "title", "description"):
+            if key in payload.data:
+                body[key] = payload.data[key]
+        r = await self._call_api(
+            "PUT",
+            f"/projects/{encoded}/issues/{issue_iid}",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_issue_note(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Add a note to an issue."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        issue_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        body = self._require_filter(payload.data, "body", payload.resource)
+        body = {
+            "body": body,
+        }
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/issues/{issue_iid}/notes",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_issue_label(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Replace labels on an issue."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        issue_iid = self._require_filter(payload.data, "iid", payload.resource)
+        encoded = _project_path(project)
+        labels = self._require_filter(payload.data, "labels", payload.resource)
+        body = {
+            "labels": labels,
+        }
+        r = await self._call_api(
+            "PUT",
+            f"/projects/{encoded}/issues/{issue_iid}",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_label(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create a project label."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        name = self._require_filter(payload.data, "name", payload.resource)
+        encoded = _project_path(project)
+        body = {
+            "name": name,
+            "color": payload.data.get("color", "#428BCA"),
+        }
+        if "description" in payload.data:
+            body["description"] = payload.data["description"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/labels",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_milestone(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create a project milestone."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        title = self._require_filter(payload.data, "title", payload.resource)
+        encoded = _project_path(project)
+        body = {
+            "title": title,
+        }
+        if "description" in payload.data:
+            body["description"] = payload.data["description"]
+        if "due_date" in payload.data:
+            body["due_date"] = payload.data["due_date"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/milestones",
+            json=body,
+        )
+        return _safe_json_object(r)
+
+    async def _write_pipeline_run(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Trigger a pipeline."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        ref = self._require_filter(payload.data, "ref", payload.resource)
+        encoded = _project_path(project)
+        body = {
+            "ref": ref,
+        }
+        if "variables" in payload.data:
+            body["variables"] = payload.data["variables"]
+        r = await self._call_api(
+            "POST",
+            f"/projects/{encoded}/pipeline",
+            json=body,
+        )
+        return _safe_json_object(r)
