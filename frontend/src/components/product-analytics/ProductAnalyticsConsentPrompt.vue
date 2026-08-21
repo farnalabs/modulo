@@ -16,29 +16,20 @@
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-2">
-        <template v-for="action in promptActions" :key="action.key">
-          <Button
-            v-if="action.variant !== 'text'"
-            :severity="action.variant === 'button-secondary' ? 'secondary' : undefined"
-            :outlined="action.variant === 'button-secondary'"
-            size="small"
-            :disabled="store.loading"
-            :data-testid="action.testid"
-            @click="submit(action.action)"
-          >
-            {{ t(action.labelKey) }}
-          </Button>
-          <button
-            v-else
-            type="button"
-            class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
-            :disabled="store.loading"
-            :data-testid="action.testid"
-            @click="submit(action.action)"
-          >
-            {{ t(action.labelKey) }}
-          </button>
-        </template>
+        <Button
+          v-for="action in promptActions"
+          :key="action.key"
+          :severity="action.variant === 'button-secondary' ? 'secondary' : undefined"
+          :outlined="action.variant === 'button-secondary'"
+          :text="action.variant === 'text'"
+          size="small"
+          :class="action.variant === 'text' ? 'text-xs text-muted-foreground underline underline-offset-2 hover:no-underline' : ''"
+          :disabled="store.loading"
+          :data-testid="action.testid"
+          @click="submit(action.action)"
+        >
+          {{ t(action.labelKey) }}
+        </Button>
       </div>
     </div>
   </output>
