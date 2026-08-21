@@ -228,4 +228,8 @@ async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
     config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
     if config is None:
         return True  # absent = enforced
+    if isinstance(config.value, bool):
+        return not config.value
+    if isinstance(config.value, str):
+        return config.value.lower() not in ("1", "true", "yes")
     return not bool(config.value)
