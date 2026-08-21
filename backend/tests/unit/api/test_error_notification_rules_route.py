@@ -15,10 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session
+from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -79,12 +79,33 @@ def client() -> Generator[TestClient, None, None]:
             pass
 
     app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="admin",
     )
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "team"
+
+        def has_license_key(self) -> bool:
+            return True
+
+    app.dependency_overrides[get_plan_context] = lambda: _AllFeatures()
 
     yield TestClient(app)
     app.dependency_overrides.clear()

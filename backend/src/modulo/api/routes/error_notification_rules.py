@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
     ErrorNotificationRuleListResponse,
@@ -56,7 +56,7 @@ def _serialize_rule(rule: ErrorNotificationRule) -> dict[str, Any]:
     }
 
 
-@router.get("", response_model=ErrorNotificationRuleListResponse)
+@router.get("", response_model=ErrorNotificationRuleListResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("error_notification_rules.list_notification_rules")
 async def list_notification_rules(
     limit: int = Query(20, ge=1, le=100),
@@ -115,7 +115,12 @@ async def list_notification_rules(
     }
 
 
-@router.post("", response_model=ErrorNotificationRuleResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ErrorNotificationRuleResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("error_tracking")],
+)
 @handle_db_errors("error_notification_rules.create_notification_rule")
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
@@ -190,7 +195,11 @@ async def create_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.put("/{rule_id}", response_model=ErrorNotificationRuleResponse)
+@router.put(
+    "/{rule_id}",
+    response_model=ErrorNotificationRuleResponse,
+    dependencies=[require_feature("error_tracking")],
+)
 @handle_db_errors("error_notification_rules.update_notification_rule")
 async def update_notification_rule(
     rule_id: uuid.UUID,
@@ -261,7 +270,7 @@ async def update_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("error_notification_rules.delete_notification_rule")
 async def delete_notification_rule(
     rule_id: uuid.UUID,

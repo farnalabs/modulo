@@ -57,6 +57,29 @@ def _override_user():
     return _inner
 
 
+class _AllFeatures:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "team"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+def _override_plan_context():
+    from modulo.api.dependencies import get_plan_context
+
+    async def _inner() -> _AllFeatures:
+        return _AllFeatures()
+
+    return {get_plan_context: _inner}
+
+
 INGEST_PAYLOAD = {
     "events": [
         {
@@ -97,6 +120,7 @@ def _make_errors_app():
 
     app.dependency_overrides[get_current_user] = _override_user()
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 
@@ -115,6 +139,7 @@ def _make_rules_app():
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 
@@ -133,26 +158,7 @@ def _make_fwd_app():
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
-
-    from modulo.api.dependencies import get_plan_context
-
-    class _AllFeatures:
-        def feature_enabled(self, name: str) -> bool:
-            return True
-
-        def list_enabled_features(self) -> list:
-            return []
-
-        def tier(self) -> str:
-            return "team"
-
-        def has_license_key(self) -> bool:
-            return True
-
-    async def _override_plan_context() -> _AllFeatures:
-        return _AllFeatures()
-
-    app.dependency_overrides[get_plan_context] = _override_plan_context
+    app.dependency_overrides.update(_override_plan_context())
     return app
 
 

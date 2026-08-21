@@ -28,10 +28,26 @@ _BREADCRUMBS = [
 
 
 def _make_ingest_app():
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.api.routes.errors import router as errors_router
     from modulo.auth.dependencies import get_current_user
     from modulo.auth.jwt import AuthenticatedPrincipal
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "team"
+
+        def has_license_key(self) -> bool:
+            return True
+
+    async def _override_plan_context():
+        return _AllFeatures()
 
     app = FastAPI()
     app.include_router(errors_router)
@@ -58,6 +74,7 @@ def _make_ingest_app():
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     return app
 
 
@@ -200,10 +217,26 @@ class TestBreadcrumbSerialization:
         assert detail["breadcrumbs"] is None
 
     def test_detail_endpoint_returns_breadcrumbs(self):
-        from modulo.api.dependencies import get_db_session
+        from modulo.api.dependencies import get_db_session, get_plan_context
         from modulo.api.routes.errors import router as errors_router
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
+
+        class _AllFeatures:
+            def feature_enabled(self, name: str) -> bool:
+                return True
+
+            def list_enabled_features(self) -> list:
+                return []
+
+            def tier(self) -> str:
+                return "team"
+
+            def has_license_key(self) -> bool:
+                return True
+
+        async def _override_plan_context():
+            return _AllFeatures()
 
         app = FastAPI()
         app.include_router(errors_router)
@@ -230,6 +263,7 @@ class TestBreadcrumbSerialization:
 
         app.dependency_overrides[get_current_user] = _override_user
         app.dependency_overrides[get_db_session] = _override_db
+        app.dependency_overrides[get_plan_context] = _override_plan_context
 
         group = MagicMock()
         group.id = uuid.uuid4()

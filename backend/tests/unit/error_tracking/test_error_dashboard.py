@@ -70,11 +70,28 @@ def _make_app():
         session.execute = AsyncMock(return_value=exec_result)
         return session
 
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.auth.dependencies import get_current_user
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "team"
+
+        def has_license_key(self) -> bool:
+            return True
+
+    async def _override_plan_context():
+        return _AllFeatures()
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     return app
 
 
