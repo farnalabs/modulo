@@ -255,10 +255,11 @@ class TestCrossTenantIsolation:
         )
         assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text}"
 
-        # Org A sees its own row.
+        # Org A can read its own row. The metrics_staging table is shared across
+        # the module-scoped org_a, so assert on the specific event_id rather than
+        # an exact row count (other tests in this module also write to org_a).
         rows_a = await _staged_rows(app_engine, org_a)
-        assert len(rows_a) == 1, "org A should have exactly one staged row"
-        assert rows_a[0][0] == "iso-1", "org A's staged row should be iso-1"
+        assert any(r[0] == "iso-1" for r in rows_a), "org A should be able to read its own staged row iso-1"
 
         # Org B's scoped session must see ZERO rows — the rls_org_isolation
         # policy must confine reads to the authenticated org.
