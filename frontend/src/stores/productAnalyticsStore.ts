@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { toDate } from '../lib/formatDate'
-import { throwOnError, formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 
 interface ConsentData {
   level: 'off' | 'all'
@@ -51,19 +51,24 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     request: () => Promise<{ error?: unknown; data?: ConsentResponse }>,
   ): Promise<boolean> {
     loading.value = true
-    try {
-      const data = throwOnError<ConsentResponse>(await request())
-      consent.value = data.consent
-      instanceEnabled.value = data.instance_enabled
-      isPartnerLicence.value = data.is_partner_licence
-      error.value = null
-      return true
-    } catch (e: unknown) {
-      error.value = formatApiError(e)
-      return false
-    } finally {
+    const result = await request().catch((e: unknown) => ({ error: e }))
+    if (result.error) {
+      error.value = formatApiError(result.error)
       loading.value = false
+      return false
     }
+    const data = result.data
+    if (!data) {
+      error.value = formatApiError('Empty response from product-analytics consent endpoint')
+      loading.value = false
+      return false
+    }
+    consent.value = data.consent
+    instanceEnabled.value = data.instance_enabled
+    isPartnerLicence.value = data.is_partner_licence
+    error.value = null
+    loading.value = false
+    return true
   }
 
   async function fetchConsent(): Promise<void> {
