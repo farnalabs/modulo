@@ -75,7 +75,7 @@ describe('useProductAnalytics', () => {
       const body = JSON.parse((init as RequestInit).body as string)
       expect(body.events).toHaveLength(1)
       expect(body.events[0]).toMatchObject({
-        event_id: 1,
+        event_id: '1',
         event_type: 'pipeline_created',
         payload: { pipeline_id: 'p-1' },
       })
@@ -146,6 +146,20 @@ describe('useProductAnalytics', () => {
 
       expect(globalThis.fetch).toHaveBeenCalledTimes(1)
     })
+
+    it('exposes a reactive bufferLength that grows on track and resets on flush', () => {
+      initProductAnalytics(() => true)
+      const { track, flush, bufferLength } = useProductAnalytics()
+
+      expect(bufferLength.value).toBe(0)
+
+      track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+      track(ANALYTICS_EVENTS.SCHEMA_CREATED)
+      expect(bufferLength.value).toBe(2)
+
+      flush()
+      expect(bufferLength.value).toBe(0)
+    })
   })
 
   describe('buffer full threshold', () => {
@@ -201,9 +215,9 @@ describe('useProductAnalytics', () => {
 
       const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
       const body = JSON.parse((init as RequestInit).body as string)
-      expect(body.events[0].event_id).toBe(1)
-      expect(body.events[1].event_id).toBe(2)
-      expect(body.events[2].event_id).toBe(3)
+      expect(body.events[0].event_id).toBe('1')
+      expect(body.events[1].event_id).toBe('2')
+      expect(body.events[2].event_id).toBe('3')
     })
 
     it('increments counter across flushes', () => {
@@ -218,7 +232,7 @@ describe('useProductAnalytics', () => {
 
       const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1]
       const body = JSON.parse((init as RequestInit).body as string)
-      expect(body.events[0].event_id).toBe(2)
+      expect(body.events[0].event_id).toBe('2')
     })
   })
 

@@ -1,4 +1,4 @@
-import { computed, readonly } from 'vue'
+import { computed, reactive, readonly } from 'vue'
 import type { AnalyticsEventType } from './productAnalyticsEvents'
 
 /**
@@ -17,7 +17,9 @@ import type { AnalyticsEventType } from './productAnalyticsEvents'
  * before increment. No per-route data is captured client-side.
  *
  * No PII is captured: no names, emails, user IDs, IPs, URLs, query strings.
- * `event_id` is deterministic counter-based (not random UUID).
+ * `event_id` is deterministic counter-based (not random UUID). The backend
+ * ingest model declares `event_id: str`, so the counter is serialised as a
+ * string to satisfy the contract without relying on Pydantic coercion.
  * API failures are logged to console.warn, never thrown.
  */
 
@@ -26,13 +28,13 @@ const FLUSH_INTERVAL_MS = 30_000
 const BUFFER_FULL_THRESHOLD = 50
 
 interface AnalyticsEvent {
-  event_id: number
+  event_id: string
   event_type: AnalyticsEventType
   recorded_at: string
   payload?: Record<string, unknown>
 }
 
-const _buffer: AnalyticsEvent[] = []
+const _buffer = reactive<AnalyticsEvent[]>([])
 let _flushTimer: ReturnType<typeof setInterval> | null = null
 let _eventIdCounter = 0
 let _consentFn: (() => boolean) | null = null
@@ -101,7 +103,7 @@ export function useProductAnalytics(): {
 
     _eventIdCounter++
     const event: AnalyticsEvent = {
-      event_id: _eventIdCounter,
+      event_id: `${_eventIdCounter}`,
       event_type: eventType,
       recorded_at: new Date().toISOString(),
     }
