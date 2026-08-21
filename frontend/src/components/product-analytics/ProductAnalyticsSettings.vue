@@ -4,6 +4,14 @@
     :description="$t('views.ProductAnalytics.settings_description')"
   >
     <div class="space-y-4">
+      <div
+        v-if="store.error"
+        class="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+        role="alert"
+      >
+        {{ store.error }}
+        <button class="ml-2 underline" @click="store.error = null">Dismiss</button>
+      </div>
       <div class="flex items-center justify-between">
         <div>
           <h4 class="text-sm font-medium">

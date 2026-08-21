@@ -6,6 +6,14 @@
     :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
     data-testid="product-analytics-consent-prompt"
   >
+    <div
+      v-if="store.error"
+      class="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+      role="alert"
+    >
+      {{ store.error }}
+      <button class="ml-2 underline" @click="store.error = null">Dismiss</button>
+    </div>
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex-1 space-y-1">
         <h3 class="text-sm font-semibold">
