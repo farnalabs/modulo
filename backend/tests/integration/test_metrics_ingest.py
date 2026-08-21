@@ -175,6 +175,22 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
     return await _seed_user(db_engine, org_b, "metrics-b@test.local")
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_metrics_staging(db_engine: AsyncEngine) -> AsyncGenerator[None, None]:
+    """Isolate each test against the shared session database.
+
+    Every test in this module stages rows for the same module-scoped ``org_a`` /
+    ``org_b``, and several assert on exact ``metrics_staging`` counts. Postgres
+    is shared across the session, so a row staged by one test (e.g. ``rt-1`` from
+    ``TestRoundTripWrite``) leaks into the next and pollutes those exact-count
+    assertions. Truncate the staging table before each test so every test starts
+    from a known-empty table.
+    """
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(text("TRUNCATE metrics_staging"))
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Read helpers — query metrics_staging under RLS scoped to *org_id*
 # ---------------------------------------------------------------------------
