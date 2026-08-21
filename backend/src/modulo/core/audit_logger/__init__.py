@@ -24,6 +24,12 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 APPEND_MAX_RETRIES = 3
 RETRY_BASE_DELAY_S = 0.1
 VERIFY_MAX_EVENTS = 10000
@@ -569,7 +575,7 @@ async def list_audit_events(
         except (ValueError, KeyError, TypeError):
             _log.warning(
                 "list_audit_events: failed to decode cursor %r — falling back to first page",
-                cursor,
+                _sanitise_log_value(cursor),
                 exc_info=True,
             )
 

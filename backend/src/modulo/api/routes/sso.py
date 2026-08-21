@@ -24,6 +24,11 @@ from modulo.settings import Settings, get_settings
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["sso"])
@@ -141,7 +146,12 @@ async def oidc_callback(
         async with session.begin():
             tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
     except ValueError as exc:
-        _log.warning("OIDC callback failed for provider %s: %s", provider, exc, exc_info=True)
+        _log.warning(
+            "OIDC callback failed for provider %s: %s",
+            _sanitise_log_value(provider),
+            _sanitise_log_value(exc),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),

@@ -57,6 +57,11 @@ _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["triggers"])
@@ -1390,7 +1395,7 @@ async def list_trigger_events(
                         | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                     )
                 except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", cursor, exc_info=True)
+                    _log.warning("Malformed cursor ignored: %s", _sanitise_log_value(cursor), exc_info=True)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
