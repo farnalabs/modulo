@@ -40,6 +40,12 @@ from modulo.db.models.trigger import Trigger
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
@@ -860,7 +866,7 @@ async def materialize_import(
 
     logger.info(
         "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
-        pname,
+        _sanitise_log_value(pname),
         len(agents_data),
         len(schemas_data),
         len(edges_data),
@@ -950,12 +956,12 @@ async def materialize_import(
             account_id=created_by,
         )
     except Exception:
-        logger.exception("Failed to create library primitive for pipeline '%s'", pname)
+        logger.exception("Failed to create library primitive for pipeline '%s'", _sanitise_log_value(pname))
         raise
 
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
-        pname,
+        _sanitise_log_value(pname),
         pipeline.id,
         len(agents_data),
         len(edges_data),
@@ -1219,7 +1225,7 @@ async def _create_agent_with_retry(
             agent_args["name"] = aname
             warnings.append(f"Agent name collided; retrying as '{aname}'.")
         except (ValueError, SQLAlchemyError):
-            logger.exception("Failed to create agent '%s'", aname)
+            logger.exception("Failed to create agent '%s'", _sanitise_log_value(aname))
             raise
 
 
@@ -1281,7 +1287,7 @@ async def _create_imported_pipeline(
             pname = suggest_import_name(existing_pipeline_names, base_name)
             warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
         except Exception:
-            logger.exception("Failed to create pipeline '%s'", pname)
+            logger.exception("Failed to create pipeline '%s'", _sanitise_log_value(pname))
             raise
 
 

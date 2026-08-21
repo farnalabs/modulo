@@ -45,6 +45,11 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 _log = logging.getLogger(__name__)
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 class PipelineHasActiveRunsError(Exception):
     """Ownership transfer is blocked while the pipeline has non-terminal runs.
 
@@ -386,7 +391,12 @@ async def clone_pipeline(
     (the caller's org role) and the read session re-applies the caller's full
     RLS context; ``account_id`` doubles as the caller's user.
     """
-    _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
+    _log.info(
+        "Cloning pipeline %s (org=%s, requested_name=%s)",
+        _sanitise_log_value(pipeline_id),
+        _sanitise_log_value(org_id),
+        _sanitise_log_value(new_name),
+    )
 
     snapshot = await _read_clone_source_snapshot(
         session,
@@ -405,7 +415,11 @@ async def clone_pipeline(
         await _on_step_a_committed()
 
     name = new_name or f"Copy of {snapshot.name}"
-    _log.info("Copying pipeline config for %s -> '%s'", pipeline_id, name)
+    _log.info(
+        "Copying pipeline config for %s -> '%s'",
+        _sanitise_log_value(pipeline_id),
+        _sanitise_log_value(name),
+    )
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,

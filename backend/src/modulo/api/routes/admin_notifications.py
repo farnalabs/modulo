@@ -9,6 +9,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from cryptography.fernet import Fernet
@@ -84,7 +85,7 @@ class WebhookCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
+        if urlparse(v).scheme not in ("http", "https"):
             raise ValueError("url must start with http:// or https://")
         return v
 
@@ -109,7 +110,7 @@ class WebhookUpdate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str | None) -> str | None:
-        if v is not None and not v.startswith(("http://", "https://")):
+        if v is not None and urlparse(v).scheme not in ("http", "https"):
             raise ValueError("url must start with http:// or https://")
         return v
 

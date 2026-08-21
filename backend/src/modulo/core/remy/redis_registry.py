@@ -12,6 +12,12 @@ import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 JsonObject = dict[str, Any]
 
 
@@ -70,7 +76,7 @@ class RemyRedisRegistry:
             if tools is None:
                 raise ValueError("permission tools must be a list of objects")
         except (ValueError, TypeError, json.JSONDecodeError):
-            logger.warning("Invalid JSON in permission request tools for %s", request_id)
+            logger.warning("Invalid JSON in permission request tools for %s", _sanitise_log_value(request_id))
             tools = []
         return {"session_id": data.get("session_id", ""), "tools": tools}
 

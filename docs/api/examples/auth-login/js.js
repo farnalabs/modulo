@@ -21,6 +21,9 @@ if (!EMAIL || !PASSWORD) {
 }
 
 async function api(path, options = {}) {
+  if (typeof path !== "string" || !path.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+    throw new Error(`Invalid API path: ${logSafe(path)}`);
+  }
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
     ...options,
@@ -36,6 +39,10 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function logSafe(value, max = 200) {
+  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+}
+
 async function main() {
   // Step 1: Login
   console.log(`Logging in as ${EMAIL} ...`);
@@ -44,18 +51,18 @@ async function main() {
     body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
   });
   const { access_token, refresh_token, token_type } = login;
-  console.log(`  access_token:  ${access_token.slice(0, 20)}...`);
-  console.log(`  refresh_token: ${refresh_token.slice(0, 20)}...`);
-  console.log(`  token_type:    ${token_type}`);
+  console.log(`  access_token:  ${logSafe(access_token.slice(0, 20))}...`);
+  console.log(`  refresh_token: ${logSafe(refresh_token.slice(0, 20))}...`);
+  console.log(`  token_type:    ${logSafe(token_type)}`);
 
   const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
   // Step 2: Get current user
   console.log("\nFetching current user ...");
   const me = await api("/api/v1/auth/me", { headers: auth(access_token) });
-  console.log(`  ${me.display_name} <${me.email}>`);
-  console.log(`  role:    ${me.org_role}`);
-  console.log(`  user_id: ${me.id}`);
+  console.log(`  ${logSafe(me.display_name)} <${logSafe(me.email)}>`);
+  console.log(`  role:    ${logSafe(me.org_role)}`);
+  console.log(`  user_id: ${logSafe(me.id)}`);
 
   // Step 3: Refresh tokens
   console.log("\nRefreshing token ...");
@@ -65,8 +72,8 @@ async function main() {
   });
   const newAccess = refreshResp.access_token;
   const newRefresh = refreshResp.refresh_token;
-  console.log(`  new access_token:  ${newAccess.slice(0, 20)}...`);
-  console.log(`  new refresh_token: ${newRefresh.slice(0, 20)}...`);
+  console.log(`  new access_token:  ${logSafe(newAccess.slice(0, 20))}...`);
+  console.log(`  new refresh_token: ${logSafe(newRefresh.slice(0, 20))}...`);
 
   // Step 4: Logout
   console.log("\nLogging out ...");
@@ -75,7 +82,7 @@ async function main() {
     headers: auth(newAccess),
     body: JSON.stringify({ refresh_token: newRefresh }),
   });
-  console.log(`  ${logout.detail}`);
+  console.log(`  ${logSafe(logout.detail)}`);
 
   console.log("\nDone.");
 }

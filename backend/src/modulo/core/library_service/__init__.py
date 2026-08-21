@@ -27,6 +27,11 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 logger = logging.getLogger(__name__)
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 __all__ = [
     "CONTRIBUTION_DRAFT",
     "CONTRIBUTION_PUBLISHED",
@@ -1048,10 +1053,18 @@ async def get_primitive_by_slug(
                 result = await session.execute(stmt)
                 item = result.scalar_one_or_none()
     except ProgrammingError:
-        logger.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
+        logger.warning(
+            "get_primitive_by_slug — DB not migrated for %s/%s",
+            _sanitise_log_value(primitive_type),
+            _sanitise_log_value(slug),
+        )
         return None
     except SQLAlchemyError:
-        logger.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
+        logger.exception(
+            "get_primitive_by_slug — DB error for %s/%s",
+            _sanitise_log_value(primitive_type),
+            _sanitise_log_value(slug),
+        )
         raise
     if item is not None:
         return item

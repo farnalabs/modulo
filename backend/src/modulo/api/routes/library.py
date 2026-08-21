@@ -291,6 +291,11 @@ class PipelineFromTemplateResponse(BaseModel):
 _log = logging.getLogger(__name__)
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 @router.get("", response_model=LibraryPrimitiveListResponse)
 @handle_db_errors("library.list_library_primitives_endpoint")
 async def list_library_primitives_endpoint(
@@ -476,8 +481,8 @@ async def create_library_primitive_endpoint(
         _log.exception("library.create_library_primitive_endpoint")
         _log.warning(
             "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
-            req.primitive_type,
-            req.slug,
+            _sanitise_log_value(req.primitive_type),
+            _sanitise_log_value(req.slug),
             exc_info=True,
         )
         raise HTTPException(

@@ -112,7 +112,7 @@ def _is_valid_recipient(address: str) -> bool:
         return False
     if any(ch in candidate for ch in ("\r", "\n", "<", ">", '"', "(", ")", ",", ";")):
         return False
-    if candidate.startswith(("http://", "https://", "mailto:", "/", "\\", "@")):
+    if candidate.startswith(("https://", "mailto:", "/", "\\", "@")):
         return False
     return _EMAIL_RE.fullmatch(candidate) is not None
 

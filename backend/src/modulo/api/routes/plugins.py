@@ -16,6 +16,12 @@ from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 router = APIRouter(prefix="/api/v1/plugins", tags=["plugins"])
 
 
@@ -80,7 +86,7 @@ async def plugin_health_endpoint(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Failed to check plugin health for %s", plugin_id)
+        logger.exception("Failed to check plugin health for %s", _sanitise_log_value(plugin_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to check plugin health",

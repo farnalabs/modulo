@@ -19,6 +19,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 _SERIALISATION_ERROR = "primitive_data contains non-serializable values"
 
 __all__ = [
@@ -89,7 +95,7 @@ def verify_signature(primitive_data: Mapping[str, object], signature_hex: str, p
         canonical = _canonical_json(primitive_data)
         public_key.verify(bytes.fromhex(signature_hex), canonical)
     except InvalidSignature:
-        logger.warning("verify_signature: invalid signature for key %s", public_key_hex[:8])
+        logger.warning("verify_signature: invalid signature for key %s", _sanitise_log_value(public_key_hex[:8]))
         return False
     except ValueError:
         logger.warning("verify_signature: bad hex input (key or signature)")

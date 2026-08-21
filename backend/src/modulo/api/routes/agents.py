@@ -47,6 +47,12 @@ _CODE_AGENTS_OPTIMIZE_PROMPT = "agents.optimize_prompt"
 
 _log = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
@@ -270,7 +276,7 @@ def _validate_generic_agent(
             "an eval rubric before production promotion. "
             "Consider adding at least one eval before deploying this agent "
             "in a production pipeline.",
-            name,
+            _sanitise_log_value(name),
         )
 
 

@@ -57,6 +57,11 @@ _CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoin
 logger = logging.getLogger(__name__)
 
 
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
 HealthCheckStatus = Literal["ok", "unhealthy", "not_applicable"]
@@ -479,7 +484,7 @@ def _validate_provider(provider: str) -> None:
             return
     except Exception as exc:
         logger.exception("model_backends._validate_provider")
-        logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
+        logger.warning("Plugin registry check failed for provider %r: %s", _sanitise_log_value(provider), exc)
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=[

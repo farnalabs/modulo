@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -49,7 +50,7 @@ class NotificationEndpointCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_safe(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
+        if urlparse(v).scheme not in ("http", "https"):
             raise ValueError("url must start with http:// or https://")
         validate_outbound_url(v)
         return v

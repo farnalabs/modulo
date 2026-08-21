@@ -21,6 +21,9 @@ if (!EMAIL || !PASSWORD) {
 }
 
 async function api(path, options = {}) {
+  if (typeof path !== "string" || !path.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+    throw new Error(`Invalid API path: ${logSafe(path)}`);
+  }
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
     ...options,
@@ -31,6 +34,16 @@ async function api(path, options = {}) {
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   return res.json();
+}
+
+function logSafe(value, max = 200) {
+  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+}
+
+function assertSafeId(id) {
+  if (!/^[0-9a-fA-F-]{1,64}$/.test(id)) {
+    throw new Error(`Invalid identifier: ${logSafe(id)}`);
+  }
 }
 
 async function login() {
@@ -52,9 +65,9 @@ async function main() {
   // Step 1: List pipelines
   console.log("Listing pipelines ...");
   const list = await api("/api/v1/pipelines?page=1&page_size=20", { headers: h });
-  console.log(`  Found ${list.total} pipeline(s)`);
+  console.log(`  Found ${logSafe(list.total)} pipeline(s)`);
   for (const p of list.items) {
-    console.log(`    - ${p.id}: ${p.name}`);
+    console.log(`    - ${logSafe(p.id)}: ${logSafe(p.name)}`);
   }
 
   // Step 2: Create a pipeline
@@ -70,14 +83,14 @@ async function main() {
     }),
   });
   const pipelineId = created.id;
-  console.log(`  Created: ${created.name} (id=${pipelineId})`);
+  console.log(`  Created: ${logSafe(created.name)} (id=${logSafe(pipelineId)})`);
 
   // Step 3: Get pipeline detail
-  console.log(`\nFetching pipeline ${pipelineId} ...`);
+  console.log(`\nFetching pipeline ${logSafe(pipelineId)} ...`);
   const detail = await api(`/api/v1/pipelines/${pipelineId}`, { headers: h });
-  console.log(`  Name:        ${detail.name}`);
-  console.log(`  Description: ${detail.description || "N/A"}`);
-  console.log(`  Visibility:  ${detail.visibility}`);
+  console.log(`  Name:        ${logSafe(detail.name)}`);
+  console.log(`  Description: ${logSafe(detail.description || "N/A")}`);
+  console.log(`  Visibility:  ${logSafe(detail.visibility)}`);
 
   // Step 4: Update pipeline
   console.log("\nUpdating pipeline ...");
@@ -89,10 +102,11 @@ async function main() {
       max_concurrent_runs: 5,
     }),
   });
-  console.log(`  New description: ${updated.description}`);
+  console.log(`  New description: ${logSafe(updated.description)}`);
 
   // Step 5: Delete pipeline
-  console.log(`\nDeleting pipeline ${pipelineId} ...`);
+  console.log(`\nDeleting pipeline ${logSafe(pipelineId)} ...`);
+  assertSafeId(pipelineId);
   const delRes = await fetch(`${BASE_URL}/api/v1/pipelines/${pipelineId}`, {
     method: "DELETE",
     headers: { ...h, "Content-Type": "application/json" },

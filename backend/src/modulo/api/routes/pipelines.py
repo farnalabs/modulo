@@ -94,6 +94,12 @@ _MSG_SNAPSHOT_NOT_FOUND = "Snapshot not found"
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
 # DoS guard: reject graphs larger than these limits before any DB work.
@@ -1550,11 +1556,11 @@ async def clone_pipeline_endpoint(
 
             # Step 2 -- validate name availability
             target_name = req.name or f"Copy of {source.name}"
-            logger.info("Step 2/4: checking name '%s' is available", target_name)
+            logger.info("Step 2/4: checking name '%s' is available", _sanitise_log_value(target_name))
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
                 logger.warning(
                     "Copy aborted: name '%s' already exists in org %s",
-                    target_name,
+                    _sanitise_log_value(target_name),
                     principal.organisation_id,
                 )
                 raise HTTPException(

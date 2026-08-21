@@ -49,6 +49,12 @@ from modulo.registry.crypto import (
 
 _log = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
 
 
@@ -319,7 +325,11 @@ async def download_registry_primitive_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("DB error in download_registry_primitive_endpoint for slug=%s", slug, exc_info=True)
+        _log.warning(
+            "DB error in download_registry_primitive_endpoint for slug=%s",
+            _sanitise_log_value(slug),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -599,8 +609,8 @@ async def verify_registry_primitive_v2(
             _log.exception("registry.verify_registry_primitive_v2")
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
-                slug,
-                entry.signing_key_fingerprint,
+                _sanitise_log_value(slug),
+                _sanitise_log_value(entry.signing_key_fingerprint),
                 exc_info=True,
             )
             raise HTTPException(

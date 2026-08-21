@@ -32,6 +32,12 @@ from modulo.core.registry.crypto import _canonical_json
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitise_log_value(value: object, limit: int = 200) -> str:
+    """Sanitise a value for logging: strip CR/LF and cap length."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
 __all__ = [
     "PUBLISHER_TRUST_COMMUNITY",
     "PUBLISHER_TRUST_REVOKED",
@@ -502,7 +508,7 @@ def publish_primitive(
     slug = f"{author}/{name}"
     with _registry_lock:
         if slug in _BUILTIN_REGISTRY:
-            logger.info("publish_primitive: overwriting existing entry %r", slug)
+            logger.info("publish_primitive: overwriting existing entry %r", _sanitise_log_value(slug))
         entry = _build_entry(
             author=author,
             name=name,
@@ -628,10 +634,10 @@ def revoke_publisher(fingerprint_hex: str) -> bool:
     with _publishers_lock:
         pub = _publishers.get(fingerprint_hex)
         if pub is None:
-            logger.warning("revoke_publisher: fingerprint %s not found", fingerprint_hex)
+            logger.warning("revoke_publisher: fingerprint %s not found", _sanitise_log_value(fingerprint_hex))
             return False
         if pub.status == PUBLISHER_TRUST_REVOKED:
-            logger.warning("revoke_publisher: fingerprint %s already revoked", fingerprint_hex)
+            logger.warning("revoke_publisher: fingerprint %s already revoked", _sanitise_log_value(fingerprint_hex))
         pub.status = PUBLISHER_TRUST_REVOKED
     return True
 
