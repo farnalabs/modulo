@@ -84,6 +84,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
@@ -1560,7 +1561,7 @@ async def _clone_pipeline_into_org(
     if not await check_pipeline_name_available(session, org_id, target_name):
         logger.warning(
             "Copy aborted: name '%s' already exists in org %s",
-            target_name,
+            _sanitise_log_value(target_name),
             org_id,
         )
         raise HTTPException(
@@ -1644,7 +1645,7 @@ async def clone_pipeline_endpoint(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
-    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
+    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
     return PipelineResponse.model_validate(cloned)
 
 

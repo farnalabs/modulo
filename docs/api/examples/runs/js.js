@@ -11,31 +11,7 @@
  *   node runs/js.js
  */
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
-const EMAIL = process.env.MODULO_EMAIL;
-const PASSWORD = process.env.MODULO_PASSWORD;
-
-if (!EMAIL || !PASSWORD) {
-  console.error("MODULO_EMAIL and MODULO_PASSWORD must be set");
-  process.exit(1);
-}
-
-async function api(path, options = {}) {
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
-  }
-  return res.json();
-}
-
-function auth(token) {
-  return { Authorization: `Bearer ${token}` };
-}
+const { api, logSafe, auth, BASE_URL, EMAIL, PASSWORD, runMain } = require("../_shared/client.js");
 
 async function main() {
   // Login
@@ -53,7 +29,7 @@ async function main() {
     process.exit(1);
   }
   const pipelineId = list.items[0].id;
-  console.log(`Using pipeline: ${list.items[0].name} (${pipelineId})`);
+  console.log(`Using pipeline: ${logSafe(list.items[0].name)} (${logSafe(pipelineId)})`);
 
   // Step 1: Trigger a run
   console.log("\nTriggering run ...");
@@ -66,7 +42,7 @@ async function main() {
     }),
   });
   const runId = run.run_id;
-  console.log(`  Run ID: ${runId}, Status: ${run.status}`);
+  console.log(`  Run ID: ${logSafe(runId)}, Status: ${logSafe(run.status)}`);
 
   // Step 2: Poll run status
   console.log("\nPolling run status ...");
@@ -76,7 +52,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 2000));
     const detail = await api(`/api/v1/runs/${runId}`, { headers: h });
     finalStatus = detail.status;
-    console.log(`  [${i + 1}] status = ${finalStatus}`);
+    console.log(`  [${i + 1}] status = ${logSafe(finalStatus)}`);
     if (terminalStates.has(finalStatus)) break;
   }
 
@@ -90,8 +66,8 @@ async function main() {
   console.log(`\nFetching run IO ...`);
   try {
     const io = await api(`/api/v1/runs/${runId}/io`, { headers: h });
-    console.log(`  Status:  ${io.status}`);
-    console.log(`  Outputs: ${JSON.stringify(io.outputs_json)}`);
+    console.log(`  Status:  ${logSafe(io.status)}`);
+    console.log(`  Outputs: ${logSafe(JSON.stringify(io.outputs_json), 500)}`);
   } catch {
     console.log("  IO not available");
   }
@@ -102,10 +78,10 @@ async function main() {
     const ws = await api("/api/v1/auth/ws-token", {
       method: "POST",
       headers: h,
-      body: "{}",
+      body: JSON.stringify({}),
     });
-    console.log(`  WS token: ${ws.ws_token.slice(0, 20)}...`);
-    console.log(`  Connect:  ws://${BASE_URL.replace(/^https?:\/\//, "")}/api/v1/runs/${runId}/ws?token=${ws.ws_token}`);
+    console.log(`  WS token: ${logSafe(ws.ws_token.slice(0, 20))}...`);
+    console.log(`  Connect:  ws://${BASE_URL.replace(/^https?:\/\//, "")}/api/v1/runs/${logSafe(runId)}/ws?token=${logSafe(ws.ws_token.slice(0, 20))}`);
   } catch {
     console.log("  WS token not available");
   }
@@ -113,7 +89,4 @@ async function main() {
   console.log("\nDone.");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err.message);
-  process.exit(1);
-});
+runMain(main);
