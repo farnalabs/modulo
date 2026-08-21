@@ -5247,6 +5247,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/org/product-analytics/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Consent
+         * @description Accept, decline, or dismiss the product analytics consent prompt.
+         */
+        post: operations["post_consent_api_v1_org_product_analytics_consent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/org/product-analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Product Analytics
+         * @description Read the current product analytics consent state and instance switch.
+         */
+        get: operations["get_product_analytics_api_v1_org_product_analytics_get"];
+        /**
+         * Update Product Analytics Level
+         * @description Update the analytics level (admin toggle).
+         *
+         *     Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+         */
+        put: operations["update_product_analytics_level_api_v1_org_product_analytics_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/primitives": {
         parameters: {
             query?: never;
@@ -8939,6 +8985,43 @@ export interface components {
             /** Redirect Url */
             redirect_url: string;
         };
+        /** ConsentRequest */
+        ConsentRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "accept" | "decline" | "dismiss";
+        };
+        /** ConsentResponse */
+        ConsentResponse: {
+            /**
+             * Level
+             * @default off
+             */
+            level: string;
+            /** Prompted */
+            prompted?: string | null;
+            /** Prompted At */
+            prompted_at?: string | null;
+            /** Level Changed At */
+            level_changed_at?: string | null;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Egress Allowed
+             * @default false
+             */
+            egress_allowed: boolean;
+            /**
+             * Prompt Eligible
+             * @default false
+             */
+            prompt_eligible: boolean;
+        };
         /** ContextSourceModeUpdate */
         ContextSourceModeUpdate: {
             /** Source Mode */
@@ -10790,6 +10873,21 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** LevelUpdateRequest */
+        LevelUpdateRequest: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "off" | "all";
+        };
+        /** LevelUpdateResponse */
+        LevelUpdateResponse: {
+            /** Level */
+            level: string;
+            /** Level Changed At */
+            level_changed_at?: string | null;
         };
         /** LibraryPrimitiveCreate */
         LibraryPrimitiveCreate: {
@@ -28192,6 +28290,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrgGuardrailsKillSwitchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_consent_api_v1_org_product_analytics_consent_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_analytics_api_v1_org_product_analytics_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_analytics_level_api_v1_org_product_analytics_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LevelUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LevelUpdateResponse"];
                 };
             };
             /** @description Validation Error */
