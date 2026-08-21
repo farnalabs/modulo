@@ -21,9 +21,6 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function flushMicrotasks() {
-  await new Promise((resolve) => setTimeout(resolve, 0))
-}
 
 describe('useProductAnalytics', () => {
   describe('consent gate', () => {
@@ -235,7 +232,8 @@ describe('useProductAnalytics', () => {
 
       track(ANALYTICS_EVENTS.PIPELINE_CREATED)
       flush()
-      await flushMicrotasks()
+      vi.advanceTimersByTime(0)
+      await Promise.resolve()
 
       expect(console.warn).toHaveBeenCalledWith(
         '[product-analytics] failed to flush events',
@@ -243,7 +241,7 @@ describe('useProductAnalytics', () => {
       )
     })
 
-    it('does not throw when fetch fails', async () => {
+    it('does not throw when fetch fails', () => {
       ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
         new Error('network error'),
       )
@@ -253,7 +251,6 @@ describe('useProductAnalytics', () => {
       track(ANALYTICS_EVENTS.PIPELINE_CREATED)
 
       expect(() => flush()).not.toThrow()
-      await flushMicrotasks()
     })
   })
 
