@@ -169,6 +169,10 @@ async def is_instance_analytics_enabled(session: AsyncSession) -> bool:
 
     config = await get_config(session, INSTANCE_SWITCH_KEY)
     if config is not None:
+        if isinstance(config.value, bool):
+            return config.value
+        if isinstance(config.value, str):
+            return config.value.lower() in ("1", "true", "yes")
         return bool(config.value)
     # Env var fallback
     env_val = os.environ.get("MODULO_PRODUCT_ANALYTICS_ENABLED", "")

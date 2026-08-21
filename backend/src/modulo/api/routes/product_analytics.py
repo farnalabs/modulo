@@ -13,7 +13,8 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
@@ -21,6 +22,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.product_analytics.consent import (
     apply_consent_action,
     get_product_analytics_block,
@@ -30,11 +32,9 @@ from modulo.core.product_analytics.consent import (
     merge_product_analytics_block,
     set_level,
 )
-from modulo.core.product_analytics.constants import (
-    DEFAULT_LEVEL,
-    VALID_LEVELS,
-)
+from modulo.core.product_analytics.constants import DEFAULT_LEVEL
 from modulo.db.crud.organisation import get_organisation
+from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -62,12 +62,7 @@ class ConsentResponse(BaseModel):
 
 
 class LevelUpdateRequest(BaseModel):
-    level: str = Field(..., description="Analytics level: 'off' or 'all'")
-
-    def validate_level(self) -> str:
-        if self.level not in VALID_LEVELS:
-            raise ValueError(f"Invalid level: {self.level!r}. Must be one of {VALID_LEVELS}")
-        return self.level
+    level: Literal["off", "all"]
 
 
 class LevelUpdateResponse(BaseModel):
@@ -78,6 +73,30 @@ class LevelUpdateResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _get_org_or_404(
+    session: AsyncSession,
+    org_id: str,
+    *,
+    for_update: bool = False,
+) -> Organisation:
+    """Fetch an organisation by ID or raise 404.
+
+    When *for_update* is True, acquires a FOR UPDATE row lock to make
+    check-then-act sequences atomic within the enclosing transaction.
+    """
+    if for_update:
+        result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+        org = result.scalar_one_or_none()
+    else:
+        org = await get_organisation(session, org_id)
+    if org is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found.",
+        )
+    return org
 
 
 def _build_consent_response(
@@ -112,12 +131,7 @@ async def post_consent(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found.",
-                )
+            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
 
             consent = get_product_analytics_block(org.settings_json)
 
@@ -131,6 +145,14 @@ async def post_consent(
             updated_consent = apply_consent_action(consent, body.action)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
+
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="product_analytics_consent",
+                actor_user_id=current_user.user_id,
+                payload_json={"action": body.action, "level": updated_consent.get("level")},
+            )
 
             instance_enabled = await is_instance_analytics_enabled(session)
 
@@ -157,12 +179,7 @@ async def get_product_analytics(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found.",
-                )
+            org = await _get_org_or_404(session, current_user.organisation_id)
 
             consent = get_product_analytics_block(org.settings_json)
             instance_enabled = await is_instance_analytics_enabled(session)
@@ -187,29 +204,27 @@ async def update_product_analytics_level(
     current_user: TenantPrincipal = Depends(require_permission("org.settings.update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> LevelUpdateResponse:
-    """Update the analytics level (admin toggle). Turning off will purge staging buffer (FAR-355)."""
-    try:
-        body.validate_level()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+    """Update the analytics level (admin toggle).
 
+    Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found.",
-                )
+            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
 
             consent = get_product_analytics_block(org.settings_json)
             updated_consent = set_level(consent, body.level)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
+
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="product_analytics_level_update",
+                actor_user_id=current_user.user_id,
+                payload_json={"level": body.level},
+            )
 
             return LevelUpdateResponse(
                 level=updated_consent["level"],
