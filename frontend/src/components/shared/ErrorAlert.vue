@@ -11,6 +11,14 @@
     >
       Retry
     </button>
+    <button
+      v-if="onDismiss && dismissLabel"
+      type="button"
+      class="ml-2 underline"
+      @click="onDismiss"
+    >
+      {{ dismissLabel }}
+    </button>
   </div>
 </template>
 
@@ -22,6 +30,8 @@ const props = defineProps<{
   message?: string | ProblemDetail
   onRetry?: () => void
   retryable?: boolean
+  onDismiss?: () => void
+  dismissLabel?: string
 }>()
 
 const isProblem = computed(() => props.message && isProblemDetail(props.message))

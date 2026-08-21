@@ -4,7 +4,12 @@
     :description="$t('views.ProductAnalytics.settings_description')"
   >
     <div class="space-y-4">
-      <ProductAnalyticsErrorAlert :dismiss-label="$t('views.ProductAnalytics.dismiss_error')" />
+      <ErrorAlert
+        v-if="store.error"
+        :message="errorMessage"
+        :on-dismiss="dismissError"
+        :dismiss-label="$t('views.ProductAnalytics.dismiss_error')"
+      />
       <div class="flex items-center justify-between">
         <div>
           <h4 class="text-sm font-medium">
@@ -53,11 +58,16 @@
 import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SectionCard from '../shared/SectionCard.vue'
+import ErrorAlert from '../shared/ErrorAlert.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
-import ProductAnalyticsErrorAlert from './ProductAnalyticsErrorAlert.vue'
 
 const { t } = useI18n()
 const store = useProductAnalyticsStore()
+
+const errorMessage = computed(() => store.error ?? undefined)
+function dismissError() {
+  store.error = null
+}
 
 const statItems = computed(() => [
   {
