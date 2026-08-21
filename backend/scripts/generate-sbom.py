@@ -117,7 +117,7 @@ def generate_sbom(components: list[dict], version: str, timestamp: str, supplier
     serial = str(uuid.uuid4())
 
     return {
-        "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+        "$schema": "https://cyclonedx.org/schema/bom-1.5.schema.json",
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "serialNumber": f"urn:uuid:{serial}",

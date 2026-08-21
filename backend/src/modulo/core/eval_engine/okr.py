@@ -16,6 +16,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.util import sanitise_log_value as _sanitise_log_value
+
 _log = logging.getLogger(__name__)
 
 TrendDirection = Literal["declining", "stable", "improving"]
@@ -183,10 +185,18 @@ async def track_okr_progress(
         }
         trend_row = (await session.execute(trend_q, trend_params)).first()
     except TimeoutError:
-        _log.error("OKR progress query timed out for suite %s (org %s)", suite_id, org_id)
+        _log.error(
+            "OKR progress query timed out for suite %s (org %s)",
+            _sanitise_log_value(suite_id),
+            _sanitise_log_value(org_id),
+        )
         raise
     except SQLAlchemyError:
-        _log.exception("OKR progress DB error for suite %s (org %s)", suite_id, org_id)
+        _log.exception(
+            "OKR progress DB error for suite %s (org %s)",
+            _sanitise_log_value(suite_id),
+            _sanitise_log_value(org_id),
+        )
         raise
 
     total_7d = trend_row.total_7d or 0 if trend_row else 0

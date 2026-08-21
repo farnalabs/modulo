@@ -35,6 +35,7 @@ from modulo.db.crud.library_primitive import (
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -306,10 +307,18 @@ async def get_primitive_by_slug(
     try:
         item = await _scoped_execute(session, org_id, _lookup)
     except ProgrammingError:
-        logger.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
+        logger.warning(
+            "get_primitive_by_slug — DB not migrated for %s/%s",
+            _sanitise_log_value(primitive_type),
+            _sanitise_log_value(slug),
+        )
         return None
     except SQLAlchemyError:
-        logger.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
+        logger.exception(
+            "get_primitive_by_slug — DB error for %s/%s",
+            _sanitise_log_value(primitive_type),
+            _sanitise_log_value(slug),
+        )
         raise
     if item is not None:
         return item

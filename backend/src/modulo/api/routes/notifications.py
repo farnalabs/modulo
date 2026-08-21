@@ -24,6 +24,7 @@ from modulo.core.ssrf import validate_outbound_url, validate_outbound_url_async
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+from modulo.util import is_valid_http_url
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
 _CODE_NOTIFICATION_MANAGE = "notification.manage"
@@ -49,7 +50,7 @@ class NotificationEndpointCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_safe(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
+        if not is_valid_http_url(v):
             raise ValueError("url must start with http:// or https://")
         validate_outbound_url(v)
         return v
