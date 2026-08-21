@@ -1,21 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
-    core: { label: 'BUILD', order: 1, default_expanded: true },
+    build: { label: 'BUILD', order: 1, default_expanded: true },
     admin: { label: 'ADMIN', order: 2, default_expanded: false, system_admin_only: true },
     monitor: { label: 'MONITOR', order: 3, default_expanded: true },
   },
   routes: {
-    '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null, exact: true },
-    '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+    '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'build', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+    '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'build', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null, exact: true },
+    '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'build', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
     '/my-profile': { name: 'my-profile', breadcrumb: 'My Profile', sidebar_group: null, sidebar_order: null, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 4, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'build', sidebar_order: 4, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
   },
 }))
 
@@ -156,7 +156,7 @@ describe('SidebarNav', () => {
     await wrapper.find('.sidebar-group-header').trigger('click')
     await flushPromises()
     expect(wrapper.find('.sidebar-group-header').attributes('aria-expanded')).toBe('false')
-    expect(localStorage.getItem('sidebar-group-prefs')).toContain('core')
+    expect(localStorage.getItem('sidebar-group-prefs')).toContain('build')
   })
 
   it('renders a collapsed rail with per-group disclosure controls instead of a flat list', async () => {
@@ -170,7 +170,7 @@ describe('SidebarNav', () => {
     const toggle = toggles[0]
     // BUILD is default-expanded -> aria-expanded true
     expect(toggle.attributes('aria-expanded')).toBe('true')
-    expect(toggle.attributes('aria-controls')).toBe('sidebar-group-rail-core')
+    expect(toggle.attributes('aria-controls')).toBe('sidebar-group-rail-build')
     expect(toggle.attributes('title')).toBeTruthy()
     expect(toggle.attributes('aria-label')).toBeTruthy()
     // expanded groups render their item links (dashboard and runs for a viewer)
@@ -191,7 +191,7 @@ describe('SidebarNav', () => {
     // a collapsed group renders no item links in the rail
     expect(wrapper.findAll('.sidebar-link').length).toBe(0)
     // persisted for the next mount
-    expect(localStorage.getItem('sidebar-group-prefs')).toContain('core')
+    expect(localStorage.getItem('sidebar-group-prefs')).toContain('build')
   })
 
   it('honours per-group collapse state for system admins in the rail', async () => {
@@ -203,7 +203,7 @@ describe('SidebarNav', () => {
       toggles.map((b) => [b.attributes('aria-controls'), b.attributes('aria-expanded')]),
     )
     // BUILD is default-expanded, ADMIN is default-collapsed
-    expect(byControls['sidebar-group-rail-core']).toBe('true')
+    expect(byControls['sidebar-group-rail-build']).toBe('true')
     expect(byControls['sidebar-group-rail-admin']).toBe('false')
     // expanded group's links render; collapsed group's links do not
     expect(wrapper.findAll('.sidebar-link').map((l) => l.attributes('href'))).toEqual(

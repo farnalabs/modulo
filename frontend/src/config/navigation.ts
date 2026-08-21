@@ -80,10 +80,12 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
 }
 
 const groupLabelKeyMap: Record<string, string> = {
-  core: 'components.SidebarNav.group_build',
+  build: 'components.SidebarNav.group_build',
   monitor: 'components.SidebarNav.group_monitor',
   configure: 'components.SidebarNav.group_configure',
   admin: 'components.SidebarNav.group_admin',
+  improve: 'components.SidebarNav.group_improve',
+  system: 'components.SidebarNav.group_system',
 }
 
 interface ManifestRoute {
