@@ -20,6 +20,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.plan_stubs import PlanStub, all_features, community_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -54,9 +55,29 @@ def _make_session(*, flush_raises: bool) -> AsyncMock:
     return session
 
 
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    session = _make_session(flush_raises=True)
+class _MockFactory:
+    """Reusable async-context session factory double."""
+
+    def __init__(self, session: AsyncMock) -> None:
+        self._session = session
+
+    def __call__(self) -> "_MockFactory":
+        return self
+
+    async def __aenter__(self) -> AsyncMock:
+        return self._session
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+
+def _build_client(*, flush_raises: bool, plan: PlanStub) -> Generator[TestClient, None, None]:
+    """Build a TestClient with the error-route dependencies overridden.
+
+    ``flush_raises`` controls whether the session flush simulates a unique
+    violation; ``plan`` selects the feature-gate plan context.
+    """
+    session = _make_session(flush_raises=flush_raises)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -64,20 +85,6 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-
-    class _MockFactory:
-        def __init__(self, s: AsyncMock) -> None:
-            self._session = s
-
-        def __call__(self) -> "_MockFactory":
-            return self
-
-        async def __aenter__(self) -> AsyncMock:
-            return self._session
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
     app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
@@ -91,24 +98,20 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-
-    class _AllFeatures:
-        def feature_enabled(self, name: str) -> bool:
-            return True
-
-        def list_enabled_features(self) -> list:
-            return []
-
-        def tier(self) -> str:
-            return "team"
-
-        def has_license_key(self) -> bool:
-            return True
-
-    app.dependency_overrides[get_plan_context] = lambda: _AllFeatures()
+    app.dependency_overrides[get_plan_context] = lambda: plan
 
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    yield from _build_client(flush_raises=True, plan=all_features())
+
+
+@pytest.fixture
+def community_client() -> Generator[TestClient, None, None]:
+    yield from _build_client(flush_raises=False, plan=community_features())
 
 
 def test_create_rule_maps_unique_violation_to_422(client: TestClient) -> None:
@@ -119,65 +122,6 @@ def test_create_rule_maps_unique_violation_to_422(client: TestClient) -> None:
     )
 
     assert resp.status_code == 422
-
-
-class _CommunityPlan:
-    """Plan-context stub with every feature disabled (community / no license)."""
-
-    def feature_enabled(self, name: str) -> bool:
-        return False
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "community"
-
-    def has_license_key(self) -> bool:
-        return False
-
-
-@pytest.fixture
-def community_client() -> Generator[TestClient, None, None]:
-    session = _make_session(flush_raises=False)
-
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield session
-
-    app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[_get_engine] = lambda: MagicMock()
-
-    class _MockFactory:
-        def __init__(self, s: AsyncMock) -> None:
-            self._session = s
-
-        def __call__(self) -> "_MockFactory":
-            return self
-
-        async def __aenter__(self) -> AsyncMock:
-            return self._session
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
-    app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
-        org_role="admin",
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="testuser",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
-        org_role="admin",
-    )
-    app.dependency_overrides[get_plan_context] = lambda: _CommunityPlan()
-
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 def test_community_plan_webhook_rule_returns_402(community_client: TestClient) -> None:

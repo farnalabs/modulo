@@ -22,6 +22,8 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.plan_stubs import all_features, community_features
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -31,53 +33,14 @@ _SCHEMA_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
 _DUMMY_UUID = uuid.UUID("00000000-0000-0000-0000-000000000005")
 
 
-class _CommunityPlan:
-    """Plan-context stub with every feature disabled (community / no license)."""
-
-    def feature_enabled(self, name: str) -> bool:
-        return False
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "community"
-
-    def has_license_key(self) -> bool:
-        return False
-
-
-class _TeamPlan:
-    """Plan-context stub with every feature enabled (paid team license)."""
-
-    def feature_enabled(self, name: str) -> bool:
-        return True
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "team"
-
-    def has_license_key(self) -> bool:
-        return True
-
-
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session, allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.begin_nested = MagicMock(return_value=begin_cm)
-    session.execute = AsyncMock(
-        return_value=MagicMock(
-            scalar=MagicMock(return_value=0),
-            scalar_one_or_none=MagicMock(return_value=None),
-            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))),
-            first=MagicMock(return_value=None),
-        )
-    )
     return session
 
 
@@ -118,12 +81,12 @@ def _build_client(plan: object) -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def community_client() -> Generator[TestClient, None, None]:
-    yield from _build_client(_CommunityPlan())
+    yield from _build_client(community_features())
 
 
 @pytest.fixture
 def team_client() -> Generator[TestClient, None, None]:
-    yield from _build_client(_TeamPlan())
+    yield from _build_client(all_features())
 
 
 # (feature_name, method, path)
