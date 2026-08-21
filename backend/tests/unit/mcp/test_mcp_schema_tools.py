@@ -233,7 +233,7 @@ class TestCreateModelBackendSuccess(AuthContext):
         mb.visibility = "org"
         mock_create.return_value = mb
         mock_handoff.return_value = {
-            "setup_url": "https://app.modulo.run/setup/model-backend/abc?token=xyz",
+            "setup_url": "https://app.modulo.run/setup/model-backend/abc#token=xyz",
             "expires_at": "2026-01-01T12:15:00+00:00",
             "expires_in_minutes": 15,
         }
