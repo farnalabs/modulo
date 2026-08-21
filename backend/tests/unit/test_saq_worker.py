@@ -102,6 +102,7 @@ class TestFunctionsWiring:
             "analytics_facts_maintenance",
             "journey_reconcile",
             "check_missed_fire_alerts_cron",
+            "metrics_dump",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
@@ -144,6 +145,15 @@ class TestFunctionsWiring:
         assert jr.heartbeat == 30
         assert jr.ttl == 300
         assert jr.unique is True
+        # metrics_dump: daily 01:00 UTC, unique=True, long timeout (full
+        # organisation scan), single retry, generous ttl.
+        md = jobs["metrics_dump"]
+        assert md.cron == "0 1 * * *"
+        assert md.timeout == 600
+        assert md.heartbeat == 60
+        assert md.retries == 1
+        assert md.ttl == 900
+        assert md.unique is True
 
     def test_settings_after_process_and_metadata(self) -> None:
         with patch.object(sw, "get_settings", return_value=_settings()):
@@ -1506,6 +1516,8 @@ class TestGetSystemAsyncEngine:
 
             assert result is create_engine.return_value
             create_engine.assert_called_once()
+            _, kwargs = create_engine.call_args
+            assert kwargs["connect_args"] == {"ssl": False, "statement_cache_size": 0}
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 

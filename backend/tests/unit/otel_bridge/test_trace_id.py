@@ -15,7 +15,9 @@ def test_trace_id_for_thread_matches_uuid5_hex() -> None:
 
 def test_trace_id_for_thread_is_deterministic() -> None:
     thread_id = "org-uuid:run-uuid"
-    assert trace_id_for_thread(thread_id) == trace_id_for_thread(thread_id)
+    first = trace_id_for_thread(thread_id)
+    second = trace_id_for_thread(thread_id)
+    assert first == second
 
 
 def test_trace_id_for_thread_differs_across_threads() -> None:

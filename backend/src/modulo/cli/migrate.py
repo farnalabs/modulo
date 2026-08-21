@@ -219,9 +219,7 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 # ── Import helpers ──────────────────────────────────────────────────────────────
 
 
-async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not await asyncio.to_thread(path.exists):
-        raise click.ClickException(f"Input file not found: {path}")
+def _read_jsonl_sync(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
@@ -241,6 +239,12 @@ async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]
             first = False
             records.append(obj)
     return meta, records
+
+
+async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not await asyncio.to_thread(path.exists):
+        raise click.ClickException(f"Input file not found: {path}")
+    return await asyncio.to_thread(_read_jsonl_sync, path)
 
 
 def _group_records(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

@@ -19,6 +19,7 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
 )
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.settings import Settings, get_settings
 
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
@@ -141,7 +142,12 @@ async def oidc_callback(
         async with session.begin():
             tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
     except ValueError as exc:
-        _log.warning("OIDC callback failed for provider %s: %s", provider, exc, exc_info=True)
+        _log.warning(
+            "OIDC callback failed for provider %s: %s",
+            sanitise_log_value(provider),
+            sanitise_log_value(exc),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),

@@ -5247,6 +5247,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/org/product-analytics/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Consent
+         * @description Accept, decline, or dismiss the product analytics consent prompt.
+         */
+        post: operations["post_consent_api_v1_org_product_analytics_consent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/org/product-analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Product Analytics
+         * @description Read the current product analytics consent state and instance switch.
+         */
+        get: operations["get_product_analytics_api_v1_org_product_analytics_get"];
+        /**
+         * Update Product Analytics Level
+         * @description Update the analytics level (admin toggle).
+         *
+         *     Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+         */
+        put: operations["update_product_analytics_level_api_v1_org_product_analytics_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/primitives": {
         parameters: {
             query?: never;
@@ -5905,7 +5951,7 @@ export interface paths {
          * @description Set the org's guardrails kill-switch (admin only).
          *
          *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
-         *     start — never a full disable. Enabling fires an audit event AND a
+         *     start -- never a full disable. Enabling fires an audit event AND a
          *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
          *     silent. Disabling restores full enforcement.
          */
@@ -7699,6 +7745,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/metrics/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Events
+         * @description Ingest a batch of curated product analytics events.
+         *
+         *     - Consent gate: 204 when the org's ``product_analytics.level`` is not ``all``.
+         *     - Best-effort insert: individual row failures are logged and skipped so the
+         *       client always receives a 2xx.
+         *     - ``api_error`` events are capped at ``API_ERROR_DAILY_CAP`` per org per day.
+         *     - ``UNIQUE(event_id)`` handles dedup — duplicate inserts are silently ignored.
+         */
+        post: operations["ingest_events_api_v1_metrics_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/product-analytics/transparency": {
         parameters: {
             query?: never;
@@ -8930,6 +9002,43 @@ export interface components {
             /** Redirect Url */
             redirect_url: string;
         };
+        /** ConsentRequest */
+        ConsentRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "accept" | "decline" | "dismiss";
+        };
+        /** ConsentResponse */
+        ConsentResponse: {
+            /**
+             * Level
+             * @default off
+             */
+            level: string;
+            /** Prompted */
+            prompted?: string | null;
+            /** Prompted At */
+            prompted_at?: string | null;
+            /** Level Changed At */
+            level_changed_at?: string | null;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Egress Allowed
+             * @default false
+             */
+            egress_allowed: boolean;
+            /**
+             * Prompt Eligible
+             * @default false
+             */
+            prompt_eligible: boolean;
+        };
         /** ContextSourceModeUpdate */
         ContextSourceModeUpdate: {
             /** Source Mode */
@@ -9157,6 +9266,8 @@ export interface components {
             legacy_total?: string | null;
             /** Org Total */
             org_total?: string | null;
+            /** Org Run Count */
+            org_run_count?: number | null;
             /**
              * Has More
              * @default false
@@ -10780,6 +10891,21 @@ export interface components {
              */
             updated_at: string;
         };
+        /** LevelUpdateRequest */
+        LevelUpdateRequest: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "off" | "all";
+        };
+        /** LevelUpdateResponse */
+        LevelUpdateResponse: {
+            /** Level */
+            level: string;
+            /** Level Changed At */
+            level_changed_at?: string | null;
+        };
         /** LibraryPrimitiveCreate */
         LibraryPrimitiveCreate: {
             /**
@@ -11375,6 +11501,24 @@ export interface components {
             role: string;
             /** Created At */
             created_at: string;
+        };
+        /** MetricsEventBatchRequest */
+        MetricsEventBatchRequest: {
+            /** Events */
+            events: components["schemas"]["MetricsEventItem"][];
+        };
+        /** MetricsEventItem */
+        MetricsEventItem: {
+            /** Event Id */
+            event_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
         };
         /** ModelBackendCreate */
         ModelBackendCreate: {
@@ -28203,6 +28347,107 @@ export interface operations {
             };
         };
     };
+    post_consent_api_v1_org_product_analytics_consent_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_analytics_api_v1_org_product_analytics_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_analytics_level_api_v1_org_product_analytics_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LevelUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LevelUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_registry_primitives_endpoint_api_v1_registry_primitives_get: {
         parameters: {
             query?: {
@@ -34174,6 +34419,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WebVitalTimeSeriesPoint"][];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_events_api_v1_metrics_events_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricsEventBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

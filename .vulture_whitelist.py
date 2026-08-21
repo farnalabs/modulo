@@ -48,6 +48,18 @@ __all__ = [
     "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
+    # --- Remy route dynamic backend dispatch (remy.py _BACKEND_IMPORTS, resolved via importlib + getattr) ---
+    "Ai21Backend",
+    "AnthropicBackend",
+    "DeepSeekBackend",
+    "FireworksBackend",
+    "GeminiBackend",
+    "GrokBackend",
+    "GroqBackend",
+    "OpenRouterBackend",
+    "PerplexityBackend",
+    "QwenBackend",
+    "TogetherAIBackend",
     # --- Framework contracts (string-cast Protocol / config-driven registries) ---
     "_TaskGroupSessionManager",
     "RepositoryHub",
@@ -202,4 +214,10 @@ __all__ = [
     "created_by_me",
     "circuit_breaker_tripped_at",
     "last_event_id",
+    # --- Product analytics partner carve-out (FAR-354, used by FAR-361 enforcement) ---
+    "is_partner_carve_out_active",
+    "is_license_enforcement_enabled",
+    # --- Product analytics enforcement (FAR-361) ---
+    "is_enforcement_active",
+    "should_degrade_to_community",
 ]

@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -240,6 +241,15 @@ async def _resolve_trigger_actor(session: AsyncSession, run: Run) -> str | None:
     return _select_trigger_actor(run, account_labels, trigger_labels)
 
 
+def _is_capacity_waiting(status: str, active_count: int, concurrency_limit: int | None) -> bool:
+    """A pending run is queued (``waiting``) at/above the org concurrency limit.
+
+    Shared by the detail path (single-run count) and the list path (bulk
+    capacity) so the admission-gate semantics cannot drift.
+    """
+    return status == "pending" and concurrency_limit is not None and active_count >= concurrency_limit
+
+
 async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) -> dict[str, Any]:
     """Compute the org's active-run capacity relative to this run.
 
@@ -258,8 +268,11 @@ async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) 
         exclude_run_id=run.id,
     )
     limit = await get_org_run_concurrency_limit(session, org_id)
-    waiting = run.status == "pending" and limit is not None and active_count >= limit
-    return {"active_runs": active_count, "concurrency_limit": limit, "waiting": waiting}
+    return {
+        "active_runs": active_count,
+        "concurrency_limit": limit,
+        "waiting": _is_capacity_waiting(run.status, active_count, limit),
+    }
 
 
 async def _resolve_child_runs(session: AsyncSession, run: Run) -> list[dict[str, Any]]:
@@ -297,30 +310,113 @@ async def _do_get_run_observability(
     return actor, capacity, child_runs
 
 
+@dataclass(frozen=True)
+class _ListRunsQuery:
+    """Filter + pagination params for the runs list.
+
+    Grouped so the CRUD call stays small — the endpoint unpacks its FastAPI
+    query params into one object and hands that to ``_do_list_runs``.
+    """
+
+    pipeline_id: uuid.UUID | None = None
+    run_status: str | None = None
+    trigger_type: str | None = None
+    search: str | None = None
+    page: int = 1
+    page_size: int = 20
+    variant_group_id: uuid.UUID | None = None
+    batch_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class _ListPageContext:
+    """Bulk-preloaded labels + org capacity shared by every item on a list page."""
+
+    child_rollup: dict[uuid.UUID, tuple[Decimal, int]]
+    account_labels: dict[uuid.UUID, str]
+    trigger_labels: dict[uuid.UUID, str]
+    active_count: int
+    concurrency_limit: int | None
+
+
+async def _load_account_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
+    """Bulk-load account labels (email or display_name) for a page of runs."""
+    account_ids = {run.account_id for run in runs if run.account_id is not None}
+    labels: dict[uuid.UUID, str] = {}
+    if not account_ids:
+        return labels
+    account_result = await session.execute(select(Account).where(Account.id.in_(account_ids)))
+    for account in account_result.scalars().all():
+        labels[account.id] = account.email or account.display_name
+    return labels
+
+
+async def _load_trigger_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
+    """Bulk-load trigger-type labels for a page of runs."""
+    trigger_ids = {run.trigger_id for run in runs if run.trigger_id is not None}
+    labels: dict[uuid.UUID, str] = {}
+    if not trigger_ids:
+        return labels
+    trigger_result = await session.execute(select(Trigger).where(Trigger.id.in_(trigger_ids)))
+    for trigger in trigger_result.scalars().all():
+        labels[trigger.id] = trigger.trigger_type
+    return labels
+
+
+def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
+    """Build one runs-list item dict from a Run row + the shared page context."""
+    pipeline_name = run.pipeline.name if run.pipeline else None
+    child_cost, child_count = ctx.child_rollup.get(run.id, (_COST_ROLLUP_ZERO, 0))
+    child_cost = _quantize_cost_rollup(child_cost)
+    own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
+    error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
+    trigger_actor = _select_trigger_actor(run, ctx.account_labels, ctx.trigger_labels)
+    capacity = {
+        "active_runs": ctx.active_count,
+        "concurrency_limit": ctx.concurrency_limit,
+        "waiting": _is_capacity_waiting(run.status, ctx.active_count, ctx.concurrency_limit),
+    }
+    return {
+        "run_id": str(run.id),
+        "pipeline_id": str(run.pipeline_id),
+        "pipeline_name": pipeline_name,
+        "status": run.status,
+        "trigger_type": run.trigger_type,
+        "run_number": run.run_number,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "error_code": error_code,
+        "error_detail": error_detail,
+        "total_cost_usd": run.total_cost_usd,
+        "child_runs_cost_usd": child_cost,
+        "child_runs_count": child_count,
+        "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
+        "account_id": str(run.account_id) if run.account_id else None,
+        "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
+        "trigger_actor": trigger_actor,
+        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        "capacity": capacity,
+    }
+
+
 async def _do_list_runs(
     factory: async_sessionmaker[AsyncSession],
     user: TenantPrincipal,
-    pipeline_id: uuid.UUID | None,
-    run_status: str | None,
-    trigger_type: str | None,
-    search: str | None,
-    page: int,
-    page_size: int,
-    variant_group_id: uuid.UUID | None = None,
-    batch_id: uuid.UUID | None = None,
+    query: _ListRunsQuery,
 ) -> dict[str, Any]:
     async with factory() as session, session.begin():
         await set_rls_org(session, user.organisation_id)
         result = await db_list_runs(
             session,
-            pipeline_id=pipeline_id,
-            status=run_status,
-            trigger_type=trigger_type,
-            search=search,
-            page=page,
-            page_size=page_size,
-            variant_group_id=variant_group_id,
-            batch_id=batch_id,
+            pipeline_id=query.pipeline_id,
+            status=query.run_status,
+            trigger_type=query.trigger_type,
+            search=query.search,
+            page=query.page,
+            page_size=query.page_size,
+            variant_group_id=query.variant_group_id,
+            batch_id=query.batch_id,
         )
         # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
         # in Python — never a per-row aggregate (avoids N+1).
@@ -335,60 +431,18 @@ async def _do_list_runs(
         # count uses admission-gate semantics (pending runs do not hold
         # capacity), matching dispatch, so queued pending runs are never shown
         # as waiting on account of other pending runs.
-        account_ids = {run.account_id for run in result.items if run.account_id is not None}
-        trigger_ids = {run.trigger_id for run in result.items if run.trigger_id is not None}
-        account_labels: dict[uuid.UUID, str] = {}
-        if account_ids:
-            account_result = await session.execute(select(Account).where(Account.id.in_(account_ids)))
-            for account in account_result.scalars().all():
-                account_labels[account.id] = account.email or account.display_name
-        trigger_labels: dict[uuid.UUID, str] = {}
-        if trigger_ids:
-            trigger_result = await session.execute(select(Trigger).where(Trigger.id.in_(trigger_ids)))
-            for trigger in trigger_result.scalars().all():
-                trigger_labels[trigger.id] = trigger.trigger_type
+        account_labels = await _load_account_labels(session, result.items)
+        trigger_labels = await _load_trigger_labels(session, result.items)
         active_count = await count_active_runs_for_org(session, user.organisation_id, include_pending=False)
         concurrency_limit = await get_org_run_concurrency_limit(session, user.organisation_id)
-
-        items = []
-        for run in result.items:
-            pipeline_name = run.pipeline.name if run.pipeline else None
-            child_cost, child_count = child_rollup.get(run.id, (_COST_ROLLUP_ZERO, 0))
-            child_cost = _quantize_cost_rollup(child_cost)
-            own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
-            _error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
-            trigger_actor = _select_trigger_actor(run, account_labels, trigger_labels)
-            capacity = {
-                "active_runs": active_count,
-                "concurrency_limit": concurrency_limit,
-                "waiting": (
-                    run.status == "pending" and concurrency_limit is not None and active_count >= concurrency_limit
-                ),
-            }
-            items.append(
-                {
-                    "run_id": str(run.id),
-                    "pipeline_id": str(run.pipeline_id),
-                    "pipeline_name": pipeline_name,
-                    "status": run.status,
-                    "trigger_type": run.trigger_type,
-                    "run_number": run.run_number,
-                    "created_at": run.created_at.isoformat() if run.created_at else None,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                    "error_code": _error_code,
-                    "error_detail": error_detail,
-                    "total_cost_usd": run.total_cost_usd,
-                    "child_runs_cost_usd": child_cost,
-                    "child_runs_count": child_count,
-                    "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
-                    "account_id": str(run.account_id) if run.account_id else None,
-                    "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
-                    "trigger_actor": trigger_actor,
-                    "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
-                    "capacity": capacity,
-                }
-            )
+        ctx = _ListPageContext(
+            child_rollup=child_rollup,
+            account_labels=account_labels,
+            trigger_labels=trigger_labels,
+            active_count=active_count,
+            concurrency_limit=concurrency_limit,
+        )
+        items = [_build_list_item(run, ctx) for run in result.items]
     return {
         "items": items,
         "total": result.total,
@@ -414,20 +468,17 @@ async def list_runs_endpoint(
     user: TenantPrincipal = require_permission(_CODE_RUN_LIST),
 ) -> dict[str, Any]:
     try:
-        return await _run_with_retry(
-            lambda: _do_list_runs(
-                factory,
-                user,
-                pipeline_id,
-                run_status,
-                trigger_type,
-                search,
-                page,
-                page_size,
-                variant_group_id,
-                batch_id,
-            )
+        query = _ListRunsQuery(
+            pipeline_id=pipeline_id,
+            run_status=run_status,
+            trigger_type=trigger_type,
+            search=search,
+            page=page,
+            page_size=page_size,
+            variant_group_id=variant_group_id,
+            batch_id=batch_id,
         )
+        return await _run_with_retry(lambda: _do_list_runs(factory, user, query))
     except IntegrityError:
         _log.exception("runs.list_runs_endpoint")
         raise HTTPException(
@@ -618,19 +669,32 @@ def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
         return None
 
 
+@dataclass(frozen=True)
+class _RunDisplayContext:
+    """Optional display enrichment for a run detail/trigger response.
+
+    Keeps ``_build_run_response`` callable with just the run row for the
+    trigger path while letting the detail path pass the resolved extras (cost
+    rollup, OTLP endpoint, observability) as a single object.
+    """
+
+    child_cost: Decimal | None = None
+    child_count: int = 0
+    otlp_endpoint: str | None = None
+    trigger_actor: str | None = None
+    trigger_id: uuid.UUID | None = None
+    heartbeat_at: datetime | None = None
+    work_item_refs: list[dict[str, Any]] | None = None
+    child_runs: list[dict[str, Any]] | None = None
+    capacity: dict[str, Any] | None = None
+
+
 def _build_run_response(
     run: Any,
-    child_cost: Decimal | None = None,
-    child_count: int = 0,
-    otlp_endpoint: str | None = None,
-    trigger_actor: str | None = None,
-    trigger_id: uuid.UUID | None = None,
-    heartbeat_at: datetime | None = None,
-    work_item_refs: list[dict[str, Any]] | None = None,
-    child_runs: list[dict[str, Any]] | None = None,
-    capacity: dict[str, Any] | None = None,
+    ctx: _RunDisplayContext | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
+    ctx = ctx or _RunDisplayContext()
     token_consumption: dict[str, Any] | None = None
     if run.total_tokens is not None:
         token_consumption = {"total_tokens": run.total_tokens}
@@ -639,14 +703,14 @@ def _build_run_response(
     trace_url: str | None = None
     if run.langgraph_thread_id:
         trace_id = trace_id_for_thread(run.langgraph_thread_id)
-        if otlp_endpoint:
-            trace_url = f"{otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
+        if ctx.otlp_endpoint:
+            trace_url = f"{ctx.otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
 
     pipeline_name: str | None = None
     if run.pipeline is not None:
         pipeline_name = run.pipeline.name
 
-    child_runs_cost_usd = _quantize_cost_rollup(child_cost if child_cost is not None else _COST_ROLLUP_ZERO)
+    child_runs_cost_usd = _quantize_cost_rollup(ctx.child_cost if ctx.child_cost is not None else _COST_ROLLUP_ZERO)
     own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
 
     error_code, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
@@ -675,7 +739,7 @@ def _build_run_response(
         node_token_usage=_serialize_node_token_usage(run.node_token_usage),
         cost_breakdown=run.cost_breakdown,
         child_runs_cost_usd=child_runs_cost_usd,
-        child_runs_count=child_count,
+        child_runs_count=ctx.child_count,
         aggregate_cost_usd=_quantize_cost_rollup(own_cost + child_runs_cost_usd),
         created_at=run.created_at,
         started_at=run.started_at,
@@ -684,13 +748,13 @@ def _build_run_response(
         gate_fired=_run_gate_fired(run),
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
-        trigger_actor=trigger_actor,
+        trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
-        trigger_id=trigger_id if trigger_id is not None else getattr(run, "trigger_id", None),
-        heartbeat_at=heartbeat_at if heartbeat_at is not None else getattr(run, "heartbeat_at", None),
-        work_item_refs=work_item_refs,
-        child_runs=child_runs,
-        capacity=capacity,
+        trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
+        heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
+        work_item_refs=ctx.work_item_refs,
+        child_runs=ctx.child_runs,
+        capacity=ctx.capacity,
     )
 
 
@@ -748,6 +812,68 @@ async def _validate_run_input_basics(
         )
 
 
+async def _enforce_trigger_rate_limit(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    input_payload: dict[str, Any],
+) -> str | None:
+    """Enforce the pipeline's max-triggers rate limit; returns the limit key.
+
+    Returns None when no rate limit is configured. Raises 429 when the window
+    is exhausted — the caller must not create the run.
+    """
+    rl = pipeline.rate_limit_config
+    if not rl or not rl.get("max_triggers"):
+        return None
+    key = TriggerEngine._compute_rate_limit_key(input_payload, rl)
+    recent_count = await TriggerEngine._count_recent_rate_limited(
+        session, pipeline.id, key, int(rl.get("window_seconds", 3600))
+    )
+    if recent_count >= int(rl["max_triggers"]):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: {rl['max_triggers']} triggers per {rl.get('window_seconds', 3600)}s",
+        )
+    return key
+
+
+async def _create_manual_run(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: TriggerRunRequest,
+) -> Run:
+    """Create a manually-triggered run: snapshot, validate, rate-limit, insert.
+
+    Runs inside the caller's transaction (RLS already set). Order matters —
+    snapshot creation and input validation happen before the rate-limit check
+    so a rejected trigger never leaves a dangling snapshot.
+    """
+    pipeline = await get_pipeline(session, req.pipeline_id, organisation_id=principal.organisation_id)
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline {req.pipeline_id} not found")
+    snapshot = await create_snapshot_from_live_graph(
+        session,
+        pipeline_id=pipeline.id,
+        account_id=principal.account_id,
+    )
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {req.pipeline_id} not found",
+        )
+    await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
+    rate_limit_key = await _enforce_trigger_rate_limit(session, pipeline, req.input_payload)
+    return await create_run(
+        session,
+        org_id=principal.organisation_id,
+        pipeline_id=pipeline.id,
+        snapshot_id=snapshot.id,
+        trigger_type="manual",
+        input_payload=req.input_payload,
+        rate_limit_key=rate_limit_key,
+    )
+
+
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
     req: TriggerRunRequest,
@@ -762,51 +888,16 @@ async def trigger_run(
     """
     org_id = principal.organisation_id
 
+    run_response: RunResponse | None = None
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
-            pipeline = await get_pipeline(session, req.pipeline_id, organisation_id=org_id)
-            if pipeline is None:
-                raise HTTPException(status_code=404, detail=f"Pipeline {req.pipeline_id} not found")
-            snapshot = await create_snapshot_from_live_graph(
-                session,
-                pipeline_id=pipeline.id,
-                account_id=principal.account_id,
-            )
-            if snapshot is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Pipeline {req.pipeline_id} not found",
-                )
-            await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
-
-            # Pipeline-level rate limit check
-            rl = pipeline.rate_limit_config
-            if rl and rl.get("max_triggers"):
-                key = TriggerEngine._compute_rate_limit_key(req.input_payload, rl)
-                recent_count = await TriggerEngine._count_recent_rate_limited(
-                    session, pipeline.id, key, int(rl.get("window_seconds", 3600))
-                )
-                if recent_count >= int(rl["max_triggers"]):
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=(
-                            f"Rate limit exceeded: {rl['max_triggers']} triggers per {rl.get('window_seconds', 3600)}s"
-                        ),
-                    )
-            else:
-                key = None
-
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline.id,
-                snapshot_id=snapshot.id,
-                trigger_type="manual",
-                input_payload=req.input_payload,
-                rate_limit_key=key,
-            )
+            run = await _create_manual_run(session, principal, req)
             run_id = run.id
+            # Build the response while the transaction is still open: the
+            # run.pipeline relationship is lazy-loaded, and the session has
+            # autobegin disabled, so a load outside a transaction would raise.
+            run_response = _build_run_response(run)
     except IntegrityError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
@@ -855,7 +946,7 @@ async def trigger_run(
         ) from None
     await dispatch_run(str(run_id), str(org_id), queue="runs")
 
-    return _build_run_response(run)
+    return run_response
 
 
 # ---------------------------------------------------------------------------
@@ -984,15 +1075,45 @@ async def get_run_status(
 
     return _build_run_response(
         run,
-        child_cost,
-        child_count,
-        otlp_endpoint=otlp_endpoint,
-        trigger_actor=trigger_actor,
-        heartbeat_at=run.heartbeat_at,
-        work_item_refs=run.work_item_refs,
-        child_runs=child_runs,
-        capacity=capacity,
+        _RunDisplayContext(
+            child_cost=child_cost,
+            child_count=child_count,
+            otlp_endpoint=otlp_endpoint,
+            trigger_actor=trigger_actor,
+            heartbeat_at=run.heartbeat_at,
+            work_item_refs=run.work_item_refs,
+            child_runs=child_runs,
+            capacity=capacity,
+        ),
     )
+
+
+async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id: uuid.UUID) -> None:
+    """Request cancellation for a run, finalizing cost for non-paused runs.
+
+    Runs inside the caller's transaction (RLS already set). PAUSED-then-
+    cancelled class (awaiting_human/claimed) runs NO finalize (§4.2). A STREAMED
+    running run cancelled cross-process is routed through finalize_cost,
+    re-reading the STORED cumulative sets; a NEVER-PAUSED in-flight run has none
+    and forfeits its accrued cost (cost_components_partial_spend_lost log).
+    """
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+    if run.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run is already in terminal status: {run.status}",
+        )
+
+    was_paused = run.status in ("awaiting_human", "claimed")
+    await request_cancellation(session, run_id)
+    if not was_paused:
+        from modulo.core.cost_controller.finalize import finalize_cancelled_run
+
+        await finalize_cancelled_run(session, run_id=run_id, org_id=principal.organisation_id)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -1008,28 +1129,7 @@ async def cancel_run(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
-
-            if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
-
-            if run.status in TERMINAL_STATUSES:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Run is already in terminal status: {run.status}",
-                )
-
-            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
-            # finalize (§4.2). A STREAMED running run cancelled cross-process is
-            # routed through finalize_cost, re-reading the STORED cumulative
-            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
-            # accrued cost (cost_components_partial_spend_lost log).
-            was_paused = run.status in ("awaiting_human", "claimed")
-            await request_cancellation(session, run_id)
-            if not was_paused:
-                from modulo.core.cost_controller.finalize import finalize_cancelled_run
-
-                await finalize_cancelled_run(session, run_id=run_id, org_id=principal.organisation_id)
+            await _cancel_run(session, principal, run_id)
     except IntegrityError:
         _log.exception("runs.cancel_run")
         raise HTTPException(
@@ -1120,6 +1220,48 @@ def _build_fixture_map(
     return fixture
 
 
+async def _load_snapshot_for_run(session: AsyncSession, run: Run | None) -> PipelineSnapshot | None:
+    """Load the pipeline snapshot a run references (None when run/snapshot is absent)."""
+    if run is None or not run.snapshot_id:
+        return None
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+
+    snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
+    return snap_result.scalar_one_or_none()
+
+
+def _build_node_labels(graph_json: dict[str, Any] | None) -> dict[str, str]:
+    """Map node_id -> human label from a snapshot graph (frontend UUID hygiene)."""
+    labels: dict[str, str] = {}
+    if not isinstance(graph_json, dict):
+        return labels
+    for n in graph_json.get("nodes", []):
+        if isinstance(n, dict) and n.get("id"):
+            labels[str(n["id"])] = str(n.get("label") or n.get("node_type") or n.get("id"))
+    return labels
+
+
+def _normalize_run_outputs(
+    outputs_json: dict[str, Any] | None,
+    telemetry_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve each node's pure return (new rows) or envelope verbatim (legacy)."""
+    if not outputs_json:
+        return outputs_json
+    return {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json}
+
+
+def _normalize_node_telemetry(
+    telemetry_json: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve each node's telemetry (new rows) or the inner output envelope (legacy)."""
+    node_ids = set(outputs_json or {}) | set(telemetry_json or {})
+    if not node_ids:
+        return telemetry_json
+    return {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in node_ids}
+
+
 class FixtureExportResponse(BaseModel):
     fixture_name: str
     run_id: uuid.UUID
@@ -1154,12 +1296,7 @@ async def get_run_io_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
-            snapshot = None
-            if run is not None and run.snapshot_id:
-                from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-
-                snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
-                snapshot = snap_result.scalar_one_or_none()
+            snapshot = await _load_snapshot_for_run(session, run)
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
@@ -1191,11 +1328,7 @@ async def get_run_io_endpoint(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
-    node_labels: dict[str, str] = {}
-    if snapshot is not None and isinstance(snapshot.graph_json, dict):
-        for n in snapshot.graph_json.get("nodes", []):
-            if isinstance(n, dict) and n.get("id"):
-                node_labels[str(n["id"])] = str(n.get("label") or n.get("node_type") or n.get("id"))
+    node_labels = _build_node_labels(snapshot.graph_json if snapshot else None)
 
     outputs_json = run.outputs_json
     telemetry_json = run.node_telemetry_json
@@ -1203,13 +1336,8 @@ async def get_run_io_endpoint(
     # One shape for the frontend: node_return resolves the pure return (new
     # rows) or the envelope verbatim (legacy rows); node_telemetry resolves
     # the stored telemetry (new rows) or the inner output envelope (legacy).
-    normalized_outputs = (
-        {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json} if outputs_json else outputs_json
-    )
-    node_ids = set(outputs_json or {}) | set(telemetry_json or {})
-    normalized_telemetry = (
-        {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in node_ids} if node_ids else telemetry_json
-    )
+    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
+    normalized_telemetry = _normalize_node_telemetry(telemetry_json, outputs_json)
 
     masked_outputs = _mask_output_value(normalized_outputs)
     masked_telemetry = _mask_output_value(normalized_telemetry)
@@ -1247,11 +1375,7 @@ async def export_run_fixture(
             run = await get_run(session, run_id)
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
-
-            from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-
-            snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
-            snapshot = snap_result.scalar_one_or_none()
+            snapshot = await _load_snapshot_for_run(session, run)
     except IntegrityError:
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
@@ -1288,9 +1412,7 @@ async def export_run_fixture(
     # outputs_json mirrors GET /runs/{id}/io and legacy runs stay byte-identical.
     outputs_json = run.outputs_json
     telemetry_json = run.node_telemetry_json
-    normalized_outputs = (
-        {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json} if outputs_json else outputs_json
-    )
+    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
 
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
     masked_outputs = _mask_output_value(normalized_outputs) if normalized_outputs else None
@@ -2037,6 +2159,36 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _decrypt_checkpoint(raw_checkpoint: Any, fernet_key: str | None) -> Any:
+    """Decrypt a checkpoint payload when stored as an encrypted JSON envelope.
+
+    Handles both string-encoded and dict-encoded envelopes. Malformed or
+    undecryptable values degrade to the original payload — never raise.
+    """
+    from cryptography.fernet import Fernet
+
+    if isinstance(raw_checkpoint, str):
+        try:
+            parsed = json.loads(raw_checkpoint)
+            if isinstance(parsed, dict):
+                if parsed.get("__encrypted__") and fernet_key:
+                    f = Fernet(fernet_key.encode())
+                    decrypted = f.decrypt(parsed["data"].encode())
+                    return json.loads(decrypted.decode())
+                return parsed
+        except (json.JSONDecodeError, Exception) as exc:
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    elif isinstance(raw_checkpoint, dict) and raw_checkpoint.get("__encrypted__") and fernet_key:
+        try:
+            f = Fernet(fernet_key.encode())
+            decrypted = f.decrypt(raw_checkpoint["data"].encode())
+            return json.loads(decrypted.decode())
+        except Exception as exc:
+            _log.exception("runs._get_checkpoint_state")
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    return raw_checkpoint
+
+
 async def _get_checkpoint_state(
     session: AsyncSession,
     thread_id: str,
@@ -2044,8 +2196,6 @@ async def _get_checkpoint_state(
     fernet_key: str | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the latest checkpoint state for a thread, decrypting if needed."""
-    from cryptography.fernet import Fernet
-
     result = await session.execute(
         text("""
             SELECT checkpoint, checkpoint_id
@@ -2062,31 +2212,43 @@ async def _get_checkpoint_state(
     if row is None:
         return None
 
-    raw_checkpoint = row[0]
-    if isinstance(raw_checkpoint, str):
-        try:
-            parsed = json.loads(raw_checkpoint)
-            if isinstance(parsed, dict):
-                if parsed.get("__encrypted__") and fernet_key:
-                    f = Fernet(fernet_key.encode())
-                    decrypted = f.decrypt(parsed["data"].encode())
-                    raw_checkpoint = json.loads(decrypted.decode())
-                else:
-                    raw_checkpoint = parsed
-        except (json.JSONDecodeError, Exception) as exc:
-            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
-    elif isinstance(raw_checkpoint, dict) and raw_checkpoint.get("__encrypted__") and fernet_key:
-        try:
-            f = Fernet(fernet_key.encode())
-            decrypted = f.decrypt(raw_checkpoint["data"].encode())
-            raw_checkpoint = json.loads(decrypted.decode())
-        except Exception as exc:
-            _log.exception("runs._get_checkpoint_state")
-            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
-
+    raw_checkpoint = _decrypt_checkpoint(row[0], fernet_key)
     if isinstance(raw_checkpoint, dict):
         return raw_checkpoint.get("channel_values")
     return None
+
+
+def _messages_from_prior_outputs(
+    outputs_json: dict[str, Any] | None,
+    node_id: str,
+) -> list[dict[str, str]]:
+    """Assistant messages built from previous node outputs (skips the current node)."""
+    messages: list[dict[str, str]] = []
+    if not outputs_json:
+        return messages
+    for prev_node_id in outputs_json:
+        if prev_node_id == node_id:
+            continue
+        output = node_return(outputs_json, None, prev_node_id)
+        if isinstance(output, str):
+            messages.append({"role": "assistant", "content": output})
+        elif isinstance(output, dict):
+            messages.append({"role": "assistant", "content": json.dumps(output, default=str)})
+    return messages
+
+
+def _resolve_node_user_input(
+    checkpoint_state: dict[str, Any] | None,
+    input_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Current user input — prefer checkpoint state, fall back to run input_payload."""
+    user_input: dict[str, Any] | None = None
+    if checkpoint_state:
+        run_ctx = checkpoint_state.get("run_context") or {}
+        user_input = run_ctx.get("input")
+    if user_input is None and input_payload:
+        user_input = input_payload
+    return user_input
 
 
 def _build_messages_from_agent_and_state(
@@ -2109,26 +2271,9 @@ def _build_messages_from_agent_and_state(
         if system_content:
             messages.append({"role": "system", "content": system_content})
 
-    # Build conversation history from previous node outputs.
-    if outputs_json:
-        for prev_node_id in outputs_json:
-            if prev_node_id == node_id:
-                continue
-            output = node_return(outputs_json, None, prev_node_id)
-            if isinstance(output, str):
-                messages.append({"role": "assistant", "content": output})
-            elif isinstance(output, dict):
-                content = json.dumps(output, default=str)
-                messages.append({"role": "assistant", "content": content})
+    messages.extend(_messages_from_prior_outputs(outputs_json, node_id))
 
-    # Current user input — prefer checkpoint state, fall back to run input_payload.
-    user_input: dict[str, Any] | None = None
-    if checkpoint_state:
-        run_ctx = checkpoint_state.get("run_context") or {}
-        user_input = run_ctx.get("input")
-    if user_input is None and input_payload:
-        user_input = input_payload
-
+    user_input = _resolve_node_user_input(checkpoint_state, input_payload)
     if user_input is not None:
         if isinstance(user_input, str):
             messages.append({"role": "user", "content": user_input})
@@ -2177,14 +2322,12 @@ async def reveal_node_prompt(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
             # Load snapshot to get graph definition.
-            snapshot_id = run.snapshot_id
-            snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id))
-            snapshot = snapshot_result.scalar_one_or_none()
+            snapshot = await _load_snapshot_for_run(session, run)
 
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Snapshot {snapshot_id} not found for run",
+                    detail=f"Snapshot {run.snapshot_id} not found for run",
                 )
 
             graph_json: dict[str, Any] = snapshot.graph_json

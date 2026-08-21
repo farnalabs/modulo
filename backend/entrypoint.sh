@@ -11,7 +11,7 @@ alembic upgrade 0001_v2_identity_org
 
 # Widen the version_num column to VARCHAR(64) — long revision IDs like
 # 0005_library_community_visibility (34 chars) exceed the default 32.
-PGPASSWORD=modulo psql -h db -U modulo -d modulo -c \
+PGPASSWORD=${POSTGRES_PASSWORD:-changeme} psql -h db -U modulo -d modulo -c \
   "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64);" 2>/dev/null || true
 
 # Phase 2: apply remaining migrations

@@ -466,9 +466,10 @@ def test_assert_pack_ci_ready_error_lists_gaps():
 # ---------------------------------------------------------------------------
 
 
-def test_main_cli_returns_zero_for_ready_pack(tmp_path):
+def test_main_cli_returns_zero_for_ready_pack(tmp_path, monkeypatch):
     pack_file = tmp_path / "ready.yaml"
     pack_file.write_text(_PACK_YAML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     assert main([str(pack_file)]) == 0
 
 

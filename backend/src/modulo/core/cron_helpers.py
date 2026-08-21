@@ -351,6 +351,7 @@ def _get_system_engine() -> AsyncEngine:
             _SYSTEM_ENGINE = create_async_engine(
                 settings.modulo_system_database_url,
                 pool_pre_ping=True,
+                connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
             _SYSTEM_ENGINE = _get_engine()
@@ -483,6 +484,73 @@ async def _count_ongoing_runs(session: AsyncSession, trigger_id: uuid.UUID) -> i
     return int(result.scalar_one() or 0)
 
 
+def _build_trigger_event(
+    *,
+    org_id: uuid.UUID,
+    trigger: Any,
+    trigger_type: str,
+    payload_salt: str,
+    result: str,
+    run_id: uuid.UUID | None,
+    error_detail: str | None,
+    sanitize: bool,
+) -> Any:
+    """Construct a TriggerEvent row (shared by the three fire-job loggers).
+
+    ``payload_salt`` varies per trigger type so each type's ``raw_payload_hash``
+    is distinct (cron uses a static salt; polling/ongoing mix in the trigger id
+    and result). ``sanitize`` mirrors the per-type ``error_detail`` policy —
+    cron and polling sanitise secrets, ongoing deliberately does not (it
+    preserves the raw failure detail for the ongoing failure counter path).
+    """
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    payload_hash = hashlib.sha256(payload_salt.encode()).hexdigest()
+    if error_detail is None:
+        detail: str | None = None
+    elif sanitize:
+        detail = sanitize_error_text(error_detail)
+    else:
+        detail = error_detail
+    return TriggerEvent(
+        organisation_id=org_id,
+        trigger_id=trigger.id,
+        trigger_type=trigger_type,
+        raw_payload_hash=payload_hash,
+        validation_result=result,
+        run_id=run_id,
+        error_detail=detail,
+    )
+
+
+async def _add_trigger_event(
+    session: AsyncSession,
+    *,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_type: str,
+    payload_salt: str,
+    result: str,
+    run_id: uuid.UUID | None = None,
+    error_detail: str | None = None,
+    sanitize: bool,
+) -> Any:
+    """Build, add and flush one TriggerEvent row."""
+    event = _build_trigger_event(
+        org_id=org_id,
+        trigger=trigger,
+        trigger_type=trigger_type,
+        payload_salt=payload_salt,
+        result=result,
+        run_id=run_id,
+        error_detail=error_detail,
+        sanitize=sanitize,
+    )
+    session.add(event)
+    await session.flush()
+    return event
+
+
 async def _log_event(
     session: AsyncSession,
     *,
@@ -492,21 +560,18 @@ async def _log_event(
     run_id: uuid.UUID | None = None,
     error_detail: str | None = None,
 ) -> Any:
-    from modulo.db.models.trigger_event import TriggerEvent
-
-    payload_hash = hashlib.sha256(b"cron").hexdigest()
-    event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
+    """Log one ``cron`` TriggerEvent."""
+    return await _add_trigger_event(
+        session,
+        trigger=trigger,
+        org_id=org_id,
         trigger_type="cron",
-        raw_payload_hash=payload_hash,
-        validation_result=result,
+        payload_salt="cron",
+        result=result,
         run_id=run_id,
-        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
+        error_detail=error_detail,
+        sanitize=True,
     )
-    session.add(event)
-    await session.flush()
-    return event
 
 
 async def _log_poll_event(
@@ -518,21 +583,18 @@ async def _log_poll_event(
     run_id: uuid.UUID | None = None,
     error_detail: str | None = None,
 ) -> Any:
-    from modulo.db.models.trigger_event import TriggerEvent
-
-    payload_hash = hashlib.sha256(f"polling:{trigger.id}:{result}".encode()).hexdigest()
-    event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
+    """Log one ``polling`` TriggerEvent."""
+    return await _add_trigger_event(
+        session,
+        trigger=trigger,
+        org_id=org_id,
         trigger_type="polling",
-        raw_payload_hash=payload_hash,
-        validation_result=result,
+        payload_salt=f"polling:{trigger.id}:{result}",
+        result=result,
         run_id=run_id,
-        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
+        error_detail=error_detail,
+        sanitize=True,
     )
-    session.add(event)
-    await session.flush()
-    return event
 
 
 async def _log_ongoing_event(
@@ -545,21 +607,17 @@ async def _log_ongoing_event(
     error_detail: str | None = None,
 ) -> Any:
     """Log one ``ongoing`` TriggerEvent (mirrors ``_log_poll_event``, FAR-158)."""
-    from modulo.db.models.trigger_event import TriggerEvent
-
-    payload_hash = hashlib.sha256(f"ongoing:{trigger.id}:{result}".encode()).hexdigest()
-    event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
+    return await _add_trigger_event(
+        session,
+        trigger=trigger,
+        org_id=org_id,
         trigger_type="ongoing",
-        raw_payload_hash=payload_hash,
-        validation_result=result,
+        payload_salt=f"ongoing:{trigger.id}:{result}",
+        result=result,
         run_id=run_id,
         error_detail=error_detail,
+        sanitize=False,
     )
-    session.add(event)
-    await session.flush()
-    return event
 
 
 async def _ingest_saq_error(
@@ -2303,19 +2361,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                 pipelines_needing_snapshots = {
                     row.pipeline_id for row in cron_rows if not (row.config_json or {}).get("snapshot_id")
                 }
-                latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
-                if pipelines_needing_snapshots:
-                    pids = list(pipelines_needing_snapshots)
-                    snap_result = await session.execute(
-                        text(
-                            "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
-                            "FROM pipeline_snapshots "
-                            "WHERE pipeline_id = ANY(:pids) "
-                            "ORDER BY pipeline_id, created_at DESC"
-                        ),
-                        {"pids": [str(p) for p in pids]},
-                    )
-                    latest_snapshots = {row[0]: row[1] for row in snap_result}
+                latest_snapshots = await _resolve_latest_snapshots(session, pipelines_needing_snapshots)
 
                 # ``advanced_this_tick`` tracks epochs THIS tick advanced AND
                 # enqueued (or SAQ-deduped as already handled). The missed-fire
@@ -2442,19 +2488,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                 ongoing_needing_snapshots = {
                     row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
                 }
-                ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
-                if ongoing_needing_snapshots:
-                    opids = list(ongoing_needing_snapshots)
-                    osnap_result = await session.execute(
-                        text(
-                            "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
-                            "FROM pipeline_snapshots "
-                            "WHERE pipeline_id = ANY(:pids) "
-                            "ORDER BY pipeline_id, created_at DESC"
-                        ),
-                        {"pids": [str(p) for p in opids]},
-                    )
-                    ongoing_latest_snapshots = {row[0]: row[1] for row in osnap_result}
+                ongoing_latest_snapshots = await _resolve_latest_snapshots(session, ongoing_needing_snapshots)
 
                 ongoing_enqueued = 0
                 for row in ongoing_rows:
@@ -2475,6 +2509,31 @@ async def fire_due_triggers() -> dict[str, Any]:
 
     _log.info("fire_due_triggers summary: %s", summary)
     return summary
+
+
+async def _resolve_latest_snapshots(
+    session: AsyncSession,
+    pipeline_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Resolve the latest snapshot id per pipeline (DISTINCT ON, by created_at).
+
+    Shared by the cron and ongoing scans in ``fire_due_triggers`` for the rows
+    that do NOT carry a pinned ``snapshot_id``. Returns a map of
+    ``{pipeline_id: latest_snapshot_id}`` (empty when no pipeline needs one).
+    """
+    if not pipeline_ids:
+        return {}
+    pids = list(pipeline_ids)
+    snap_result = await session.execute(
+        text(
+            "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
+            "FROM pipeline_snapshots "
+            "WHERE pipeline_id = ANY(:pids) "
+            "ORDER BY pipeline_id, created_at DESC"
+        ),
+        {"pids": [str(p) for p in pids]},
+    )
+    return {row[0]: row[1] for row in snap_result}
 
 
 def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID]) -> uuid.UUID | None:

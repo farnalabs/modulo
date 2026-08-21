@@ -101,11 +101,11 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           python-version: "3.12"
           enable-cache: true
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.21.0
       - uses: actions/setup-node@v6
@@ -119,22 +119,22 @@ jobs:
         working-directory: backend
         run: |
           uv sync --frozen
-          uv run --no-sync ruff check .
-          uv run --no-sync mypy src/modulo/
-          uv run --no-sync bandit -r src/modulo/ -ll
-          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .)
-          uv run --no-sync pip-audit
+          uv run --no-build --no-sync ruff check .
+          uv run --no-build --no-sync mypy src/modulo/
+          uv run --no-build --no-sync bandit -r src/modulo/ -ll
+          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
+          uv run --no-build --no-sync pip-audit
 
       - name: Backend unit tests
         working-directory: backend
-        run: uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
         env:
-          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
 
       - name: Frontend checks
         working-directory: frontend
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm run lint --quiet
           pnpm run type-check
           pnpm run test:unit
@@ -169,7 +169,7 @@ jobs:
 
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
@@ -177,10 +177,8 @@ jobs:
       - name: Security audit
         working-directory: backend
         run: |
-          uv run pip-audit
-          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --error .)
-        env:
-          SEMGREP_BASELINE_COMMIT: "HEAD^"
+          uv run --no-build --no-sync pip-audit
+          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
 
       - name: Stop containers
         if: always()
@@ -579,7 +577,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.21.0
       - uses: actions/setup-node@v6
@@ -603,7 +601,7 @@ jobs:
           exit 1
 
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium
@@ -908,7 +906,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.21.0
       - uses: actions/setup-node@v6
@@ -918,7 +916,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium

@@ -37,6 +37,10 @@ function auth(token) {
   return { Authorization: `Bearer ${token}` };
 }
 
+function logSafe(value, max = 200) {
+  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+}
+
 async function main() {
   // Login
   const loginResp = await api("/api/v1/auth/login", {
@@ -49,7 +53,7 @@ async function main() {
   // Step 1: List all pending gates org-wide
   console.log("Fetching pending HITL gates ...");
   const pending = await api("/api/v1/hitl/pending", { headers: h });
-  console.log(`  ${pending.gates.length} pending gate(s)`);
+  console.log(`  ${logSafe(pending.gates.length)} pending gate(s)`);
 
   if (!pending.gates.length) {
     console.log("\nNo pending gates. Trigger a pipeline with a human_review node first.");
@@ -79,7 +83,7 @@ async function main() {
     headers: h,
     body: JSON.stringify({ expiry_minutes: 10 }),
   });
-  console.log(`  Claimed! Token: ${claim.claim_token.slice(0, 20)}...`);
+  console.log(`  Claimed! Token: ${logSafe(claim.claim_token.slice(0, 20))}...`);
 
   // Step 4: Approve the gate
   console.log(`\nApproving gate ${gate_id} ...`);
@@ -91,7 +95,7 @@ async function main() {
       notes: "Approved via JS example",
     }),
   });
-  console.log(`  Status: ${approve.status}`);
+  console.log(`  Status: ${logSafe(approve.status)}`);
 
   console.log("\nDone.");
 }
