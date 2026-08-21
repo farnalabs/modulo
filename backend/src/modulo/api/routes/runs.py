@@ -863,7 +863,7 @@ async def _create_manual_run(
         )
     await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
     rate_limit_key = await _enforce_trigger_rate_limit(session, pipeline, req.input_payload)
-    return await create_run(
+    run = await create_run(
         session,
         org_id=principal.organisation_id,
         pipeline_id=pipeline.id,
@@ -872,6 +872,14 @@ async def _create_manual_run(
         input_payload=req.input_payload,
         rate_limit_key=rate_limit_key,
     )
+    # Attach the already-loaded pipeline so _build_run_response can read
+    # run.pipeline.name without a lazy load. Otherwise the relationship is
+    # lazy-loaded after the transaction has committed, which raises
+    # "Autobegin is disabled" on sessions configured with autobegin=False
+    # (e.g. the integration-test session) and turns POST /api/v1/runs into a
+    # 500 even though the run was created successfully.
+    run.pipeline = pipeline
+    return run
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -888,16 +896,16 @@ async def trigger_run(
     """
     org_id = principal.organisation_id
 
+    run_response: RunResponse | None = None
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
             run = await _create_manual_run(session, principal, req)
             run_id = run.id
-            # Eagerly load the pipeline relationship while the transaction is
-            # still open. The session has autobegin disabled, so accessing
-            # ``run.pipeline`` later (in _build_run_response) would fail with
-            # "Autobegin is disabled" once the transaction has committed.
-            await session.refresh(run, ["pipeline"])
+            # Build the response while the transaction is still open: the
+            # run.pipeline relationship is lazy-loaded, and the session has
+            # autobegin disabled, so a load outside a transaction would raise.
+            run_response = _build_run_response(run)
     except IntegrityError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
@@ -946,7 +954,7 @@ async def trigger_run(
         ) from None
     await dispatch_run(str(run_id), str(org_id), queue="runs")
 
-    return _build_run_response(run)
+    return run_response
 
 
 # ---------------------------------------------------------------------------
