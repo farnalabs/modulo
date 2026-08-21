@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: modulo
-      POSTGRES_PASSWORD: modulo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-modulo}
       POSTGRES_DB: modulo
     ports:
       - "5434:5432"
@@ -32,7 +32,7 @@ services:
       db-local:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://modulo:modulo@db-local:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-modulo}@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
       FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
@@ -53,7 +53,7 @@ services:
       db-local:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://modulo:modulo@db-local:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-modulo}@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
       FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
