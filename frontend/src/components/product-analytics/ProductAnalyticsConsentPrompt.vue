@@ -62,47 +62,30 @@ type PromptAction = {
   action: 'accept' | 'decline' | 'dismiss'
 }
 
+type PromptActionDef = [
+  key: string,
+  labelKey: string,
+  testid: string,
+  variant: PromptAction['variant'],
+  action: PromptAction['action'],
+]
+
+const standardActions: PromptActionDef[] = [
+  ['accept', 'views.ProductAnalytics.accept', 'product-analytics-accept', 'button-secondary', 'accept'],
+  ['decline', 'views.ProductAnalytics.decline', 'product-analytics-decline', 'button-secondary', 'decline'],
+  ['dismiss', 'views.ProductAnalytics.dismiss', 'product-analytics-dismiss', 'text', 'dismiss'],
+]
+
+const partnerActions: PromptActionDef[] = [
+  ['partner-enable', 'views.ProductAnalytics.partner_enable', 'product-analytics-partner-enable', 'button', 'accept'],
+  ['partner-stay-community', 'views.ProductAnalytics.partner_stay_community', 'product-analytics-partner-stay-community', 'text', 'decline'],
+]
+
+const buildPromptActions = (defs: PromptActionDef[]): PromptAction[] =>
+  defs.map(([key, labelKey, testid, variant, action]) => ({ key, labelKey, testid, variant, action }))
+
 const promptActions = computed<PromptAction[]>(() =>
-  store.isPartnerCarveOut
-    ? [
-        {
-          key: 'partner-enable',
-          labelKey: 'views.ProductAnalytics.partner_enable',
-          testid: 'product-analytics-partner-enable',
-          variant: 'button',
-          action: 'accept',
-        },
-        {
-          key: 'partner-stay-community',
-          labelKey: 'views.ProductAnalytics.partner_stay_community',
-          testid: 'product-analytics-partner-stay-community',
-          variant: 'text',
-          action: 'decline',
-        },
-      ]
-    : [
-        {
-          key: 'accept',
-          labelKey: 'views.ProductAnalytics.accept',
-          testid: 'product-analytics-accept',
-          variant: 'button-secondary',
-          action: 'accept',
-        },
-        {
-          key: 'decline',
-          labelKey: 'views.ProductAnalytics.decline',
-          testid: 'product-analytics-decline',
-          variant: 'button-secondary',
-          action: 'decline',
-        },
-        {
-          key: 'dismiss',
-          labelKey: 'views.ProductAnalytics.dismiss',
-          testid: 'product-analytics-dismiss',
-          variant: 'text',
-          action: 'dismiss',
-        },
-      ],
+  buildPromptActions(store.isPartnerCarveOut ? partnerActions : standardActions),
 )
 
 onMounted(() => {

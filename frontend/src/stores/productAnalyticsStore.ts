@@ -52,23 +52,19 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
   ): Promise<boolean> {
     loading.value = true
     const result = await request().catch((e: unknown) => ({ error: e, data: undefined }))
+    const data = result.error ? undefined : result.data
     if (result.error) {
       error.value = formatApiError(result.error)
-      loading.value = false
-      return false
-    }
-    const data = result.data
-    if (!data) {
+    } else if (!data) {
       error.value = formatApiError('Empty response from product-analytics consent endpoint')
-      loading.value = false
-      return false
+    } else {
+      consent.value = data.consent
+      instanceEnabled.value = data.instance_enabled
+      isPartnerLicence.value = data.is_partner_licence
+      error.value = null
     }
-    consent.value = data.consent
-    instanceEnabled.value = data.instance_enabled
-    isPartnerLicence.value = data.is_partner_licence
-    error.value = null
     loading.value = false
-    return true
+    return !result.error && !!data
   }
 
   async function fetchConsent(): Promise<void> {
