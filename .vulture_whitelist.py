@@ -204,4 +204,7 @@ __all__ = [
     "last_event_id",
     # --- Product analytics — public API used in tests ---
     "get_instance_id",
+    # --- Product analytics enforcement (FAR-361) ---
+    "is_enforcement_active",
+    "should_degrade_to_community",
 ]
