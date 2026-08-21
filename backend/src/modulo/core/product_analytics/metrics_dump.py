@@ -70,6 +70,8 @@ async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
         last_dumped = await read_system_config(session, _WATERMARK_KEY)
 
     if last_dumped is not None:
+        if isinstance(last_dumped, str):
+            last_dumped = date.fromisoformat(last_dumped)
         start_date = last_dumped + timedelta(days=1)
     else:
         earliest_consent = min(
