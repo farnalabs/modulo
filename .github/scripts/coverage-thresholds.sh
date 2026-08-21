@@ -13,13 +13,13 @@ echo "::endgroup::"
 echo "::group::Per-module coverage checks"
 
 echo "Checking modulo.auth (threshold: 90%)"
-uv run --no-sync coverage report --include="src/modulo/auth/*" --fail-under=90
+uv run --no-sync --no-build coverage report --include="src/modulo/auth/*" --fail-under=90
 
 echo "Checking modulo.core.pipeline_engine (threshold: 85%)"
-uv run --no-sync coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=85
+uv run --no-sync --no-build coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=85
 
 echo "Checking modulo.db.rls (threshold: 95%)"
-uv run --no-sync coverage report --include="src/modulo/db/rls.py" --fail-under=95
+uv run --no-sync --no-build coverage report --include="src/modulo/db/rls.py" --fail-under=95
 
 echo "::endgroup::"
 echo "All coverage thresholds met."
