@@ -1,19 +1,12 @@
 <template>
-  <output
-    v-if="shouldShow"
-    class="block rounded-lg border bg-card p-4"
-    :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
-    data-testid="product-analytics-consent-prompt"
-  >
-    <div
-      v-if="store.error"
-      class="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
-      role="alert"
+    <output
+      v-if="shouldShow"
+      class="block rounded-lg border bg-card p-4"
+      :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
+      data-testid="product-analytics-consent-prompt"
     >
-      {{ store.error }}
-      <button type="button" class="ml-2 underline" @click="store.error = null">{{ $t('views.ProductAnalytics.dismiss_error') }}</button>
-    </div>
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <ProductAnalyticsErrorAlert :dismiss-label="$t('views.ProductAnalytics.dismiss_error')" />
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex-1 space-y-1">
         <h3 class="text-sm font-semibold">
           {{ $t('views.ProductAnalytics.consent_prompt_title') }}
@@ -87,6 +80,7 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
+import ProductAnalyticsErrorAlert from './ProductAnalyticsErrorAlert.vue'
 
 const store = useProductAnalyticsStore()
 const { t } = useI18n()

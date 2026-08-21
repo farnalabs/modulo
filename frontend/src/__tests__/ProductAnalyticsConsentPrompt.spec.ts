@@ -18,46 +18,52 @@ vi.mock('primevue/button', () => ({
   },
 }))
 
+type ConsentOverrides = {
+  instanceEnabled?: boolean
+  isPartnerLicence?: boolean
+  prompted?: 'yes' | 'no' | 'dismissed' | null
+  prompted_at?: string | null
+  level?: 'off' | 'all'
+}
+
+function setupConsentStore(overrides: ConsentOverrides = {}): ReturnType<typeof useProductAnalyticsStore> {
+  const store = useProductAnalyticsStore()
+  store.instanceEnabled = overrides.instanceEnabled ?? true
+  store.isPartnerLicence = overrides.isPartnerLicence ?? false
+  store.consent.prompted = overrides.prompted ?? null
+  store.consent.prompted_at = overrides.prompted_at ?? null
+  store.consent.level = overrides.level ?? 'off'
+  return store
+}
+
 describe('ProductAnalyticsConsentPrompt', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
   })
 
   it('renders when prompt is eligible', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.consent.prompted = null
-    store.consent.level = 'off'
+    setupConsentStore()
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(true)
   })
 
   it('does not render when already consented', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.consent.prompted = 'yes'
-    store.consent.level = 'all'
+    setupConsentStore({ prompted: 'yes', level: 'all' })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
   })
 
   it('does not render when instance is disabled', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = false
-    store.consent.prompted = null
-    store.consent.level = 'off'
+    setupConsentStore({ instanceEnabled: false })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
   })
 
   it('does not render when declined permanently', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.consent.prompted = 'no'
-    store.consent.level = 'off'
+    setupConsentStore({ prompted: 'no' })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
@@ -68,11 +74,7 @@ describe('ProductAnalyticsConsentPrompt', () => {
     ['decline', 'product-analytics-decline'],
     ['dismiss', 'product-analytics-dismiss'],
   ])('calls submitConsent with %s on %s button click', async (action, testid) => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.isPartnerLicence = false
-    store.consent.prompted = null
-    store.consent.level = 'off'
+    const store = setupConsentStore({ isPartnerLicence: false })
     const submitSpy = vi.spyOn(store, 'submitConsent').mockResolvedValue(true)
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
@@ -82,11 +84,7 @@ describe('ProductAnalyticsConsentPrompt', () => {
   })
 
   it('renders partner carve-out variant with enable and stay-community buttons', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.isPartnerLicence = true
-    store.consent.prompted = null
-    store.consent.level = 'off'
+    setupConsentStore({ isPartnerLicence: true })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-partner-enable"]').exists()).toBe(true)
@@ -95,22 +93,17 @@ describe('ProductAnalyticsConsentPrompt', () => {
   })
 
   it('does not render when dismissed within cooldown', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.consent.prompted = 'dismissed'
-    store.consent.prompted_at = new Date().toISOString()
-    store.consent.level = 'off'
+    setupConsentStore({ prompted: 'dismissed', prompted_at: new Date().toISOString() })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
   })
 
   it('renders when dismiss cooldown has expired', () => {
-    const store = useProductAnalyticsStore()
-    store.instanceEnabled = true
-    store.consent.prompted = 'dismissed'
-    store.consent.prompted_at = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() // nosemgrep: new-date-without-guard - deterministic past timestamp
-    store.consent.level = 'off'
+    setupConsentStore({
+      prompted: 'dismissed',
+      prompted_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // nosemgrep: new-date-without-guard - deterministic past timestamp
+    })
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
     expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(true)

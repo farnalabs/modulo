@@ -4,14 +4,7 @@
     :description="$t('views.ProductAnalytics.settings_description')"
   >
     <div class="space-y-4">
-      <div
-        v-if="store.error"
-        class="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
-        role="alert"
-      >
-        {{ store.error }}
-        <button type="button" class="ml-2 underline" @click="store.error = null">{{ $t('views.ProductAnalytics.dismiss_error') }}</button>
-      </div>
+      <ProductAnalyticsErrorAlert :dismiss-label="$t('views.ProductAnalytics.dismiss_error')" />
       <div class="flex items-center justify-between">
         <div>
           <h4 class="text-sm font-medium">
@@ -69,6 +62,7 @@
 import { onMounted } from 'vue'
 import SectionCard from '../shared/SectionCard.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
+import ProductAnalyticsErrorAlert from './ProductAnalyticsErrorAlert.vue'
 
 const store = useProductAnalyticsStore()
 
