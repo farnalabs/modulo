@@ -10,6 +10,7 @@ import functools
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -93,6 +94,25 @@ _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
 _CORRECTION_TERMINAL_STATUSES = frozenset({"resolved", "escalated", "dismissed"})
 
 
+@dataclass(frozen=True)
+class _CorrectionRunContext:
+    """Immutable parameters describing one single-node correction run.
+
+    Bundles the correction definition, its guardrail, the restricted backend,
+    the violating node input, and the bound guardrails / eval config so the
+    retry loop and resume path do not thread a long argument list between
+    helpers.
+    """
+
+    correction: Any
+    guardrail: Any
+    node_input: dict[str, Any]
+    backend: Any
+    bound_guardrails: list[Any] | None = None
+    revalidation_config: dict[str, Any] | None = None
+    judge_callable: Callable[..., Any] | None = None
+
+
 def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(method)
     async def wrapper(self: "FeedbackManager", *args: Any, **kwargs: Any) -> Any:
@@ -132,6 +152,17 @@ def _guardrail_correction_config(guardrail: Any) -> dict[str, Any] | None:
     return correction if isinstance(correction, dict) else None
 
 
+def _correction_guardrail_from(
+    guardrails: list[Any],
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Return the first (guardrail, correction_config) declaring an embedded correction block."""
+    for guardrail in guardrails:
+        block = _guardrail_correction_config(guardrail)
+        if block is not None:
+            return guardrail, block
+    return None, None
+
+
 async def _get_feedback_record_for_node(
     session: AsyncSession,
     org_id: UUID,
@@ -147,6 +178,43 @@ async def _get_feedback_record_for_node(
         )
     )
     return result.scalars().first()
+
+
+async def _get_or_create_feedback_record(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    run_id: UUID,
+    node_id: str,
+    gate_id: str,
+    account_id: UUID | None,
+    rejection_reason: str,
+    rejected_output: dict[str, Any],
+) -> FeedbackRecord | None:
+    """Return the existing FeedbackRecord for (run, node) or create one.
+
+    Returns None when no record exists and no account is available to own a
+    new one (nothing to anchor the record to).
+    """
+    record = await _get_feedback_record_for_node(session, org_id, run_id, node_id)
+    if record is not None:
+        return record
+    if account_id is None:
+        return None
+    record = FeedbackRecord(
+        organisation_id=org_id,
+        run_id=run_id,
+        gate_id=gate_id,
+        account_id=account_id,
+        rejection_reason=rejection_reason,
+        rejected_output=rejected_output,
+        producing_node_id=node_id,
+        feedback_status="correcting",
+        feedback_handler_type="human",
+    )
+    session.add(record)
+    await session.flush()
+    return record
 
 
 async def dispatch_reject_correction(
@@ -175,68 +243,15 @@ async def dispatch_reject_correction(
     """
     try:
         async with session_factory() as session, session.begin():
-            from modulo.db.rls import set_rls_org
-
-            await set_rls_org(session, org_id)
-            run = await get_run(session, run_id)
-            if run is None:
-                return None
-            pipeline_id = run.pipeline_id
-            account_id = run.account_id
-
-            from modulo.core.guardrails.conformance import load_node_guardrails
-
-            guardrails = await load_node_guardrails(session, org_id=org_id, pipeline_id=pipeline_id, node_id=node_id)
-            guardrail: Any | None = None
-            correction_config: dict[str, Any] | None = None
-            for g in guardrails:
-                block = _guardrail_correction_config(g)
-                if block is not None:
-                    guardrail = g
-                    correction_config = block
-                    break
-            if guardrail is None or correction_config is None:
-                return None
-
-            from modulo.core.guardrails.correction import CorrectionDefinition
-
-            correction = CorrectionDefinition.from_eval_config({"correction": correction_config})
-
-            record = await _get_feedback_record_for_node(session, org_id, run_id, node_id)
-            if record is None:
-                if account_id is None:
-                    return None
-                record = FeedbackRecord(
-                    organisation_id=org_id,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    account_id=account_id,
-                    rejection_reason=rejection_reason,
-                    rejected_output=node_input,
-                    producing_node_id=node_id,
-                    feedback_status="correcting",
-                    feedback_handler_type="human",
-                )
-                session.add(record)
-                await session.flush()
-
-            from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-            hub = get_model_backend_hub()
-            if hub is None:
-                return None
-            backend = await hub.get(UUID(str(correction.model_backend_id)))
-
-            mgr = FeedbackManager(session, org_id)
-            outcome = await mgr.run_single_node_correction(
-                record_id=record.id,
-                guardrail=guardrail,
-                correction=correction,
+            return await _dispatch_reject_correction_in_session(
+                session=session,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
                 node_input=node_input,
-                backend=backend,
-                bound_guardrails=guardrails,
+                rejection_reason=rejection_reason,
+                gate_id=gate_id,
             )
-            return cast(dict[str, Any], outcome)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -247,6 +262,72 @@ async def dispatch_reject_correction(
         return None
 
 
+async def _dispatch_reject_correction_in_session(
+    *,
+    session: AsyncSession,
+    org_id: UUID,
+    run_id: UUID,
+    node_id: str,
+    node_input: dict[str, Any],
+    rejection_reason: str,
+    gate_id: str,
+) -> dict[str, Any] | None:
+    """Run the reject→correction dispatch inside one session/transaction.
+
+    Failure-isolated: returns None when no correction can be dispatched (no
+    run, no correction-configured guardrail, no record/account, or no backend
+    hub). The caller owns the transaction and error handling.
+    """
+    from modulo.db.rls import set_rls_org
+
+    await set_rls_org(session, org_id)
+    run = await get_run(session, run_id)
+    if run is None:
+        return None
+
+    from modulo.core.guardrails.conformance import load_node_guardrails
+
+    guardrails = await load_node_guardrails(session, org_id=org_id, pipeline_id=run.pipeline_id, node_id=node_id)
+    guardrail, correction_config = _correction_guardrail_from(guardrails)
+    if guardrail is None or correction_config is None:
+        return None
+
+    from modulo.core.guardrails.correction import CorrectionDefinition
+
+    correction = CorrectionDefinition.from_eval_config({"correction": correction_config})
+
+    record = await _get_or_create_feedback_record(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        gate_id=gate_id,
+        account_id=run.account_id,
+        rejection_reason=rejection_reason,
+        rejected_output=node_input,
+    )
+    if record is None:
+        return None
+
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    if hub is None:
+        return None
+    backend = await hub.get(UUID(str(correction.model_backend_id)))
+
+    mgr = FeedbackManager(session, org_id)
+    outcome = await mgr.run_single_node_correction(
+        record_id=record.id,
+        guardrail=guardrail,
+        correction=correction,
+        node_input=node_input,
+        backend=backend,
+        bound_guardrails=guardrails,
+    )
+    return cast(dict[str, Any], outcome)
+
+
 class FeedbackManager:
     """Manages the feedback lifecycle: creation, status transitions, eval gap detection."""
 
@@ -254,18 +335,13 @@ class FeedbackManager:
         self._session = session
         self._org_id = org_id
 
-    @_rls
-    async def create_feedback_record(
+    def _validate_feedback_inputs(
         self,
-        run_id: UUID,
-        gate_id: str,
-        account_id: UUID,
         rejection_reason: str,
         rejected_output: dict[str, Any],
-        producing_node_id: str,
-        producing_agent_id: UUID | None = None,
-        feedback_handler_type: str = "human",
-    ) -> FeedbackRecord:
+        feedback_handler_type: str,
+    ) -> str:
+        """Validate and normalise feedback inputs; returns the stripped reason."""
         stripped_reason = rejection_reason.strip() if rejection_reason else ""
         if not stripped_reason:
             raise ValidationError("rejection_reason must not be empty")
@@ -281,6 +357,22 @@ class FeedbackManager:
                 f"unknown feedback_handler_type '{feedback_handler_type}'. "
                 f"Valid: {sorted(_VALID_FEEDBACK_HANDLER_TYPES)}"
             )
+        return stripped_reason
+
+    @_rls
+    async def create_feedback_record(
+        self,
+        run_id: UUID,
+        gate_id: str,
+        account_id: UUID,
+        rejection_reason: str,
+        rejected_output: dict[str, Any],
+        producing_node_id: str,
+        producing_agent_id: UUID | None = None,
+        feedback_handler_type: str = "human",
+    ) -> FeedbackRecord:
+        stripped_reason = self._validate_feedback_inputs(rejection_reason, rejected_output, feedback_handler_type)
+
         record = FeedbackRecord(
             organisation_id=self._org_id,
             run_id=run_id,
@@ -342,6 +434,39 @@ class FeedbackManager:
         rows = (await self._session.execute(q)).scalars().all()
         return list(rows), total
 
+    def _paginated_response(
+        self,
+        rows: list[FeedbackRecord],
+        total: int,
+        page: int,
+        page_size: int,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the standard paginated response dict, optionally with extra keys."""
+        response: dict[str, Any] = {
+            "items": rows,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+        if extra:
+            response.update(extra)
+        return response
+
+    def _org_scoped_conditions(
+        self,
+        status: str | None = None,
+        pipeline_id: UUID | None = None,
+    ) -> list[Any]:
+        """Return tenant-scoped WHERE conditions shared by the feedback list queries."""
+        conditions: list[Any] = [FeedbackRecord.organisation_id == self._org_id]
+        if status:
+            conditions.append(FeedbackRecord.feedback_status == status)
+        if pipeline_id:
+            run_subq = select(Run.id).where(Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id)
+            conditions.append(FeedbackRecord.run_id.in_(run_subq))
+        return conditions
+
     @_rls
     async def get_feedback_records(
         self,
@@ -351,21 +476,9 @@ class FeedbackManager:
         page_size: int = _DEFAULT_PAGE_SIZE,
         include_total: bool = True,
     ) -> dict[str, Any]:
-        conditions = [FeedbackRecord.organisation_id == self._org_id]
-        if status:
-            conditions.append(FeedbackRecord.feedback_status == status)
-        if pipeline_id:
-            run_subq = select(Run.id).where(Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id)
-            conditions.append(FeedbackRecord.run_id.in_(run_subq))
-
+        conditions = self._org_scoped_conditions(status, pipeline_id)
         rows, total = await self._paginate(conditions, page, page_size, include_total)
-
-        return {
-            "items": rows,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+        return self._paginated_response(rows, total, page, page_size)
 
     @_rls
     async def get_feedback_record(self, record_id: UUID) -> FeedbackRecord | None:
@@ -380,8 +493,8 @@ class FeedbackManager:
             logger.warning("FeedbackRecord %s not found for org %s", record_id, self._org_id)
         return record
 
-    @_rls
-    async def update_status(self, record_id: UUID, new_status: str) -> FeedbackRecord:
+    async def _get_record_or_raise(self, record_id: UUID) -> FeedbackRecord:
+        """Fetch a FeedbackRecord scoped to this org, raising when it is missing."""
         current = (
             await self._session.execute(
                 select(FeedbackRecord).where(
@@ -392,6 +505,11 @@ class FeedbackManager:
         ).scalar_one_or_none()
         if current is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
+        return current
+
+    @_rls
+    async def update_status(self, record_id: UUID, new_status: str) -> FeedbackRecord:
+        current = await self._get_record_or_raise(record_id)
         allowed = _VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
         if new_status not in allowed:
             raise InvalidTransitionError(
@@ -420,16 +538,7 @@ class FeedbackManager:
 
     @_rls
     async def link_correction_run(self, record_id: UUID, correction_run_id: UUID) -> FeedbackRecord:
-        current = (
-            await self._session.execute(
-                select(FeedbackRecord).where(
-                    FeedbackRecord.id == record_id,
-                    FeedbackRecord.organisation_id == self._org_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if current is None:
-            raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
+        current = await self._get_record_or_raise(record_id)
         allowed = _VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
         if "correcting" not in allowed:
             raise InvalidTransitionError(
@@ -491,6 +600,34 @@ class FeedbackManager:
             )
         return eval_def
 
+    async def _evaluate_single_eval_def(
+        self,
+        record: FeedbackRecord,
+        eval_def: Any,
+        eval_engine: EvalEngine,
+    ) -> tuple[bool, bool | None]:
+        """Run one eval against the rejected output.
+
+        Returns ``(processed, passed)``: ``processed`` records a well-formed
+        eval_def regardless of outcome; ``passed`` is None when the evaluation
+        raised (inconclusive) or the def was malformed (not counted).
+        """
+        if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
+            logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
+            return False, None
+        try:
+            result = eval_engine.evaluate(record.rejected_output, self._normalise_eval_def(eval_def))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
+                record.id,
+                eval_def,
+            )
+            return True, None
+        return True, result.passed
+
     @_rls
     async def detect_eval_gap(
         self,
@@ -511,24 +648,11 @@ class FeedbackManager:
             return True
         processed_count = 0
         for eval_def in eval_suite:
-            # A valid eval_def is either a raw config dict or an EvalDefinition
-            # (ORM or DTO) carrying an ``eval_type`` — anything else is malformed.
-            if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
-                logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
+            processed, passed = await self._evaluate_single_eval_def(record, eval_def, eval_engine)
+            if not processed:
                 continue
             processed_count += 1
-            try:
-                result = eval_engine.evaluate(record.rejected_output, self._normalise_eval_def(eval_def))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception(
-                    "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
-                    record.id,
-                    eval_def,
-                )
-                continue
-            if not result.passed:
+            if passed is not None and not passed:
                 return False
         if processed_count == 0:
             logger.warning(
@@ -540,6 +664,22 @@ class FeedbackManager:
         await self._session.flush()
         logger.info("Eval gap detected for FeedbackRecord %s", record.id)
         return True
+
+    def _build_feedback_correction_block(
+        self,
+        record: FeedbackRecord,
+        run_context_overrides: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build the engine-only ``feedback_correction`` block for the new run."""
+        feedback_correction: dict[str, Any] = {
+            "rejection_reason": record.rejection_reason,
+            "rejected_output": record.rejected_output,
+            "producing_node_id": record.producing_node_id,
+            "is_correction_run": True,
+        }
+        if run_context_overrides:
+            feedback_correction.update(run_context_overrides)
+        return feedback_correction
 
     @_rls
     async def spawn_correction_run(
@@ -586,15 +726,7 @@ class FeedbackManager:
                 f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
             )
 
-        feedback_correction: dict[str, Any] = {
-            "rejection_reason": record.rejection_reason,
-            "rejected_output": record.rejected_output,
-            "producing_node_id": record.producing_node_id,
-            "is_correction_run": True,
-        }
-        if run_context_overrides:
-            feedback_correction.update(run_context_overrides)
-
+        feedback_correction = self._build_feedback_correction_block(record, run_context_overrides)
         input_payload = dict(original_run.input_payload or {})
 
         new_run = await create_run(
@@ -618,6 +750,30 @@ class FeedbackManager:
             record.run_id,
         )
         return new_run.id
+
+    def _validate_correction_eligibility(self, record: Any, ctx: _CorrectionRunContext) -> None:
+        """Fence a single-node correction: no terminal records, restricted backend only."""
+        if record.feedback_status in _CORRECTION_TERMINAL_STATUSES:
+            # Finding 3 (review FAR-210): never run a correction on a record a
+            # human has already decided on. A terminal record (``resolved`` /
+            # ``escalated`` / ``dismissed``) re-entered via dispatch or resume
+            # would silently reverse that decision — fail fast instead of
+            # re-writing the status.
+            raise InvalidTransitionError(
+                f"FeedbackRecord {record.id} is in terminal status "
+                f"'{record.feedback_status}'; cannot run a single-node correction "
+                f"on a record a human has already decided on"
+            )
+
+        ctx.correction.validate_guardrail_binding(ctx.guardrail)
+        # FAR-210: the correction backend is RESTRICTED — it must not claim any
+        # vault/guardrail-config capability. Defensive: read the backend's
+        # declared capability surface (empty = restricted; a privileged backend
+        # would declare vault/guardrail_config access).
+        backend_capabilities = getattr(ctx.backend, "capabilities", ())
+        if not isinstance(backend_capabilities, (list, tuple, set)):
+            backend_capabilities = ()
+        ctx.correction.validate_restricted_backend(list(backend_capabilities))
 
     @_rls
     async def run_single_node_correction(
@@ -660,47 +816,26 @@ class FeedbackManager:
         ``correcting`` so a concurrent decision is never reversed. Returns the
         correction outcome dict.
         """
-        from modulo.core.audit_logger import append_audit_event
         from modulo.core.guardrails.correction import (
-            EVENT_CORRECTION_ATTEMPTED,
-            EVENT_CORRECTION_CAP_BLOCKED,
-            CorrectionCapExceededError,
             CorrectionOutcome,
-            CorrectionVerdict,
             build_idempotency_key,
-            claim_correction_slot,
             redact_payload,
-            resume_interrupted_correction,
-        )
-        from modulo.core.guardrails.correction import (
-            dispatch_single_node_correction as _run_correction,
         )
 
         record = await self.get_feedback_record(record_id)
         if record is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
 
-        if record.feedback_status in _CORRECTION_TERMINAL_STATUSES:
-            # Finding 3 (review FAR-210): never run a correction on a record a
-            # human has already decided on. A terminal record (``resolved`` /
-            # ``escalated`` / ``dismissed``) re-entered via dispatch or resume
-            # would silently reverse that decision — fail fast instead of
-            # re-writing the status.
-            raise InvalidTransitionError(
-                f"FeedbackRecord {record_id} is in terminal status "
-                f"'{record.feedback_status}'; cannot run a single-node correction "
-                f"on a record a human has already decided on"
-            )
-
-        correction.validate_guardrail_binding(guardrail)
-        # FAR-210: the correction backend is RESTRICTED — it must not claim any
-        # vault/guardrail-config capability. Defensive: read the backend's
-        # declared capability surface (empty = restricted; a privileged backend
-        # would declare vault/guardrail_config access).
-        backend_capabilities = getattr(backend, "capabilities", ())
-        if not isinstance(backend_capabilities, (list, tuple, set)):
-            backend_capabilities = ()
-        correction.validate_restricted_backend(list(backend_capabilities))
+        ctx = _CorrectionRunContext(
+            correction=correction,
+            guardrail=guardrail,
+            node_input=node_input,
+            backend=backend,
+            bound_guardrails=bound_guardrails,
+            revalidation_config=revalidation_config,
+            judge_callable=judge_callable,
+        )
+        self._validate_correction_eligibility(record, ctx)
 
         redacted_input = redact_payload(node_input, correction.input_redaction_patterns)
         idem_key = build_idempotency_key(
@@ -714,107 +849,41 @@ class FeedbackManager:
         prior_states: list[dict[str, Any]] = [persisted_state] if persisted_state else []
         attempt = int(persisted_state.get("attempt") or 0)
 
-        outcome: CorrectionOutcome | None = None
-        if persisted_state.get("idempotency_key") == idem_key:
-            # Idempotent re-dispatch: RE-VALIDATE the recorded produced output
-            # (never re-run the LM for a resume). A still-violating recorded
-            # output with attempts remaining falls through to a fresh attempt.
-            outcome = await resume_interrupted_correction(
-                correction=correction,
-                guardrail=guardrail,
-                backend=backend,
-                state=persisted_state,
-                revalidation_config=revalidation_config,
-                judge_callable=judge_callable,
-            )
-            if outcome.verdict == CorrectionVerdict.STILL_VIOLATING and attempt < correction.max_attempts:
-                outcome = None
+        outcome: CorrectionOutcome | None = await self._resume_correction_from_state(
+            ctx=ctx,
+            idem_key=idem_key,
+            persisted_state=persisted_state,
+            attempt=attempt,
+        )
 
         if outcome is None:
             # Claim the org-wide concurrent-correction slot ONCE for this
             # correction (the whole retry sequence holds one slot; the current
             # record is excluded from the count).
-            admitted = await claim_correction_slot(
-                self._session,
-                org_id=self._org_id,
-                correction=correction,
-                exclude_record_id=record_id,
+            await self._claim_correction_slot(ctx=ctx, record_id=record_id)
+            outcome = await self._run_correction_attempts(
+                ctx=ctx,
+                record=record,
+                idem_key=idem_key,
+                prior_states=prior_states,
+                attempt=attempt,
             )
-            if not admitted:
-                await append_audit_event(
-                    self._session,
-                    org_id=self._org_id,
-                    event_type=EVENT_CORRECTION_CAP_BLOCKED,
-                    resource_type="feedback",
-                    resource_id=record_id,
-                    payload_json={"correction_id": correction.id, "reason": "org concurrent-correction cap reached"},
-                )
-                raise CorrectionCapExceededError(
-                    f"Correction {correction.id!r} blocked at claim time: org concurrent-correction cap reached"
-                )
-            while attempt < correction.max_attempts:
-                attempt += 1
-                await append_audit_event(
-                    self._session,
-                    org_id=self._org_id,
-                    event_type=EVENT_CORRECTION_ATTEMPTED,
-                    resource_type="feedback",
-                    resource_id=record_id,
-                    payload_json={
-                        "correction_id": correction.id,
-                        "guardrail_id": correction.guardrail_id,
-                        "node_id": record.producing_node_id,
-                        "attempt": attempt,
-                    },
-                )
-                # A retry re-runs the LM on the SAME redacted input, so its own
-                # prior input fingerprint must not spuriously converge it; only
-                # a repeated produced OUTPUT is oscillation.
-                retry_prior = _prior_states_for_retry(prior_states) if attempt > 1 else prior_states
-                outcome = await _run_correction(
-                    correction=correction,
-                    guardrail=guardrail,
-                    node_input=node_input,
-                    backend=backend,
-                    prior_states=retry_prior,
-                    idempotency_key=idem_key,
-                    attempt=attempt,
-                    revalidation_config=revalidation_config,
-                    judge_callable=judge_callable,
-                    bound_guardrails=bound_guardrails,
-                )
-                outcome.state["produced_output"] = outcome.produced_output
-                record.correction_state = outcome.state
-                prior_states.append(dict(outcome.state))
-                if outcome.verdict != CorrectionVerdict.STILL_VIOLATING:
-                    break
             if outcome is None:
                 # The recorded state already consumed the whole budget and the
                 # idempotency key did not match (no resume) — terminal exhaustion.
-                outcome = CorrectionOutcome(
-                    verdict=CorrectionVerdict.BUDGET_EXHAUSTED,
-                    detail=(
-                        f"correction budget exhausted (recorded attempt {attempt} of "
-                        f"{correction.max_attempts}): no fresh attempt available"
-                    ),
-                    needs_human_review=True,
-                    state=dict(persisted_state),
+                outcome = self._budget_exhausted_outcome(
+                    ctx=ctx,
+                    attempt=attempt,
+                    persisted_state=persisted_state,
                 )
 
         outcome.state["produced_output"] = outcome.produced_output
         record.correction_state = outcome.state
 
-        outcome = await self._apply_correction_violated_check(
-            outcome=outcome,
-            guardrail=guardrail,
-            correction=correction,
-            bound_guardrails=bound_guardrails or [],
-        )
+        outcome = await self._apply_correction_violated_check(outcome=outcome, ctx=ctx)
 
         await self._persist_correction_outcome(
             record_id=record_id,
-            record=record,
-            guardrail=guardrail,
             correction=correction,
             outcome=outcome,
         )
@@ -825,13 +894,154 @@ class FeedbackManager:
             "needs_human_review": outcome.needs_human_review,
         }
 
+    async def _resume_correction_from_state(
+        self,
+        *,
+        ctx: _CorrectionRunContext,
+        idem_key: str,
+        persisted_state: dict[str, Any],
+        attempt: int,
+    ) -> Any | None:
+        """Re-validate a recorded outcome on an idempotent re-dispatch.
+
+        Returns None when there is nothing to resume (the persisted state does
+        not match this dispatch's idempotency key) or when a still-violating
+        recorded output falls through to a fresh attempt.
+        """
+        from modulo.core.guardrails.correction import (
+            CorrectionVerdict,
+            resume_interrupted_correction,
+        )
+
+        if persisted_state.get("idempotency_key") != idem_key:
+            return None
+        outcome = await resume_interrupted_correction(
+            correction=ctx.correction,
+            guardrail=ctx.guardrail,
+            backend=ctx.backend,
+            state=persisted_state,
+            revalidation_config=ctx.revalidation_config,
+            judge_callable=ctx.judge_callable,
+        )
+        if outcome.verdict == CorrectionVerdict.STILL_VIOLATING and attempt < ctx.correction.max_attempts:
+            return None
+        return outcome
+
+    async def _claim_correction_slot(self, *, ctx: _CorrectionRunContext, record_id: UUID) -> None:
+        """Claim the org-wide concurrent-correction slot once, raising when the cap is reached."""
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.core.guardrails.correction import (
+            EVENT_CORRECTION_CAP_BLOCKED,
+            CorrectionCapExceededError,
+            claim_correction_slot,
+        )
+
+        admitted = await claim_correction_slot(
+            self._session,
+            org_id=self._org_id,
+            correction=ctx.correction,
+            exclude_record_id=record_id,
+        )
+        if not admitted:
+            await append_audit_event(
+                self._session,
+                org_id=self._org_id,
+                event_type=EVENT_CORRECTION_CAP_BLOCKED,
+                resource_type="feedback",
+                resource_id=record_id,
+                payload_json={"correction_id": ctx.correction.id, "reason": "org concurrent-correction cap reached"},
+            )
+            raise CorrectionCapExceededError(
+                f"Correction {ctx.correction.id!r} blocked at claim time: org concurrent-correction cap reached"
+            )
+
+    async def _run_correction_attempts(
+        self,
+        *,
+        ctx: _CorrectionRunContext,
+        record: Any,
+        idem_key: str,
+        prior_states: list[dict[str, Any]],
+        attempt: int,
+    ) -> Any | None:
+        """Run fresh LM attempts until convergence, budget exhaustion, or a terminal verdict.
+
+        Returns None when the budget was already exhausted at entry (no attempt
+        ran); the caller converts that into a BUDGET_EXHAUSTED outcome.
+        """
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.core.guardrails.correction import (
+            EVENT_CORRECTION_ATTEMPTED,
+            CorrectionVerdict,
+        )
+        from modulo.core.guardrails.correction import (
+            dispatch_single_node_correction as _run_correction,
+        )
+
+        outcome = None
+        while attempt < ctx.correction.max_attempts:
+            attempt += 1
+            await append_audit_event(
+                self._session,
+                org_id=self._org_id,
+                event_type=EVENT_CORRECTION_ATTEMPTED,
+                resource_type="feedback",
+                resource_id=record.id,
+                payload_json={
+                    "correction_id": ctx.correction.id,
+                    "guardrail_id": ctx.correction.guardrail_id,
+                    "node_id": record.producing_node_id,
+                    "attempt": attempt,
+                },
+            )
+            # A retry re-runs the LM on the SAME redacted input, so its own
+            # prior input fingerprint must not spuriously converge it; only
+            # a repeated produced OUTPUT is oscillation.
+            retry_prior = _prior_states_for_retry(prior_states) if attempt > 1 else prior_states
+            outcome = await _run_correction(
+                correction=ctx.correction,
+                guardrail=ctx.guardrail,
+                node_input=ctx.node_input,
+                backend=ctx.backend,
+                prior_states=retry_prior,
+                idempotency_key=idem_key,
+                attempt=attempt,
+                revalidation_config=ctx.revalidation_config,
+                judge_callable=ctx.judge_callable,
+                bound_guardrails=ctx.bound_guardrails,
+            )
+            outcome.state["produced_output"] = outcome.produced_output
+            record.correction_state = outcome.state
+            prior_states.append(dict(outcome.state))
+            if outcome.verdict != CorrectionVerdict.STILL_VIOLATING:
+                break
+        return outcome
+
+    def _budget_exhausted_outcome(
+        self,
+        *,
+        ctx: _CorrectionRunContext,
+        attempt: int,
+        persisted_state: dict[str, Any],
+    ) -> Any:
+        """Build the terminal BUDGET_EXHAUSTED outcome for a fully-consumed budget."""
+        from modulo.core.guardrails.correction import CorrectionOutcome, CorrectionVerdict
+
+        return CorrectionOutcome(
+            verdict=CorrectionVerdict.BUDGET_EXHAUSTED,
+            detail=(
+                f"correction budget exhausted (recorded attempt {attempt} of "
+                f"{ctx.correction.max_attempts}): no fresh attempt available"
+            ),
+            needs_human_review=True,
+            state=dict(persisted_state),
+        )
+
     async def _apply_correction_violated_check(
         self,
         *,
         outcome: Any,
-        guardrail: Any,
-        correction: Any,
-        bound_guardrails: list[Any],
+        ctx: _CorrectionRunContext,
     ) -> Any:
         """Escalate ``correction_violated`` when the corrected output violates a bound guardrail.
 
@@ -849,8 +1059,8 @@ class FeedbackManager:
             return outcome
         violator = await check_corrected_output_violates_guardrails(
             corrected_output=outcome.produced_output,
-            guardrails=bound_guardrails,
-            exclude_name=guardrail.name,
+            guardrails=ctx.bound_guardrails or [],
+            exclude_name=ctx.guardrail.name,
         )
         if violator is not None:
             from dataclasses import replace
@@ -863,12 +1073,42 @@ class FeedbackManager:
             )
         return outcome
 
+    async def _update_status_fenced(
+        self,
+        *,
+        record_id: UUID,
+        new_status: str,
+        values: dict[str, Any],
+        failure_message: str,
+    ) -> FeedbackRecord:
+        """Run a status UPDATE fenced on the record still being ``correcting``.
+
+        Returns the updated row; raises ``ConcurrentModificationError`` when no
+        row matched (the record left the ``correcting`` pre-state concurrently,
+        so the write would otherwise silently reverse a human decision).
+        """
+        updated = (
+            await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(**values, feedback_status=new_status)
+                .returning(FeedbackRecord)
+            )
+        ).scalar_one_or_none()
+        if updated is None:
+            raise ConcurrentModificationError(
+                f"FeedbackRecord {record_id} status changed concurrently. {failure_message}"
+            )
+        return updated
+
     async def _persist_correction_outcome(
         self,
         *,
         record_id: UUID,
-        record: Any,
-        guardrail: Any,
         correction: Any,
         outcome: Any,
     ) -> None:
@@ -898,23 +1138,12 @@ class FeedbackManager:
 
         verdict = CorrectionVerdict(outcome.verdict)
         if verdict == CorrectionVerdict.RESOLVED:
-            updated = (
-                await self._session.execute(
-                    update(FeedbackRecord)
-                    .where(
-                        FeedbackRecord.id == record_id,
-                        FeedbackRecord.organisation_id == self._org_id,
-                        FeedbackRecord.feedback_status == "correcting",
-                    )
-                    .values(feedback_status="resolved", needs_human_review=outcome.needs_human_review)
-                    .returning(FeedbackRecord)
-                )
-            ).scalar_one_or_none()
-            if updated is None:
-                raise ConcurrentModificationError(
-                    f"FeedbackRecord {record_id} status changed concurrently. "
-                    f"Expected 'correcting', failed to persist a RESOLVED correction outcome."
-                )
+            await self._update_status_fenced(
+                record_id=record_id,
+                new_status="resolved",
+                values={"needs_human_review": outcome.needs_human_review},
+                failure_message="Expected 'correcting', failed to persist a RESOLVED correction outcome.",
+            )
             await append_audit_event(
                 self._session,
                 org_id=self._org_id,
@@ -928,23 +1157,12 @@ class FeedbackManager:
                 },
             )
             return
-        updated = (
-            await self._session.execute(
-                update(FeedbackRecord)
-                .where(
-                    FeedbackRecord.id == record_id,
-                    FeedbackRecord.organisation_id == self._org_id,
-                    FeedbackRecord.feedback_status == "correcting",
-                )
-                .values(feedback_status="escalated", needs_human_review=True)
-                .returning(FeedbackRecord)
-            )
-        ).scalar_one_or_none()
-        if updated is None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} status changed concurrently. "
-                f"Expected 'correcting', failed to persist an escalated correction outcome."
-            )
+        await self._update_status_fenced(
+            record_id=record_id,
+            new_status="escalated",
+            values={"needs_human_review": True},
+            failure_message="Expected 'correcting', failed to persist an escalated correction outcome.",
+        )
         violation_event = (
             EVENT_CORRECTION_VIOLATED
             if verdict == CorrectionVerdict.CORRECTION_VIOLATED
@@ -976,22 +1194,12 @@ class FeedbackManager:
         reason: str,
     ) -> None:
         """Atomically escalate a FeedbackRecord, raising on concurrent modification."""
-        result = await self._session.execute(
-            update(FeedbackRecord)
-            .where(
-                FeedbackRecord.id == record_id,
-                FeedbackRecord.organisation_id == self._org_id,
-                FeedbackRecord.feedback_status == "correcting",
-            )
-            .values(feedback_status="escalated")
-            .returning(FeedbackRecord)
+        await self._update_status_fenced(
+            record_id=record_id,
+            new_status="escalated",
+            values={},
+            failure_message=f"Expected 'correcting', failed to escalate: {reason}.",
         )
-        updated = result.scalar_one_or_none()
-        if updated is None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} status changed concurrently. "
-                f"Expected 'correcting', failed to escalate: {reason}."
-            )
         logger.warning(
             "Escalated FeedbackRecord %s: %s",
             record_id,
@@ -1061,24 +1269,14 @@ class FeedbackManager:
         telemetry = correction_run.node_telemetry_json
         output = {nid: node_return(raw_output, telemetry, nid) for nid in raw_output}
 
-        try:
-            result = engine.standalone_evaluate(
-                output,
-                name=_POST_CORRECTION_EVAL_NAME,
-                config=eval_config or {},
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "standalone_evaluate failed for FeedbackRecord %s correction run %s",
-                record_id,
-                record.correction_run_id,
-            )
-            await self._escalate_record(
-                record_id,
-                f"Post-correction eval raised an error for correction run {record.correction_run_id}",
-            )
+        result = await self._run_post_correction_evaluate(
+            engine=engine,
+            output=output,
+            eval_config=eval_config,
+            record_id=record_id,
+            correction_run_id=record.correction_run_id,
+        )
+        if result is None:
             return {
                 "passed": False,
                 "detail": "Post-correction eval raised an error",
@@ -1086,33 +1284,11 @@ class FeedbackManager:
                 "needs_human_review": True,
             }
 
-        needs_human_review = False
-        if result.passed:
-            needs_human_review = record.feedback_handler_type == "ai_correction_with_human_review"
-            result_update = await self._session.execute(
-                update(FeedbackRecord)
-                .where(
-                    FeedbackRecord.id == record_id,
-                    FeedbackRecord.organisation_id == self._org_id,
-                    FeedbackRecord.feedback_status == "correcting",
-                )
-                .values(
-                    feedback_status="resolved",
-                    needs_human_review=needs_human_review,
-                )
-                .returning(FeedbackRecord)
-            )
-            updated = result_update.scalar_one_or_none()
-            if updated is None:
-                raise ConcurrentModificationError(
-                    f"FeedbackRecord {record_id} status changed concurrently. "
-                    f"Expected 'correcting', retry the post-correction eval."
-                )
-        else:
-            await self._escalate_record(
-                record_id,
-                f"Correction eval failed for correction run {record.correction_run_id}",
-            )
+        needs_human_review = await self._resolve_or_escalate_post_eval(
+            record=record,
+            result=result,
+            record_id=record_id,
+        )
         logger.info(
             "Post-correction eval for FeedbackRecord %s: passed=%s, needs_human_review=%s",
             record_id,
@@ -1127,6 +1303,67 @@ class FeedbackManager:
             "score": result.score,
             "needs_human_review": needs_human_review,
         }
+
+    async def _run_post_correction_evaluate(
+        self,
+        *,
+        engine: EvalEngine,
+        output: dict[str, Any],
+        eval_config: dict[str, Any] | None,
+        record_id: UUID,
+        correction_run_id: UUID,
+    ) -> Any | None:
+        """Run the post-correction eval, escalating the record on engine failure.
+
+        Returns the eval result, or None when the engine raised (the record has
+        been escalated to HITL for manual review).
+        """
+        try:
+            return engine.standalone_evaluate(
+                output,
+                name=_POST_CORRECTION_EVAL_NAME,
+                config=eval_config or {},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "standalone_evaluate failed for FeedbackRecord %s correction run %s",
+                record_id,
+                correction_run_id,
+            )
+            await self._escalate_record(
+                record_id,
+                f"Post-correction eval raised an error for correction run {correction_run_id}",
+            )
+            return None
+
+    async def _resolve_or_escalate_post_eval(
+        self,
+        *,
+        record: FeedbackRecord,
+        result: Any,
+        record_id: UUID,
+    ) -> bool:
+        """Auto-resolve (or escalate) the record based on the post-correction eval outcome.
+
+        Returns the ``needs_human_review`` flag for the resolved path; a failing
+        eval escalates the record to HITL and returns False.
+        """
+        if not result.passed:
+            await self._escalate_record(
+                record_id,
+                f"Correction eval failed for correction run {record.correction_run_id}",
+            )
+            return False
+        needs_human_review = record.feedback_handler_type == "ai_correction_with_human_review"
+        await self._update_status_fenced(
+            record_id=record_id,
+            new_status="resolved",
+            values={"needs_human_review": needs_human_review},
+            failure_message="Expected 'correcting', retry the post-correction eval.",
+        )
+        return needs_human_review
 
     @_rls
     async def _enrich_with_pipeline_names(self, rows: list[FeedbackRecord]) -> dict[str, str]:
@@ -1155,14 +1392,9 @@ class FeedbackManager:
         page_size: int = _DEFAULT_PAGE_SIZE,
         include_total: bool = True,
     ) -> dict[str, Any]:
-        conditions = [FeedbackRecord.organisation_id == self._org_id]
+        conditions = self._org_scoped_conditions(status, pipeline_id)
         if handler_type:
             conditions.append(FeedbackRecord.feedback_handler_type == handler_type)
-        if status:
-            conditions.append(FeedbackRecord.feedback_status == status)
-        if pipeline_id:
-            run_subq = select(Run.id).where(Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id)
-            conditions.append(FeedbackRecord.run_id.in_(run_subq))
         if date_from:
             conditions.append(FeedbackRecord.created_at >= date_from)
         if date_to:
@@ -1171,13 +1403,7 @@ class FeedbackManager:
         rows, total = await self._paginate(conditions, page, page_size, include_total)
         pipeline_map = await self._enrich_with_pipeline_names(rows)
 
-        return {
-            "items": rows,
-            "pipeline_map": pipeline_map,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+        return self._paginated_response(rows, total, page, page_size, extra={"pipeline_map": pipeline_map})
 
     @_rls
     async def get_eval_proposals(
@@ -1192,10 +1418,4 @@ class FeedbackManager:
             FeedbackRecord.feedback_status.in_(["pending", "routing"]),
         ]
         rows, total = await self._paginate(conditions, page, page_size, include_total)
-
-        return {
-            "items": rows,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+        return self._paginated_response(rows, total, page, page_size)
