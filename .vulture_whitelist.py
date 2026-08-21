@@ -205,8 +205,4 @@ __all__ = [
     # --- Product analytics partner carve-out (FAR-354, used by FAR-361 enforcement) ---
     "is_partner_carve_out_active",
     "is_license_enforcement_enabled",
-    # --- Account-level routing (FAR-354 CA model, used by API endpoints) ---
-    "get_current_account",
-    "get_membership_by_account_and_ca",
-    "list_memberships_for_ca",
 ]
