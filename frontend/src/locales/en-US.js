@@ -2726,7 +2726,7 @@ export default {
         "view_full_analytics": "View full analytics"
       },
       "RemySkillManager": {
-        "description": "Description",
+        "description": "Skill description",
         "triggers_commaseparated": "Triggers (comma-separated)",
         "failed_to_delete_skill": "Failed to delete skill:",
         "failed_to_create_skill": "Failed to create skill:",
