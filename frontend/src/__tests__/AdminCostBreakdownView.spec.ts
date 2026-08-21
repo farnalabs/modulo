@@ -101,4 +101,37 @@ describe('AdminCostBreakdownView', () => {
 
     expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/costs/anomalies/dismiss/anomaly-1')
   })
+
+  it('renders summary cards from org_total/org_run_count when items is empty', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [],
+            org_total: '90.138792',
+            org_run_count: 42,
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-total-spend"]').text()).toContain('90.14')
+    expect(wrapper.find('[data-testid="cost-total-runs"]').text()).toContain('42')
+  })
 })
