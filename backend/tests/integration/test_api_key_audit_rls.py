@@ -36,7 +36,7 @@ def _make_settings(db_url: str) -> Settings:
         database_url=db_url,
         modulo_db="postgres",
         secret_key="a" * 32,
-        fernet_key="vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=",
+        fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         redis_url="",
         modulo_admin_password="test",
     )

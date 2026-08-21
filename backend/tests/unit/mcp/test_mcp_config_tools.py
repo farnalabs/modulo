@@ -112,7 +112,7 @@ class TestGetOrgConfigSuccess(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list_config.return_value = [
-            _make_config(key="fernet_key", value="vK-xU7GqHLflg"),
+            _make_config(key="fernet_key", value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
             _make_config(key="app_name", value="modulo"),
         ]
         mock_session.return_value = make_session_context(AsyncMock())

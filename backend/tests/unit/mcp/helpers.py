@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 API_KEY = "mk_testprefix_testsecretkey1234567890abc"
-FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 
 def make_session_context(session: AsyncMock) -> AsyncMock:

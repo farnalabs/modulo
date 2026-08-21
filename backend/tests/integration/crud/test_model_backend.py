@@ -26,7 +26,7 @@ from modulo.db.models.model_backend import ModelBackend
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
-_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+_VALID_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 
 def _mb_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -> dict:

@@ -29,7 +29,7 @@ COPY backend/tests/ tests/
 # Required non-production test values (the database is never contacted).
 ENV DATABASE_URL=postgresql+asyncpg://unused:unused@localhost/unused
 ENV SECRET_KEY=docker-mutation-secret-key-not-for-production
-ENV FERNET_KEY=vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+ENV FERNET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 # Default runs all configured paths
 CMD ["uv", "run", "mutmut", "run"]

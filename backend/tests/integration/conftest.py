@@ -34,7 +34,7 @@ os.environ.setdefault("SECRET_KEY", "a" * 32)
 # Fernet key — the executor's ModuloPostgresSaver constructs ``Fernet()`` from
 # settings.fernet_key, and an invalid key raises ValueError, failing every run
 # (the deploy gate failure). Must match what ci.yml sets at the workflow level.
-os.environ.setdefault("FERNET_KEY", "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=")
+os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")

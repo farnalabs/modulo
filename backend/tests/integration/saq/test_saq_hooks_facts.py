@@ -185,7 +185,7 @@ def saq_hooks_engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> A
     """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=")
+    monkeypatch.setenv("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
     get_settings.cache_clear()
     saved = saq_hooks._ENGINE
     saq_hooks._ENGINE = None
