@@ -175,6 +175,18 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
     return await _seed_user(db_engine, org_b, "metrics-b@test.local")
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _truncate_metrics_staging(db_engine: AsyncEngine) -> AsyncGenerator[None, None]:
+    """Isolate each test: the module-scoped ``org_a``/``org_b`` fixtures are
+    reused across every test, and the metrics endpoint appends rows to the
+    shared ``metrics_staging`` table. Without a clean slate a test that writes
+    to org A bleeds rows into a later test that asserts ``org A has exactly one
+    staged row``, producing a false cross-tenant-isolation failure."""
+    yield
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(text("DELETE FROM metrics_staging"))
+
+
 # ---------------------------------------------------------------------------
 # Read helpers — query metrics_staging under RLS scoped to *org_id*
 # ---------------------------------------------------------------------------

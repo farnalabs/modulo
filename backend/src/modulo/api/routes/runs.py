@@ -893,6 +893,11 @@ async def trigger_run(
             await set_rls_org(session, org_id)
             run = await _create_manual_run(session, principal, req)
             run_id = run.id
+            # Eagerly load the pipeline relationship while the transaction is
+            # still open. The session has autobegin disabled, so accessing
+            # ``run.pipeline`` later (in _build_run_response) would fail with
+            # "Autobegin is disabled" once the transaction has committed.
+            await session.refresh(run, ["pipeline"])
     except IntegrityError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
