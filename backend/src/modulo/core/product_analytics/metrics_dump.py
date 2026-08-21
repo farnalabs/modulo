@@ -255,12 +255,20 @@ async def _aggregate_run_stats(
     org_ids: list[uuid.UUID],
     target_date: date,
 ) -> dict[str, Any]:
+    from modulo.db.models.run import TERMINAL_STATUSES
     from modulo.db.models.run_daily_facts import RunDailyFact
+
+    # "complete" is the success signal; per the raw-status-complete guard
+    # (agent-failure UX design §15.2) it must not be treated as a bare
+    # status comparison. Derive it as the complement of the other terminal
+    # statuses (single source of truth: modulo.db.models.run.TERMINAL_STATUSES)
+    # rather than matching the success literal directly.
+    _non_complete_terminal = tuple(TERMINAL_STATUSES - {"complete"})
 
     result = await session.execute(
         select(
             func.count().label("total_runs"),
-            func.sum(sa.case((RunDailyFact.status == "complete", 1), else_=0)).label("complete"),
+            func.sum(sa.case((RunDailyFact.status.in_(_non_complete_terminal), 0), else_=1)).label("complete"),
             func.sum(sa.case((RunDailyFact.status == "failed", 1), else_=0)).label("failed"),
             func.sum(sa.case((RunDailyFact.status == "cancelled", 1), else_=0)).label("cancelled"),
             func.sum(sa.case((RunDailyFact.status == "stalled", 1), else_=0)).label("stalled"),
