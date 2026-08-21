@@ -45,6 +45,22 @@ _DEFAULT_PAGE_SIZE = 20
 _MAX_PAGE_SIZE = 100
 
 
+def _handler_type_label(handler_type: str) -> str:
+    """Return a safe, non-tainted label for ``feedback_handler_type``.
+
+    The raw value arrives from caller input and is treated as tainted by
+    static analysis. Each branch returns a literal constant (never the
+    caller-supplied value), so the result is untainted and safe to log.
+    """
+    if handler_type == "human":
+        return "human"
+    if handler_type == "ai_correction":
+        return "ai_correction"
+    if handler_type == "ai_correction_with_human_review":
+        return "ai_correction_with_human_review"
+    return "unknown"
+
+
 class FeedbackManagerError(Exception):
     """Base exception for FeedbackManager errors."""
 
@@ -397,7 +413,7 @@ class FeedbackManager:
             "Created FeedbackRecord %s (run=%s, handler=%s)",
             record.id,
             run_id,
-            feedback_handler_type,
+            _handler_type_label(feedback_handler_type),
         )
         return record
 
@@ -600,7 +616,7 @@ class FeedbackManager:
             )
         return eval_def
 
-    async def _evaluate_single_eval_def(
+    def _evaluate_single_eval_def(
         self,
         record: FeedbackRecord,
         eval_def: Any,
@@ -648,7 +664,7 @@ class FeedbackManager:
             return True
         processed_count = 0
         for eval_def in eval_suite:
-            processed, passed = await self._evaluate_single_eval_def(record, eval_def, eval_engine)
+            processed, passed = self._evaluate_single_eval_def(record, eval_def, eval_engine)
             if not processed:
                 continue
             processed_count += 1
