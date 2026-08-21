@@ -251,6 +251,79 @@ async def _guard_and_resolve_ongoing_changes(
     return False
 
 
+def _require_trigger_type(trigger: Trigger, expected: str, detail: str) -> None:
+    """Raise 400 unless the trigger's type matches ``expected``."""
+    if trigger.trigger_type != expected:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+async def _apply_active_state(session: AsyncSession, trigger: Trigger, new_active: bool | None) -> bool:
+    """Apply an ``active`` transition; returns the trigger's PREVIOUS ``active`` value.
+
+    FAR-190: any ``active=True`` transition re-anchors the no-delivery streak
+    epoch so pre-existing history can never count. Returns ``False`` when the
+    field was not supplied so callers can skip the post-commit counter clear.
+    """
+    if new_active is None:
+        return False
+    prev_active = trigger.active
+    trigger.active = new_active
+    if trigger.active and not prev_active:
+        await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
+    return prev_active
+
+
+def _merge_if_set(config: dict[str, Any], key: str, value: Any) -> None:
+    """Set ``config[key]`` from ``value`` when it is not ``None`` (merge semantics)."""
+    if value is not None:
+        config[key] = value
+
+
+def _bump_ongoing_next_fire(trigger: Trigger, changed: bool) -> None:
+    """Push an ongoing trigger's ``next_fire_at`` to now when its pool/cadence changed.
+
+    The scheduler tick selects ``next_fire_at IS NULL OR due``, so the reset
+    makes a freshly configured ongoing trigger fire promptly.
+    """
+    if trigger.trigger_type == "ongoing" and changed:
+        trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+
+
+def _serialize_trigger_detail(trigger: Trigger, *, in_flight: int, streak_status: dict[str, Any]) -> dict[str, Any]:
+    """The full single-trigger API shape shared by the create/update/restore responses."""
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
+        "config_json": mask_config_json(trigger.config_json),
+        "cron_expression": trigger.cron_expression,
+        "cron_timezone": trigger.cron_timezone,
+        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "in_flight": in_flight,
+        "streak_status": streak_status,
+    }
+
+
+def _resolve_cron_next_fire(
+    trigger_type: str,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+) -> datetime.datetime | None:
+    """Validate cron fields when supplied; returns the next UTC fire time or ``None``.
+
+    Raises 400 when cron fields are supplied for a non-cron trigger.
+    """
+    if cron_expression is None and cron_timezone is None:
+        return None
+    if trigger_type != "cron":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_ONLY_CRON_TRIGGERS_CAN)
+    return _validated_next_fire(cron_expression, cron_timezone)
+
+
 @router.get("/triggers", status_code=status.HTTP_200_OK)
 @handle_db_errors("triggers.list_triggers")
 async def list_triggers(
@@ -367,11 +440,7 @@ async def update_cron_config(
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
-            if trigger.trigger_type != "cron":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
-                )
+            _require_trigger_type(trigger, "cron", _MSG_ONLY_CRON_TRIGGERS_CAN)
 
             next_fire_at: datetime.datetime | None = None
             if req.cron_expression is not None or req.cron_timezone is not None:
@@ -380,13 +449,7 @@ async def update_cron_config(
                     req.cron_timezone if req.cron_timezone is not None else trigger.cron_timezone,
                 )
 
-            if req.active is not None:
-                prev_active = trigger.active
-                trigger.active = req.active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
+            prev_active = await _apply_active_state(session, trigger, req.active)
             if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
@@ -544,34 +607,19 @@ async def update_polling_config(
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
-            if trigger.trigger_type != "polling":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only polling triggers can have polling configuration",
-                )
+            _require_trigger_type(trigger, "polling", "Only polling triggers can have polling configuration")
 
-            if req.active is not None:
-                prev_active = trigger.active
-                trigger.active = req.active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
+            prev_active = await _apply_active_state(session, trigger, req.active)
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
 
             config = dict(trigger.config_json or {})
 
-            if req.connector_instance_id is not None:
-                config["connector_instance_id"] = req.connector_instance_id
-            if req.poll_query is not None:
-                config["poll_query"] = req.poll_query
-            if req.condition_expression is not None:
-                config["condition_expression"] = req.condition_expression
-            if req.poll_interval_seconds is not None:
-                config["poll_interval_seconds"] = req.poll_interval_seconds
-            if req.snapshot_id is not None:
-                config["snapshot_id"] = req.snapshot_id
+            _merge_if_set(config, "connector_instance_id", req.connector_instance_id)
+            _merge_if_set(config, "poll_query", req.poll_query)
+            _merge_if_set(config, "condition_expression", req.condition_expression)
+            _merge_if_set(config, "poll_interval_seconds", req.poll_interval_seconds)
+            _merge_if_set(config, "snapshot_id", req.snapshot_id)
 
             trigger.config_json = config
 
@@ -661,11 +709,7 @@ async def update_ongoing_config(
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
-            if trigger.trigger_type != "ongoing":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only ongoing triggers can have ongoing configuration",
-                )
+            _require_trigger_type(trigger, "ongoing", "Only ongoing triggers can have ongoing configuration")
 
             config = dict(trigger.config_json or {})
             old_scan = int(config.get("scan_interval_seconds") or 60)
@@ -673,28 +717,18 @@ async def update_ongoing_config(
             if req.scan_interval_seconds is not None:
                 config["scan_interval_seconds"] = req.scan_interval_seconds
                 scan_changed = req.scan_interval_seconds != old_scan
-            if req.input_template is not None:
-                config["input_template"] = req.input_template
-            if req.snapshot_id is not None:
-                config["snapshot_id"] = req.snapshot_id
+            _merge_if_set(config, "input_template", req.input_template)
+            _merge_if_set(config, "snapshot_id", req.snapshot_id)
             trigger.config_json = config
 
             prev_max = trigger.max_concurrent_runs
             if req.target_runs is not None:
                 trigger.max_concurrent_runs = req.target_runs
-            if req.active is not None:
-                prev_active = trigger.active
-                trigger.active = req.active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
+            prev_active = await _apply_active_state(session, trigger, req.active)
 
-            if trigger.trigger_type == "ongoing":
-                activated = req.active is not None and trigger.active
-                target_changed = req.target_runs is not None and req.target_runs != prev_max
-                if scan_changed or activated or target_changed:
-                    trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+            activated = req.active is not None and trigger.active
+            target_changed = req.target_runs is not None and req.target_runs != prev_max
+            _bump_ongoing_next_fire(trigger, scan_changed or activated or target_changed)
 
             await session.flush()
             updated_in_flight = await _ongoing_in_flight(session, trigger)
@@ -771,11 +805,7 @@ async def test_polling_condition(
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
-            if trigger.trigger_type != "polling":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only polling triggers can be tested",
-                )
+            _require_trigger_type(trigger, "polling", "Only polling triggers can be tested")
     except ProgrammingError:
         _log.exception("triggers.test_polling_condition")
         raise HTTPException(
@@ -841,14 +871,7 @@ async def create_trigger(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            next_fire_at = None
-            if req.cron_expression is not None or req.cron_timezone is not None:
-                if req.trigger_type != "cron":
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
-                    )
-                next_fire_at = _validated_next_fire(req.cron_expression, req.cron_timezone)
+            next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
                 # validator also loads the pipeline cap for the target check).
@@ -908,22 +931,9 @@ async def create_trigger(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    return {
-        "id": str(trigger.id),
-        "pipeline_id": str(trigger.pipeline_id),
-        "trigger_type": trigger.trigger_type,
-        "active": trigger.active,
-        "max_concurrent_runs": trigger.max_concurrent_runs,
-        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
-        "config_json": mask_config_json(trigger.config_json),
-        "cron_expression": trigger.cron_expression,
-        "cron_timezone": trigger.cron_timezone,
-        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
-        "in_flight": created_in_flight,
-        "streak_status": created_streak_status,
-    }
+    response = _serialize_trigger_detail(trigger, in_flight=created_in_flight, streak_status=created_streak_status)
+    response["input_template"] = trigger.config_json.get("input_template") if trigger.config_json else None
+    return response
 
 
 class TriggerUpdate(BaseModel):
@@ -952,11 +962,9 @@ async def update_trigger(
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
-            if (req.cron_expression is not None or req.cron_timezone is not None) and trigger.trigger_type != "cron":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
-                )
+            cron_changed = req.cron_expression is not None or req.cron_timezone is not None
+            if cron_changed:
+                _require_trigger_type(trigger, "cron", _MSG_ONLY_CRON_TRIGGERS_CAN)
 
             # FAR-158 ongoing guards. The ongoing spend limit is REQUIRED — it
             # can never be cleared to None (the DB partial CHECK would also
@@ -967,7 +975,7 @@ async def update_trigger(
                 ongoing_scan_interval_changed = await _guard_and_resolve_ongoing_changes(session, trigger, req)
 
             next_fire_at: datetime.datetime | None = None
-            if req.cron_expression is not None or req.cron_timezone is not None:
+            if cron_changed:
                 next_fire_at = _validated_next_fire(
                     req.cron_expression if req.cron_expression is not None else trigger.cron_expression,
                     req.cron_timezone if req.cron_timezone is not None else trigger.cron_timezone,
@@ -976,14 +984,7 @@ async def update_trigger(
             # Pre-mutation snapshot for the ongoing next_fire_at reset decision
             # (reset only when the pool/cadence/active actually CHANGES).
             prev_max = trigger.max_concurrent_runs
-            prev_active = trigger.active
-
-            if req.active is not None:
-                trigger.active = req.active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
+            prev_active = await _apply_active_state(session, trigger, req.active)
             if req.max_concurrent_runs is not None:
                 trigger.max_concurrent_runs = req.max_concurrent_runs
             if "daily_spend_limit" in req.model_fields_set:
@@ -1001,11 +1002,9 @@ async def update_trigger(
             # Ongoing triggers recompute next_fire_at when the pool or cadence
             # actually changes (NOT on metadata-only edits) so the new config
             # takes effect promptly.
-            if trigger.trigger_type == "ongoing":
-                target_changed = req.max_concurrent_runs is not None and req.max_concurrent_runs != prev_max
-                activated = req.active is not None and trigger.active and not prev_active
-                if target_changed or ongoing_scan_interval_changed or activated:
-                    trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+            target_changed = req.max_concurrent_runs is not None and req.max_concurrent_runs != prev_max
+            activated = req.active is not None and trigger.active and not prev_active
+            _bump_ongoing_next_fire(trigger, target_changed or ongoing_scan_interval_changed or activated)
 
             await session.flush()
             updated_in_flight = await _ongoing_in_flight(session, trigger)
@@ -1035,21 +1034,7 @@ async def update_trigger(
     if req.active is True and not prev_active:
         await clear_trigger_streak_after_reenable(trigger.id)
 
-    return {
-        "id": str(trigger.id),
-        "pipeline_id": str(trigger.pipeline_id),
-        "trigger_type": trigger.trigger_type,
-        "active": trigger.active,
-        "max_concurrent_runs": trigger.max_concurrent_runs,
-        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
-        "config_json": mask_config_json(trigger.config_json),
-        "cron_expression": trigger.cron_expression,
-        "cron_timezone": trigger.cron_timezone,
-        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "in_flight": updated_in_flight,
-        "streak_status": updated_streak_status,
-    }
+    return _serialize_trigger_detail(trigger, in_flight=updated_in_flight, streak_status=updated_streak_status)
 
 
 @router.delete(
@@ -1149,21 +1134,7 @@ async def restore_trigger(
     if trigger.active:
         await clear_trigger_streak_after_reenable(trigger.id)
 
-    return {
-        "id": str(trigger.id),
-        "pipeline_id": str(trigger.pipeline_id),
-        "trigger_type": trigger.trigger_type,
-        "active": trigger.active,
-        "max_concurrent_runs": trigger.max_concurrent_runs,
-        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
-        "config_json": mask_config_json(trigger.config_json),
-        "cron_expression": trigger.cron_expression,
-        "cron_timezone": trigger.cron_timezone,
-        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "in_flight": restored_in_flight,
-        "streak_status": restored_streak_status,
-    }
+    return _serialize_trigger_detail(trigger, in_flight=restored_in_flight, streak_status=restored_streak_status)
 
 
 @router.post(
@@ -1239,6 +1210,42 @@ class TestTriggerRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+async def _record_manual_test_run(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    trigger: Trigger,
+    payload: dict[str, Any],
+    event: TriggerEvent,
+) -> str | None:
+    """Create a snapshot + run for a manual test trigger; returns the run id (or None).
+
+    Raised as part of the ``manual`` dispatch branch in ``test_trigger``.
+    """
+    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+    from modulo.db.crud.run import create_run
+
+    snapshot = await create_snapshot_from_live_graph(
+        session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
+    )
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create pipeline snapshot for test trigger",
+        )
+    run = await create_run(
+        session,
+        org_id=principal.organisation_id,
+        pipeline_id=trigger.pipeline_id,
+        snapshot_id=snapshot.id,
+        trigger_type="manual",
+        input_payload=payload,
+        account_id=principal.account_id,
+        trigger_id=trigger.id,
+    )
+    event.run_id = run.id
+    return str(run.id)
+
+
 @router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_TRIGGERS_TEST_TRIGGER)
 async def test_trigger(
@@ -1281,29 +1288,7 @@ async def test_trigger(
 
             run_id: str | None = None
             if trigger.trigger_type == "manual":
-                from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-                from modulo.db.crud.run import create_run
-
-                snapshot = await create_snapshot_from_live_graph(
-                    session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
-                )
-                if snapshot is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create pipeline snapshot for test trigger",
-                    )
-                run = await create_run(
-                    session,
-                    org_id=principal.organisation_id,
-                    pipeline_id=trigger.pipeline_id,
-                    snapshot_id=snapshot.id,
-                    trigger_type="manual",
-                    input_payload=req.payload,
-                    account_id=principal.account_id,
-                    trigger_id=trigger.id,
-                )
-                run_id = str(run.id)
-                event.run_id = run.id
+                run_id = await _record_manual_test_run(session, principal, trigger, req.payload, event)
 
             await session.flush()
     except ProgrammingError:
@@ -1481,25 +1466,9 @@ async def list_pipeline_triggers(
             # strict-RLS Postgres, silently showing a deactivated trigger as
             # state 'ok' with no Re-enable button.
             for r in rows:
-                pipeline_items.append(
-                    {
-                        "id": str(r.id),
-                        "pipeline_id": str(r.pipeline_id),
-                        "trigger_type": r.trigger_type,
-                        "active": r.active,
-                        "max_concurrent_runs": r.max_concurrent_runs,
-                        "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
-                        "config_json": mask_config_json(r.config_json),
-                        "cron_expression": r.cron_expression,
-                        "cron_timezone": r.cron_timezone,
-                        "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
-                        "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                        "created_by": str(r.account_id),
-                        "created_at": r.created_at.isoformat() if r.created_at else None,
-                        "in_flight": await _ongoing_in_flight(session, r),
-                        "streak_status": await _streak_status_for(session, r),
-                    }
-                )
+                item = await _serialize_trigger(session, r)
+                item["created_at"] = r.created_at.isoformat() if r.created_at else None
+                pipeline_items.append(item)
     except ProgrammingError:
         _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
