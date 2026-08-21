@@ -84,6 +84,7 @@ from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.metrics import router as metrics_router
+from modulo.api.routes.metrics_ingest import router as metrics_ingest_router
 from modulo.api.routes.model_backends import router as model_backends_router
 from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
@@ -1207,6 +1208,7 @@ app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)
+app.include_router(metrics_ingest_router)
 
 # Strip router lifespan contexts -- none of the 68+ routers register
 # on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.
