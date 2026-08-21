@@ -1506,6 +1506,8 @@ class TestGetSystemAsyncEngine:
 
             assert result is create_engine.return_value
             create_engine.assert_called_once()
+            _, kwargs = create_engine.call_args
+            assert kwargs["connect_args"] == {"ssl": False, "statement_cache_size": 0}
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 
