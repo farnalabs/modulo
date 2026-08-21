@@ -104,12 +104,17 @@ def _build_consent_response(
     consent: dict[str, object],
     instance_enabled: bool,
 ) -> ConsentResponse:
-    egress = is_egress_allowed(instance_enabled, str(consent.get("level", DEFAULT_LEVEL)))
+    raw_level = consent.get("level", DEFAULT_LEVEL)
+    level = str(raw_level) if raw_level is not None else DEFAULT_LEVEL
+    egress = is_egress_allowed(instance_enabled, level)
+    prompted = consent.get("prompted")
+    prompted_at = consent.get("prompted_at")
+    level_changed_at = consent.get("level_changed_at")
     return ConsentResponse(
-        level=str(consent.get("level", DEFAULT_LEVEL)),
-        prompted=consent.get("prompted"),
-        prompted_at=consent.get("prompted_at"),
-        level_changed_at=consent.get("level_changed_at"),
+        level=level,
+        prompted=prompted if isinstance(prompted, str) else None,
+        prompted_at=prompted_at if isinstance(prompted_at, str) else None,
+        level_changed_at=level_changed_at if isinstance(level_changed_at, str) else None,
         instance_enabled=instance_enabled,
         egress_allowed=egress,
         prompt_eligible=is_prompt_eligible(consent),
@@ -124,7 +129,7 @@ def _build_consent_response(
 @router.post("/consent", response_model=ConsentResponse)
 @handle_db_errors("product_analytics.consent")
 async def post_consent(
-    body: ConsentRequest,
+    req: ConsentRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConsentResponse:
@@ -143,7 +148,7 @@ async def post_consent(
                     detail="Consent prompt is not currently eligible. Dismissed prompts re-appear after 7 days.",
                 )
 
-            updated_consent = apply_consent_action(consent, body.action)
+            updated_consent = apply_consent_action(consent, req.action)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
 
@@ -152,7 +157,7 @@ async def post_consent(
                 org_id=current_user.organisation_id,
                 event_type="product_analytics_consent",
                 actor_user_id=current_user.user_id,
-                payload_json={"action": body.action, "level": updated_consent.get("level")},
+                payload_json={"action": req.action, "level": updated_consent.get("level")},
             )
 
             instance_enabled = await is_instance_analytics_enabled(session)
@@ -201,7 +206,7 @@ async def get_product_analytics(
 @router.put("", response_model=LevelUpdateResponse)
 @handle_db_errors("product_analytics.update_level")
 async def update_product_analytics_level(
-    body: LevelUpdateRequest,
+    req: LevelUpdateRequest,
     current_user: TenantPrincipal = require_permission("org.settings.update"),
     session: AsyncSession = Depends(get_db_session),
 ) -> LevelUpdateResponse:
@@ -215,7 +220,7 @@ async def update_product_analytics_level(
             org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
 
             consent = get_product_analytics_block(org.settings_json)
-            updated_consent = set_level(consent, body.level)
+            updated_consent = set_level(consent, req.level)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
 
@@ -224,7 +229,7 @@ async def update_product_analytics_level(
                 org_id=current_user.organisation_id,
                 event_type="product_analytics_level_update",
                 actor_user_id=current_user.user_id,
-                payload_json={"level": body.level},
+                payload_json={"level": req.level},
             )
 
             return LevelUpdateResponse(
