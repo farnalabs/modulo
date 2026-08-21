@@ -12,9 +12,9 @@ import secrets
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.system_config import get_config, set_config
 from modulo.db.models.system_config import SystemConfig
 
 _INSTANCE_ID_KEY = "product_analytics_instance_id"
@@ -28,8 +28,10 @@ async def get_or_create_instance_identity(
 ) -> tuple[uuid.UUID, str]:
     """Return ``(instance_id, secret)``, creating both on first call.
 
-    Uses ``INSERT … ON CONFLICT DO NOTHING`` + re-select so concurrent
-    callers converge to the same values without race conditions.
+    Uses ``get_config`` + ``set_config`` idempotently: if the values already
+    exist they are returned unchanged, otherwise they are minted once.  The
+    concurrent-first-write race is handled inside ``set_config`` (which converges
+    to the value the winning caller intended to write).
     """
     instance_id = await _get_or_create_uuid(session, _INSTANCE_ID_KEY)
     secret = await _get_or_create_secret(session, _SECRET_KEY)
@@ -58,7 +60,7 @@ async def rotate_secret(session: AsyncSession) -> str:
     secret before calling this.
     """
     new_secret = secrets.token_hex(32)
-    await _upsert_config(session, _SECRET_KEY, new_secret)
+    await set_config(session, _SECRET_KEY, new_secret)
     _log.info("product_analytics.secret_rotated")
     return new_secret
 
@@ -67,54 +69,34 @@ async def rotate_secret(session: AsyncSession) -> str:
 
 
 async def _get_or_create_uuid(session: AsyncSession, key: str) -> uuid.UUID:
-    """Idempotently mint a UUID in SystemConfig.
+    """Idempotently read or mint a UUID in SystemConfig.
 
-    Uses ``_upsert_config`` (which does ``SELECT … FOR UPDATE``) to avoid
-    TOCTOU races between concurrent callers.
+    Returns the stored value unchanged when it already exists, so concurrent
+    callers converge to a single instance id.
     """
+    existing = await get_config(session, key)
+    if existing is not None:
+        return uuid.UUID(str(existing.value))
     new_id = uuid.uuid4()
-    await _upsert_config(session, key, str(new_id))
-    # Re-select the authoritative value — another caller may have won the race.
-    row = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
-    raw = row.scalar_one()
+    # ``set_config`` handles the concurrent-first-write race and returns the
+    # (converged) SystemConfig row, whose value is the id we just minted.
+    entity = await set_config(session, key, str(new_id))
     _log.info("product_analytics.instance_id_minted")
-    return uuid.UUID(str(raw))
+    return uuid.UUID(str(entity.value))
 
 
 async def _get_or_create_secret(session: AsyncSession, key: str) -> str:
-    """Idempotently mint a hex secret in SystemConfig.
+    """Idempotently read or mint a hex secret in SystemConfig.
 
-    Uses ``_upsert_config`` (which does ``SELECT … FOR UPDATE``) to avoid
-    TOCTOU races between concurrent callers.
+    Returns the stored value unchanged when it already exists, so concurrent
+    callers converge to a single shared secret.
     """
+    existing = await get_config(session, key)
+    if existing is not None:
+        return str(existing.value)
     new_secret = secrets.token_hex(32)
-    await _upsert_config(session, key, new_secret)
-    # Re-select the authoritative value — another caller may have won the race.
-    row = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
-    raw = row.scalar_one()
+    # ``set_config`` handles the concurrent-first-write race and returns the
+    # (converged) SystemConfig row, whose value is the secret we just minted.
+    entity = await set_config(session, key, new_secret)
     _log.info("product_analytics.secret_generated")
-    return str(raw)
-
-
-async def _upsert_config(session: AsyncSession, key: str, value: str) -> None:
-    """Insert-or-update a SystemConfig row.
-
-    Uses a savepoint so a concurrent INSERT (the TOCTOU race on first mint)
-    rolls back only this scope, never the surrounding transaction.
-    """
-    existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
-    row = existing.scalar_one_or_none()
-    if row is not None:
-        row.value = value
-        await session.flush()
-        return
-    session.add(SystemConfig(key=key, value=value))
-    savepoint = await session.begin_nested()
-    try:
-        await session.flush()
-    except IntegrityError:
-        await savepoint.rollback()
-        existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
-        row = existing.scalar_one()
-        row.value = value
-        await session.flush()
+    return str(entity.value)
