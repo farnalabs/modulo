@@ -30,6 +30,7 @@ from modulo.api.dependencies import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
@@ -243,8 +244,6 @@ async def _append_team_audit_event(
     ``SQLAlchemyError`` are logged and swallowed so the preceding team mutation
     is never rolled back by a failed audit write.
     """
-    from modulo.core.audit_logger import append_audit_event
-
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
