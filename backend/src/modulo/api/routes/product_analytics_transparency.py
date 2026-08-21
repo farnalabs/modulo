@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -34,7 +34,6 @@ router = APIRouter(
 class TransparencyResponse(BaseModel):
     last_successful_dump_at: str | None = None
     dump_count_total: int = 0
-    dump_count_last_7d: int = 0
     consent_level: str = "off"
     instance_enabled: bool = False
     enforcement_enabled: bool = False
@@ -74,7 +73,6 @@ async def get_transparency(
         enforcement_enabled_raw = enforcement_entry.value if enforcement_entry else False
         enforcement_enabled = bool(enforcement_enabled_raw) if enforcement_enabled_raw is not None else False
 
-        dump_count_last_7d = 0
         warning = None
 
         if last_dump_at:
@@ -86,16 +84,12 @@ async def get_transparency(
                 days_since = (now - last_dt).total_seconds() / 86400
                 if days_since > _STALE_WARNING_DAYS and consent_level == "all":
                     warning = "not_reaching_farnalabs"
-                seven_days_ago = now - timedelta(days=7)
-                if last_dt >= seven_days_ago:
-                    dump_count_last_7d = max(1, dump_count_total)
             except (ValueError, TypeError):
                 pass
 
         return TransparencyResponse(
             last_successful_dump_at=last_dump_at,
             dump_count_total=dump_count_total,
-            dump_count_last_7d=dump_count_last_7d,
             consent_level=consent_level,
             instance_enabled=instance_enabled,
             enforcement_enabled=enforcement_enabled,

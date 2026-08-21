@@ -16,7 +16,7 @@
 
         <!-- Transparency data -->
         <SectionCard :title="$t('views.AdminProductAnalyticsView.delivery_status')">
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.last_successful_dump') }}</span>
               <p class="mt-0.5 text-lg font-semibold" data-testid="last-dump">
@@ -29,12 +29,6 @@
                 {{ store.transparency.dump_count_total }}
               </p>
             </div>
-            <div>
-              <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.dumps_last_7d') }}</span>
-              <p class="mt-0.5 text-lg font-semibold" data-testid="dump-count-7d">
-                {{ store.transparency.dump_count_last_7d }}
-              </p>
-            </div>
           </div>
         </SectionCard>
 
@@ -44,7 +38,7 @@
               <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.consent_level') }}</span>
               <p class="mt-0.5">
                 <span :class="store.transparency.consent_level === 'all' ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="consent-level">
-                  {{ store.transparency.consent_level === 'all' ? $t('views.AdminProductAnalyticsView.level_all') : $t('views.AdminProductAnalyticsView.level_off') }}
+                  {{ consentLevelLabel }}
                 </span>
               </p>
             </div>
@@ -73,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -81,8 +75,18 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
+import { useI18n } from 'vue-i18n'
 
 const store = useProductAnalyticsStore()
+const { t } = useI18n()
+
+const consentLevelLabel = computed(() => {
+  const map: Record<string, string> = {
+    all: t('views.AdminProductAnalyticsView.level_all'),
+    off: t('views.AdminProductAnalyticsView.level_off'),
+  }
+  return map[store.transparency?.consent_level ?? ''] || store.transparency?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
+})
 
 onMounted(() => {
   store.fetchTransparency()

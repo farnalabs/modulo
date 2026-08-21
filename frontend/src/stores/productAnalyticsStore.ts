@@ -5,7 +5,6 @@ import { api } from "../lib/api/client";
 interface TransparencyData {
   last_successful_dump_at: string | null;
   dump_count_total: number;
-  dump_count_last_7d: number;
   consent_level: string;
   instance_enabled: boolean;
   enforcement_enabled: boolean;
