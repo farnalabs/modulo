@@ -122,7 +122,7 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync mypy src/modulo/
           uv run --no-sync bandit -r src/modulo/ -ll
-          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .)
+          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
           uv run --no-sync pip-audit
 
       - name: Backend unit tests
@@ -178,9 +178,7 @@ jobs:
         working-directory: backend
         run: |
           uv run pip-audit
-          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --error .)
-        env:
-          SEMGREP_BASELINE_COMMIT: "HEAD^"
+          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
 
       - name: Stop containers
         if: always()
