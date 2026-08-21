@@ -43,6 +43,8 @@ from modulo.core.trigger_streak import (
     get_trigger_streak_status,
 )
 from modulo.core.trigger_validation import validate_ongoing_config
+from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.crud.run import create_run
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
@@ -1221,9 +1223,6 @@ async def _record_manual_test_run(
 
     Raised as part of the ``manual`` dispatch branch in ``test_trigger``.
     """
-    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-    from modulo.db.crud.run import create_run
-
     snapshot = await create_snapshot_from_live_graph(
         session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
     )
