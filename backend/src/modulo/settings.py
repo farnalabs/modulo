@@ -342,6 +342,14 @@ class Settings(BaseSettings):
     # Default org ID for SCIM provisioning. If empty, the first org in the DB is used.
     modulo_scim_default_org_id: str = Field("")
 
+    # Product analytics — opt-in aggregate usage metrics (design doc section 11).
+    # Endpoint URL for the vendor service. Empty = disabled.
+    product_analytics_endpoint_url: str = Field(default="", alias="MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL")
+    # Instance secret for HMAC signing. Empty = disabled.
+    product_analytics_instance_secret: str = Field(
+        default="", alias="MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET", repr=False
+    )
+
     # Telemetry — disabled by default for data residency compliance.
     # Set to "true" to enable OTel stdout + OTLP exporters.
     modulo_telemetry_enabled: bool = Field(False)

@@ -746,6 +746,18 @@ async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"emitted": emitted}
 
 
+async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — daily product analytics metrics dump (FAR-356).
+
+    Builds an aggregate payload from all consenting orgs and POSTs it to
+    the vendor endpoint.  Skips when: no consenting orgs or instance switch
+    off.  Watermark advances only on full success.
+    """
+    from modulo.core.product_analytics.metrics_dump import metrics_dump as _run_dump
+
+    return await _run_dump(ctx)
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -877,6 +889,7 @@ def _system_functions() -> list[Any]:
         analytics_facts_maintenance,
         journey_reconcile,
         check_missed_fire_alerts_cron,
+        metrics_dump,
     ]
 
 
@@ -1023,6 +1036,19 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=2,
             ttl=300,
+        ),
+        # metrics_dump: daily 01:00 UTC, unique=True, system session factory.
+        # Runs after analytics_facts_maintenance (same slot, separate job).
+        # Watermark advances only on full success; skips when no consenting
+        # orgs or instance switch off.
+        CronJob(
+            metrics_dump,
+            cron="0 1 * * *",
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
         ),
     ]
 
