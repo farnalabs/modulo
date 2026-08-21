@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { toDate } from '../lib/formatDate'
+import { throwOnError, formatApiError } from '../lib/api/formatError'
 
 interface ConsentData {
   level: 'off' | 'all'
@@ -50,22 +51,15 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     request: () => Promise<{ error?: unknown; data?: ConsentResponse }>,
   ): Promise<boolean> {
     loading.value = true
-    error.value = null
     try {
-      const resp = await request()
-      if (resp.error) {
-        error.value = String(resp.error)
-        return false
-      }
-      if (resp.data) {
-        const data = resp.data
-        consent.value = data.consent
-        instanceEnabled.value = data.instance_enabled
-        isPartnerLicence.value = data.is_partner_licence
-      }
+      const data = throwOnError<ConsentResponse>(await request())
+      consent.value = data.consent
+      instanceEnabled.value = data.instance_enabled
+      isPartnerLicence.value = data.is_partner_licence
+      error.value = null
       return true
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = formatApiError(e)
       return false
     } finally {
       loading.value = false
