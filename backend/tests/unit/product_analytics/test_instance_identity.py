@@ -79,19 +79,30 @@ def _make_mock_session(existing: dict[str, str] | None = None) -> AsyncMock:
             mock_obj = MagicMock()
             mock_obj.value = _stored[key]
             scalar_result.scalar_one_or_none.return_value = mock_obj
+            scalar_result.scalar_one.return_value = mock_obj
         elif ".id" in stmt_str:
             # select(Model.id) — existence check
             scalar_result.scalar_one_or_none.return_value = "exists"
+            scalar_result.scalar_one.return_value = "exists"
         else:
             # select(Model.value) — scalar value
             scalar_result.scalar_one_or_none.return_value = _stored[key]
+            scalar_result.scalar_one.return_value = _stored[key]
         return scalar_result
 
     session.execute = AsyncMock(side_effect=_execute)
     session.flush = AsyncMock()
 
     added: list = []
-    session.add = MagicMock(side_effect=lambda obj: added.append(obj))
+
+    def _add(obj):
+        added.append(obj)
+        # Persist SystemConfig rows so subsequent re-selects observe the write,
+        # mirroring real DB behaviour (the production code re-selects after upsert).
+        if getattr(obj, "key", None) is not None and getattr(obj, "value", None) is not None:
+            _stored[obj.key] = obj.value
+
+    session.add = MagicMock(side_effect=_add)
     session._added = added
     session._stored = _stored
     session._last_queried_key = last_queried_key

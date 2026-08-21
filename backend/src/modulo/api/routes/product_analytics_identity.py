@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import time
 from collections import defaultdict
@@ -21,6 +22,7 @@ from modulo.core.product_analytics.instance_identity import (
     get_secret_exists,
     rotate_secret,
 )
+from modulo.db.crud.system_config import get_config, set_config
 
 _log = logging.getLogger(__name__)
 
@@ -195,8 +197,6 @@ _SEQUENCE_KEY_PREFIX = "product_analytics_last_sequence_"
 
 async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
     """Read the last accepted sequence number for this instance."""
-    from modulo.db.crud.system_config import get_config
-
     key = _SEQUENCE_KEY_PREFIX + instance_id
     entry = await get_config(session, key)
     if entry is None:
@@ -206,14 +206,10 @@ async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
 
 async def _set_last_sequence(session: AsyncSession, instance_id: str, seq: int) -> None:
     """Persist the last accepted sequence number."""
-    from modulo.db.crud.system_config import set_config
-
     key = _SEQUENCE_KEY_PREFIX + instance_id
     await set_config(session, key, seq)
 
 
 def _constant_time_equal(a: str, b: str) -> bool:
     """Compare two strings in constant time to prevent timing attacks."""
-    import hmac as _hmac
-
-    return _hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))

@@ -97,17 +97,23 @@ async def _get_or_create_secret(session: AsyncSession, key: str) -> str:
 
 
 async def _upsert_config(session: AsyncSession, key: str, value: str) -> None:
-    """Insert-or-update a SystemConfig row."""
+    """Insert-or-update a SystemConfig row.
+
+    Uses a savepoint so a concurrent INSERT (the TOCTOU race on first mint)
+    rolls back only this scope, never the surrounding transaction.
+    """
     existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
     row = existing.scalar_one_or_none()
     if row is not None:
         row.value = value
-    else:
-        session.add(SystemConfig(key=key, value=value))
+        await session.flush()
+        return
+    session.add(SystemConfig(key=key, value=value))
+    savepoint = await session.begin_nested()
     try:
         await session.flush()
     except IntegrityError:
-        await session.rollback()
+        await savepoint.rollback()
         existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
         row = existing.scalar_one()
         row.value = value
