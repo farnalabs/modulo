@@ -48,6 +48,18 @@ __all__ = [
     "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
+    # --- Remy route dynamic backend dispatch (remy.py _BACKEND_IMPORTS, resolved via importlib + getattr) ---
+    "Ai21Backend",
+    "AnthropicBackend",
+    "DeepSeekBackend",
+    "FireworksBackend",
+    "GeminiBackend",
+    "GrokBackend",
+    "GroqBackend",
+    "OpenRouterBackend",
+    "PerplexityBackend",
+    "QwenBackend",
+    "TogetherAIBackend",
     # --- Framework contracts (string-cast Protocol / config-driven registries) ---
     "_TaskGroupSessionManager",
     "RepositoryHub",

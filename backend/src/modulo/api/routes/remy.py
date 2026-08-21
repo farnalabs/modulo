@@ -23,13 +23,14 @@ Endpoints:
 
 import asyncio
 import contextlib
+import importlib
 import json
 import logging
 import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from cryptography.fernet import Fernet
@@ -277,6 +278,25 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
             return HumanMessage(content=m.content or "")
 
 
+# Provider → (module, backend class) map. Imported lazily via importlib so the
+# heavy model-backend dependencies stay out of the module import path.
+_BACKEND_IMPORTS: dict[str, tuple[str, str]] = {
+    "ai21": ("modulo.model_backends.ai21", "Ai21Backend"),
+    "anthropic": ("modulo.model_backends.anthropic", "AnthropicBackend"),
+    "deepseek": ("modulo.model_backends.deepseek", "DeepSeekBackend"),
+    "fireworks": ("modulo.model_backends.fireworks", "FireworksBackend"),
+    "gemini": ("modulo.model_backends.gemini", "GeminiBackend"),
+    "grok": ("modulo.model_backends.grok", "GrokBackend"),
+    "groq": ("modulo.model_backends.groq", "GroqBackend"),
+    "openai": ("modulo.model_backends.openai", "OpenAIBackend"),
+    "opencode": ("modulo.model_backends.opencode", "OpenCodeBackend"),
+    "openrouter": ("modulo.model_backends.openrouter", "OpenRouterBackend"),
+    "perplexity": ("modulo.model_backends.perplexity", "PerplexityBackend"),
+    "qwen": ("modulo.model_backends.qwen", "QwenBackend"),
+    "togetherai": ("modulo.model_backends.togetherai", "TogetherAIBackend"),
+}
+
+
 def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> ModelBackendBase:
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(
@@ -284,63 +304,16 @@ def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> Mo
             detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(SUPPORTED_PROVIDERS))}",
         )
 
-    if provider == "ai21":
-        from modulo.model_backends.ai21 import Ai21Backend
-
-        return Ai21Backend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "anthropic":
-        from modulo.model_backends.anthropic import AnthropicBackend
-
-        return AnthropicBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "deepseek":
-        from modulo.model_backends.deepseek import DeepSeekBackend
-
-        return DeepSeekBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "fireworks":
-        from modulo.model_backends.fireworks import FireworksBackend
-
-        return FireworksBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "gemini":
-        from modulo.model_backends.gemini import GeminiBackend
-
-        return GeminiBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "grok":
-        from modulo.model_backends.grok import GrokBackend
-
-        return GrokBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "groq":
-        from modulo.model_backends.groq import GroqBackend
-
-        return GroqBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "openai":
-        from modulo.model_backends.openai import OpenAIBackend
-
-        return OpenAIBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "opencode":
-        from modulo.model_backends.opencode import OpenCodeBackend
-
-        return OpenCodeBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "openrouter":
-        from modulo.model_backends.openrouter import OpenRouterBackend
-
-        return OpenRouterBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "perplexity":
-        from modulo.model_backends.perplexity import PerplexityBackend
-
-        return PerplexityBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "qwen":
-        from modulo.model_backends.qwen import QwenBackend
-
-        return QwenBackend(api_key=api_key, model_id=model, **kwargs)
-    if provider == "togetherai":
-        from modulo.model_backends.togetherai import TogetherAIBackend
-
-        return TogetherAIBackend(api_key=api_key, model_id=model, **kwargs)
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unsupported provider: {provider!r}",
-    )
+    entry = _BACKEND_IMPORTS.get(provider)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported provider: {provider!r}",
+        )
+    module_name, class_name = entry
+    backend_module = importlib.import_module(module_name)
+    backend_cls = getattr(backend_module, class_name)
+    return cast(ModelBackendBase, backend_cls(api_key=api_key, model_id=model, **kwargs))
 
 
 async def _resolve_api_key(
@@ -456,7 +429,7 @@ async def _is_ui_driving_enabled(
 # ── UI command helpers ───────────────────────────────────────────────────
 
 
-async def _validate_session_ownership(
+async def _get_owned_session(
     session_id: uuid.UUID,
     principal: TenantPrincipal,
     db: AsyncSession,
@@ -464,6 +437,15 @@ async def _validate_session_ownership(
     chat_session = await db.get(ChatSession, session_id)
     if chat_session is None or chat_session.user_id != principal.account_id:
         raise HTTPException(status_code=404, detail=_MSG_SESSION_NOT_FOUND)
+    return chat_session
+
+
+async def _validate_session_ownership(
+    session_id: uuid.UUID,
+    principal: TenantPrincipal,
+    db: AsyncSession,
+) -> ChatSession:
+    chat_session = await _get_owned_session(session_id, principal, db)
     # Track session→account mapping for per-account logout (FAR-1470)
     account_id_str = str(principal.account_id)
     session_id_str = str(session_id)
@@ -619,6 +601,461 @@ def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, A
     return tools
 
 
+# ── Stream event-generator helpers ───────────────────────────────────────
+
+
+def _sse_tool_call_event(tool_result: dict[str, Any]) -> str:
+    return f"event: tool_call\ndata: {json.dumps(tool_result)}\n\n"
+
+
+async def _resolve_stream_api_key(
+    req: StreamRequest,
+    principal: TenantPrincipal,
+    db_session: AsyncSession,
+    settings: Settings,
+) -> tuple[str | None, str | None]:
+    """Return (api_key, error_detail). A non-None error_detail means no key resolved."""
+    if req.api_key:
+        return req.api_key, None
+    async with db_session.begin():
+        await set_rls_org(db_session, principal.organisation_id)
+        resolved = await _resolve_api_key(
+            req.provider,
+            principal.organisation_id,
+            db_session,
+            settings.fernet_key,
+        )
+    if resolved is None:
+        msg = (
+            f"No active {req.provider} API key configured. Add one in Settings > Model Backends or provide an api_key."
+        )
+        return None, msg
+    return resolved, None
+
+
+def _build_stream_backend(req: StreamRequest, api_key: str) -> tuple[ModelBackendBase | None, str | None]:
+    """Return (backend, error_detail). A non-None error_detail means construction failed."""
+    try:
+        return _build_backend(req.provider, req.model, api_key), None
+    except HTTPException as exc:
+        return None, str(exc.detail)
+    except Exception as exc:
+        logger.exception("remy.backend_construction_failed")
+        return None, f"Failed to initialize backend: {exc}"
+
+
+async def _build_stream_system_prompt(
+    db_session: AsyncSession,
+    principal: TenantPrincipal,
+    req: StreamRequest,
+    supports_tools: bool,
+) -> str:
+    async with db_session.begin():
+        await set_rls_org(db_session, principal.organisation_id)
+        skill_loader = SkillLoader(db_session)
+        return await skill_loader.build_system_prompt(
+            org_id=principal.organisation_id,
+            user_id=principal.account_id,
+            page_context=req.page_context,
+            system_prompt_override=req.system_prompt,
+            include_ui_tools_text=(not supports_tools) and not req.exclude_ui_tools,
+        )
+
+
+async def _save_stream_user_message(
+    db_session: AsyncSession,
+    principal: TenantPrincipal,
+    session_id: uuid.UUID,
+    req: StreamRequest,
+) -> uuid.UUID:
+    async with db_session.begin():
+        await set_rls_org(db_session, principal.organisation_id)
+        user_msg = ChatMessage(
+            organisation_id=principal.organisation_id,
+            session_id=session_id,
+            role="user",
+            content=req.content,
+        )
+        db_session.add(user_msg)
+        await db_session.flush()
+        return user_msg.id
+
+
+async def _build_stream_tools_param(
+    backend: ModelBackendBase,
+    principal: TenantPrincipal,
+    db_session: AsyncSession,
+    req: StreamRequest,
+) -> list[dict[str, Any]] | None:
+    if not getattr(backend, "supports_tools", False):
+        return None
+    await build_tool_registry()
+    return _get_all_tool_definitions(
+        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id, db_session))
+        and not req.exclude_ui_tools,
+    )
+
+
+def _prune_context_window(messages: list[BaseMessage], context_window: int) -> int:
+    """Trim old messages until the conversation fits the 80% token budget.
+
+    Returns the number of messages pruned.
+    """
+    budget = int(context_window * 0.8)
+    total_tokens = sum(max(1, len(m.content or "") // 4) for m in messages)
+    pruned_count = 0
+    while total_tokens > budget and len(messages) > 2:
+        removed = messages.pop(1)
+        total_tokens -= max(1, len(removed.content or "") // 4)
+        pruned_count += 1
+    return pruned_count
+
+
+def _accumulate_tool_call_chunks(chunk: AIMessageChunk, buffers: dict[int, dict[str, Any]]) -> None:
+    """Accumulate partial tool-call argument chunks into the index-keyed buffers."""
+    if not chunk.tool_call_chunks:
+        return
+    for chunk_call in chunk.tool_call_chunks:
+        idx = chunk_call.get("index")
+        if idx is None:
+            idx = 0
+        buf = buffers.get(idx)
+        if buf is None:
+            buffers[idx] = {
+                "id": chunk_call.get("id", "") or "",
+                "name": chunk_call.get("name", "") or "",
+                "args": chunk_call.get("args", "") or "",
+            }
+        else:
+            if chunk_call.get("id"):
+                buf["id"] = chunk_call["id"] or ""
+            if chunk_call.get("name"):
+                buf["name"] = chunk_call["name"] or ""
+            if chunk_call.get("args"):
+                buf["args"] += chunk_call["args"] or ""
+
+
+async def _auto_name_stream_session(
+    db_session: AsyncSession,
+    session_id: uuid.UUID,
+    req: StreamRequest,
+    chat_session: ChatSession,
+) -> None:
+    """Derive and persist an auto-generated name for an unnamed session."""
+    if chat_session.name:
+        return
+    msg_count_q = select(func.count(ChatMessage.id)).where(
+        ChatMessage.session_id == session_id,
+        ChatMessage.role == "user",
+    )
+    msg_count = (await db_session.execute(msg_count_q)).scalar() or 0
+    auto_name: str | None = None
+    if msg_count == 1:
+        # First message: use first 40 chars of user's first message
+        name_seed = req.content[:40].strip()
+        auto_name = name_seed + ("..." if len(req.content) > 40 else "")
+    elif msg_count >= 10:
+        # After 10 messages: use first user message prefix
+        first_msg_q = (
+            select(ChatMessage.content)
+            .where(
+                ChatMessage.session_id == session_id,
+                ChatMessage.role == "user",
+            )
+            .order_by(ChatMessage.created_at.asc())
+            .limit(1)
+        )
+        first_msg = (await db_session.execute(first_msg_q)).scalar() or ""
+        name_seed = first_msg[:30].strip()
+        auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
+    if auto_name:
+        try:
+            async with db_session.begin():
+                stmt = update(ChatSession).where(ChatSession.id == session_id).values(name=auto_name)
+                await db_session.execute(stmt)
+        except Exception:
+            logger.exception("remy.auto_naming_failed")
+
+
+async def _finalise_stream_assistant_message(
+    db_session: AsyncSession,
+    principal: TenantPrincipal,
+    session_id: uuid.UUID,
+    full_content: str,
+    parent_msg_id: uuid.UUID | None,
+    req: StreamRequest,
+    chat_session: ChatSession,
+) -> str:
+    """Persist the final assistant message (no tool calls) and auto-name the session."""
+    async with db_session.begin():
+        await set_rls_org(db_session, principal.organisation_id)
+        assistant_msg = ChatMessage(
+            organisation_id=principal.organisation_id,
+            session_id=session_id,
+            role="assistant",
+            content=full_content or None,
+            tool_calls_json=None,
+            parent_id=parent_msg_id,
+        )
+        db_session.add(assistant_msg)
+        await db_session.flush()
+        msg_id = str(assistant_msg.id)
+        await _auto_name_stream_session(db_session, session_id, req, chat_session)
+    return msg_id
+
+
+async def _run_mcp_tool_calls(
+    mcp_tool_calls: list[dict[str, Any]],
+    req: StreamRequest,
+    mcp_base_url: str,
+) -> AsyncGenerator[dict[str, Any], None]:
+    if mcp_tool_calls and not req.mcp_api_key:
+        for tc in mcp_tool_calls:
+            yield {
+                "tool_call_id": tc["id"],
+                "tool_name": tc["name"],
+                "success": False,
+                "error": "Tool execution requires an MCP API key",
+            }
+    elif req.mcp_api_key is not None:
+        for tc in mcp_tool_calls:
+            try:
+                result = await _call_mcp_tool(
+                    tool_name=tc["name"],
+                    arguments=tc["args"],
+                    mcp_api_key=req.mcp_api_key,
+                    base_url=mcp_base_url,
+                )
+                yield {
+                    "tool_call_id": tc["id"],
+                    "tool_name": tc["name"],
+                    "success": True,
+                    "result": result,
+                }
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.exception("MCP tool call failed: %r", tc["name"])
+                err_msg = f"{type(exc).__name__}: {exc}"[:200]
+                yield {
+                    "tool_call_id": tc["id"],
+                    "tool_name": tc["name"],
+                    "success": False,
+                    "error": err_msg,
+                }
+
+
+async def _run_manifest_calls(
+    manifest_calls: list[dict[str, Any]],
+    req: StreamRequest,
+) -> AsyncGenerator[dict[str, Any], None]:
+    for tc in manifest_calls:
+        if req.exclude_ui_tools:
+            yield {
+                "tool_call_id": tc["id"],
+                "tool_name": "get_manifest",
+                "success": False,
+                "error": "UI driving is not available in this view",
+            }
+            continue
+        from modulo.core.manifest import get_manifest
+
+        manifest = get_manifest()
+        path = tc["args"].get("path")
+        if path:
+            route = manifest.get("routes", {}).get(path)
+            elements = manifest.get("elements", {}).get(path, [])
+            result = {"route": route, "elements": elements}
+        else:
+            result = {
+                "routes": {
+                    k: {
+                        "name": v.get("name"),
+                        "testid": v.get("testid"),
+                        "type": v.get("type"),
+                        "sidebar_group": v.get("sidebar_group"),
+                    }
+                    for k, v in manifest.get("routes", {}).items()
+                },
+                "elements": manifest.get("elements", {}),
+                "sidebar_groups": manifest.get("sidebar_groups", {}),
+            }
+        yield {
+            "tool_call_id": tc["id"],
+            "tool_name": "get_manifest",
+            "success": True,
+            "result": result,
+        }
+
+
+async def _classify_ui_tool_permissions(
+    config: RemyConfig,
+    ui_tool_calls: list[dict[str, Any]],
+    page_path: str,
+    session_id_str: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split UI tool calls into (approved, pending-permission) buckets."""
+    approved_calls: list[dict[str, Any]] = []
+    pending_permission_calls: list[dict[str, Any]] = []
+    for tc in ui_tool_calls:
+        perm = _resolve_tool_permission(config, tc["name"], tc["args"], page_path)
+        if perm == "disabled":
+            continue
+        if perm in ("requires_approval", "nogo_requires_approval") and not await _is_approved_for_session(
+            session_id_str, tc["name"], page_path
+        ):
+            if perm == "nogo_requires_approval":
+                tc["_nogo"] = True
+            pending_permission_calls.append(tc)
+            continue
+        approved_calls.append(tc)
+    return approved_calls, pending_permission_calls
+
+
+async def _wait_for_stream_resume(
+    registry: Any | None,
+    session_id_str: str,
+) -> None:
+    if registry is not None:
+        await registry.subscribe_resume(session_id_str, timeout=300.0)
+    else:
+        resume_ev = _resume_events.get(session_id_str)
+        if resume_ev is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
+
+
+def _build_permission_request_payload(
+    pending_permission_calls: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    req_id = str(uuid.uuid4())
+    payload = {
+        "request_id": req_id,
+        "tools": [
+            {
+                "name": tc["name"],
+                "args": tc["args"],
+                **({"nogo": True} if tc.get("_nogo") else {}),
+            }
+            for tc in pending_permission_calls
+        ],
+    }
+    return payload, req_id
+
+
+async def _await_permission_decision(
+    registry: Any | None,
+    session_id_str: str,
+    req_id: str,
+    pending_permission_calls: list[dict[str, Any]],
+    page_path: str,
+) -> list[dict[str, Any]]:
+    """Register the permission request, wait for a decision, return approved calls."""
+    event = asyncio.Event()
+    _pending_permissions[req_id] = (event, session_id_str)
+    if registry is not None:
+        await registry.set_permission_request(
+            req_id,
+            session_id_str,
+            [{"name": tc["name"], "args": tc["args"]} for tc in pending_permission_calls],
+        )
+    approved: list[dict[str, Any]] = []
+    try:
+        if registry is not None:
+            decision_data = await registry.subscribe_permission_response(req_id, timeout=60.0)
+            decision = {"action": "reject"} if decision_data is None else decision_data
+        else:
+            await asyncio.wait_for(event.wait(), timeout=60.0)
+            decision = _permission_decisions.pop(req_id, {"action": "reject"})
+        if decision["action"] in ("approve", "approve_for_session"):
+            approved = list(pending_permission_calls)
+            if decision["action"] == "approve_for_session":
+                for tc in pending_permission_calls:
+                    await _set_session_approval(session_id_str, tc["name"], page_path)
+    except TimeoutError:
+        pass
+    finally:
+        _pending_permissions.pop(req_id, None)
+    return approved
+
+
+async def _wait_for_ui_command_results(
+    registry: Any | None,
+    session_id_str: str,
+    event: asyncio.Event,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    try:
+        if registry is not None:
+            ready = await registry.subscribe_ui_results(session_id_str, timeout=120.0)
+            if ready:
+                results = await registry.get_and_clear_ui_command_results(session_id_str)
+        else:
+            await asyncio.wait_for(event.wait(), timeout=120.0)
+            results = _ui_command_results.pop(session_id_str, [])
+    except TimeoutError:
+        pass
+    return results
+
+
+def _merge_ui_command_results(
+    approved_calls: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for ac, r in zip(approved_calls, results, strict=False):
+        merged.append(
+            {
+                "tool_call_id": ac["id"],
+                "tool_name": r.get("name", ""),
+                "success": r.get("success", False),
+                "result": r.get("result"),
+                "error": r.get("error"),
+            }
+        )
+    return merged
+
+
+def _tool_result_content(tool_result: dict[str, Any]) -> str:
+    return json.dumps(tool_result.get("result", tool_result.get("error", "")))
+
+
+async def _persist_assistant_and_tool_messages(
+    db_session: AsyncSession,
+    principal: TenantPrincipal,
+    session_id: uuid.UUID,
+    full_content: str,
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    parent_msg_id: uuid.UUID | None,
+) -> str:
+    async with db_session.begin():
+        await set_rls_org(db_session, principal.organisation_id)
+        assistant_msg = ChatMessage(
+            organisation_id=principal.organisation_id,
+            session_id=session_id,
+            role="assistant",
+            content=full_content or None,
+            tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
+            parent_id=parent_msg_id,
+        )
+        db_session.add(assistant_msg)
+        await db_session.flush()
+        msg_id = str(assistant_msg.id)
+
+        for tr in tool_results:
+            tool_msg = ChatMessage(
+                organisation_id=principal.organisation_id,
+                session_id=session_id,
+                role="tool_result",
+                content=_tool_result_content(tr),
+                tool_results_json=tr,
+                parent_id=assistant_msg.id,
+            )
+            db_session.add(tool_msg)
+    return msg_id
+
+
 # ── Session endpoints ────────────────────────────────────────────────────
 
 
@@ -770,9 +1207,7 @@ async def get_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            chat_session = await _get_owned_session(session_id, principal, session)
 
             count_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
             count_result = await session.execute(count_q)
@@ -812,9 +1247,7 @@ async def rename_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            chat_session = await _get_owned_session(session_id, principal, session)
 
             chat_session.name = req.name
             await session.flush()
@@ -852,9 +1285,7 @@ async def delete_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            chat_session = await _get_owned_session(session_id, principal, session)
 
             await session.delete(chat_session)
 
@@ -914,9 +1345,7 @@ async def list_messages(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            await _get_owned_session(session_id, principal, session)
 
             total_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
             total_result = await session.execute(total_q)
@@ -971,9 +1400,7 @@ async def append_message(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            await _get_owned_session(session_id, principal, session)
 
             msg = ChatMessage(
                 organisation_id=principal.organisation_id,
@@ -1028,9 +1455,7 @@ async def stream_chat(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            chat_session = await session.get(ChatSession, session_id)
-            if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
+            chat_session = await _get_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.stream_chat")
         raise HTTPException(
@@ -1066,61 +1491,25 @@ async def stream_chat(
         try:
             async with AsyncSession(session.bind, autobegin=False) as db_session:
                 # 1. Resolve API key
-                api_key = req.api_key
-                if not api_key:
-                    async with db_session.begin():
-                        await set_rls_org(db_session, principal.organisation_id)
-                        resolved = await _resolve_api_key(
-                            req.provider,
-                            principal.organisation_id,
-                            db_session,
-                            settings.fernet_key,
-                        )
-                    if resolved is None:
-                        msg = (
-                            f"No active {req.provider} API key configured. "
-                            "Add one in Settings > Model Backends or provide an api_key."
-                        )
-                        yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
-                        return
-                    api_key = resolved
+                api_key, api_key_error = await _resolve_stream_api_key(req, principal, db_session, settings)
+                if api_key_error is not None:
+                    yield f"event: error\ndata: {json.dumps({'detail': api_key_error})}\n\n"
+                    return
+                assert api_key is not None
 
                 # 2. Create backend (needed before system prompt for supports_tools)
-                try:
-                    backend = _build_backend(req.provider, req.model, api_key)
-                except HTTPException as exc:
-                    yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
+                backend, backend_error = _build_stream_backend(req, api_key)
+                if backend_error is not None:
+                    yield f"event: error\ndata: {json.dumps({'detail': backend_error})}\n\n"
                     return
-                except Exception as exc:
-                    logger.exception("remy.backend_construction_failed")
-                    yield f"event: error\ndata: {json.dumps({'detail': f'Failed to initialize backend: {exc}'})}\n\n"
-                    return
+                assert backend is not None
 
                 # 3. Construct system prompt from config + skills
                 supports_tools = getattr(backend, "supports_tools", False)
-                async with db_session.begin():
-                    await set_rls_org(db_session, principal.organisation_id)
-                    skill_loader = SkillLoader(db_session)
-                    system_prompt = await skill_loader.build_system_prompt(
-                        org_id=principal.organisation_id,
-                        user_id=principal.account_id,
-                        page_context=req.page_context,
-                        system_prompt_override=req.system_prompt,
-                        include_ui_tools_text=(not supports_tools) and not req.exclude_ui_tools,
-                    )
+                system_prompt = await _build_stream_system_prompt(db_session, principal, req, supports_tools)
 
                 # 4. Save user message to DB
-                async with db_session.begin():
-                    await set_rls_org(db_session, principal.organisation_id)
-                    user_msg = ChatMessage(
-                        organisation_id=principal.organisation_id,
-                        session_id=session_id,
-                        role="user",
-                        content=req.content,
-                    )
-                    db_session.add(user_msg)
-                    await db_session.flush()
-                    parent_msg_id = user_msg.id
+                parent_msg_id = await _save_stream_user_message(db_session, principal, session_id, req)
 
                 # 5. Reconstruct conversation
                 async with db_session.begin():
@@ -1137,13 +1526,7 @@ async def stream_chat(
                     if req.context_window_tokens is not None
                     else (chat_session.context_window_tokens or 200000)
                 )
-                budget = int(context_window * 0.8)
-                total_tokens = sum(max(1, len(m.content or "") // 4) for m in langchain_messages)
-                pruned_count = 0
-                while total_tokens > budget and len(langchain_messages) > 2:
-                    removed = langchain_messages.pop(1)
-                    total_tokens -= max(1, len(removed.content or "") // 4)
-                    pruned_count += 1
+                pruned_count = _prune_context_window(langchain_messages, context_window)
                 if pruned_count:
                     logger.info("Pruned %d messages from session %s", pruned_count, session_id)
 
@@ -1152,13 +1535,7 @@ async def stream_chat(
                     full_content = ""
                     tool_call_buffers: dict[int, dict[str, Any]] = {}
 
-                    tools_param = None
-                    if getattr(backend, "supports_tools", False):
-                        await build_tool_registry()
-                        tools_param = _get_all_tool_definitions(
-                            include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id, db_session))
-                            and not req.exclude_ui_tools,
-                        )
+                    tools_param = await _build_stream_tools_param(backend, principal, db_session, req)
 
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
@@ -1166,25 +1543,7 @@ async def stream_chat(
                         if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
                             full_content += chunk.content
                             yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
-                            if chunk.tool_call_chunks:
-                                for chunk_call in chunk.tool_call_chunks:
-                                    idx = chunk_call.get("index")
-                                    if idx is None:
-                                        idx = 0
-                                    buf = tool_call_buffers.get(idx)
-                                    if buf is None:
-                                        tool_call_buffers[idx] = {
-                                            "id": chunk_call.get("id", "") or "",
-                                            "name": chunk_call.get("name", "") or "",
-                                            "args": chunk_call.get("args", "") or "",
-                                        }
-                                    else:
-                                        if chunk_call.get("id"):
-                                            buf["id"] = chunk_call["id"] or ""
-                                        if chunk_call.get("name"):
-                                            buf["name"] = chunk_call["name"] or ""
-                                        if chunk_call.get("args"):
-                                            buf["args"] += chunk_call["args"] or ""
+                            _accumulate_tool_call_chunks(chunk, tool_call_buffers)
 
                     if await request.is_disconnected():
                         return
@@ -1193,57 +1552,9 @@ async def stream_chat(
 
                     if not tool_calls:
                         # LLM done — save assistant message and exit loop
-                        async with db_session.begin():
-                            await set_rls_org(db_session, principal.organisation_id)
-                            assistant_msg = ChatMessage(
-                                organisation_id=principal.organisation_id,
-                                session_id=session_id,
-                                role="assistant",
-                                content=full_content or None,
-                                tool_calls_json=None,
-                                parent_id=parent_msg_id,
-                            )
-                            db_session.add(assistant_msg)
-                            await db_session.flush()
-                            msg_id = str(assistant_msg.id)
-
-                            # Auto-name session if it has no custom name
-                            if not chat_session.name:
-                                msg_count_q = select(func.count(ChatMessage.id)).where(
-                                    ChatMessage.session_id == session_id,
-                                    ChatMessage.role == "user",
-                                )
-                                msg_count = (await db_session.execute(msg_count_q)).scalar() or 0
-                                auto_name = None
-                                if msg_count == 1:
-                                    # First message: use first 40 chars of user's first message
-                                    name_seed = req.content[:40].strip()
-                                    auto_name = name_seed + ("..." if len(req.content) > 40 else "")
-                                elif msg_count >= 10:
-                                    # After 10 messages: use first user message prefix
-                                    first_msg_q = (
-                                        select(ChatMessage.content)
-                                        .where(
-                                            ChatMessage.session_id == session_id,
-                                            ChatMessage.role == "user",
-                                        )
-                                        .order_by(ChatMessage.created_at.asc())
-                                        .limit(1)
-                                    )
-                                    first_msg = (await db_session.execute(first_msg_q)).scalar() or ""
-                                    name_seed = first_msg[:30].strip()
-                                    auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
-                                if auto_name:
-                                    try:
-                                        async with db_session.begin():
-                                            stmt = (
-                                                update(ChatSession)
-                                                .where(ChatSession.id == session_id)
-                                                .values(name=auto_name)
-                                            )
-                                            await db_session.execute(stmt)
-                                    except Exception:
-                                        logger.exception("remy.auto_naming_failed")
+                        msg_id = await _finalise_stream_assistant_message(
+                            db_session, principal, session_id, full_content, parent_msg_id, req, chat_session
+                        )
                         break
 
                     # Separate UI vs MCP tool calls
@@ -1253,97 +1564,17 @@ async def stream_chat(
                     tool_results: list[dict[str, Any]] = []
 
                     # Execute MCP tools
-                    if mcp_tool_calls and not req.mcp_api_key:
-                        for tc in mcp_tool_calls:
-                            tool_results.append(
-                                {
-                                    "tool_call_id": tc["id"],
-                                    "tool_name": tc["name"],
-                                    "success": False,
-                                    "error": "Tool execution requires an MCP API key",
-                                }
-                            )
-                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
-                    elif req.mcp_api_key is not None:
-                        for tc in mcp_tool_calls:
-                            try:
-                                result = await _call_mcp_tool(
-                                    tool_name=tc["name"],
-                                    arguments=tc["args"],
-                                    mcp_api_key=req.mcp_api_key,
-                                    base_url=mcp_base_url,
-                                )
-                                tool_results.append(
-                                    {
-                                        "tool_call_id": tc["id"],
-                                        "tool_name": tc["name"],
-                                        "success": True,
-                                        "result": result,
-                                    }
-                                )
-                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
-                            except HTTPException:
-                                raise
-                            except Exception as exc:
-                                logger.exception("MCP tool call failed: %r", tc["name"])
-                                err_msg = f"{type(exc).__name__}: {exc}"[:200]
-                                tool_results.append(
-                                    {
-                                        "tool_call_id": tc["id"],
-                                        "tool_name": tc["name"],
-                                        "success": False,
-                                        "error": err_msg,
-                                    }
-                                )
-                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    async for tr in _run_mcp_tool_calls(mcp_tool_calls, req, mcp_base_url):
+                        tool_results.append(tr)
+                        yield _sse_tool_call_event(tr)
 
                     # Handle get_manifest calls server-side
                     manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
                     ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
 
-                    for tc in manifest_calls:
-                        if req.exclude_ui_tools:
-                            tool_results.append(
-                                {
-                                    "tool_call_id": tc["id"],
-                                    "tool_name": "get_manifest",
-                                    "success": False,
-                                    "error": "UI driving is not available in this view",
-                                }
-                            )
-                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
-                            continue
-                        from modulo.core.manifest import get_manifest
-
-                        manifest = get_manifest()
-                        path = tc["args"].get("path")
-                        if path:
-                            route = manifest.get("routes", {}).get(path)
-                            elements = manifest.get("elements", {}).get(path, [])
-                            result = {"route": route, "elements": elements}
-                        else:
-                            result = {
-                                "routes": {
-                                    k: {
-                                        "name": v.get("name"),
-                                        "testid": v.get("testid"),
-                                        "type": v.get("type"),
-                                        "sidebar_group": v.get("sidebar_group"),
-                                    }
-                                    for k, v in manifest.get("routes", {}).items()
-                                },
-                                "elements": manifest.get("elements", {}),
-                                "sidebar_groups": manifest.get("sidebar_groups", {}),
-                            }
-                        tool_results.append(
-                            {
-                                "tool_call_id": tc["id"],
-                                "tool_name": "get_manifest",
-                                "success": True,
-                                "result": result,
-                            }
-                        )
-                        yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    async for tr in _run_manifest_calls(manifest_calls, req):
+                        tool_results.append(tr)
+                        yield _sse_tool_call_event(tr)
 
                     # Handle UI tools
                     if ui_tool_calls and (
@@ -1355,15 +1586,14 @@ async def stream_chat(
                             else _MSG_UI_DRIVING_DISABLED_ORGANISATION
                         )
                         for tc in ui_tool_calls:
-                            tool_results.append(
-                                {
-                                    "tool_call_id": tc["id"],
-                                    "tool_name": tc["name"],
-                                    "success": False,
-                                    "error": ui_driving_error,
-                                }
-                            )
-                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            tr = {
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": False,
+                                "error": ui_driving_error,
+                            }
+                            tool_results.append(tr)
+                            yield _sse_tool_call_event(tr)
                     elif ui_tool_calls:
                         async with db_session.begin():
                             await set_rls_org(db_session, principal.organisation_id)
@@ -1379,84 +1609,21 @@ async def stream_chat(
                                 + json.dumps({"detail": "Session paused. Waiting for resume."})
                                 + "\n\n"
                             )
-                            registry = _get_registry()
-                            if registry is not None:
-                                await registry.subscribe_resume(session_id_str, timeout=300.0)
-                            else:
-                                resume_ev = _resume_events.get(session_id_str)
-                                if resume_ev is not None:
-                                    with contextlib.suppress(TimeoutError):
-                                        await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
+                            await _wait_for_stream_resume(registry, session_id_str)
 
-                        approved_calls: list[dict[str, Any]] = []
-                        pending_permission_calls: list[dict[str, Any]] = []
-
-                        for tc in ui_tool_calls:
-                            perm = _resolve_tool_permission(config, tc["name"], tc["args"], req.page_context or "")
-                            if perm == "disabled":
-                                continue
-                            elif perm in ("requires_approval", "nogo_requires_approval"):
-                                page_path = req.page_context or ""
-                                if not await _is_approved_for_session(
-                                    session_id_str,
-                                    tc["name"],
-                                    page_path,
-                                ):
-                                    if perm == "nogo_requires_approval":
-                                        tc["_nogo"] = True
-                                    pending_permission_calls.append(tc)
-                                    continue
-                            approved_calls.append(tc)
+                        page_path = req.page_context or ""
+                        approved_calls, pending_permission_calls = await _classify_ui_tool_permissions(
+                            config, ui_tool_calls, page_path, session_id_str
+                        )
 
                         if pending_permission_calls:
-                            req_id = str(uuid.uuid4())
-                            yield f"event: permission_request\ndata: {
-                                json.dumps(
-                                    {
-                                        'request_id': req_id,
-                                        'tools': [
-                                            {
-                                                'name': tc['name'],
-                                                'args': tc['args'],
-                                                **({'nogo': True} if tc.get('_nogo') else {}),
-                                            }
-                                            for tc in pending_permission_calls
-                                        ],
-                                    }
+                            payload, req_id = _build_permission_request_payload(pending_permission_calls)
+                            yield f"event: permission_request\ndata: {json.dumps(payload)}\n\n"
+                            approved_calls.extend(
+                                await _await_permission_decision(
+                                    registry, session_id_str, req_id, pending_permission_calls, page_path
                                 )
-                            }\n\n"
-
-                            # Register permission request — Redis pub/sub for cross-worker,
-                            # in-memory Event for local fast-path
-                            registry = _get_registry()
-                            event = asyncio.Event()
-                            _pending_permissions[req_id] = (event, session_id_str)
-                            if registry is not None:
-                                await registry.set_permission_request(
-                                    req_id,
-                                    session_id_str,
-                                    [{"name": tc["name"], "args": tc["args"]} for tc in pending_permission_calls],
-                                )
-                            try:
-                                if registry is not None:
-                                    decision_data = await registry.subscribe_permission_response(req_id, timeout=60.0)
-                                    decision = {"action": "reject"} if decision_data is None else decision_data
-                                else:
-                                    await asyncio.wait_for(event.wait(), timeout=60.0)
-                                    decision = _permission_decisions.pop(req_id, {"action": "reject"})
-                                if decision["action"] in ("approve", "approve_for_session"):
-                                    approved_calls.extend(pending_permission_calls)
-                                    if decision["action"] == "approve_for_session":
-                                        for tc in pending_permission_calls:
-                                            await _set_session_approval(
-                                                session_id_str,
-                                                tc["name"],
-                                                req.page_context or "",
-                                            )
-                            except TimeoutError:
-                                pass
-                            finally:
-                                _pending_permissions.pop(req_id, None)
+                            )
 
                         if approved_calls:
                             # Rate limiter check before yielding commands
@@ -1486,19 +1653,8 @@ async def stream_chat(
                             registry = _get_registry()
                             event = asyncio.Event()
                             _pending_ui_results[session_id_str] = event
-
                             try:
-                                if registry is not None:
-                                    ready = await registry.subscribe_ui_results(session_id_str, timeout=120.0)
-                                    if ready:
-                                        results = await registry.get_and_clear_ui_command_results(session_id_str)
-                                    else:
-                                        results = []
-                                else:
-                                    await asyncio.wait_for(event.wait(), timeout=120.0)
-                                    results = _ui_command_results.pop(session_id_str, [])
-                            except TimeoutError:
-                                results = []
+                                results = await _wait_for_ui_command_results(registry, session_id_str, event)
                             finally:
                                 _pending_ui_results.pop(session_id_str, None)
 
@@ -1507,17 +1663,9 @@ async def stream_chat(
                                     "remy.ui_result_length_mismatch",
                                     extra={"approved": len(approved_calls), "results": len(results)},
                                 )
-                            for ac, r in zip(approved_calls, results, strict=False):
-                                tool_results.append(
-                                    {
-                                        "tool_call_id": ac["id"],
-                                        "tool_name": r.get("name", ""),
-                                        "success": r.get("success", False),
-                                        "result": r.get("result"),
-                                        "error": r.get("error"),
-                                    }
-                                )
-                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            for tr in _merge_ui_command_results(approved_calls, results):
+                                tool_results.append(tr)
+                                yield _sse_tool_call_event(tr)
 
                             if results and all(r.get("error") == "cancelled_by_user" for r in results):
                                 skipped = len(results)
@@ -1539,36 +1687,15 @@ async def stream_chat(
                     for tr in tool_results:
                         langchain_messages.append(
                             ToolMessage(
-                                content=json.dumps(tr.get("result", tr.get("error", ""))),
+                                content=_tool_result_content(tr),
                                 tool_call_id=tr["tool_call_id"],
                             )
                         )
 
                     # Save to DB
-                    async with db_session.begin():
-                        await set_rls_org(db_session, principal.organisation_id)
-                        assistant_msg = ChatMessage(
-                            organisation_id=principal.organisation_id,
-                            session_id=session_id,
-                            role="assistant",
-                            content=full_content or None,
-                            tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
-                            parent_id=parent_msg_id,
-                        )
-                        db_session.add(assistant_msg)
-                        await db_session.flush()
-                        msg_id = str(assistant_msg.id)
-
-                        for tr in tool_results:
-                            tool_msg = ChatMessage(
-                                organisation_id=principal.organisation_id,
-                                session_id=session_id,
-                                role="tool_result",
-                                content=json.dumps(tr.get("result", tr.get("error", ""))),
-                                tool_results_json=tr,
-                                parent_id=assistant_msg.id,
-                            )
-                            db_session.add(tool_msg)
+                    msg_id = await _persist_assistant_and_tool_messages(
+                        db_session, principal, session_id, full_content, tool_calls, tool_results, parent_msg_id
+                    )
 
                     # Ping keepalive if idle
                     now = _time.monotonic()
