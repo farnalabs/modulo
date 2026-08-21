@@ -35,7 +35,8 @@ uv sync
 DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
 MODULO_DB=postgres
 SECRET_KEY=local-dev-secret-key-not-for-production
-FERNET_KEY=vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+FERNET_KEY=<generate-your-own-fernet-key>
+# Generate your own key, e.g.: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 REDIS_URL=redis://localhost:6380/0
 MODULO_PUBLIC_URL=http://localhost:8000
 MODULO_USERS=admin:admin

@@ -9,8 +9,8 @@ on:
 
 env:
   DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
-  SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
-  FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY }}
   REDIS_URL: "redis://localhost:6379/0"
   MODULO_PUBLIC_URL: "http://localhost:8000"
   MODULO_USERS: "admin:admin"

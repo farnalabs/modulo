@@ -104,7 +104,8 @@ cd ..
 
 # 6. Configure environment
 $env:SECRET_KEY = "dev-secret-key-32-bytes-at-least-here!"
-$env:FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+# Generate your own key, e.g.: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+$env:FERNET_KEY = "<generate-your-own-fernet-key>"
 $env:DATABASE_URL = "postgresql+asyncpg://modulo:modulo@localhost:5434/modulo"
 $env:REDIS_URL = "redis://localhost:6380/0"
 $env:MODULO_USERS = "admin:admin"

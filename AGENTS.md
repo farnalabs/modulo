@@ -372,7 +372,7 @@ docker compose -f docker-compose.local.yml up -d
 #   DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
 #   MODULO_DB=postgres
 #   SECRET_KEY=local-dev-secret-key-not-for-production
-#   FERNET_KEY=vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+#   FERNET_KEY=<your-generated-key>
 #   REDIS_URL=redis://localhost:6380/0
 #   MODULO_PUBLIC_URL=http://localhost:8000
 #   MODULO_USERS=admin:admin

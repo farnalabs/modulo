@@ -35,7 +35,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://modulo:modulo@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
-      FERNET_KEY: vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+      FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
@@ -56,7 +56,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://modulo:modulo@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
-      FERNET_KEY: vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+      FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
