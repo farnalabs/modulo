@@ -2096,6 +2096,25 @@ export default {
       "ascending": "Ascending",
       "descending": "Descending"
     },
+    "ProductAnalytics": {
+      "consent_prompt_title": "Help improve Modulo",
+      "consent_prompt_description": "Share anonymous usage data to help us improve Modulo. No personal data, pipeline content, or secrets are ever collected.",
+      "partner_description": "Your Partner licence requires product analytics to be enabled. This helps us improve Modulo for your team.",
+      "accept": "Yes, share usage data",
+      "decline": "No thanks",
+      "dismiss": "Ask me later",
+      "partner_enable": "Enable analytics",
+      "partner_stay_community": "Stay on Community",
+      "settings_title": "Product Analytics",
+      "settings_description": "Control whether anonymous usage data is shared with Modulo to help improve the product.",
+      "opt_in_toggle_label": "Share usage data",
+      "opt_in_toggle_description": "When enabled, anonymous aggregate usage data is sent to help improve Modulo.",
+      "current_level": "Current level",
+      "level_off": "Off",
+      "level_all": "All",
+      "last_successful_dump": "Last successful dump",
+      "coming_soon": "Coming soon"
+    },
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
       "failed_to_load_folders": "Failed to load folders:",
