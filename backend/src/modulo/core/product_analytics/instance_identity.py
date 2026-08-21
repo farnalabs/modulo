@@ -12,6 +12,7 @@ import secrets
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_config import SystemConfig
@@ -103,4 +104,11 @@ async def _upsert_config(session: AsyncSession, key: str, value: str) -> None:
         row.value = value
     else:
         session.add(SystemConfig(key=key, value=value))
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
+        row = existing.scalar_one()
+        row.value = value
+        await session.flush()
