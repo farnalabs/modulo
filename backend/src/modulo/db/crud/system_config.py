@@ -28,8 +28,17 @@ async def set_config(
     is nothing to lock, so two concurrent first-writes can both clear the SELECT
     and race on the INSERT. That race surfaces as an ``IntegrityError`` on the
     unique ``key`` constraint — we roll back to a savepoint, re-select the
-    winning row, and adopt its value, so the stored value converges to the value
-    we intended to write.
+    winning row, and **adopt the winner's value** (first-write-wins).
+
+    This first-write-wins guarantee is load-bearing for Trust-On-First-Use minting
+    (see ``instance_identity.py``): under a concurrent first-mint of a key, the
+    losing caller must observe the value the *winning* caller stored, not its own
+    — otherwise two concurrent callers return different values for the same key
+    and every reader sees whichever id was written last (last-write-wins), which
+    is exactly the instability TOFU is meant to prevent.
+
+    When the row already exists (a deliberate update, e.g. secret rotation) the
+    caller's value still wins, as expected for an upsert.
     """
     existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
     existing_row = existing.scalar_one_or_none()
@@ -57,8 +66,10 @@ async def set_config(
                 await savepoint.rollback()
             existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
             entity = existing.scalar_one()
-            entity.value = value
-            entity.updated_by = updated_by
+            # First-write-wins: the winning caller's row is authoritative. Do NOT
+            # overwrite ``entity.value`` / ``entity.updated_by`` — the losing
+            # caller adopts the already-stored (winner's) value so concurrent
+            # callers converge to a single stored value.
     await session.flush()
     return entity
 

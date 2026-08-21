@@ -105,10 +105,11 @@ class TestSystemConfigCRUD:
         """Concurrent first-write race: a loser's INSERT raises IntegrityError.
 
         ``set_config`` must roll back to a savepoint, re-select the winner's row,
-        and overwrite it with the value this caller intended to write — so the
-        stored value converges on the value we supplied (regression guard for the
-        TOCTOU race on first mint of a SystemConfig key; formerly the
-        ``_upsert_config`` retry branch at instance_identity.py:115).
+        and adopt the winner's value unchanged (first-write-wins) — so every
+        caller observes the same stored value (regression guard for the TOFU
+        convergence guarantee: concurrent first-mint of a SystemConfig key must
+        converge to a single value instead of flipping to whichever caller wrote
+        last).
         """
         session = AsyncMock(spec=AsyncSession)
         session.begin_nested = AsyncMock()
@@ -117,8 +118,8 @@ class TestSystemConfigCRUD:
         session.begin_nested.return_value = savepoint
 
         # First SELECT (FOR UPDATE) sees no row → take the INSERT branch.
-        # After the IntegrityError, the re-SELECT must return the winning row,
-        # which holds the *other* caller's value — set_config must overwrite it.
+        # After the IntegrityError, the re-SELECT returns the winning row, which
+        # holds the *other* caller's value. set_config must adopt it unchanged.
         winner_row = SystemConfig(key="race_key", value="concurrent-winner-value")
         first_execute = MagicMock()
         first_execute.scalar_one_or_none.return_value = None
@@ -146,9 +147,11 @@ class TestSystemConfigCRUD:
 
         entity = await set_config(session, "race_key", "my-intended-value")
 
-        # The race loser must converge the stored value to the one it intended.
-        assert winner_row.value == "my-intended-value"
+        # The race loser must converge to the winner's stored value, NOT overwrite
+        # it with its own. Both callers observe the same value (key invariant).
+        assert winner_row.value == "concurrent-winner-value"
         assert entity is winner_row
+        assert entity.value != "my-intended-value"
         savepoint.rollback.assert_awaited()
         session.begin_nested.assert_awaited()
 

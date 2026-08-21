@@ -2,6 +2,21 @@
 
 Provides replay protection via a 5-minute timestamp window and monotonic
 per-instance sequence numbers.
+
+Canonical message format (cross-SDK contract)
+---------------------------------------------
+The byte string fed into HMAC-SHA256 is built by ``_build_message`` as::
+
+    payload_bytes + b"|" + f"{timestamp:.6f}".encode("ascii") + b"|" + f"{sequence}".encode("ascii")
+
+i.e. ``<payload>|<timestamp with exactly 6 decimal places>|<sequence>``.
+
+This format is an implicit contract with the client SDK (which lives outside
+this repo). The timestamp MUST be rendered as a fixed-point float with exactly
+six decimal places (``"%.6f"``) — any other precision (``int(ts)``, ``"%.9f"``,
+scientific notation, etc.) silently breaks verification because the signed byte
+string no longer matches. Keep every signer and verifier in lockstep with this
+format.
 """
 
 from __future__ import annotations
@@ -73,5 +88,10 @@ def verify_hmac(
 
 
 def _build_message(payload_bytes: bytes, timestamp: float, sequence: int) -> bytes:
-    """Canonical byte string fed into the HMAC."""
+    """Canonical byte string fed into the HMAC.
+
+    The timestamp is rendered as a fixed-point float with exactly six decimal
+    places (``"%.6f"``) — this precision is part of the cross-SDK wire contract
+    and MUST NOT change without updating every signer.
+    """
     return payload_bytes + f"|{timestamp:.6f}".encode("ascii") + f"|{sequence}".encode("ascii")

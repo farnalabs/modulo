@@ -30,8 +30,9 @@ async def get_or_create_instance_identity(
 
     Uses ``get_config`` + ``set_config`` idempotently: if the values already
     exist they are returned unchanged, otherwise they are minted once.  The
-    concurrent-first-write race is handled inside ``set_config`` (which converges
-    to the value the winning caller intended to write).
+    concurrent-first-write race is handled inside ``set_config`` (which is
+    first-write-wins: the losing caller adopts the winning caller's stored value,
+    so all concurrent callers converge to a single instance id / secret).
     """
     instance_id = await _get_or_create_uuid(session, _INSTANCE_ID_KEY)
     secret = await _get_or_create_secret(session, _SECRET_KEY)
@@ -78,8 +79,9 @@ async def _get_or_create_uuid(session: AsyncSession, key: str) -> uuid.UUID:
     if existing is not None:
         return uuid.UUID(str(existing.value))
     new_id = uuid.uuid4()
-    # ``set_config`` handles the concurrent-first-write race and returns the
-    # (converged) SystemConfig row, whose value is the id we just minted.
+    # ``set_config`` is first-write-wins: if a concurrent caller won the race,
+    # ``entity.value`` is that caller's (winning) id, so all callers converge to
+    # a single instance id.
     entity = await set_config(session, key, str(new_id))
     _log.info("product_analytics.instance_id_minted")
     return uuid.UUID(str(entity.value))
@@ -95,8 +97,9 @@ async def _get_or_create_secret(session: AsyncSession, key: str) -> str:
     if existing is not None:
         return str(existing.value)
     new_secret = secrets.token_hex(32)
-    # ``set_config`` handles the concurrent-first-write race and returns the
-    # (converged) SystemConfig row, whose value is the secret we just minted.
+    # ``set_config`` is first-write-wins: if a concurrent caller won the race,
+    # ``entity.value`` is that caller's (winning) secret, so all callers converge
+    # to a single shared secret.
     entity = await set_config(session, key, new_secret)
     _log.info("product_analytics.secret_generated")
     return str(entity.value)
