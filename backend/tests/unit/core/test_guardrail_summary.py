@@ -223,7 +223,9 @@ def test_fired_signature_log_emits_per_pattern(caplog: pytest.LogCaptureFixture)
 def test_pattern_hash_is_deterministic_and_empty_for_unknown() -> None:
     regex_def = _def("regex-guard", "block")
     defs = [regex_def]
-    assert guardrail_pattern_hash(defs, regex_def.id) == guardrail_pattern_hash(defs, regex_def.id)
+    first = guardrail_pattern_hash(defs, regex_def.id)
+    second = guardrail_pattern_hash(defs, regex_def.id)
+    assert first == second
     assert not guardrail_pattern_hash(defs, uuid.uuid4())
 
 

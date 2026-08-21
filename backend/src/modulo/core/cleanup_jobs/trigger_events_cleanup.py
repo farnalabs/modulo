@@ -99,7 +99,7 @@ async def cleanup_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> N
             backoff = 1
             await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
-            break
+            raise
         except Exception:
             _log.exception("Trigger events cleanup loop error")
             await asyncio.sleep(backoff)

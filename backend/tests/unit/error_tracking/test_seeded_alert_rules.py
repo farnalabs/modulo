@@ -101,10 +101,14 @@ def _seed_session(
 class TestSignalFingerprint:
     def test_stable_per_signal_and_pipeline(self) -> None:
         pipeline = uuid.uuid4()
-        assert signal_fingerprint("agent.failed", pipeline) == signal_fingerprint("agent.failed", pipeline)
+        first = signal_fingerprint("agent.failed", pipeline)
+        second = signal_fingerprint("agent.failed", pipeline)
+        assert first == second
 
     def test_differs_by_pipeline(self) -> None:
-        assert signal_fingerprint("agent.failed", uuid.uuid4()) != signal_fingerprint("agent.failed", uuid.uuid4())
+        pipeline_a = uuid.uuid4()
+        pipeline_b = uuid.uuid4()
+        assert signal_fingerprint("agent.failed", pipeline_a) != signal_fingerprint("agent.failed", pipeline_b)
 
     def test_differs_by_signal(self) -> None:
         pipeline = uuid.uuid4()
@@ -114,7 +118,9 @@ class TestSignalFingerprint:
         assert len(signal_fingerprint("agent.failed", None)) == 64
 
     def test_no_pipeline_keeps_signal_partition(self) -> None:
-        assert signal_fingerprint("agent.failed", None) == signal_fingerprint("agent.failed", None)
+        first = signal_fingerprint("agent.failed", None)
+        second = signal_fingerprint("agent.failed", None)
+        assert first == second
         assert signal_fingerprint("agent.failed", None) != signal_fingerprint("agent.no_op", None)
 
 
