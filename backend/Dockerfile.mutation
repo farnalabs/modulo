@@ -34,4 +34,6 @@ ENV FERNET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 # Default runs all configured paths
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
-CMD ["uv", "run", "--frozen", "mutmut", "run"]
+# Run the pre-built mutmut binary directly (no `uv run`, which would re-sync
+# and execute package build/setup scripts) to keep the image SonarCloud-clean.
+CMD ["/app/.venv/bin/mutmut", "run"]
