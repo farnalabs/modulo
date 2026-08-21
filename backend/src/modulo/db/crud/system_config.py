@@ -64,6 +64,12 @@ async def set_config(
         except IntegrityError:
             if savepoint is not None:
                 await savepoint.rollback()
+            # The losing caller's ``entity`` is still pending in the session after
+            # the savepoint rollback — it is NOT expunged, so the trailing flush
+            # would re-emit its INSERT and re-raise the same unique-constraint
+            # violation (a dead/no-op recovery that never converges). Expunge it
+            # now so the only row the session knows about is the winner's.
+            session.expunge(entity)
             existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
             entity = existing.scalar_one()
             # First-write-wins: the winning caller's row is authoritative. Do NOT
