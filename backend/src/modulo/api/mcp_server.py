@@ -1160,6 +1160,14 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
     return {"error": "auth_expired", "detail": msg}
 
 
+def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse a UUID tool param, returning ``(value, None)`` or ``(None, error_dict)``."""
+    try:
+        return uuid.UUID(value), None
+    except ValueError:
+        return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
+
+
 @mcp.tool(
     name="list_pipelines",
     description=(
@@ -1740,10 +1748,11 @@ async def get_pipeline_graph_tool(
         from modulo.db.crud.pipeline import get_pipeline_graph
 
         org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -1841,10 +1850,10 @@ async def _update_pipeline_graph_impl(
     from modulo.db.crud.pipeline import replace_pipeline_graph
 
     org_id = _ctx_org_id_val()
-    try:
-        pid = uuid.UUID(pipeline_id)
-    except ValueError:
-        return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+    pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+    if pid_err:
+        return pid_err
+    assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
     # the MCP surface is structurally excluded from gate weakening. The
@@ -2047,12 +2056,17 @@ async def bind_connector_to_node(
         from modulo.db.crud.connector_instance import get_connector_instance
 
         org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-            nid = uuid.UUID(node_id)
-            cid = uuid.UUID(connector_instance_id)
-        except ValueError:
-            return {"error": "invalid_id", "detail": "One or more IDs have invalid UUID format"}
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        nid, nid_err = _parse_uuid_param(node_id, "node_id")
+        if nid_err:
+            return nid_err
+        cid, cid_err = _parse_uuid_param(connector_instance_id, "connector_instance_id")
+        if cid_err:
+            return cid_err
+        if pid is None or nid is None or cid is None:
+            return {"error": "invalid_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             # Verify connector exists in org
@@ -2112,15 +2126,7 @@ async def bind_connector_to_node(
 
 
 def _trigger_pipeline_validate_id(pipeline_id: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
-    try:
-        pid = uuid.UUID(pipeline_id)
-    except ValueError:
-        return None, {
-            "error": "invalid_id",
-            "field": "pipeline_id",
-            "detail": f"Invalid UUID format: {pipeline_id}",
-        }
-    return pid, None
+    return _parse_uuid_param(pipeline_id, "pipeline_id")
 
 
 async def _create_manual_run(
@@ -2317,10 +2323,10 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     org_id = _ctx_org_id_val()
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
         run = await _load_run_for_status(s, org_id, rid, run_id)
         if run is _TEAM_SCOPE_ERROR:
@@ -2430,10 +2436,11 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
         org_id = _ctx_org_id_val()
-        try:
-            rid = uuid.UUID(run_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+        rid, rid_err = _parse_uuid_param(run_id, "run_id")
+        if rid_err:
+            return rid_err
+        if rid is None:
+            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
 
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -2529,10 +2536,11 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         from modulo.db.crud.run import request_cancellation
 
         org_id = _ctx_org_id_val()
-        try:
-            rid = uuid.UUID(run_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+        rid, rid_err = _parse_uuid_param(run_id, "run_id")
+        if rid_err:
+            return rid_err
+        if rid is None:
+            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
         async with _session(org_id) as s:
             from modulo.db.crud.run import get_run
 
@@ -2657,10 +2665,10 @@ def _parse_hitl_action(
     Returns ``(rid, None)`` on success, or ``(None, error_dict)`` on the first
     validation failure.
     """
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return None, {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return None, rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     if action not in ("claim", "approve", "reject", "deliver_manual"):
         return None, {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
@@ -2913,10 +2921,10 @@ async def copy_library_primitive(
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     org_id = _ctx_org_id_val()
-    try:
-        pid = uuid.UUID(primitive_id)
-    except ValueError:
-        return {"error": "invalid_id", "field": "primitive_id", "detail": f"Invalid UUID format: {primitive_id}"}
+    pid, pid_err = _parse_uuid_param(primitive_id, "primitive_id")
+    if pid_err:
+        return pid_err
+    assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
         try:
@@ -3607,10 +3615,11 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         check_tool_scope(_ctx_role_val(), "get_trigger")
 
         org_id = _ctx_org_id_val()
-        try:
-            tid = uuid.UUID(trigger_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+        tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
+        if tid_err:
+            return tid_err
+        if tid is None:
+            return {"error": "invalid_id", "field": "trigger_id", "detail": "UUID parse failed"}
 
         from sqlalchemy import select
 
@@ -3657,10 +3666,10 @@ def _validate_trigger_update_inputs(
     daily_spend_limit: float | None,
 ) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
     """Parse the trigger UUID and validate the numeric update inputs."""
-    try:
-        tid = uuid.UUID(trigger_id)
-    except ValueError:
-        return None, {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+    tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
+    if tid_err:
+        return None, tid_err
+    assert tid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     if max_concurrent_runs is not None and max_concurrent_runs < 1:
         return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
     if daily_spend_limit is not None and daily_spend_limit < 0:
@@ -5651,10 +5660,10 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     from modulo.db.models.schema import Schema, SchemaVersion
 
     org_id = _ctx_org_id_val()
-    try:
-        sid = uuid.UUID(schema_id)
-    except ValueError:
+    sid, sid_err = _parse_uuid_param(schema_id, "schema_id")
+    if sid_err:
         return f"error: Invalid UUID format: {schema_id}"
+    assert sid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
         schema = await s.get(Schema, sid)
         if schema is None:
