@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -105,6 +106,28 @@ async def _verify_admin_access(session: Any, org_id: uuid.UUID, admin_user_id: s
         raise click.ClickException("Account does not have admin-level access")
 
 
+# ── Shared helpers ─────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class _ScopeFlags:
+    """Pair of mutually-exclusive table-scoping flags shared by import/export."""
+
+    pipelines_only: bool = False
+    users_only: bool = False
+
+
+def _filter_scope(tables: list[tuple[str, Any]], *, pipelines_only: bool, users_only: bool) -> list[tuple[str, Any]]:
+    """Narrow a table set to pipelines or accounts when a scoping flag is set."""
+    if pipelines_only and users_only:
+        raise click.ClickException("--pipelines-only and --users-only are mutually exclusive")
+    if pipelines_only:
+        return [(name, item) for name, item in tables if name == "pipelines"]
+    if users_only:
+        return [(name, item) for name, item in tables if name == "accounts"]
+    return list(tables)
+
+
 # ── Serialisation helpers ─────────────────────────────────────────────────────
 
 
@@ -130,6 +153,23 @@ def _hash_record(rec: dict[str, Any]) -> str:
 # ── Export helpers ──────────────────────────────────────────────────────────────
 
 
+async def _fetch_table_rows(session: Any, model_cls: Any, org_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Fetch every row of one table in bounded pages, scoped to the org."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query: Any = select(model_cls).order_by(model_cls.id)
+        if hasattr(model_cls, "organisation_id"):
+            query = query.where(model_cls.organisation_id == org_id)
+        query = query.offset(offset).limit(_PAGE_SIZE)
+        batch = (await session.execute(query)).scalars().all()
+        if not batch:
+            break
+        rows.extend(_serialise_row(r) for r in batch)
+        offset += _PAGE_SIZE
+    return rows
+
+
 async def _collect_org_data(
     session: Any,
     org_id: uuid.UUID,
@@ -143,28 +183,9 @@ async def _collect_org_data(
         raise click.ClickException(f"Organisation {org_id} not found")
     bundle["organisation"] = _serialise_row(org)
 
-    if pipelines_only and users_only:
-        raise click.ClickException("--pipelines-only and --users-only are mutually exclusive")
-    tables_to_fetch = list(_MODEL_MAP.items())
-    if pipelines_only:
-        tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "pipelines"]
-    elif users_only:
-        tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "accounts"]
-
+    tables_to_fetch = _filter_scope(list(_MODEL_MAP.items()), pipelines_only=pipelines_only, users_only=users_only)
     for name, model_cls in tqdm(tables_to_fetch, desc="Exporting tables", unit="table"):
-        rows: list[dict[str, Any]] = []
-        offset = 0
-        while True:
-            query = select(model_cls).order_by(model_cls.id)
-            if hasattr(model_cls, "organisation_id"):
-                query = query.where(model_cls.organisation_id == org_id)
-            query = query.offset(offset).limit(_PAGE_SIZE)
-            batch = (await session.execute(query)).scalars().all()
-            if not batch:
-                break
-            rows.extend(_serialise_row(r) for r in batch)
-            offset += _PAGE_SIZE
-        bundle[name] = rows
+        bundle[name] = await _fetch_table_rows(session, model_cls, org_id)
 
     bundle["exported_at"] = datetime.now(UTC).isoformat()
     return bundle
@@ -256,6 +277,118 @@ def _group_records(records: list[dict[str, Any]]) -> dict[str, list[dict[str, An
     return groups
 
 
+@dataclass
+class _TableImportConfig:
+    """Per-table settings shared by every row import within one table."""
+
+    session: Any
+    model_cls: type
+    pk_col: str
+    skip_cols: set[str]
+    strategy: ConflictStrategy
+    org_id: uuid.UUID
+    table_name: str
+
+
+def _build_table_config(
+    session: Any,
+    model_cls: type,
+    strategy: ConflictStrategy,
+    org_id: uuid.UUID,
+    table_name: str,
+) -> _TableImportConfig:
+    pk_cols = list(model_cls.__table__.primary_key.columns.keys())  # type: ignore[attr-defined]
+    pk_col = pk_cols[0] if pk_cols else "id"
+    skip_cols = {"id", pk_col, "created_at", "organisation_id"}
+    return _TableImportConfig(
+        session=session,
+        model_cls=model_cls,
+        pk_col=pk_col,
+        skip_cols=skip_cols,
+        strategy=strategy,
+        org_id=org_id,
+        table_name=table_name,
+    )
+
+
+def _map_existing_id(old_id_str: str | None, obj: Any, pk_col: str, id_map: dict[str, str]) -> None:
+    """Record the remap from an exported row id to the stored primary key value."""
+    if old_id_str and hasattr(obj, pk_col):
+        id_map[old_id_str] = str(getattr(obj, pk_col))
+
+
+def _apply_conflict_strategy(existing: Any, row_data: dict[str, Any], cfg: _TableImportConfig) -> None:
+    """Copy row values onto an existing row according to the conflict strategy."""
+    for col, val in row_data.items():
+        if col in cfg.skip_cols or not hasattr(existing, col):
+            continue
+        if cfg.strategy == "merge":
+            current = getattr(existing, col)
+            if current is not None:
+                continue
+        setattr(existing, col, val)
+
+
+async def _create_row(
+    cfg: _TableImportConfig,
+    row_data: dict[str, Any],
+    old_id_str: str | None,
+    id_map: dict[str, str],
+) -> None:
+    """Insert a new row, stripping the exported id so the DB assigns a fresh one."""
+    row_data.pop("id", None)
+    if hasattr(cfg.model_cls, "organisation_id"):
+        row_data["organisation_id"] = cfg.org_id
+    new_obj = cfg.model_cls(**row_data)
+    cfg.session.add(new_obj)
+    await cfg.session.flush()
+    _map_existing_id(old_id_str, new_obj, cfg.pk_col, id_map)
+
+
+async def _import_row(
+    cfg: _TableImportConfig,
+    rec: dict[str, Any],
+    id_map: dict[str, str],
+    counts: dict[str, int],
+) -> None:
+    """Import a single export record under the configured conflict strategy."""
+    raw_data = rec.get("data")
+    if raw_data is None or not isinstance(raw_data, dict):
+        _log.warning("Record missing or invalid 'data' key, skipping: %s", rec.get("id", "?"))
+        counts["errors"] += 1
+        return
+    row_data = dict(raw_data)
+    row_data.pop("organisation_id", None)
+    row_id = row_data.get("id")
+    old_id_str = str(row_id) if row_id else None
+    _remap_fk_row(row_data, id_map)
+
+    try:
+        existing = await _find_existing_row(cfg.session, cfg.model_cls, cfg.pk_col, row_id, cfg.org_id)
+
+        if existing is not None and cfg.strategy == "skip":
+            _map_existing_id(old_id_str, existing, cfg.pk_col, id_map)
+            counts["skipped"] += 1
+            return
+
+        async with cfg.session.begin_nested():
+            if existing is not None and cfg.strategy in ("overwrite", "merge"):
+                _apply_conflict_strategy(existing, row_data, cfg)
+                _map_existing_id(old_id_str, existing, cfg.pk_col, id_map)
+                counts["overwritten"] += 1
+                return
+
+            if existing is None:
+                await _create_row(cfg, row_data, old_id_str, id_map)
+                counts["created"] += 1
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("Error importing %s row %s: %s", cfg.table_name, row_id or "?", exc)
+        counts["errors"] += 1
+
+
 async def _import_org_data(
     session: Any,
     org_id: uuid.UUID,
@@ -269,13 +402,7 @@ async def _import_org_data(
     groups = _group_records(records)
     id_map: dict[str, str] = {}
 
-    if pipelines_only and users_only:
-        raise click.ClickException("--pipelines-only and --users-only are mutually exclusive")
-    tables_to_import = list(groups.items())
-    if pipelines_only:
-        tables_to_import = [(n, r) for n, r in tables_to_import if n == "pipelines"]
-    elif users_only:
-        tables_to_import = [(n, r) for n, r in tables_to_import if n == "accounts"]
+    tables_to_import = _filter_scope(list(groups.items()), pipelines_only=pipelines_only, users_only=users_only)
 
     for table_name, recs in tqdm(tables_to_import, desc="Importing tables", unit="table"):
         if not table_name:
@@ -288,62 +415,9 @@ async def _import_org_data(
             counts["errors"] += 1
             continue
 
-        pk_cols = list(model_cls.__table__.primary_key.columns.keys())  # type: ignore[attr-defined]
-        pk_col = pk_cols[0] if pk_cols else "id"
-        skip_cols = {"id", pk_col, "created_at", "organisation_id"}
-
+        cfg = _build_table_config(session, model_cls, strategy, org_id, table_name)
         for rec in tqdm(recs, desc=f"  {table_name}", unit="row", leave=False):
-            raw_data = rec.get("data")
-            if raw_data is None or not isinstance(raw_data, dict):
-                _log.warning("Record missing or invalid 'data' key, skipping: %s", rec.get("id", "?"))
-                counts["errors"] += 1
-                continue
-            row_data = dict(raw_data)
-            row_data.pop("organisation_id", None)
-            row_id = row_data.get("id")
-            old_id_str = str(row_id) if row_id else None
-            _remap_fk_row(row_data, id_map)
-
-            try:
-                existing = await _find_existing_row(session, model_cls, pk_col, row_id, org_id)
-
-                if existing is not None and strategy == "skip":
-                    if old_id_str and hasattr(existing, pk_col):
-                        id_map[old_id_str] = str(getattr(existing, pk_col))
-                    counts["skipped"] += 1
-                    continue
-
-                async with session.begin_nested():
-                    if existing is not None and strategy in ("overwrite", "merge"):
-                        for col, val in row_data.items():
-                            if col in skip_cols or not hasattr(existing, col):
-                                continue
-                            if strategy == "merge":
-                                current = getattr(existing, col)
-                                if current is not None:
-                                    continue
-                            setattr(existing, col, val)
-                        if old_id_str and hasattr(existing, pk_col):
-                            id_map[old_id_str] = str(getattr(existing, pk_col))
-                        counts["overwritten"] += 1
-                        continue
-
-                    if existing is None:
-                        row_data.pop("id", None)
-                        if hasattr(model_cls, "organisation_id"):
-                            row_data["organisation_id"] = org_id
-                        new_obj = model_cls(**row_data)
-                        session.add(new_obj)
-                        await session.flush()
-                        if old_id_str and hasattr(new_obj, pk_col):
-                            id_map[old_id_str] = str(getattr(new_obj, pk_col))
-                        counts["created"] += 1
-
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                _log.exception("Error importing %s row %s: %s", table_name, row_id or "?", exc)
-                counts["errors"] += 1
+            await _import_row(cfg, rec, id_map, counts)
 
         try:
             await session.flush()
@@ -453,22 +527,19 @@ def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
 @click.pass_context
 def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bool, users_only: bool) -> None:
     """Export all organisation data as a JSONL bundle."""
-    asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, _ORG_ID_ARG_LABEL), output, pipelines_only, users_only))
+    scope = _ScopeFlags(pipelines_only=pipelines_only, users_only=users_only)
+    asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, _ORG_ID_ARG_LABEL), output, scope))
 
 
-async def _async_export_org(
-    ctx: click.Context,
-    org_id: uuid.UUID,
-    output: Path,
-    pipelines_only: bool,
-    users_only: bool,
-) -> None:
+async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path, scope: _ScopeFlags) -> None:
     export_completed = False
     try:
         async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS):
             async with AsyncSessionLocal() as session:
                 await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-                bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
+                bundle = await _collect_org_data(
+                    session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only
+                )
                 hashes = _write_jsonl(bundle, output)
                 export_completed = True
                 record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
@@ -518,7 +589,8 @@ def import_org(
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
     parsed_org_id = _parse_uuid(org_id, _ORG_ID_ARG_LABEL)
-    asyncio.run(_async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only))
+    scope = _ScopeFlags(pipelines_only=pipelines_only, users_only=users_only)
+    asyncio.run(_async_import_org(ctx, parsed_org_id, input_path, on_conflict, scope))
 
 
 async def _async_import_org(
@@ -526,8 +598,7 @@ async def _async_import_org(
     org_id: uuid.UUID,
     input_path: Path,
     strategy: ConflictStrategy,
-    pipelines_only: bool,
-    users_only: bool,
+    scope: _ScopeFlags,
 ) -> None:
     meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
@@ -544,8 +615,8 @@ async def _async_import_org(
                     org_id,
                     records,
                     strategy,
-                    pipelines_only=pipelines_only,
-                    users_only=users_only,
+                    pipelines_only=scope.pipelines_only,
+                    users_only=scope.users_only,
                 )
                 await session.commit()
                 click.echo(
