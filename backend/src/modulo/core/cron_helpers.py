@@ -621,7 +621,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    session: AsyncSession,
+    _session: AsyncSession,
     org_id: uuid.UUID,
     *,
     function: str,
@@ -630,8 +630,9 @@ async def _ingest_saq_error(
 ) -> None:
     """Ingest an error event with source='saq' (plan F3d/F1 enqueue-failure alert).
 
-    Runs in its own session/transaction (the caller's transaction stays intact)
-    and never raises — error ingestion must not crash the scheduler tick.
+    Runs in its own session/transaction (the caller's transaction stays intact
+    — ``_session`` is vestigial and kept only for caller symmetry) and never
+    raises — error ingestion must not crash the scheduler tick.
 
     If ``org_id`` is the nil UUID (system error without tenant context), the
     error is logged and skipped — the ``error_events`` FK constraint requires a
@@ -812,7 +813,6 @@ async def _auto_create_snapshot(
 async def _build_polling_connector(
     session: AsyncSession,
     connector_instance: Any,
-    connector_instance_id: uuid.UUID,
     trigger: Any,
     org_id: uuid.UUID,
     trigger_id: uuid.UUID,
@@ -920,6 +920,69 @@ async def _evaluate_poll_condition(
         return None, str(exc)
 
 
+async def _cron_spend_gate_skip(
+    session: AsyncSession,
+    trigger: Any,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Return a spend-limited skip result when today's cost already meets the limit.
+
+    Extracted from ``fire_cron_trigger`` (no behaviour change) so the fire job
+    body stays within the cognitive-complexity bound; delegates to the shared
+    ``_spend_limit_skip`` helper.
+    """
+    spend_limit = trigger.daily_spend_limit
+    if spend_limit is None:
+        return None
+    return await _spend_limit_skip(session, trigger, org_id, spend_limit)
+
+
+async def _polling_spend_gate_skip(
+    session: AsyncSession,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Return a polling spend-limit skip outcome when today's cost already meets the limit.
+
+    Mirrors ``_cron_spend_gate_skip`` (the polling event logger + inline cost
+    query, behaviour unchanged). Extracted from ``fire_polling_trigger`` so the
+    fire job body stays within the cognitive-complexity bound.
+    """
+    spend_limit = trigger.daily_spend_limit
+    if spend_limit is None:
+        return None
+    from sqlalchemy import func
+
+    from modulo.core.cost_controller import created_at_day_start
+    from modulo.db.models.run import Run
+
+    today_start = created_at_day_start()
+    cost_result = await session.execute(
+        select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+            Run.trigger_id == trigger_id,
+            Run.organisation_id == org_id,
+            Run.created_at >= today_start,
+        )
+    )
+    today_cost = cost_result.scalar_one()
+    if today_cost is not None and today_cost >= spend_limit:
+        await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="spend_limit_reached",
+            error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
+        )
+        return {
+            "status": "skipped",
+            "reason": "spend_limit",
+            "daily_spend_limit": str(spend_limit),
+            "today_cost": str(today_cost),
+        }
+    return None
+
+
 async def fire_cron_trigger(
     *,
     trigger_id: uuid.UUID,
@@ -981,11 +1044,9 @@ async def fire_cron_trigger(
         if active_count >= trigger.max_concurrent_runs:
             return await _concurrency_limit_skip(session, trigger, org_id, active_count)
 
-        spend_limit = trigger.daily_spend_limit
-        if spend_limit is not None:
-            skip = await _spend_limit_skip(session, trigger, org_id, spend_limit)
-            if skip is not None:
-                return skip
+        skip = await _cron_spend_gate_skip(session, trigger, org_id)
+        if skip is not None:
+            return skip
 
         if snapshot_id is None:
             snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
@@ -1109,36 +1170,9 @@ async def fire_polling_trigger(
         # Daily spend limit check (mirrors fire_cron_trigger) — run BEFORE the
         # connector query so an over-budget trigger stops polling the external
         # service instead of running the query every cycle.
-        spend_limit = trigger.daily_spend_limit
-        if spend_limit is not None:
-            from sqlalchemy import func
-
-            from modulo.core.cost_controller import created_at_day_start
-            from modulo.db.models.run import Run
-
-            today_start = created_at_day_start()
-            cost_result = await session.execute(
-                select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
-                    Run.trigger_id == trigger_id,
-                    Run.organisation_id == org_id,
-                    Run.created_at >= today_start,
-                )
-            )
-            today_cost = cost_result.scalar_one()
-            if today_cost is not None and today_cost >= spend_limit:
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="spend_limit_reached",
-                    error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
-                )
-                return {
-                    "status": "skipped",
-                    "reason": "spend_limit",
-                    "daily_spend_limit": str(spend_limit),
-                    "today_cost": str(today_cost),
-                }
+        skip = await _polling_spend_gate_skip(session, trigger, org_id, trigger_id)
+        if skip is not None:
+            return skip
 
         conn_result = await session.execute(
             select(ConnectorInstance).where(
@@ -1161,7 +1195,6 @@ async def fire_polling_trigger(
         connector = await _build_polling_connector(
             session,
             connector_instance,
-            connector_instance_id,
             trigger,
             org_id,
             trigger_id,
@@ -1490,7 +1523,7 @@ async def _ongoing_topup(
         return []
 
     to_create = await _ongoing_shortfall(
-        session, trigger, trigger_id=trigger_id, org_id=org_id, pipeline_id=pipeline_id, outcome=outcome
+        session, trigger, trigger_id=trigger_id, pipeline_id=pipeline_id, outcome=outcome
     )
     if to_create <= 0:
         return []
@@ -1524,6 +1557,17 @@ async def _ongoing_topup(
     )
 
 
+def _ongoing_outcome_update(outcome: dict[str, Any] | None, updates: dict[str, Any]) -> None:
+    """Merge skip/status updates into the caller's mutable outcome dict (if any).
+
+    Shared by the ongoing helpers so the consuming functions stay within the
+    cognitive-complexity bound instead of nesting a ``if outcome is not None``
+    guard at every skip site.
+    """
+    if outcome is not None:
+        outcome.update(updates)
+
+
 async def _acquire_ongoing_trigger(
     session: AsyncSession,
     *,
@@ -1542,8 +1586,7 @@ async def _acquire_ongoing_trigger(
         {"key1": key1, "key2": key2},
     )
     if not lock_result.scalar_one():
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": "trigger_busy"})
+        _ongoing_outcome_update(outcome, {"status": "skipped", "reason": "trigger_busy"})
         return None
 
     trigger_result = await session.execute(
@@ -1555,16 +1598,14 @@ async def _acquire_ongoing_trigger(
     )
     trigger = trigger_result.scalar_one_or_none()
     if trigger is None or not trigger.active:
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": "trigger_inactive_or_missing"})
+        _ongoing_outcome_update(outcome, {"status": "skipped", "reason": "trigger_inactive_or_missing"})
         return None
 
     # Org-wide pause (kill-switch) — race backstop before the spend gate / count
     # (the create_run gate is the authority). Degraded on a pre-migration
     # ProgrammingError (not-paused) inside a savepoint, matching cron/polling.
     if await _org_is_paused_degraded(session, org_id):
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+        _ongoing_outcome_update(outcome, {"status": "skipped", "reason": PAUSE_SKIP_REASON})
         return None
 
     # Daily spend gate (mirrors fire_cron_trigger) — run BEFORE the count so an
@@ -1574,8 +1615,7 @@ async def _acquire_ongoing_trigger(
     if spend_limit is not None:
         skip = await _ongoing_spend_gate(session, trigger, org_id, trigger_id, now, spend_limit)
         if skip is not None:
-            if outcome is not None:
-                outcome.update(skip)
+            _ongoing_outcome_update(outcome, skip)
             return None
     return trigger
 
@@ -1585,7 +1625,6 @@ async def _ongoing_shortfall(
     trigger: Any,
     *,
     trigger_id: uuid.UUID,
-    org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     outcome: dict[str, Any] | None,
 ) -> int:
@@ -1774,17 +1813,18 @@ async def _resolve_ongoing_snapshot(
 
 
 async def _dispatch_ongoing_runs(
-    q_or_none: Any,
+    _q_or_none: Any,
     org_id: uuid.UUID,
     run_ids: list[uuid.UUID],
-    redis_client: AsyncRedis | None = None,
+    _redis_client: AsyncRedis | None = None,
 ) -> list[dict[str, Any]]:
     """Queue phase of the ongoing top-up — dispatch each created run to SAQ.
 
-    Called ONLY after the top-up transaction committed (``q_or_none`` is a
+    Called ONLY after the top-up transaction committed (``_q_or_none`` is a
     placeholder kept for seam parity; the queue name resolves from settings).
-    Per-run try/except collects ``{'run_id', 'outcome', 'job_id'?}`` and NEVER
-    raises after commit — a SAQ retry would re-count the committed pendings
+    ``_redis_client`` is retained for caller symmetry but unused — per-run
+    try/except collects ``{'run_id', 'outcome', 'job_id'?}`` and NEVER raises
+    after commit: a SAQ retry would re-count the committed pendings
     (idempotent), and committed-but-never-dispatched pendings are recovered by
     ``dispatcher_reconcile``'s existing ``pending + dispatched_at IS NULL``
     branch.
@@ -1843,7 +1883,7 @@ async def fire_ongoing_trigger(
                 outcome=outcome,
             )
         # Committed here — safe to dispatch.
-        dispatched = await _dispatch_ongoing_runs(None, org_id, [r.id for r in created], redis_client=redis_client)
+        dispatched = await _dispatch_ongoing_runs(None, org_id, [r.id for r in created])
         if created:
             summary: dict[str, Any] = {
                 "status": "fired",
@@ -2099,6 +2139,86 @@ async def _mark_catchup_fired(redis_client: AsyncRedis, trigger_id: uuid.UUID, m
         _log.warning("cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id)
 
 
+async def _advance_catchup_epoch(
+    session: AsyncSession,
+    row: Any,
+    now: datetime,
+) -> tuple[datetime, bool]:
+    """Atomically advance the observed epoch; ``(next_nf, True)`` when won.
+
+    The CAS-style guard (``next_fire_at = :expected``) means only ONE machine
+    wins the epoch; a concurrent catch-up or manual edit returns ``False`` and
+    the row is left for the winner. Extracted unchanged from
+    ``_fire_missed_cron_epochs`` (complexity bound).
+    """
+    next_nf = compute_next_fire(row.cron_expression, after=now, timezone=row.cron_timezone or "UTC")
+    try:
+        r = await session.execute(
+            _catchup_advance_stmt(),
+            {"nf": next_nf, "tid": str(row.id), "expected": row.next_fire_at},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: catch-up advance failed %s", row.id)
+        return next_nf, False
+    return next_nf, r.fetchone() is not None
+
+
+async def _enqueue_catchup_fire(
+    session: AsyncSession,
+    redis_client: AsyncRedis,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    row: Any,
+    now: datetime,
+    snapshot_id: uuid.UUID | None,
+    next_nf: datetime,
+    missed_epoch: int,
+    summary: dict[str, Any],
+) -> None:
+    """Enqueue the catch-up fire job and mark the epoch fired (best-effort).
+
+    On enqueue failure the consumed advance is rolled back (guarded) and an
+    error event is ingested — the next tick re-selects the epoch. Extracted
+    unchanged from ``_fire_missed_cron_epochs`` (complexity bound).
+    """
+    try:
+        job_id = await _enqueue_fire_job_async(
+            q,
+            "modulo.core.saq_worker.fire_cron_trigger",
+            f"fire:{row.id}:{int(now.timestamp())}",
+            trigger_id=str(row.id),
+            org_id=str(org_id),
+            pipeline_id=str(row.pipeline_id),
+            cron_expression=row.cron_expression,
+            snapshot_id=str(snapshot_id) if snapshot_id else "",
+        )
+        if job_id is not None:
+            summary["cron_catchup_enqueued"] += 1
+        await _mark_catchup_fired(redis_client, row.id, missed_epoch)
+        _log.info(
+            "fire_due_triggers.catchup_refire trigger=%s last_fired=%s cadence=%s missed_epoch=%s",
+            row.id,
+            row.last_fired_at.isoformat(),
+            _cron_cadence_seconds(row.cron_expression, row.cron_timezone, now),
+            missed_epoch,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["enqueue_failures"] += 1
+        _log.exception("fire_due_triggers: catch-up enqueue failed %s", row.id)
+        await _rollback_catchup_advance(session, row.id, row.next_fire_at, next_nf)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="fire_due_triggers",
+            message=f"fire_due_triggers: catch-up enqueue failed for cron trigger {row.id}",
+            context={"trigger_id": str(row.id), "trigger_type": "cron", "catchup": True},
+        )
+
+
 async def _fire_missed_cron_epochs(
     session: AsyncSession,
     redis_client: AsyncRedis,
@@ -2174,54 +2294,13 @@ async def _fire_missed_cron_epochs(
             continue
         if not await _claim_catchup_marker(redis_client, row.id, missed_epoch):
             continue  # another machine already claimed this epoch — single winner
-        next_nf = compute_next_fire(row.cron_expression, after=now, timezone=row.cron_timezone or "UTC")
-        try:
-            r = await session.execute(
-                _catchup_advance_stmt(),
-                {"nf": next_nf, "tid": str(row.id), "expected": row.next_fire_at},
-            )
-            if r.fetchone() is None:
-                continue  # another machine won the epoch (or the row changed)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_due_triggers: catch-up advance failed %s", row.id)
-            continue
+        next_nf, advanced = await _advance_catchup_epoch(session, row, now)
+        if not advanced:
+            continue  # another machine won the epoch (or the row changed)
         snapshot_id = _resolve_snapshot_id(row, {})
-        try:
-            job_id = await _enqueue_fire_job_async(
-                q,
-                "modulo.core.saq_worker.fire_cron_trigger",
-                f"fire:{row.id}:{int(now.timestamp())}",
-                trigger_id=str(row.id),
-                org_id=str(org_id),
-                pipeline_id=str(row.pipeline_id),
-                cron_expression=row.cron_expression,
-                snapshot_id=str(snapshot_id) if snapshot_id else "",
-            )
-            if job_id is not None:
-                summary["cron_catchup_enqueued"] += 1
-            await _mark_catchup_fired(redis_client, row.id, missed_epoch)
-            _log.info(
-                "fire_due_triggers.catchup_refire trigger=%s last_fired=%s cadence=%s missed_epoch=%s",
-                row.id,
-                row.last_fired_at.isoformat(),
-                _cron_cadence_seconds(row.cron_expression, row.cron_timezone, now),
-                missed_epoch,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            summary["enqueue_failures"] += 1
-            _log.exception("fire_due_triggers: catch-up enqueue failed %s", row.id)
-            await _rollback_catchup_advance(session, row.id, row.next_fire_at, next_nf)
-            await _ingest_saq_error(
-                session,
-                org_id,
-                function="fire_due_triggers",
-                message=f"fire_due_triggers: catch-up enqueue failed for cron trigger {row.id}",
-                context={"trigger_id": str(row.id), "trigger_type": "cron", "catchup": True},
-            )
+        await _enqueue_catchup_fire(
+            session, redis_client, q, org_id, row, now, snapshot_id, next_nf, missed_epoch, summary
+        )
 
 
 def _is_catchup_eligible(row: Any, advanced_this_tick: set[uuid.UUID], now: datetime) -> bool:
@@ -2674,6 +2753,125 @@ def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID])
     return latest_snapshots.get(row.pipeline_id)
 
 
+async def _enqueue_cron_fire(
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    now: datetime,
+    org_id: uuid.UUID,
+    row: Any,
+    snapshot_id: uuid.UUID | None,
+    advanced_this_tick: set[uuid.UUID],
+    summary: dict[str, Any],
+) -> bool:
+    """Enqueue one cron fire job + mark the consumed epoch (best-effort).
+
+    Returns ``False`` only when the enqueue raised (the caller then rolls the
+    atomic advance back). The epoch is marked consumed even when SAQ deduped
+    the job (a concurrent machine already enqueued the same epoch) so the
+    catch-up scan never re-fires it. Extracted unchanged from
+    ``_process_due_cron_rows`` (complexity bound).
+    """
+    try:
+        job_id = await _enqueue_fire_job_async(
+            q,
+            "modulo.core.saq_worker.fire_cron_trigger",
+            f"fire:{row.id}:{int(now.timestamp())}",
+            trigger_id=str(row.id),
+            org_id=str(org_id),
+            pipeline_id=str(row.pipeline_id),
+            cron_expression=row.cron_expression,
+            snapshot_id=str(snapshot_id) if snapshot_id else "",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["enqueue_failures"] += 1
+        _log.exception("fire_due_triggers: cron enqueue failed %s", row.id)
+        return False
+    if job_id is not None:
+        summary["cron_enqueued"] += 1
+    # Enqueue succeeded or SAQ-deduped (a concurrent machine
+    # already enqueued the same epoch) — handled, so the
+    # catch-up scan must not re-fire it this tick.
+    advanced_this_tick.add(row.id)
+    # Finding 1 (review PR #982): ALSO mark the consumed epoch
+    # so the catch-up scan does not re-fire it on the NEXT
+    # tick while the fire job is still pending. row.next_fire_at
+    # still holds the pre-advance value = the epoch consumed.
+    try:
+        await _mark_catchup_fired(redis_client, row.id, int(row.next_fire_at.timestamp()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: catchup_marker_write_failed %s", row.id)
+    return True
+
+
+async def _process_one_due_cron_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    latest_snapshots: dict[uuid.UUID, uuid.UUID],
+    advanced_this_tick: set[uuid.UUID],
+    summary: dict[str, Any],
+) -> None:
+    """Advance + enqueue ONE due cron row; roll the advance back on enqueue failure."""
+    summary["cron_due"] += 1
+    try:
+        advanced = await _advance_cron_next_fire(session, row.id, row.cron_expression, row.cron_timezone)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: cron advance failed %s", row.id)
+        return
+    if not advanced:
+        return  # another machine advanced this epoch
+    if org_paused:
+        # SKIP-not-defer: the epoch is consumed (advance above)
+        # but no fire job is enqueued. Counters + summary are the
+        # scheduled-path audit — no per-trigger TriggerEvent.
+        summary["cron_skipped_paused"] += 1
+        return
+    snapshot_id = _resolve_snapshot_id(row, latest_snapshots)
+    if not await _enqueue_cron_fire(
+        q,
+        redis_client,
+        now,
+        org_id,
+        row,
+        snapshot_id,
+        advanced_this_tick,
+        summary,
+    ):
+        # Roll back the atomic advance so the next tick
+        # re-selects the epoch and retries — never leave an
+        # epoch consumed-but-unfired (2026-08-10 incident).
+        try:
+            await _rollback_cron_advance(
+                session,
+                row.id,
+                row.cron_expression,
+                row.cron_timezone,
+                previous_next_fire=row.next_fire_at,
+                now=now,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_due_triggers: cron enqueue rollback failed %s", row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="fire_due_triggers",
+            message=f"fire_due_triggers: enqueue failed for cron trigger {row.id}",
+            context={"trigger_id": str(row.id), "trigger_type": "cron"},
+        )
+
+
 async def _process_due_cron_rows(
     session: AsyncSession,
     q: RedisQueue,
@@ -2688,77 +2886,109 @@ async def _process_due_cron_rows(
 ) -> None:
     """Advance + enqueue the due cron rows (one epoch each, atomic)."""
     for row in cron_rows:
-        summary["cron_due"] += 1
-        try:
-            if not await _advance_cron_next_fire(session, row.id, row.cron_expression, row.cron_timezone):
-                continue  # another machine advanced this epoch
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_due_triggers: cron advance failed %s", row.id)
-            continue
-        if org_paused:
-            # SKIP-not-defer: the epoch is consumed (advance above)
-            # but no fire job is enqueued. Counters + summary are the
-            # scheduled-path audit — no per-trigger TriggerEvent.
-            summary["cron_skipped_paused"] += 1
-            continue
-        snapshot_id = _resolve_snapshot_id(row, latest_snapshots)
-        try:
-            job_id = await _enqueue_fire_job_async(
-                q,
-                "modulo.core.saq_worker.fire_cron_trigger",
-                f"fire:{row.id}:{int(now.timestamp())}",
-                trigger_id=str(row.id),
-                org_id=str(org_id),
-                pipeline_id=str(row.pipeline_id),
-                cron_expression=row.cron_expression,
-                snapshot_id=str(snapshot_id) if snapshot_id else "",
-            )
-            if job_id is not None:
-                summary["cron_enqueued"] += 1
-            # Enqueue succeeded or SAQ-deduped (a concurrent machine
-            # already enqueued the same epoch) — handled, so the
-            # catch-up scan must not re-fire it this tick.
-            advanced_this_tick.add(row.id)
-            # Finding 1 (review PR #982): ALSO mark the consumed epoch
-            # so the catch-up scan does not re-fire it on the NEXT
-            # tick while the fire job is still pending. row.next_fire_at
-            # still holds the pre-advance value = the epoch consumed.
-            try:
-                await _mark_catchup_fired(redis_client, row.id, int(row.next_fire_at.timestamp()))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("fire_due_triggers: catchup_marker_write_failed %s", row.id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            summary["enqueue_failures"] += 1
-            _log.exception("fire_due_triggers: cron enqueue failed %s", row.id)
-            # Roll back the atomic advance so the next tick
-            # re-selects the epoch and retries — never leave an
-            # epoch consumed-but-unfired (2026-08-10 incident).
-            try:
-                await _rollback_cron_advance(
-                    session,
-                    row.id,
-                    row.cron_expression,
-                    row.cron_timezone,
-                    previous_next_fire=row.next_fire_at,
-                    now=now,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("fire_due_triggers: cron enqueue rollback failed %s", row.id)
-            await _ingest_saq_error(
-                session,
-                org_id,
-                function="fire_due_triggers",
-                message=f"fire_due_triggers: enqueue failed for cron trigger {row.id}",
-                context={"trigger_id": str(row.id), "trigger_type": "cron"},
-            )
+        await _process_one_due_cron_row(
+            session,
+            q,
+            redis_client,
+            now,
+            org_id,
+            org_paused,
+            row,
+            latest_snapshots,
+            advanced_this_tick,
+            summary,
+        )
+
+
+async def _enqueue_polling_fire(
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    row: Any,
+    config: dict[str, Any],
+    connector_instance_id: uuid.UUID,
+    summary: dict[str, Any],
+) -> bool:
+    """Enqueue ONE polling fire job; ``False`` when the enqueue raised.
+
+    No advance rollback for polling — a consumed epoch self-heals on the next
+    tick — the caller ingests the error event. Extracted unchanged from
+    ``_process_due_polling_rows`` (complexity bound).
+    """
+    try:
+        job_id = await _enqueue_fire_job_async(
+            q,
+            "modulo.core.saq_worker.fire_polling_trigger",
+            f"fire:{row.id}:{int(now.timestamp())}",
+            trigger_id=str(row.id),
+            org_id=str(org_id),
+            pipeline_id=str(row.pipeline_id),
+            connector_instance_id=str(connector_instance_id),
+            poll_query=config.get("poll_query", ""),
+            condition_expression=config.get("condition_expression"),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["enqueue_failures"] += 1
+        _log.exception("fire_due_triggers: polling enqueue failed %s", row.id)
+        return False
+    if job_id is not None:
+        summary["polling_enqueued"] += 1
+    return True
+
+
+async def _process_one_due_polling_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    summary: dict[str, Any],
+) -> None:
+    """Advance + enqueue ONE due polling row (one epoch each, atomic)."""
+    config = row.config_json or {}
+    ci_id_str = config.get("connector_instance_id")
+    try:
+        connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
+    except (ValueError, TypeError):
+        connector_instance_id = None
+    try:
+        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
+    except (ValueError, TypeError):
+        _log.warning(
+            "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
+            row.id,
+        )
+        interval = 60
+    if connector_instance_id is None:
+        # Missing connector instance — log poll_error and advance
+        # (mirrors the legacy beat _fetch_due_triggers behaviour).
+        await _polling_missing_connector(session, org_id, row, interval, summary)
+        return
+
+    summary["polling_due"] += 1
+    try:
+        advanced = await _advance_polling_next_fire(session, row.id, interval)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: polling advance failed %s", row.id)
+        return
+    if not advanced:
+        return
+    if org_paused:
+        summary["polling_skipped_paused"] += 1
+        return
+    if not await _enqueue_polling_fire(q, now, org_id, row, config, connector_instance_id, summary):
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="fire_due_triggers",
+            message=f"fire_due_triggers: enqueue failed for polling trigger {row.id}",
+            context={"trigger_id": str(row.id), "trigger_type": "polling"},
+        )
 
 
 async def _process_due_polling_rows(
@@ -2772,64 +3002,7 @@ async def _process_due_polling_rows(
 ) -> None:
     """Advance + enqueue the due polling rows (one epoch each, atomic)."""
     for row in polling_rows:
-        config = row.config_json or {}
-        ci_id_str = config.get("connector_instance_id")
-        try:
-            connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
-        except (ValueError, TypeError):
-            connector_instance_id = None
-        try:
-            interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-        except (ValueError, TypeError):
-            _log.warning(
-                "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
-                row.id,
-            )
-            interval = 60
-        if connector_instance_id is None:
-            # Missing connector instance — log poll_error and advance
-            # (mirrors the legacy beat _fetch_due_triggers behaviour).
-            await _polling_missing_connector(session, org_id, row, interval, summary)
-            continue
-
-        summary["polling_due"] += 1
-        try:
-            if not await _advance_polling_next_fire(session, row.id, interval):
-                continue
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_due_triggers: polling advance failed %s", row.id)
-            continue
-        if org_paused:
-            summary["polling_skipped_paused"] += 1
-            continue
-        try:
-            job_id = await _enqueue_fire_job_async(
-                q,
-                "modulo.core.saq_worker.fire_polling_trigger",
-                f"fire:{row.id}:{int(now.timestamp())}",
-                trigger_id=str(row.id),
-                org_id=str(org_id),
-                pipeline_id=str(row.pipeline_id),
-                connector_instance_id=str(connector_instance_id),
-                poll_query=config.get("poll_query", ""),
-                condition_expression=config.get("condition_expression"),
-            )
-            if job_id is not None:
-                summary["polling_enqueued"] += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            summary["enqueue_failures"] += 1
-            _log.exception("fire_due_triggers: polling enqueue failed %s", row.id)
-            await _ingest_saq_error(
-                session,
-                org_id,
-                function="fire_due_triggers",
-                message=f"fire_due_triggers: enqueue failed for polling trigger {row.id}",
-                context={"trigger_id": str(row.id), "trigger_type": "polling"},
-            )
+        await _process_one_due_polling_row(session, q, now, org_id, org_paused, row, summary)
 
 
 async def _polling_missing_connector(
@@ -3871,6 +4044,197 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
         _log.warning("dispatcher_reconcile.metrics_update_failed", exc_info=True)
 
 
+async def _reconcile_enqueue_failed(
+    redis_client: AsyncRedis,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    is_enqueue_failed: bool,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> int | None:
+    """Handle the B3 enqueue-failed branch; ``None`` when the row continues.
+
+    Terminal-fails past the TTL backstop (only when Redis is verifiably
+    reachable — Redis down keeps the row pending), else re-dispatches under the
+    bounded interval + per-tick cap. Returns the (possibly updated)
+    enqueue-failed counter when the branch fully handled the row, ``None`` when
+    the caller must proceed with the normal repairs. Extracted unchanged from
+    ``_reconcile_one_row`` (complexity bound).
+    """
+    if not is_enqueue_failed:
+        return None
+    marker_age = (datetime.now(UTC) - row.enqueue_failed_at).total_seconds()
+    if marker_age > ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES * 60:
+        try:
+            await redis_client.ping()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            summary["skipped"] += 1
+            # Redis down — do NOT terminal-fail; keep pending for a later tick.
+            return enqueue_failed_redispatched
+        await _fail_run_dispatch_failed(session, row.id, org_id)
+        terminalized_run_ids.append((row.id, org_id))
+        summary["dispatch_failed_terminalized"] += 1
+        summary["enqueue_failed_ttl_terminalized"] += 1
+        return enqueue_failed_redispatched
+    if enqueue_failed_redispatched >= ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK:
+        summary["enqueue_failed_capped"] += 1
+        _log.warning(
+            "dispatcher_reconcile: enqueue-failed re-dispatch cap hit (%d/tick); deferring run %s to a later tick",
+            ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK,
+            row.id,
+        )
+        return enqueue_failed_redispatched
+    return None
+
+
+async def _read_reconcile_job(
+    session: AsyncSession,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    row: Any,
+    job_key: str,
+    description: str,
+    summary: dict[str, Any],
+) -> tuple[Any, bool]:
+    """Read the run's SAQ job; ``(job, True)`` when the read succeeded.
+
+    ``description`` is "read"/"re-check" and only tags the log/error text. On a
+    Redis failure the error is ingested and ``(None, False)`` returned —
+    fail-safe: NEVER act on an unreadable Redis. Extracted unchanged from
+    ``_reconcile_one_row`` (complexity bound).
+    """
+    try:
+        return await q.job(job_key), True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["redis_errors"] += 1
+        _log.exception("dispatcher_reconcile: Redis %s failed for run %s", description, row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="dispatcher_reconcile",
+            message=f"dispatcher_reconcile: Redis {description} failed for run {row.id}",
+            context={"run_id": str(row.id)},
+        )
+        return None, False
+
+
+async def _resolve_hitl_resume_or_skip(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    summary: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None]:
+    """F6a auto-approve guard + durable resume payload for one row.
+
+    Returns ``(skip, resume_data)``: ``skip`` is True when a genuinely-waiting
+    awaiting_human run must NOT be resumed (no committed gate decision — a
+    resumed empty decision would auto-approve the gate); otherwise ``resume_data``
+    is reconstructed from the committed HITL decision (never ``{}``). ``claimed``
+    rows are exempt from the guard (a claim was already made — mid-resume crash
+    recovery). Extracted unchanged from ``_reconcile_one_row``.
+    """
+    if row.status not in ("awaiting_human", "claimed"):
+        return False, None
+    if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(session, org_id, row.id):
+        summary["skipped"] += 1
+        _log.info(
+            "dispatcher_reconcile: awaiting_human run %s has no committed HITL decision — not re-dispatched",
+            row.id,
+        )
+        return True, None
+    return False, await _committed_decision_resume_data(session, org_id, row.id)
+
+
+async def _re_dispatch_reconciled_run(
+    session: AsyncSession,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    row: Any,
+    job_type: str,
+    key_suffix: str,
+    resume_data: dict[str, Any] | None,
+    is_enqueue_failed: bool,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+) -> int:
+    """Re-dispatch the repaired run through ``dispatch_run``; gate on the outcome.
+
+    Returns the updated enqueue-failed counter. Every exception path ingests an
+    error event and only bumps ``redis_errors`` — a re-dispatch never raises.
+    Extracted unchanged from ``_reconcile_one_row`` (complexity bound).
+    """
+    try:
+        outcome, new_job_id = await _re_enqueue_run(
+            q.name,
+            str(row.id),
+            str(org_id),
+            job_type,
+            resume_data=resume_data,
+            key_suffix=key_suffix,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["redis_errors"] += 1
+        _log.exception("dispatcher_reconcile: re-enqueue failed for run %s", row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="dispatcher_reconcile",
+            message=f"dispatcher_reconcile: re-enqueue failed for run {row.id}",
+            context={"run_id": str(row.id), "job_type": job_type},
+        )
+        return enqueue_failed_redispatched
+    if outcome == "enqueued":
+        summary["repaired"] += 1
+        if is_enqueue_failed:
+            enqueue_failed_redispatched += 1
+            summary["enqueue_failed_redispatched"] += 1
+        _log.info(
+            "dispatcher_reconcile: re-dispatched run %s as %s (%s)",
+            row.id,
+            job_type,
+            new_job_id,
+        )
+    elif outcome == "deferred":
+        # Still capacity-blocked: dispatch_run re-checked the pipeline + org
+        # run concurrency limits in one transaction and deferred without
+        # enqueueing. Not an error and NOT a dedup — counted separately so ops
+        # can see the stranded-pending cohort, and no false error_event is
+        # ingested.
+        summary["capacity_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile: run %s still capacity-deferred — pending undispatched",
+            row.id,
+        )
+    elif outcome == "enqueue_failed":
+        # The re-dispatch itself failed to enqueue: the run is left pending
+        # with enqueue_failed_at refreshed by dispatch_run — a later tick
+        # retries. Not a dedup, not a terminal failure.
+        summary["skipped"] += 1
+        _log.warning(
+            "dispatcher_reconcile: re-enqueue failed for run %s (left pending for retry)",
+            row.id,
+        )
+    else:
+        summary["deduped"] += 1
+        _log.warning("dispatcher_reconcile: re-enqueue still deduped for run %s", row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="dispatcher_reconcile",
+            message=f"dispatcher_reconcile: re-enqueue still deduped for run {row.id}",
+            context={"run_id": str(row.id), "job_type": job_type},
+        )
+    return enqueue_failed_redispatched
+
+
 async def _reconcile_one_row(
     session: AsyncSession,
     q: RedisQueue,
@@ -3904,90 +4268,39 @@ async def _reconcile_one_row(
         return enqueue_failed_redispatched
 
     # B3 enqueue-failed branch: pending + dispatched + dispatcher
-    # NULL + enqueue_failed_at set. Terminal-fail past the TTL
-    # backstop (only when Redis is reachable), else re-dispatch
-    # under the bounded interval + per-tick cap.
+    # NULL + enqueue_failed_at set.
     is_enqueue_failed = (
         row.status == "pending"
         and row.dispatched_at is not None
         and getattr(row, "dispatcher", None) is None
         and getattr(row, "enqueue_failed_at", None) is not None
     )
-    if is_enqueue_failed:
-        marker_age = (datetime.now(UTC) - row.enqueue_failed_at).total_seconds()
-        if marker_age > ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES * 60:
-            try:
-                await redis_client.ping()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                summary["skipped"] += 1
-                # Redis down — do NOT terminal-fail; keep pending
-                # for a later tick.
-                return enqueue_failed_redispatched
-            await _fail_run_dispatch_failed(session, row.id, org_id)
-            terminalized_run_ids.append((row.id, org_id))
-            summary["dispatch_failed_terminalized"] += 1
-            summary["enqueue_failed_ttl_terminalized"] += 1
-            return enqueue_failed_redispatched
-        if enqueue_failed_redispatched >= ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK:
-            summary["enqueue_failed_capped"] += 1
-            _log.warning(
-                "dispatcher_reconcile: enqueue-failed re-dispatch cap hit (%d/tick); deferring run %s to a later tick",
-                ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK,
-                row.id,
-            )
-            return enqueue_failed_redispatched
+    early = await _reconcile_enqueue_failed(
+        redis_client,
+        session,
+        org_id,
+        row,
+        is_enqueue_failed,
+        enqueue_failed_redispatched,
+        summary,
+        terminalized_run_ids,
+    )
+    if early is not None:
+        return early
 
     job_key = f"run:{row.id}"
-    try:
-        job = await q.job(job_key)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        summary["redis_errors"] += 1
-        _log.exception("dispatcher_reconcile: Redis read failed for run %s", row.id)
-        # Fail-safe: NEVER act on an unreadable Redis.
-        await _ingest_saq_error(
-            session,
-            org_id,
-            function="dispatcher_reconcile",
-            message=f"dispatcher_reconcile: Redis read failed for run {row.id}",
-            context={"run_id": str(row.id)},
-        )
+    job, ok = await _read_reconcile_job(session, q, org_id, row, job_key, "read", summary)
+    if not ok:
+        return enqueue_failed_redispatched
+    if job is not None:
+        summary["skipped"] += 1  # job still exists — nothing to repair
         return enqueue_failed_redispatched
 
-    if job is not None:
-        summary["skipped"] += 1
-        return enqueue_failed_redispatched  # job still exists — nothing to repair
-
-    # F6a auto-approve guard + durable resume payload
-    # (B1-reconcile): an awaiting_human run may only be
-    # re-dispatched as resume_run when a gate decision is
-    # actually committed AND (for payload-carrying actions) its
-    # decision_payload is present. A genuinely-waiting run (no
-    # human action, no committed decision) whose completed
-    # execute_run job hash expired and whose heartbeat froze
-    # matches the F6a staleness branch, but re-dispatching it
-    # with EMPTY resume_data would inject {"_hitl_decision": {}}
-    # into executor.resume — the HITL gate node treats any
-    # non-None decision as approved. Leave the row alone; it is
-    # genuinely waiting on a human. claimed rows are exempt (a
-    # claim was already made — mid-resume crash recovery).
-    resume_data: dict[str, Any] | None = None
-    if row.status in ("awaiting_human", "claimed"):
-        if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(session, org_id, row.id):
-            summary["skipped"] += 1
-            _log.info(
-                "dispatcher_reconcile: awaiting_human run %s has no committed HITL decision — not re-dispatched",
-                row.id,
-            )
-            return enqueue_failed_redispatched
-        # Reconstruct the durable resume payload from the
-        # committed decision (never {} — a recovered rejection
-        # must resume as rejected). claimed rows with no
-        # committed decision yield None (the caller's default).
-        resume_data = await _committed_decision_resume_data(session, org_id, row.id)
+    # F6a auto-approve guard + durable resume payload (B1-reconcile) — see
+    # ``_resolve_hitl_resume_or_skip``.
+    skip, resume_data = await _resolve_hitl_resume_or_skip(session, org_id, row, summary)
+    if skip:
+        return enqueue_failed_redispatched
 
     # Capacity check for capacity-deferred runs (pending + no
     # dispatched_at). Re-dispatch only when the pipeline has free
@@ -3997,30 +4310,18 @@ async def _reconcile_one_row(
         if deferred:
             return enqueue_failed_redispatched
 
-    # NO SAQ-internal eviction (B2): a version-pinned
-    # DEL/ZREM/LREM of saq:abort:*/incomplete/queued/active is
-    # TOCTOU-unsafe across machines and can permanently strand a
-    # job. The atomic claim UPDATE is the real dedupe — a second
-    # worker claiming the same run loses. Re-check q.job() AFTER
-    # the decision and immediately before enqueue: if a job now
-    # exists under the original key, a concurrent worker already
-    # re-enqueued it — skip.
-    try:
-        if await q.job(job_key) is not None:
-            summary["skipped"] += 1
-            return enqueue_failed_redispatched
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        summary["redis_errors"] += 1
-        _log.exception("dispatcher_reconcile: Redis re-check failed for run %s", row.id)
-        await _ingest_saq_error(
-            session,
-            org_id,
-            function="dispatcher_reconcile",
-            message=f"dispatcher_reconcile: Redis re-check failed for run {row.id}",
-            context={"run_id": str(row.id)},
-        )
+    # NO SAQ-internal eviction (B2): a version-pinned DEL/ZREM/LREM of
+    # saq:abort:*/incomplete/queued/active is TOCTOU-unsafe across machines
+    # and can permanently strand a job. The atomic claim UPDATE is the real
+    # dedupe — a second worker claiming the same run loses. Re-check
+    # q.job() AFTER the decision and immediately before enqueue: if a job now
+    # exists under the original key, a concurrent worker already re-enqueued
+    # it — skip.
+    job, ok = await _read_reconcile_job(session, q, org_id, row, job_key, "re-check", summary)
+    if not ok:
+        return enqueue_failed_redispatched
+    if job is not None:
+        summary["skipped"] += 1
         return enqueue_failed_redispatched
 
     # Discriminator (F6a): awaiting_human/claimed -> resume_run;
@@ -4029,71 +4330,18 @@ async def _reconcile_one_row(
     # enqueue.
     job_type = _reconcile_job_type(row.status)
     key_suffix = uuid.uuid4().hex
-    try:
-        outcome, new_job_id = await _re_enqueue_run(
-            q.name,
-            str(row.id),
-            str(org_id),
-            job_type,
-            resume_data=resume_data,
-            key_suffix=key_suffix,
-        )
-        if outcome == "enqueued":
-            summary["repaired"] += 1
-            if is_enqueue_failed:
-                enqueue_failed_redispatched += 1
-                summary["enqueue_failed_redispatched"] += 1
-            _log.info(
-                "dispatcher_reconcile: re-dispatched run %s as %s (%s)",
-                row.id,
-                job_type,
-                new_job_id,
-            )
-        elif outcome == "deferred":
-            # Still capacity-blocked: dispatch_run re-checked
-            # the pipeline + org run concurrency limits in one
-            # transaction and deferred without enqueueing. Not
-            # an error and NOT a dedup — counted separately so
-            # ops can see the stranded-pending cohort, and no
-            # false error_event is ingested.
-            summary["capacity_deferred"] += 1
-            _log.warning(
-                "dispatcher_reconcile: run %s still capacity-deferred — pending undispatched",
-                row.id,
-            )
-        elif outcome == "enqueue_failed":
-            # The re-dispatch itself failed to enqueue: the run
-            # is left pending with enqueue_failed_at refreshed by
-            # dispatch_run — a later tick retries. Not a dedup,
-            # not a terminal failure.
-            summary["skipped"] += 1
-            _log.warning(
-                "dispatcher_reconcile: re-enqueue failed for run %s (left pending for retry)",
-                row.id,
-            )
-        else:
-            summary["deduped"] += 1
-            _log.warning("dispatcher_reconcile: re-enqueue still deduped for run %s", row.id)
-            await _ingest_saq_error(
-                session,
-                org_id,
-                function="dispatcher_reconcile",
-                message=f"dispatcher_reconcile: re-enqueue still deduped for run {row.id}",
-                context={"run_id": str(row.id), "job_type": job_type},
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        summary["redis_errors"] += 1
-        _log.exception("dispatcher_reconcile: re-enqueue failed for run %s", row.id)
-        await _ingest_saq_error(
-            session,
-            org_id,
-            function="dispatcher_reconcile",
-            message=f"dispatcher_reconcile: re-enqueue failed for run {row.id}",
-            context={"run_id": str(row.id), "job_type": job_type},
-        )
-    return enqueue_failed_redispatched
+    return await _re_dispatch_reconciled_run(
+        session,
+        q,
+        org_id,
+        row,
+        job_type,
+        key_suffix,
+        resume_data,
+        is_enqueue_failed,
+        enqueue_failed_redispatched,
+        summary,
+    )
 
 
 async def _capacity_defer_pending_run(
