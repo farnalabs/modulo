@@ -26,7 +26,7 @@ _MODULE_AVAILABLE: bool = True
 _hvac: Any = None
 
 try:
-    import hvac  # type: ignore[import-untyped]
+    import hvac
 
     _hvac = hvac
 except ImportError:
