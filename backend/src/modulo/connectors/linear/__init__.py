@@ -107,6 +107,17 @@ class LinearConnector(TicketTrackerBase):
         raise ValueError("Linear API request failed after retries") from last_exc
 
     @staticmethod
+    def _ref_from_filters(filters: dict[str, Any]) -> str:
+        """Extract a non-empty string issue ref from a filter/data dict.
+
+        Linear methods expect ``str``; the underlying dicts are untyped
+        (``dict[str, Any]``) so values come back as ``Any | None``. Coerce to
+        ``str`` so callers keep their strict signatures.
+        """
+        ref = filters.get("issue_ref") or filters.get("ticket_id")
+        return str(ref) if ref is not None else ""
+
+    @staticmethod
     def _issue_args(issue_ref: str) -> dict[str, Any]:
         """Map an issue_ref to Linear GraphQL ``issue`` resolver args."""
         issue_ref = (issue_ref or "").strip()
@@ -130,7 +141,7 @@ class LinearConnector(TicketTrackerBase):
         issue = data.get("issue")
         if not issue:
             raise ValueError(f"Linear issue not found: {issue_ref}")
-        return issue["id"]
+        return str(issue["id"])
 
     async def resolve(self, issue_ref: str) -> dict[str, Any]:
         """T1 - resolve an issue reference into a thin fact dict.
@@ -333,18 +344,18 @@ class LinearConnector(TicketTrackerBase):
             case "issue":
                 if "ticket_id" not in filters and "issue_ref" not in filters:
                     raise ValueError("Linear issue query requires 'issue_ref' (or 'ticket_id') filter")
-                ref = filters.get("issue_ref") or filters.get("ticket_id")
+                ref = self._ref_from_filters(filters)
                 fact = await self.resolve(ref)
                 return ConnectorResult(records=[fact], total=1)
             case "comments":
                 if "ticket_id" not in filters and "issue_ref" not in filters:
                     raise ValueError("Linear comments query requires 'issue_ref' (or 'ticket_id') filter")
-                ref = filters.get("issue_ref") or filters.get("ticket_id")
+                ref = self._ref_from_filters(filters)
                 return ConnectorResult(records=await self.get_comments(ref), total=None)
             case "issue_body":
                 if "ticket_id" not in filters and "issue_ref" not in filters:
                     raise ValueError("Linear issue_body query requires 'issue_ref' (or 'ticket_id') filter")
-                ref = filters.get("issue_ref") or filters.get("ticket_id")
+                ref = self._ref_from_filters(filters)
                 return ConnectorResult(records=[{"body": await self.get_issue_body(ref)}], total=1)
             case _:
                 raise ValueError(f"Unsupported Linear query resource: {q.resource!r}")
@@ -358,14 +369,14 @@ class LinearConnector(TicketTrackerBase):
                     raise ValueError("Linear comment write requires 'issue_ref' (or 'ticket_id') in data")
                 if "body" not in data:
                     raise ValueError("Linear comment write requires 'body' in data")
-                ref = data.get("issue_ref") or data.get("ticket_id")
+                ref = self._ref_from_filters(data)
                 return await self.comment(ref, data["body"])
             case "status_update":
                 if "issue_ref" not in data and "ticket_id" not in data:
                     raise ValueError("Linear status_update write requires 'issue_ref' (or 'ticket_id') in data")
                 if "status" not in data:
                     raise ValueError("Linear status_update write requires 'status' in data")
-                ref = data.get("issue_ref") or data.get("ticket_id")
+                ref = self._ref_from_filters(data)
                 return await self.update_status(ref, data["status"])
             case _:
                 raise ValueError(f"Unsupported Linear write resource: {payload.resource!r}")
