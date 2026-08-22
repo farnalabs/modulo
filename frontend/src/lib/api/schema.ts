@@ -4411,6 +4411,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/community/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Community Contributions Endpoint
+         * @description List the org's own community contributions, optionally filtered by status.
+         */
+        get: operations["list_community_contributions_endpoint_api_v1_libraries_community_contributions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/community": {
         parameters: {
             query?: never;
@@ -4752,26 +4772,6 @@ export interface paths {
          * @description Submit a community library contribution.
          */
         post: operations["community_contribute_endpoint_api_v1_libraries_community_contribute_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/libraries/community/contributions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Community Contributions Endpoint
-         * @description List the org's own community contributions, optionally filtered by status.
-         */
-        get: operations["list_community_contributions_endpoint_api_v1_libraries_community_contributions_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -26975,6 +26975,40 @@ export interface operations {
             };
         };
     };
+    list_community_contributions_endpoint_api_v1_libraries_community_contributions_get: {
+        parameters: {
+            query?: {
+                contribution_status?: string | null;
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityContributionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_community_api_v1_libraries_community_get: {
         parameters: {
             query?: {
@@ -27725,40 +27759,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibraryPrimitiveResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_community_contributions_endpoint_api_v1_libraries_community_contributions_get: {
-        parameters: {
-            query?: {
-                contribution_status?: string | null;
-                page?: number;
-                page_size?: number;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommunityContributionListResponse"];
                 };
             };
             /** @description Validation Error */
