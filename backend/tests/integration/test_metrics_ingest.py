@@ -25,33 +25,16 @@ from datetime import datetime
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient, Response
+from httpx import AsyncClient, Response
 from sqlalchemy import JSON, bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
 from modulo.auth.jwt import create_access_token
-from modulo.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
-
-
-class _AllFeatures:
-    def feature_enabled(self, name: str) -> bool:
-        return True
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "team"
-
-    def has_license_key(self) -> bool:
-        return True
 
 
 # ---------------------------------------------------------------------------
@@ -118,33 +101,6 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID, role: str = "admin") -> str:
 # ---------------------------------------------------------------------------
 # Client + fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture
-async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClient:
-    settings = Settings(
-        database_url=db_url,
-        secret_key=_VALID_32,
-        fernet_key=_VALID_32,
-        modulo_csrf_enabled=False,
-        modulo_auth_rate_limit_enabled=False,
-        redis_url="",
-        modulo_admin_password="",
-    )
-
-    async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        factory = async_sessionmaker(app_engine, expire_on_commit=False)
-        async with factory() as session:
-            yield session
-
-    app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[_get_engine] = lambda: app_engine
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_plan_context] = lambda: _AllFeatures()
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
-        yield client
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture(scope="module")
