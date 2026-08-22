@@ -17,8 +17,11 @@
       :class="mainPaddingClass"
       :style="remyDockedStyle"
     >
-      <div class="relative z-10">
+      <div class="relative z-10 space-y-2">
         <OnboardingBanner />
+        <div class="px-6">
+          <ProductAnalyticsConsentPrompt />
+        </div>
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
@@ -57,6 +60,7 @@ import { applyPrimeVueTokenBridge } from "../lib/primevue-theme";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
+import ProductAnalyticsConsentPrompt from "./product-analytics/ProductAnalyticsConsentPrompt.vue";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();

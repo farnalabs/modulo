@@ -30,22 +30,12 @@
             When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.
           </p>
         </div>
-        <span
-          class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
-          role="switch"
-          :aria-checked="devModeEnabled"
-          aria-label="Developer Mode"
-          tabindex="0"
-          @click="toggleDevMode(!devModeEnabled)"
-          @keydown.enter="toggleDevMode(!devModeEnabled)"
-          @keydown.space.prevent="toggleDevMode(!devModeEnabled)"
-          :class="devModeEnabled ? 'bg-primary' : 'bg-input'"
-        >
-          <span
-            class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
-            :class="devModeEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'"
-          />
-        </span>
+        <ToggleSwitch
+          :checked="devModeEnabled"
+          label="Developer Mode"
+          data-testid="developer-mode-toggle"
+          @toggle="toggleDevMode"
+        />
       </div>
     </div>
 
@@ -172,22 +162,12 @@
                     class="transition-colors hover:bg-muted/20"
                   >
                     <td class="table-cell">
-                      <span
-                        class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
-                        role="switch"
-                        :aria-checked="flag.currently_active"
-                        :aria-label="'Toggle ' + flag.name"
-                        tabindex="0"
-                        @click.stop="toggleFlag(flag)"
-                        @keydown.enter="toggleFlag(flag)"
-                        @keydown.space.prevent="toggleFlag(flag)"
-                        :class="flagToggling[flag.name] ? 'bg-muted-foreground/50' : (flag.currently_active ? 'bg-primary' : 'bg-input')"
-                      >
-                        <span
-                          class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
-                          :class="flag.currently_active ? 'translate-x-[18px]' : 'translate-x-0.5'"
-                        />
-                      </span>
+                      <ToggleSwitch
+                        :checked="flag.currently_active"
+                        :toggling="flagToggling[flag.name]"
+                        :label="'Toggle ' + flag.name"
+                        @toggle="toggleFlag(flag)"
+                      />
                     </td>
                     <td class="table-cell">
                       <span
@@ -268,6 +248,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import Button from 'primevue/button'
 import FormDialog from '../components/shared/FormDialog.vue'
 import Select from 'primevue/select'

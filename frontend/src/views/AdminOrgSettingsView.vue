@@ -87,6 +87,9 @@
         </div>
       </SectionCard>
 
+      <!-- Product Analytics -->
+      <ProductAnalyticsSettings />
+
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
         <Button severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
@@ -140,6 +143,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
+import ProductAnalyticsSettings from '../components/product-analytics/ProductAnalyticsSettings.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
