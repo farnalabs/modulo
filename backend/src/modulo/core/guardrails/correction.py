@@ -604,7 +604,7 @@ def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]
     if not isinstance(parsed, dict):
         raise CorrectionConfigError("correction backend output must be a JSON object")
     if schema:
-        from jsonschema import SchemaError, ValidationError, validate  # type: ignore[import-untyped]
+        from jsonschema import SchemaError, ValidationError, validate
 
         try:
             validate(parsed, schema)
