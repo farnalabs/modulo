@@ -120,6 +120,63 @@ class _TerminalWrite(NamedTuple):
     claim_token: str | None
 
 
+class _BuiltCost(NamedTuple):
+    """The cost-build outcome feeding the finalization write + ledger.
+
+    ``total`` / ``breakdown`` are the persisted cost columns, ``enriched`` the
+    ENRICHED union written back to ``node_token_usage``, and ``total_tokens``
+    the derived server-measured token total.
+    """
+
+    total: Decimal
+    breakdown: list[dict[str, Any]]
+    enriched: dict[str, dict[str, Any]]
+    total_tokens: int
+
+
+class _MergedSets(NamedTuple):
+    """The merged cumulative sets (segment-wins) flowing into the LEGACY FALLBACK.
+
+    Groups ``merged_usage`` / ``merged_outputs`` / ``merged_telemetry`` — the
+    three sets ``finalize_cost`` derives once and ``_fallback_write`` persists
+    together, cutting that helper's argument count.
+    """
+
+    usage: dict[str, Any]
+    outputs: dict[str, Any]
+    telemetry: dict[str, Any]
+
+
+class _JourneyResolution(NamedTuple):
+    """The parsed/confirmed self-report resolution feeding journey advancement.
+
+    Groups the raw entries, the normalised reported claims, the confirmed refs,
+    the parse counters, and the merged effective refs — cutting
+    ``_record_journey_outcome``'s argument count from 8 to 5.
+    """
+
+    raw: list[dict[str, Any]]
+    reported: list[dict[str, Any]]
+    confirmed: list[dict[str, Any]]
+    counters: dict[str, int]
+    effective: list[dict[str, Any]]
+
+
+class _LedgerEscapeContext(NamedTuple):
+    """The reduced terminalize-without-ledger escape context.
+
+    Groups the fields ``_reduced_escape`` / ``_handle_ledger_write_failure``
+    thread to a FRESH session write, cutting their argument counts.
+    """
+
+    run_id: uuid.UUID
+    org_id: uuid.UUID
+    status: str
+    finalize_fields: dict[str, Any]
+    session_factory: Callable[[], Any] | None
+    claim_token: str | None
+
+
 # Union JSON size guardrail — log-only, not a cap (§4.2).
 _UNION_SIZE_GUARDRAIL_BYTES = 8 * 1024 * 1024
 
@@ -355,19 +412,59 @@ def _pop_model_cost_fields(node_dict: dict[str, Any]) -> None:
         node_dict.pop(key, None)
 
 
+def _fold_stored_clamped(node_dict: dict[str, Any]) -> None:
+    """Branch (3): output ABSENT — re-clamp the stored-union value (fallback authority).
+
+    The stored ``model_cost_usd`` is re-validated through ``clamp_reported`` and
+    the folded flags derive from the re-clamped fold.
+    """
+    stored = node_dict.get("model_cost_usd")
+    if stored is None:
+        return
+    folded = clamp_reported(stored)
+    if folded is None:
+        _pop_model_cost_fields(node_dict)
+        return
+    clamped_val, _was_clamped, oob = folded
+    node_dict["model_cost_usd"] = float(clamped_val)
+    node_dict["model_cost_clamped"] = bool(node_dict.get("model_cost_clamped", _was_clamped))
+    node_dict["model_cost_out_of_band_high"] = bool(node_dict.get("model_cost_out_of_band_high", oob))
+
+
+def _fold_from_output_obj(node_dict: dict[str, Any], output_obj: dict[str, Any]) -> None:
+    """Branch (1): output PRESENT + carries ``model_cost_usd`` → overwrite with the
+    re-clamped fold (the FULL mirror of the extraction validation, defense-in-depth;
+    the input is the RAW field when present, else the clamped value — the
+    explicit-None pin)."""
+    raw_field = output_obj.get("model_cost_raw_usd")
+    fold_input = raw_field if raw_field is not None else output_obj.get("model_cost_usd")
+    if fold_input is None:
+        _pop_model_cost_fields(node_dict)
+        return
+    folded = clamp_reported(fold_input)
+    if folded is None:
+        _pop_model_cost_fields(node_dict)
+        return
+    clamped_val, _was_clamped, _oob = folded
+    node_dict["model_cost_usd"] = float(clamped_val)
+    if raw_field is not None:
+        node_dict["model_cost_raw_usd"] = float(raw_field)
+    else:
+        node_dict.pop("model_cost_raw_usd", None)
+    node_dict["model_cost_clamped"] = bool(output_obj.get("model_cost_clamped", _was_clamped))
+    node_dict["model_cost_out_of_band_high"] = bool(output_obj.get("model_cost_out_of_band_high", _oob))
+
+
 def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
     """The PINNED stored-union ONE-mechanism rule for ``model_cost_usd`` (§4.2/§4.5).
 
     (1) output PRESENT + carries ``model_cost_usd`` → OVERWRITE with the
-        re-clamped fold (re-validated through ``clamp_reported`` — the FULL
-        mirror of the extraction validation, defense-in-depth; the input is the
-        RAW field when present, else the clamped value — the explicit-None pin);
+        re-clamped fold (``_fold_from_output_obj``);
     (2) output PRESENT but LACKS ``model_cost_usd`` → pop the value + sibling
         flags (the node is estimated);
     (3) output ABSENT from both stored ``outputs_json`` and the current segment
-        → the stored-union value is re-clamped through ``clamp_reported`` and
-        the folded flags derive from the re-clamped fold (fallback authority —
-        the third-path class).
+        → the stored-union value is re-clamped through ``clamp_reported``
+        (``_fold_stored_clamped`` — fallback authority, the third-path class).
 
     ``model_cost_clamped`` / ``model_cost_out_of_band_high`` are the
     AUTHORITATIVE values folded from the node-output dict written by
@@ -375,39 +472,11 @@ def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | Non
     output lacks them.
     """
     if output_obj is None:
-        stored = node_dict.get("model_cost_usd")
-        if stored is None:
-            return
-        folded = clamp_reported(stored)
-        if folded is None:
-            _pop_model_cost_fields(node_dict)
-            return
-        clamped_val, _was_clamped, oob = folded
-        node_dict["model_cost_usd"] = float(clamped_val)
-        node_dict["model_cost_clamped"] = bool(node_dict.get("model_cost_clamped", _was_clamped))
-        node_dict["model_cost_out_of_band_high"] = bool(node_dict.get("model_cost_out_of_band_high", oob))
+        _fold_stored_clamped(node_dict)
         return
-
     if "model_cost_usd" in output_obj:
-        raw_field = output_obj.get("model_cost_raw_usd")
-        fold_input = raw_field if raw_field is not None else output_obj.get("model_cost_usd")
-        if fold_input is None:
-            _pop_model_cost_fields(node_dict)
-            return
-        folded = clamp_reported(fold_input)
-        if folded is None:
-            _pop_model_cost_fields(node_dict)
-            return
-        clamped_val, _was_clamped, _oob = folded
-        node_dict["model_cost_usd"] = float(clamped_val)
-        if raw_field is not None:
-            node_dict["model_cost_raw_usd"] = float(raw_field)
-        else:
-            node_dict.pop("model_cost_raw_usd", None)
-        node_dict["model_cost_clamped"] = bool(output_obj.get("model_cost_clamped", _was_clamped))
-        node_dict["model_cost_out_of_band_high"] = bool(output_obj.get("model_cost_out_of_band_high", _oob))
+        _fold_from_output_obj(node_dict, output_obj)
         return
-
     _pop_model_cost_fields(node_dict)
 
 
@@ -475,6 +544,15 @@ def _log_node_type_summary(missing_node_type: list[str], executed_types: Counter
         _log.info("cost_components_node_type_ratio", extra={"executed_types": dict(executed_types)})
 
 
+def _wall_clock_ms(output_obj: Any) -> int | float | None:
+    """The server-verified wall-clock duration (ms) of a node-output dict."""
+    if isinstance(output_obj, dict):
+        value = output_obj.get("wall_clock_time_ms")
+        if isinstance(value, (int, float)):
+            return value
+    return None
+
+
 def _enrich_node_fields(
     node_dict: dict[str, Any],
     output_obj: dict[str, Any] | None,
@@ -487,13 +565,13 @@ def _enrich_node_fields(
     pinned model-cost fold. Returns the node's mapped type (``None`` when the
     frozen map lacks the node — the schema-drift provenance gate).
     """
-    if isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float)):
-        node_dict["wall_clock_time_ms"] = output_obj["wall_clock_time_ms"]
+    wall_ms = _wall_clock_ms(output_obj)
+    if wall_ms is not None:
+        node_dict["wall_clock_time_ms"] = wall_ms
 
-    has_wallclock = isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float))
     node_dict["sandbox_by_map"] = map_type == NODE_TYPE_SANDBOX_AGENT
     node_dict["is_sandbox_for_wallclock"] = (map_type == NODE_TYPE_SANDBOX_AGENT) or (
-        map_type is None and has_wallclock
+        map_type is None and wall_ms is not None
     )
 
     _fold_model_cost(node_dict, output_obj)
@@ -675,9 +753,7 @@ async def _fallback_write(
     session: AsyncSession,
     run_id: uuid.UUID,
     status: str,
-    merged_usage: dict[str, Any],
-    merged_outputs: dict[str, Any],
-    merged_telemetry: dict[str, Any],
+    merged: _MergedSets,
     error_code: str | None,
     error_detail: str | None,
     is_terminal: bool = False,
@@ -694,14 +770,14 @@ async def _fallback_write(
     On a terminal write the analytics fact is recorded in the SAME transaction
     (fail-open, ADR 020).
     """
-    total_tokens = _derive_total_tokens(merged_usage)
-    token_cost = _token_cost(merged_usage)
-    sandbox_cost = _legacy_sandbox_cost(merged_outputs, merged_telemetry)
+    total_tokens = _derive_total_tokens(merged.usage)
+    token_cost = _token_cost(merged.usage)
+    sandbox_cost = _legacy_sandbox_cost(merged.outputs, merged.telemetry)
     total = token_cost + sandbox_cost
     if not total.is_finite():
         total = Decimal(0)
-    wall_hours = _fallback_wall_hours(merged_outputs, merged_telemetry)
-    breakdown = _build_fallback_breakdown(token_cost, sandbox_cost, wall_hours, merged_usage)
+    wall_hours = _fallback_wall_hours(merged.outputs, merged.telemetry)
+    breakdown = _build_fallback_breakdown(token_cost, sandbox_cost, wall_hours, merged)
     if total > COST_COLUMN_CAP:
         total = COST_COLUMN_CAP
         breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
@@ -713,14 +789,14 @@ async def _fallback_write(
         error_detail=error_detail,
         total_cost_usd=total,
         cost_breakdown=breakdown,
-        node_token_usage=merged_usage,
-        outputs_json=merged_outputs,
-        node_telemetry_json=merged_telemetry,
+        node_token_usage=merged.usage,
+        outputs_json=merged.outputs,
+        node_telemetry_json=merged.telemetry,
         total_tokens=total_tokens,
         claim_token=claim_token,
     )
     if is_terminal:
-        await _record_fallback_terminal_facts(session, run_id, status, merged_outputs)
+        await _record_fallback_terminal_facts(session, run_id, status, merged.outputs)
 
 
 def _fallback_wall_hours(merged_outputs: dict[str, Any], merged_telemetry: Any) -> float:
@@ -738,7 +814,7 @@ def _build_fallback_breakdown(
     token_cost: Decimal,
     sandbox_cost: Decimal,
     wall_hours: float,
-    merged_usage: dict[str, Any],
+    merged: _MergedSets,
 ) -> list[dict[str, Any]]:
     """The LEGACY FALLBACK breakdown — LLM tokens + sandbox infra entries."""
     return [
@@ -750,8 +826,8 @@ def _build_fallback_breakdown(
             "formula_applied": ("tokens_input * input_token_rate + tokens_output * output_token_rate"),
             "rate_usd": None,
             "basis": {
-                "tokens_input": _usage_token_sum(merged_usage, "input_tokens"),
-                "tokens_output": _usage_token_sum(merged_usage, "output_tokens"),
+                "tokens_input": _usage_token_sum(merged.usage, "input_tokens"),
+                "tokens_output": _usage_token_sum(merged.usage, "output_tokens"),
                 "nodes_estimated": 0,
             },
         },
@@ -861,12 +937,7 @@ async def _record_ledger_with_retry(
 
 async def _reduced_escape(
     session: AsyncSession,
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    status: str,
-    finalize_fields: dict[str, Any],
-    session_factory: Callable[[], Any] | None,
-    claim_token: str | None = None,
+    ctx: _LedgerEscapeContext,
 ) -> None:
     """The REDUCED terminalize-without-ledger escape (§4.2).
 
@@ -875,25 +946,25 @@ async def _reduced_escape(
     write failures, never a ``daily_limit_exceeded`` refusal. The status write
     is fenced by *claim_token* (a superseded executor's escape is a no-op).
     """
-    if session_factory is None:
-        _log.error("cost_ledger.reduced_escape_unavailable", extra={"run_id": str(run_id)})
+    if ctx.session_factory is None:
+        _log.error("cost_ledger.reduced_escape_unavailable", extra={"run_id": str(ctx.run_id)})
         return
     try:
-        async with session_factory() as fresh, fresh.begin():
-            await set_rls_org(fresh, org_id)
+        async with ctx.session_factory() as fresh, fresh.begin():
+            await set_rls_org(fresh, ctx.org_id)
             run = await update_run_status(
                 fresh,
-                run_id,
-                status,
-                **finalize_fields,
-                claim_token=claim_token,
+                ctx.run_id,
+                ctx.status,
+                **ctx.finalize_fields,
+                claim_token=ctx.claim_token,
             )
             if run is not None:
                 await record_run_facts(fresh, run)
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.exception("cost_ledger.reduced_escape_failed", extra={"run_id": str(run_id)})
+        _log.exception("cost_ledger.reduced_escape_failed", extra={"run_id": str(ctx.run_id)})
 
 
 async def _ledger_block(
@@ -944,19 +1015,21 @@ async def _ledger_block(
         )
         ok, reason = False, "whole_tx_abort"
 
-    if not ok and reason is not None and reason.startswith("daily_limit_exceeded"):
+    if _is_limit_refused(ok, reason):
         await _handle_limit_refused(session, locked, run_id, owner_team_id)
         return
 
     if not ok:
         await _handle_ledger_write_failure(
             session,
-            run_id,
-            org_id,
-            status,
-            finalize_fields,
-            session_factory,
-            claim_token,
+            _LedgerEscapeContext(
+                run_id=run_id,
+                org_id=org_id,
+                status=status,
+                finalize_fields=finalize_fields,
+                session_factory=session_factory,
+                claim_token=claim_token,
+            ),
             owner_team_id,
             reason,
         )
@@ -982,30 +1055,25 @@ async def _handle_limit_refused(
 
 async def _handle_ledger_write_failure(
     session: AsyncSession,
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    status: str,
-    finalize_fields: dict[str, Any],
-    session_factory: Callable[[], Any] | None,
-    claim_token: str | None,
+    ctx: _LedgerEscapeContext,
     owner_team_id: uuid.UUID | None,
     reason: str | None,
 ) -> None:
     """REDUCED terminalize-without-ledger escape, write_failure ONLY."""
     _log.error(
         "cost_ledger.finalize_deferred",
-        extra={"reason": reason or "unknown", "run_id": str(run_id)},
+        extra={"reason": reason or "unknown", "run_id": str(ctx.run_id)},
     )
     record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
-    await _reduced_escape(
-        session,
-        run_id,
-        org_id,
-        status,
-        finalize_fields,
-        session_factory,
-        claim_token=claim_token,
-    )
+    await _reduced_escape(session, ctx)
+
+
+def _is_limit_refused(ok: bool, reason: str | None) -> bool:
+    """True for a PERMANENT daily-limit refusal — a clean return, NOT a failure.
+
+    The refused amount was already persisted by ``check_and_record_spend``.
+    """
+    return not ok and reason is not None and reason.startswith("daily_limit_exceeded")
 
 
 async def _check_circuit_breaker(
@@ -1185,6 +1253,31 @@ async def _record_journey_fact(
         )
 
 
+async def _resolve_effective_refs(
+    session: AsyncSession,
+    run: Run,
+    merged_outputs: dict[str, Any],
+) -> _JourneyResolution:
+    """Self-report confirm + effective-ref merge — the journey resolution.
+
+    Parses the self-report refs from ``merged_outputs``, normalises the reported
+    claims, confirms them against existing journey rows (ADVISORY — a reported
+    claim can only MATCH, never mint), and merges the create-stamped refs with
+    the confirmed reported refs (dedup, cap 100).
+    """
+    raw = parse_self_report_refs(merged_outputs)
+    reported, counters = validate_and_normalise_reported_refs(raw)
+    confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
+    effective = _merge_effective_refs(run.work_item_refs, confirmed)
+    return _JourneyResolution(
+        raw=raw,
+        reported=reported,
+        confirmed=confirmed,
+        counters=counters,
+        effective=effective,
+    )
+
+
 async def _advance_journeys_on_terminal(
     session: AsyncSession,
     run: Run,
@@ -1223,19 +1316,16 @@ async def _advance_journeys_on_terminal(
     try:
         async with session.begin_nested():
             await session.refresh(run)
-            raw = parse_self_report_refs(merged_outputs)
-            reported, counters = validate_and_normalise_reported_refs(raw)
-            confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
-            effective = _merge_effective_refs(run.work_item_refs, confirmed)
-            if confirmed:
-                run.work_item_refs = effective
+            resolution = await _resolve_effective_refs(session, run, merged_outputs)
+            if resolution.confirmed:
+                run.work_item_refs = resolution.effective
                 await session.flush()
             advanced = await advance_journeys(
                 session,
                 run.organisation_id,
                 run_id=run.id,
                 pipeline_id=run.pipeline_id,
-                refs=effective,
+                refs=resolution.effective,
                 status=status,
                 completed_at=run.completed_at,
                 run_created_at=run.created_at,
@@ -1247,10 +1337,7 @@ async def _advance_journeys_on_terminal(
                 run,
                 writer,
                 advanced,
-                raw,
-                reported,
-                confirmed,
-                counters,
+                resolution,
             )
     except asyncio.CancelledError:
         raise
@@ -1263,10 +1350,7 @@ async def _record_journey_outcome(
     run: Run,
     writer: str,
     advanced: int,
-    raw: list[dict[str, Any]],
-    reported: list[dict[str, Any]],
-    confirmed: list[dict[str, Any]],
-    counters: dict[str, int],
+    resolution: _JourneyResolution,
 ) -> None:
     """Record the FAR-143 observability counters + persisted fact denominators.
 
@@ -1274,24 +1358,24 @@ async def _record_journey_outcome(
     journey work and is swallowed by the caller.
     """
     record_journey_advance(advanced)
-    unmatched = max(len(reported) - len(confirmed), 0)
-    if counters["malformed"]:
-        record_journey_parse_failure(writer, counters["malformed"])
-    if counters["capped"]:
-        record_self_report_refs_capped(counters["capped"])
+    unmatched = max(len(resolution.reported) - len(resolution.confirmed), 0)
+    if resolution.counters["malformed"]:
+        record_journey_parse_failure(writer, resolution.counters["malformed"])
+    if resolution.counters["capped"]:
+        record_self_report_refs_capped(resolution.counters["capped"])
     if unmatched:
         record_unmatched_self_report_refs(unmatched)
-    record_journey_finalise_attempt(writer, len(raw))
-    await _record_journey_fact(session, run, writer, counters["malformed"], len(raw))
+    record_journey_finalise_attempt(writer, len(resolution.raw))
+    await _record_journey_fact(session, run, writer, resolution.counters["malformed"], len(resolution.raw))
     _log.info(
         "cost_finalize.journey_advanced",
         extra={
             "run_id": str(run.id),
             "writer": writer,
-            "parsed": counters["valid"],
-            "confirmed": len(confirmed),
-            "malformed": counters["malformed"],
-            "capped": counters["capped"],
+            "parsed": resolution.counters["valid"],
+            "confirmed": len(resolution.confirmed),
+            "malformed": resolution.counters["malformed"],
+            "capped": resolution.counters["capped"],
         },
     )
 
@@ -1344,12 +1428,7 @@ async def finalize_cost(
         _log.warning("cost_finalize.run_not_found", extra={"run_id": str(run_id)})
         return
 
-    # B6 — CANCEL-WINS precedence: an interrupted/awaiting_human (or about-to-be
-    # completed) run with a cancellation requested is finalised ``cancelled``,
-    # never ``awaiting_human``/``complete``.
-    if getattr(run, "cancellation_requested", False) and status in ("awaiting_human", "complete"):
-        _log.info("cost_finalize.cancel_wins", extra={"run_id": str(run_id), "status": status})
-        status = "cancelled"
+    status = _apply_cancel_wins(run, status)
 
     merged_usage = _merge(run.node_token_usage, segment_node_token_usage, segment_wins=True)
     merged_outputs, merged_telemetry = _split_merge_outputs(
@@ -1360,7 +1439,7 @@ async def finalize_cost(
         run_id=str(run.id),
     )
 
-    if not merged_usage and not merged_outputs and not merged_telemetry:
+    if _is_empty_finalize_segment(merged_usage, merged_outputs, merged_telemetry):
         # Pre-component-read terminal: total 0, breakdown NULL, no ledger.
         await _write_empty_terminal(
             session,
@@ -1374,40 +1453,30 @@ async def finalize_cost(
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
     try:
-        live_components = await load_live_components(session, run.organisation_id)
-        enriched = _enrich_union(
+        built = await _build_enriched_state(
+            session,
+            run,
             merged_usage,
             merged_outputs,
+            merged_telemetry,
             node_type_map,
-            is_terminal=is_terminal,
-            merged_telemetry=merged_telemetry,
+            is_terminal,
         )
-        telemetry, per_node_cost = build_telemetry(enriched, live_components)
-        breakdown, total = build_cost_breakdown(telemetry, live_components, settings=get_settings())
-        enriched = _write_back_node_cost(enriched, per_node_cost)
-        total_tokens = _derive_total_tokens(enriched)
         # FAR-104 — per-agent token budget enforcement (TERMINAL-ONLY, atomic).
         # Runs AFTER the run's token usage is derived (SERVER-measured entries)
         # and BEFORE the status write, so the ``budget_exceeded`` status +
         # error message land in the SAME ``update_run_status`` call. Cancelled
         # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
         status, error_code, error_detail = await _apply_agent_budget_override(
-            session, run, enriched, is_terminal, status, error_code, error_detail
+            session, run, built.enriched, is_terminal, status, error_code, error_detail
         )
-        _log_union_size_guardrail(enriched, run_id)
-        await update_run_status(
+        await _write_finalized_run(
             session,
             run_id,
-            status,
-            error_code=error_code,
-            error_detail=error_detail,
-            total_cost_usd=total,
-            cost_breakdown=breakdown,
-            node_token_usage=enriched,
-            outputs_json=merged_outputs,
-            node_telemetry_json=merged_telemetry,
-            total_tokens=total_tokens,
-            claim_token=claim_token,
+            merged_outputs,
+            merged_telemetry,
+            built,
+            _TerminalWrite(status, error_code, error_detail, claim_token),
         )
     except asyncio.CancelledError:
         raise
@@ -1424,9 +1493,7 @@ async def finalize_cost(
             session,
             run_id,
             status,
-            merged_usage,
-            merged_outputs,
-            merged_telemetry,
+            _MergedSets(merged_usage, merged_outputs, merged_telemetry),
             error_code,
             error_detail,
             is_terminal=is_terminal,
@@ -1435,24 +1502,25 @@ async def finalize_cost(
         return
 
     # --- Ledger block — terminal only, guarded, converged (§4.2/§4.6) ---
-    if is_terminal and total is not None and total > 0 and run.started_at is not None:
+    run_date = _ledger_run_date(is_terminal, built.total, run)
+    if run_date is not None:
         await _ledger_block(
             session,
             run_id=run_id,
             org_id=org_id,
             status=status,
-            total=total,
+            total=built.total,
             owner_team_id=run.owner_team_id,
-            run_date=run.started_at.astimezone(UTC).date(),
+            run_date=run_date,
             finalize_fields={
                 "error_code": error_code,
                 "error_detail": error_detail,
-                "total_cost_usd": total,
-                "cost_breakdown": breakdown,
-                "node_token_usage": enriched,
+                "total_cost_usd": built.total,
+                "cost_breakdown": built.breakdown,
+                "node_token_usage": built.enriched,
                 "outputs_json": merged_outputs,
                 "node_telemetry_json": merged_telemetry,
-                "total_tokens": total_tokens,
+                "total_tokens": built.total_tokens,
             },
             session_factory=session_factory,
             claim_token=claim_token,
@@ -1465,11 +1533,118 @@ async def finalize_cost(
     # the ORM identity map, so the fact must snapshot the terminal row — FAR-200);
     # a refresh failure degrades to the in-memory object and never propagates.
     if is_terminal:
-        await record_run_facts(session, run)
-        # FAR-143 — self-report confirm + journey advancement (fail-open, own
-        # savepoint). Also covers the reduced-escape terminal (its fresh-tx
-        # status write is committed before we get here).
-        await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_LIVE)
+        await _record_terminal_analytics(session, run, status, merged_outputs, writer=_WRITER_LIVE)
+
+
+def _apply_cancel_wins(run: Run, status: str) -> str:
+    """B6 — CANCEL-WINS precedence: an interrupted/awaiting_human (or about-to-be
+    completed) run with a cancellation requested is finalised ``cancelled``,
+    never ``awaiting_human``/``complete``."""
+    if getattr(run, "cancellation_requested", False) and status in ("awaiting_human", "complete"):
+        _log.info("cost_finalize.cancel_wins", extra={"run_id": str(run.id), "status": status})
+        return "cancelled"
+    return status
+
+
+def _is_empty_finalize_segment(
+    merged_usage: dict[str, Any],
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+) -> bool:
+    """True when NO node contributed usage/outputs/telemetry — the pre-component-read
+    terminal (total 0, breakdown NULL, no ledger)."""
+    return not merged_usage and not merged_outputs and not merged_telemetry
+
+
+def _ledger_run_date(is_terminal: bool, total: Decimal, run: Run) -> date | None:
+    """The ledger run-date when a terminal run should enter the ledger.
+
+    Terminal-only gate: a positive persisted total with a started timestamp
+    yields the UTC run date; otherwise ``None`` (no ledger entry).
+    """
+    if is_terminal and total is not None and total > 0 and run.started_at is not None:
+        return run.started_at.astimezone(UTC).date()
+    return None
+
+
+async def _build_enriched_state(
+    session: AsyncSession,
+    run: Run,
+    merged_usage: dict[str, Any],
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    node_type_map: dict[str, str],
+    is_terminal: bool,
+) -> _BuiltCost:
+    """The cost build — component read + enrich + telemetry + breakdown + write-back.
+
+    Runs inside the never-fail envelope. Returns the persisted
+    ``total``/``breakdown``, the ENRICHED union (``node_token_usage``) and the
+    derived server-measured token total. Any exception here is caught by the
+    caller's LEGACY FALLBACK.
+    """
+    live_components = await load_live_components(session, run.organisation_id)
+    enriched = _enrich_union(
+        merged_usage,
+        merged_outputs,
+        node_type_map,
+        is_terminal=is_terminal,
+        merged_telemetry=merged_telemetry,
+    )
+    telemetry, per_node_cost = build_telemetry(enriched, live_components)
+    breakdown, total = build_cost_breakdown(telemetry, live_components, settings=get_settings())
+    enriched = _write_back_node_cost(enriched, per_node_cost)
+    total_tokens = _derive_total_tokens(enriched)
+    _log_union_size_guardrail(enriched, run.id)
+    return _BuiltCost(total=total, breakdown=breakdown, enriched=enriched, total_tokens=total_tokens)
+
+
+async def _write_finalized_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    built: _BuiltCost,
+    write: _TerminalWrite,
+) -> None:
+    """Persist the enriched finalization — the single ``update_run_status`` write."""
+    await update_run_status(
+        session,
+        run_id,
+        write.status,
+        error_code=write.error_code,
+        error_detail=write.error_detail,
+        total_cost_usd=built.total,
+        cost_breakdown=built.breakdown,
+        node_token_usage=built.enriched,
+        outputs_json=merged_outputs,
+        node_telemetry_json=merged_telemetry,
+        total_tokens=built.total_tokens,
+        claim_token=write.claim_token,
+    )
+
+
+async def _record_terminal_analytics(
+    session: AsyncSession,
+    run: Run,
+    status: str,
+    merged_outputs: dict[str, Any],
+    writer: str,
+) -> None:
+    """Terminal analytics + journey advancement in the SAME transaction (ADR 020).
+
+    ``record_run_facts`` is fail-open: a facts-write failure rolls back only
+    its own savepoint and never affects the cost/ledger outcome. The run is
+    refreshed INSIDE ``record_run_facts``'s guard (the fenced UPDATE bypasses
+    the ORM identity map, so the fact must snapshot the terminal row — FAR-200);
+    a refresh failure degrades to the in-memory object and never propagates.
+    ``_advance_journeys_on_terminal`` is the FAR-143 self-report confirm +
+    journey advancement hook (fail-open, own savepoint). Also covers the
+    reduced-escape terminal (its fresh-tx status write is committed before we
+    get here).
+    """
+    await record_run_facts(session, run)
+    await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=writer)
 
 
 async def _apply_agent_budget_override(
@@ -1519,10 +1694,9 @@ async def _write_empty_terminal(
         # pre-write 'running' row (FAR-200). The refresh runs INSIDE
         # ``record_run_facts``'s fail-open guard (ADR-020), so a refresh
         # failure degrades to the in-memory object and never propagates.
-        await record_run_facts(session, run)
         # FAR-143 — even with empty outputs the run still advances from its
         # create-stamped refs (zero-cost terminal).
-        await _advance_journeys_on_terminal(session, run, write.status, merged_outputs, writer=_WRITER_EARLY_RETURN)
+        await _record_terminal_analytics(session, run, write.status, merged_outputs, writer=_WRITER_EARLY_RETURN)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:
