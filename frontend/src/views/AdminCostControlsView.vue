@@ -67,6 +67,7 @@
                 { key: 'actions', label: '' },
               ]"
               :rows="tableRows"
+              :row-clickable="false"
             >
               <template #cell-budget="{ row }">
                 <InputText :aria-label="$t('views.AdminCostControlsView.budget')"
