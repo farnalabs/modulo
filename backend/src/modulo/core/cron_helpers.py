@@ -3604,7 +3604,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         max_connections=settings.saq_redis_pool_size,
     )
     try:
-        org_ids = await _collect_dispatcher_org_ids(factory)
+        org_ids = await _collect_org_ids(factory)
         if not org_ids:
             # Still record the run so /healthz/ready sees a fresh last_run_at
             # even in an empty-org environment (the cron keeps ticking every 60s).
@@ -3691,14 +3691,6 @@ def _dispatcher_summary() -> dict[str, Any]:
         "run_api_key_revoked": 0,
         "run_api_key_errors": 0,
     }
-
-
-async def _collect_dispatcher_org_ids(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
-    from modulo.db.models.organisation import Organisation
-
-    async with factory() as session, session.begin():
-        result = await session.execute(select(Organisation.id))
-        return list(result.scalars())
 
 
 async def _reconcile_org(
