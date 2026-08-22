@@ -9,5 +9,5 @@ export interface CommunityLibraryEntry {
   published_at?: string | null;
   content_sha256?: string | null;
   installed?: boolean;
-  content?: unknown | null;
+  content?: unknown;
 }

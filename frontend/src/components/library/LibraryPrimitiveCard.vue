@@ -116,6 +116,7 @@
         {{ $t("views.LibraryView.installed") }}
       </button>
       <button
+        type="button"
         v-if="
           prim.primitive_type === 'pipeline_template' ||
           prim.primitive_type === 'composite'
@@ -141,6 +142,7 @@
         }}
       </button>
       <button
+        type="button"
         :class="`${secondaryActionButton} bg-background text-foreground hover:bg-accent transition-colors`"
         @click="$emit('view-details', prim)"
         data-testid="library-view-details"
