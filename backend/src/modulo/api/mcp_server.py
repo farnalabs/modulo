@@ -5095,8 +5095,8 @@ async def validate_payload(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        from jsonschema import Draft202012Validator, ValidationError
-        from jsonschema.exceptions import SchemaError as JsSchemaError
+        from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
+        from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 
         org_id = _ctx_org_id_val()
         try:
