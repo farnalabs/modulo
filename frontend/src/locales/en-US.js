@@ -2055,7 +2055,8 @@ export default {
       "runner": "Runner",
       "operator": "Operator",
       "webhook_notifications": "Webhook Notifications",
-      "owned_resource_count": "{count} owned resource | {count} owned resources"
+      "owned_resource_count": "{count} owned resource | {count} owned resources",
+      "team_details": "{name} details"
     },
     "SettingsSsoView": {
       "sso_provider_management_is_not_available_on_your_current_pla": "SSO provider management is not available on your current plan.",

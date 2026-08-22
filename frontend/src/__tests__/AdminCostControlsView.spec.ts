@@ -93,6 +93,21 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.find('[data-testid="cc-team-save-team-1"]').exists()).toBe(true)
   })
 
+  it('does not expose team budget rows as clickable controls (row-clickable=false)', async () => {
+    const wrapper = await mountView()
+    const budgetInput = wrapper.find('[data-testid="cc-team-budget-team-1"]')
+    expect(budgetInput.exists()).toBe(true)
+    const tableEl = budgetInput.element.closest('table') as HTMLElement | null
+    expect(tableEl).not.toBeNull()
+
+    const rows = Array.from(tableEl!.querySelectorAll('tbody tr'))
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row.getAttribute('role')).toBeNull()
+      expect(row.getAttribute('tabindex')).toBeNull()
+    }
+  })
+
   it('displays alert threshold checkboxes', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="cc-threshold-50"]').exists()).toBe(true)
