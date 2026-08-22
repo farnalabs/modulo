@@ -52,6 +52,8 @@ _MSG_MODEL_BACKEND_NOT_FOUND = "Model backend not found"
 _CODE_MODEL_BACKENDS_UPDATE_MODEL = "model_backends.update_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_DELETE_MODEL = "model_backends.delete_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_RECHECK_MODEL = "model_backends.recheck_model_backend_health_endpoint"
+_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED = "model_backends.audit_append_failed"
+_PERM_MODEL_BACKEND_LIST = "model_backend.list"
 _CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoint"
 
 
@@ -329,7 +331,7 @@ async def list_model_backends_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "model_backend.list.in_dev")
@@ -586,7 +588,7 @@ async def create_model_backend_endpoint(
                 "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
                 "has_credentials": bool(mb.credentials_ciphertext),
             },
-            log_key="model_backends.audit_append_failed",
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
@@ -622,7 +624,7 @@ async def create_model_backend_endpoint(
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendResponse:
     try:
         async with session.begin():
@@ -667,7 +669,7 @@ async def list_pipeline_references_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> PipelineReferenceListResponse:
     try:
         async with session.begin():
@@ -783,7 +785,7 @@ async def update_model_backend_endpoint(
                 event_type="model_backend.updated",
                 resource_id=mb.id,
                 payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
-                log_key="model_backends.audit_append_failed",
+                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
             )
         if req.api_key is not None:
             await append_audit_event_isolated(
@@ -798,7 +800,7 @@ async def update_model_backend_endpoint(
                     "provider": mb.provider,
                     "model_id": mb.model_id,
                 },
-                log_key="model_backends.audit_append_failed",
+                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
             )
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
@@ -988,5 +990,5 @@ async def delete_model_backend_endpoint(
             event_type="model_backend.deleted",
             resource_id=backend_id,
             payload=audit_payload,
-            log_key="model_backends.audit_append_failed",
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )

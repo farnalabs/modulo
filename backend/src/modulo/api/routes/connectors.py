@@ -45,6 +45,7 @@ _CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT = "connectors.get_connector_endpoint"
 _MSG_CONNECTOR_NOT_FOUND = "Connector not found"
 _CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT = "connectors.update_connector_endpoint"
 _CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT = "connectors.delete_connector_endpoint"
+_PERM_CONNECTOR_LIST = "connector.list"
 
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ async def list_connectors_endpoint(
     cursor: str | None = Query(default=None),
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("connector.list"),
+    principal: TenantPrincipal = require_permission(_PERM_CONNECTOR_LIST),
 ) -> ConnectorListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "connector.list.in_dev")
@@ -299,7 +300,7 @@ async def create_connector_endpoint(
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("connector.list"),
+    principal: TenantPrincipal = require_permission(_PERM_CONNECTOR_LIST),
 ) -> ConnectorResponse:
     try:
         async with session.begin():
@@ -349,7 +350,7 @@ class ConnectorHealthResponse(BaseModel):
 async def connector_health_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("connector.list"),
+    principal: TenantPrincipal = require_permission(_PERM_CONNECTOR_LIST),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorHealthResponse:
     """Run a live health check against a connector instance.

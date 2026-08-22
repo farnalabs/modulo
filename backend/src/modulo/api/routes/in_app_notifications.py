@@ -45,6 +45,8 @@ _CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS = "in_app_notifications.list_notifica
 _CODE_APP_NOTIFICATIONS_GET_NOTIFICATION = "in_app_notifications.get_notification_detail"
 _CODE_APP_NOTIFICATIONS_REVIEW_LATER = "in_app_notifications.review_later_endpoint"
 _CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT = "in_app_notifications.dismiss_endpoint"
+_CODE_APP_NOTIFICATIONS_GET_PREFERENCES = "in_app_notifications.get_preferences"
+_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_preferences"
 
 
 _log = logging.getLogger(__name__)
@@ -273,7 +275,7 @@ async def list_notifications(
 
 
 @router.get("/preferences")
-@handle_db_errors("in_app_notifications.get_preferences")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_PREFERENCES)
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
@@ -289,19 +291,19 @@ async def get_preferences(
             )
             dashboard_level = await _load_dashboard_level(session, principal.account_id)
     except ProgrammingError:
-        _log.exception("in_app_notifications.get_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.get_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.get_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_DATABASE_ERROR_OCCURRED,
@@ -313,7 +315,7 @@ async def get_preferences(
 
 
 @router.put("/preferences")
-@handle_db_errors("in_app_notifications.update_preferences")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
@@ -353,19 +355,19 @@ async def update_preferences(
             if dashboard_level is None:
                 dashboard_level = await _load_dashboard_level(session, principal.account_id)
     except ProgrammingError:
-        _log.exception("in_app_notifications.update_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.update_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.update_preferences")
+        _log.exception(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_DATABASE_ERROR_OCCURRED,

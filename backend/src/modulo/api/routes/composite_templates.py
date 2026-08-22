@@ -31,6 +31,7 @@ from modulo.db.rls import set_rls_org
 
 _MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 _MSG_COMPOSITE_TEMPLATE_NOT_FOUND = "Composite template not found"
+_PERM_PIPELINE_UPDATE = "pipeline.update"
 
 
 logger = logging.getLogger(__name__)
@@ -242,7 +243,7 @@ async def update_composite_template_endpoint(
     template_id: uuid.UUID,
     req: CompositeTemplateUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_PERM_PIPELINE_UPDATE),
 ) -> CompositeTemplateResponse:
     updates: dict[str, Any] = {}
     for k, v in req.model_dump(exclude_unset=True).items():
@@ -407,7 +408,7 @@ async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
     req: EditorGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_PERM_PIPELINE_UPDATE),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -563,7 +564,7 @@ async def publish_composite_endpoint(
     template_id: uuid.UUID,
     req: PublishRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_PERM_PIPELINE_UPDATE),
 ) -> PublishResponse:
     version = req.version or "1.0.0"
     try:

@@ -46,6 +46,8 @@ _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
 _MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
 _CODE_ADMIN_ORGS_ADMIN_REMOVE = "admin_orgs.admin_remove_org_license"
+_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED = "admin_orgs.admin_set_org_triggers_paused"
+_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH = "admin_orgs.admin_set_org_guardrails_kill_switch"
 
 _MSG_MIGRATIONS_REQUIRED = "Feature is not available. Run database migrations to enable it."
 
@@ -710,10 +712,10 @@ async def admin_set_org_triggers_paused(
                 paused_at=_timestamp_response(org.triggers_paused_at),
             )
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_set_org_triggers_paused", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
         _raise_db_unavailable(
-            "admin_orgs.admin_set_org_triggers_paused",
+            _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED,
             "Database error while updating org trigger pause state.",
             exc,
         )
@@ -839,10 +841,10 @@ async def admin_set_org_guardrails_kill_switch(
                 enabled_at=_timestamp_response(org.guardrails_kill_switch_at),
             )
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_set_org_guardrails_kill_switch", _MSG_MIGRATIONS_REQUIRED, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH, _MSG_MIGRATIONS_REQUIRED, exc)
     except SQLAlchemyError as exc:
         _raise_db_unavailable(
-            "admin_orgs.admin_set_org_guardrails_kill_switch",
+            _CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH,
             "Database error while updating org guardrails kill-switch state.",
             exc,
         )

@@ -37,6 +37,7 @@ _SCRIPT_ANOMALY_ERROR_CODES = frozenset({"script.side_effect_unknown", "script.b
 
 # Script-mode error code for unexpected side_effect_unknown.
 _SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"
+_LOG_ANOMALY_DETECTED = "rollback_threshold.anomaly_detected"
 
 
 def _graph_has_script_mode_node(graph_json: dict[str, Any] | None) -> bool:
@@ -203,7 +204,7 @@ async def evaluate_rollback_thresholds(
                         anomalies_found += 1
                         flagged_orgs.append(str(org_id))
                         _log.warning(
-                            "rollback_threshold.anomaly_detected",
+                            _LOG_ANOMALY_DETECTED,
                             extra={
                                 "org_id": str(org_id),
                                 "total_runs": total,
@@ -219,7 +220,7 @@ async def evaluate_rollback_thresholds(
                         if str(org_id) not in flagged_orgs:
                             flagged_orgs.append(str(org_id))
                         _log.warning(
-                            "rollback_threshold.anomaly_detected",
+                            _LOG_ANOMALY_DETECTED,
                             extra={
                                 "org_id": str(org_id),
                                 "total_runs": total,
@@ -235,7 +236,7 @@ async def evaluate_rollback_thresholds(
                         if str(org_id) not in flagged_orgs:
                             flagged_orgs.append(str(org_id))
                         _log.warning(
-                            "rollback_threshold.anomaly_detected",
+                            _LOG_ANOMALY_DETECTED,
                             extra={
                                 "org_id": str(org_id),
                                 "total_runs": total,

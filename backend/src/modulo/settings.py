@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings
 _log = logging.getLogger(__name__)
 
 _MIN_KEY_LEN = 32
+_POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
 # Minimum length for each operator secret (MODULO_BREAK_GLASS_SECRET /
 # _STANDBY_SECRET). Validated unconditionally when set (break-glass plan §3).
 _MIN_BREAK_GLASS_SECRET_LEN = 24
@@ -486,7 +487,7 @@ class Settings(BaseSettings):
     def _fix_database_url(self) -> "Settings":
         url = self.database_url
         if url.startswith("postgres://"):
-            url = "postgresql+asyncpg://" + url[len("postgres://") :]
+            url = _POSTGRES_ASYNC_PREFIX + url[len("postgres://") :]
         if url.startswith("mysql+asyncmy://"):
             url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
             _log.warning("settings.legacy_asyncmy_url_replaced")
@@ -504,12 +505,12 @@ class Settings(BaseSettings):
     def _apply_sqlite_mode(self) -> "Settings":
         if self.modulo_db.lower() == "sqlite":
             _log.warning("settings.sqlite_mode")
-            if self.database_url.startswith("postgresql+asyncpg://"):
+            if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
                 self.database_url = "sqlite+aiosqlite:///./modulo.db"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         elif self.modulo_db.lower() in ("mariadb", "mysql"):
             _log.warning("settings.mariadb_mode")
-            if self.database_url.startswith("postgresql+asyncpg://"):
+            if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
                 self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self

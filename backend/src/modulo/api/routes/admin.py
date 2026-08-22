@@ -98,6 +98,7 @@ _MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable
 _CODE_ADMIN_ADMIN_CREATE_TEAM = "admin.admin_create_team"
 _MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _MSG_USER_NOT_FOUND = "User not found"
+_MSG_USER_NOT_FOUND_IN_ORGANISATION = "User not found in this organisation"
 _MSG_BREAK_GLASS_ACCOUNTS_CANNOT = "Break-glass accounts cannot be managed via the admin API"
 _CODE_ADMIN_ADMIN_DEACTIVATE_USER = "admin.admin_deactivate_user"
 _CODE_ADMIN_ADMIN_REACTIVATE_USER = "admin.admin_reactivate_user"
@@ -1058,7 +1059,7 @@ async def admin_update_user(
             if target_membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             target_role_after = req.org_role
@@ -1214,7 +1215,7 @@ async def admin_deactivate_user(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             await assert_not_last_admin(
@@ -1323,7 +1324,7 @@ async def admin_reactivate_user(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             account.active = True
@@ -1411,7 +1412,7 @@ async def admin_reset_password(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             temporary_password = secrets.token_urlsafe(18)[:24]
