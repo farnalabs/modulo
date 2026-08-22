@@ -185,14 +185,13 @@
         {{ $t("views.LibraryView.loading") }}
       </div>
 
-      <div
+      <Banner
         v-else-if="error || (section === 'hosted' && hostedError)"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
-        role="alert"
+        variant="error"
         data-testid="library-error"
       >
         {{ section === "hosted" ? hostedError : error }}
-      </div>
+      </Banner>
 
       <EmptyState
         v-else-if="section === 'hosted' && hostedCommunityItems.length === 0"
@@ -282,14 +281,13 @@
         />
       </div>
 
-      <div
+      <Banner
         v-if="successMessage"
-        class="rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-emerald-600"
-        role="status"
+        variant="success"
         data-testid="library-success-message"
       >
         {{ successMessage }}
-      </div>
+      </Banner>
 
       <div
         v-if="total > pageSize"
@@ -332,6 +330,7 @@ import Button from "primevue/button";
 import PageHeader from "../components/shared/PageHeader.vue";
 import FilterBar from "../components/shared/FilterBar.vue";
 import EmptyState from "../components/shared/EmptyState.vue";
+import Banner from "../components/shared/Banner.vue";
 import LibraryPrimitiveCard from "../components/library/LibraryPrimitiveCard.vue";
 import LibraryPrimitiveGrid from "../components/library/LibraryPrimitiveGrid.vue";
 import { useDataFetch } from "../composables/useDataFetch";

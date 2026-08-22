@@ -1,4 +1,4 @@
-export interface CommunityLibraryEntryBase {
+export interface CommunityLibraryEntry {
   id: string;
   type: string;
   slug: string;
@@ -8,12 +8,6 @@ export interface CommunityLibraryEntryBase {
   status?: string | null;
   published_at?: string | null;
   content_sha256?: string | null;
-}
-
-export interface CommunityLibraryEntry extends CommunityLibraryEntryBase {
-  installed: boolean;
-}
-
-export interface CommunityLibraryEntryDetail extends CommunityLibraryEntryBase {
+  installed?: boolean;
   content?: unknown | null;
 }

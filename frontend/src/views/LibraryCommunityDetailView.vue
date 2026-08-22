@@ -19,14 +19,13 @@
         {{ $t("views.LibraryCommunityDetail.loading") }}
       </div>
 
-      <div
+      <Banner
         v-else-if="error"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
-        role="alert"
+        variant="error"
         data-testid="library-community-detail-error"
       >
         {{ error }}
-      </div>
+      </Banner>
 
       <div
         v-else-if="entry"
@@ -72,7 +71,7 @@
               {{ $t("views.LibraryCommunityDetail.published_at") }}
             </dt>
             <dd class="mt-0.5 text-foreground">
-              {{ formatDate(entry.published_at) }}
+              {{ formatDateShort(entry.published_at) }}
             </dd>
           </div>
         </dl>
@@ -96,15 +95,17 @@ import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import Button from "primevue/button";
 import PageHeader from "../components/shared/PageHeader.vue";
+import Banner from "../components/shared/Banner.vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
 import { typeBadgeClass } from "../lib/ui/typeBadge";
-import type { CommunityLibraryEntryDetail } from "../lib/api/communityLibrary";
+import type { CommunityLibraryEntry } from "../lib/api/communityLibrary";
+import { formatDateShort } from "../lib/formatDate";
 
 const route = useRoute();
 const { t } = useI18n();
 
-const entry = ref<CommunityLibraryEntryDetail | null>(null);
+const entry = ref<CommunityLibraryEntry | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -119,12 +120,6 @@ const contentText = computed(() => {
 const hasContent = computed(
   () => !!entry.value?.content && Object.keys(entry.value.content).length > 0,
 );
-
-function formatDate(value: string): string {
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return value;
-  return d.toLocaleDateString();
-}
 
 async function loadEntry(): Promise<void> {
   const id = typeof route.params.id === "string" ? route.params.id : null;
@@ -146,7 +141,7 @@ async function loadEntry(): Promise<void> {
       return;
     }
     entry.value = data
-      ? (data as unknown as CommunityLibraryEntryDetail)
+      ? (data as unknown as CommunityLibraryEntry)
       : null;
   } catch (e) {
     error.value = formatApiError(e);

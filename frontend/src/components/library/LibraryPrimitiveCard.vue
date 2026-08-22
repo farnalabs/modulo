@@ -93,7 +93,7 @@
     <div class="flex items-center gap-2 mt-auto">
       <button
         v-if="!installed"
-        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        :class="`${primaryActionButton} disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5`"
         :disabled="installing"
         :aria-busy="installing"
         @click="$emit('install', prim)"
@@ -108,7 +108,7 @@
       </button>
       <button
         v-else
-        class="flex-1 px-3 py-2 border border-border bg-muted text-muted-foreground text-sm font-medium rounded-lg disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        :class="`${secondaryActionButton} bg-muted text-muted-foreground disabled:cursor-not-allowed flex items-center justify-center gap-1.5`"
         disabled
         data-testid="library-installed-button"
       >
@@ -120,7 +120,7 @@
           prim.primitive_type === 'pipeline_template' ||
           prim.primitive_type === 'composite'
         "
-        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
+        :class="primaryActionButton"
         @click="$emit('create-pipeline', prim)"
         data-testid="library-create-pipeline"
       >
@@ -128,7 +128,7 @@
       </button>
       <button
         v-else-if="prim.primitive_type === 'lifecycle_map'"
-        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed"
+        :class="`${primaryActionButton} disabled:opacity-50 disabled:cursor-not-allowed`"
         :disabled="adapting[prim.id]"
         :aria-busy="adapting[prim.id]"
         @click="$emit('create-lifecycle-map', prim)"
@@ -141,7 +141,7 @@
         }}
       </button>
       <button
-        class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+        :class="`${secondaryActionButton} bg-background text-foreground hover:bg-accent transition-colors`"
         @click="$emit('view-details', prim)"
         data-testid="library-view-details"
       >
@@ -154,6 +154,11 @@
 <script setup lang="ts">
 import { Check as CheckIcon, Loader as LoaderIcon } from "@lucide/vue";
 import { typeBadgeClass } from "../../lib/ui/typeBadge";
+
+const primaryActionButton =
+  "flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60";
+const secondaryActionButton =
+  "flex-1 px-3 py-2 border border-border text-sm font-medium rounded-lg";
 
 export interface LibraryPrimitive {
   id: string;
