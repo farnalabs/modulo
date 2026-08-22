@@ -1,7 +1,10 @@
-"""Metrics dump -- daily SAQ cron job for product analytics.
+"""Metrics dump -- product analytics SAQ cron job.
 
-Builds an aggregate payload from all consenting orgs and POSTs it to
-the vendor endpoint.  Watermark advances only on full success.
+The SAQ cron ticks every 10 minutes; a per-instance jitter offset (aligned to
+the 10-minute grid, spread across a 6-hour window) opens a 10-minute execution
+window so each instance actually performs its (daily) dump on exactly one tick.
+Builds an aggregate payload from all consenting orgs and POSTs it to the vendor
+endpoint.  Watermark advances only on full success.
 """
 
 from __future__ import annotations
@@ -44,22 +47,54 @@ _DUMP_EXECUTION_WINDOW_MINUTES = 10  # each instance gets 10 min to complete
 _OFFSET_KEY = "product_analytics_dump_offset_minutes"
 
 
-async def _should_dump_now(factory: Any) -> bool:
-    """Check if it's this instance's turn to dump based on stored jitter offset."""
+async def _get_or_create_system_config(factory: Any, key: str, create: Any) -> str:
+    """Get-or-create a string-valued ``system_config`` entry.
+
+    Shared by the jitter offset and the instance id: read inside a transaction;
+    if absent, generate via ``create`` (a zero-arg callable returning ``str``)
+    and persist.  Returns the stored value as a string.
+    """
+    async with factory() as session, session.begin():
+        value = await read_system_config(session, key)
+        if value is None:
+            value = create()
+            await write_system_config(session, key, value)
+    return str(value)
+
+
+async def _should_dump_now(factory: Any, now: datetime | None = None) -> bool:
+    """Check if it's this instance's turn to dump based on stored jitter offset.
+
+    The SAQ cron ticks every ``_DUMP_EXECUTION_WINDOW_MINUTES`` (10 min), so the
+    instance must pick an offset *aligned* to that grid within the
+    ``_DUMP_WINDOW_MINUTES`` (6h) window.  Because the offset is a multiple of
+    the tick interval, exactly one cron fire per day lands inside the
+    ``[offset, offset + 10)`` execution window and performs the dump.  A legacy
+    unaligned offset (drawn before this alignment) is realigned on first read so
+    its window is centred on a real tick.
+
+    ``now`` is injectable for testing; it defaults to ``datetime.now(UTC)``.
+    """
     import secrets as _secrets
 
-    async with factory() as session, session.begin():
-        offset = await read_system_config(session, _OFFSET_KEY)
+    if now is None:
+        now = datetime.now(UTC)
+    current_minute_of_day = now.hour * 60 + now.minute
 
-    if offset is None:
-        offset = _secrets.randbelow(_DUMP_WINDOW_MINUTES)
+    slots = _DUMP_WINDOW_MINUTES // _DUMP_EXECUTION_WINDOW_MINUTES
+
+    def _create_offset() -> str:
+        value = str(_secrets.randbelow(slots) * _DUMP_EXECUTION_WINDOW_MINUTES)
+        _log.info("product_analytics.jitter_offset_set", extra={"offset_minutes": int(value)})
+        return value
+
+    offset = int(await _get_or_create_system_config(factory, _OFFSET_KEY, _create_offset))
+
+    # Realign a legacy unaligned offset so the window sits on a real tick.
+    if offset % _DUMP_EXECUTION_WINDOW_MINUTES != 0:
+        offset = (offset // _DUMP_EXECUTION_WINDOW_MINUTES) * _DUMP_EXECUTION_WINDOW_MINUTES
         async with factory() as session, session.begin():
             await write_system_config(session, _OFFSET_KEY, str(offset))
-        _log.info("product_analytics.jitter_offset_set", extra={"offset_minutes": offset})
-
-    offset = int(offset)
-    now = datetime.now(UTC)
-    current_minute_of_day = now.hour * 60 + now.minute
 
     return offset <= current_minute_of_day < offset + _DUMP_EXECUTION_WINDOW_MINUTES
 
@@ -67,7 +102,10 @@ async def _should_dump_now(factory: Any) -> bool:
 async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     """SAQ system-cron job -- daily metrics dump.
 
-    Daily 01:00 UTC, unique=True, system session factory.
+    The SAQ cron ticks every 10 minutes (``*/10 * * * *``); the per-instance
+    jitter gate (``_should_dump_now``) opens a 10-minute execution window so the
+    dump runs on exactly one tick per day, spread across a 6-hour window.
+    unique=True, system session factory.
     Skips when: no consenting orgs or instance switch off.
     """
     from modulo.core.saq_worker import _make_system_session_factory
@@ -384,12 +422,11 @@ async def _build_integration_inventory(session: AsyncSession, org_ids: list[uuid
 
 async def _get_or_create_instance_id(factory: Any) -> str:
     key = "product_analytics_instance_id"
-    async with factory() as session, session.begin():
-        instance_id = await read_system_config(session, key)
-        if instance_id is None:
-            instance_id = str(uuid.uuid4())
-            await write_system_config(session, key, instance_id)
-    return str(instance_id)
+
+    def _create_id() -> str:
+        return str(uuid.uuid4())
+
+    return await _get_or_create_system_config(factory, key, _create_id)
 
 
 async def _build_instance_metadata(factory: Any) -> dict[str, Any]:

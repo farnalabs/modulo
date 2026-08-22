@@ -5,16 +5,20 @@ from __future__ import annotations
 import hashlib
 import hmac
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
+    _DUMP_EXECUTION_WINDOW_MINUTES,
+    _DUMP_WINDOW_MINUTES,
+    _OFFSET_KEY,
     _WATERMARK_KEY,
     SCHEMA_VERSION,
     _get_consenting_orgs,
+    _should_dump_now,
     metrics_dump,
 )
 from modulo.core.product_analytics.vendor_client import (
@@ -207,6 +211,158 @@ class _FakeSessionFactory:
 
     def __call__(self) -> _FakeSession:
         return self._session
+
+
+# --- Jitter gate (_should_dump_now) ---
+
+# The cron ticks every 10 minutes (``*/10 * * * *``), so the offset MUST be a
+# multiple of 10 to coincide with a fire. These tests pin the gate against that
+# schedule.
+
+
+class TestShouldDumpNow:
+    @pytest.mark.asyncio
+    async def test_creates_and_persists_aligned_offset_on_first_run(self) -> None:
+        """First run draws an offset aligned to the 10-minute cron grid and
+        persists it."""
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write,
+            patch("secrets.randbelow", return_value=3),
+        ):
+            # offset = 3 * 10 = 30; 00:30 (minute 30) is inside [30, 40) -> True.
+            now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC)
+            result = await _should_dump_now(factory, now=now)
+
+        assert result is True
+        write.assert_awaited_once()
+        # write_system_config(session, _OFFSET_KEY, value)
+        assert write.await_args.args[1] == _OFFSET_KEY
+        assert int(write.await_args.args[2]) % _DUMP_EXECUTION_WINDOW_MINUTES == 0
+
+    @pytest.mark.asyncio
+    async def test_generated_offset_always_grid_aligned(self) -> None:
+        """Every possible draw lands on the 10-minute grid (a real cron fire)."""
+        for draw in range(_DUMP_WINDOW_MINUTES // _DUMP_EXECUTION_WINDOW_MINUTES):
+            factory = _FakeSessionFactory()
+            with (
+                patch(
+                    "modulo.core.product_analytics.metrics_dump.read_system_config",
+                    new_callable=AsyncMock,
+                    return_value=None,
+                ),
+                patch(
+                    "modulo.core.product_analytics.metrics_dump.write_system_config",
+                    new_callable=AsyncMock,
+                ) as write,
+                patch("secrets.randbelow", return_value=draw),
+            ):
+                await _should_dump_now(factory, now=datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+            assert int(write.await_args.args[2]) % _DUMP_EXECUTION_WINDOW_MINUTES == 0
+
+    @pytest.mark.asyncio
+    async def test_persisted_offset_in_window_true(self) -> None:
+        factory = _FakeSessionFactory()
+        now = datetime(2026, 1, 1, 0, 35, tzinfo=UTC)  # minute 35 in [30, 40)
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="30",
+            ),
+            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+        ):
+            assert await _should_dump_now(factory, now=now) is True
+
+    @pytest.mark.asyncio
+    async def test_persisted_offset_out_of_window_false(self) -> None:
+        factory = _FakeSessionFactory()
+        now = datetime(2026, 1, 1, 0, 40, tzinfo=UTC)  # 40 not in [30, 40)
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="30",
+            ),
+            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+        ):
+            assert await _should_dump_now(factory, now=now) is False
+
+    @pytest.mark.asyncio
+    async def test_lower_boundary_inclusive_true(self) -> None:
+        factory = _FakeSessionFactory()
+        now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC)  # exactly offset 30
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="30",
+            ),
+            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+        ):
+            assert await _should_dump_now(factory, now=now) is True
+
+    @pytest.mark.asyncio
+    async def test_upper_boundary_exclusive_false(self) -> None:
+        factory = _FakeSessionFactory()
+        now = datetime(2026, 1, 1, 0, 40, tzinfo=UTC)  # offset + window == 40, excluded
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="30",
+            ),
+            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+        ):
+            assert await _should_dump_now(factory, now=now) is False
+
+    @pytest.mark.asyncio
+    async def test_offset_at_window_tail_fires_once_daily(self) -> None:
+        """Offset 350 (a 05:50 slot) is True only at that tick, not at 06:00."""
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="350",
+            ),
+            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+        ):
+            at_slot = datetime(2026, 1, 1, 5, 50, tzinfo=UTC)  # minute 350
+            after_slot = datetime(2026, 1, 1, 6, 0, tzinfo=UTC)  # minute 360
+            assert await _should_dump_now(factory, now=at_slot) is True
+            assert await _should_dump_now(factory, now=after_slot) is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_unaligned_offset_is_realigned(self) -> None:
+        """A pre-existing unaligned offset is realigned to the grid on read and
+        persisted, without preventing the dump on the aligned tick."""
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value="37",
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write,
+        ):
+            # Realigned to 30; 00:30 -> True.
+            now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC)
+            assert await _should_dump_now(factory, now=now) is True
+        # The realigned value (30) is written back.
+        written = [c.args[2] for c in write.await_args_list]
+        assert any(int(v) % _DUMP_EXECUTION_WINDOW_MINUTES == 0 for v in written)
 
 
 # --- Skip conditions ---
