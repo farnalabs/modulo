@@ -11,6 +11,7 @@ interface ConsentData {
   level_changed_at: string | null
   egress_allowed: boolean
   prompt_eligible: boolean
+  instance_enabled: boolean
 }
 
 const PROMPT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
@@ -23,6 +24,7 @@ function emptyConsent(): ConsentData {
     level_changed_at: null,
     egress_allowed: false,
     prompt_eligible: false,
+    instance_enabled: false,
   }
 }
 
@@ -54,6 +56,7 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
       level_changed_at: data.level_changed_at ?? null,
       egress_allowed: data.egress_allowed,
       prompt_eligible: data.prompt_eligible,
+      instance_enabled: data.instance_enabled,
     }
     instanceEnabled.value = data.instance_enabled
   }
