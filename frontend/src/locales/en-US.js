@@ -3083,7 +3083,7 @@ export default {
     "agent": {
       "failed": "Agent failed",
       "no_op": "No output",
-      "stall": "Agent stalled"
+      "stall": "Worker claimed run but dispatched no node (recovered by re-dispatch)"
     },
     "contract": {
       "schema": "Output rejected",
