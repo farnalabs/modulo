@@ -81,7 +81,7 @@
             </div>
           </div>
 
-          <div v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" role="region" :aria-label="team.name + ' details'">
+          <div v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" role="region" :aria-label="$t('views.SettingsTeamsView.team_details', { name: team.name })">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
               <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
               <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
