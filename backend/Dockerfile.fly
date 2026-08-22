@@ -35,12 +35,13 @@ RUN pnpm run build
 # =============================================================================
 FROM python:3.12-slim
 ENV PATH="/app/.venv/bin:$PATH" \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    HOME=/tmp
 
-# Install nginx + uv
+# Install nginx + uv (libcap2-bin provides setcap for non-root port binding)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends nginx
+apt-get update && apt-get install -y --no-install-recommends nginx libcap2-bin
 RUN --mount=type=cache,target=/root/.cache/pip pip install --only-binary :all: uv==0.11.13
 
 WORKDIR /app
@@ -84,6 +85,23 @@ COPY deploy/fly/release.sh /release.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
 RUN chmod +x /entrypoint.sh
 RUN chmod +x /release.sh
+
+# Run as the unprivileged www-data user (docker:S6471). nginx binds the
+# unprivileged port 8080, so setcap is applied for parity with the SPA image
+# should the listen port ever drop below 1024. The entrypoint writes
+# runtime-config.js into /usr/share/nginx/html at boot, hence the html chown.
+# Debian nginx keeps proxy/body temp files under /var/lib/nginx (not
+# /var/cache/nginx), so those dirs are pre-created and chowned for non-root.
+RUN mkdir -p /var/cache/nginx /var/lib/nginx/body /var/lib/nginx/fastcgi /var/lib/nginx/proxy /var/lib/nginx/scgi /var/lib/nginx/uwsgi \
+    && chown -R www-data:www-data /var/cache/nginx \
+    && chown -R www-data:www-data /var/lib/nginx \
+    && chown -R www-data:www-data /var/log/nginx \
+    && chown -R www-data:www-data /usr/share/nginx/html \
+    && touch /var/run/nginx.pid \
+    && chown www-data:www-data /var/run/nginx.pid \
+    && setcap 'cap_net_bind_service=+ep' "$(command -v nginx)"
+
+USER www-data
 
 EXPOSE 8000
 
