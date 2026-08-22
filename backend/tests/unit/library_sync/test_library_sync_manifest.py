@@ -106,5 +106,5 @@ class TestParseManifest:
 
     def test_tolerates_missing_lists(self) -> None:
         data = parse_manifest({"schema_version": "1"})
-        assert data.entries == []
-        assert data.revoked == []
+        assert not data.entries
+        assert not data.revoked
