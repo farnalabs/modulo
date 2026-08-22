@@ -13,6 +13,11 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.library_service.community import (
+    get_community_entry,
+    install_community_entry,
+    list_community_entries,
+)
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.library_primitive import (
     create_library_primitive,
@@ -38,8 +43,11 @@ __all__ = [
     "contribute_fixture",
     "contribute_primitive",
     "copy_to_adapt",
+    "get_community_entry",
     "get_primitive",
     "get_primitive_by_slug",
+    "install_community_entry",
+    "list_community_entries",
     "list_contribution_versions",
     "list_contributions",
     "list_org_contributions",

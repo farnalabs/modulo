@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     stripe_secret_key: str = Field(default="", repr=False)
     stripe_webhook_secret: str = Field(default="", repr=False)
 
+    # Hosted community library — client sync (FAR-363). Empty defaults keep the
+    # app bootable without a library configured; when ``modulo_library_endpoint``
+    # is non-empty the SAQ ``library_sync`` cron polls + verifies the signed
+    # manifest and caches the catalog. The root public key is the Ed25519 PEM
+    # that verifies manifests — stored repr=False so it never leaks into logs.
+    modulo_library_endpoint: str = Field("")
+    modulo_library_root_public_key: str = Field(default="", repr=False)
+    modulo_library_sync_interval_seconds: int = Field(300)
+    modulo_library_sync_timeout_seconds: int = Field(15)
+
     # SSO / OIDC — JSON array of {provider_id, client_id, client_secret, discovery_url}
     modulo_oidc_providers: str = Field("[]")
 
