@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
-from typing import Any
+from typing import Any, TypeGuard
 
 from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -81,6 +81,13 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
 # reports / variants, are NOT pause-gated — see the create_run gate comment).
 PAUSE_EXEMPT_TRIGGER_TYPES = frozenset({"manual", "correction"})
 
+# Stats-only failure groupings — NOT interchangeable with TERMINAL_STATUSES. The
+# per-day "failed" bucket also counts the legacy ``expired`` spelling (a run
+# demoted before the status-set cleanup), while the failure-reason breakdown
+# only attributes genuinely failed executions (a cancelled run has no reason).
+_FAILURE_BUCKET_STATUSES: frozenset[str] = frozenset({"failed", "cancelled", "eval_failed", "expired", "stalled"})
+_FAILURE_REASON_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled"})
+
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
@@ -88,6 +95,26 @@ _SANDBOX_CONCURRENCY_MAX = 100
 _RUN_CONCURRENCY_KEY = "run_concurrency_limit"
 _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
+
+
+def _is_terminal_status(status: str) -> bool:
+    """Whether ``status`` ends the run (no further state transitions)."""
+    return status in TERMINAL_STATUSES
+
+
+def _is_failure_bucket_status(status: str) -> bool:
+    """Whether ``status`` counts toward the per-day failed bucket in run stats."""
+    return status in _FAILURE_BUCKET_STATUSES
+
+
+def _is_failure_reason_status(status: str) -> bool:
+    """Whether ``status`` can carry a failure reason in run stats."""
+    return status in _FAILURE_REASON_STATUSES
+
+
+def _is_valid_int_limit_value(value: Any) -> TypeGuard[int]:
+    """Whether a settings_json value is a usable integer limit (never a bool)."""
+    return not isinstance(value, bool) and isinstance(value, int)
 
 
 def _input_hash(payload: dict[str, Any]) -> str:
@@ -425,16 +452,361 @@ class _GuardrailInterception:
     summary_json: dict[str, int] | None
 
 
-async def _intercept_guardrails(
+@dataclass
+class _InterceptionRequest:
+    """Grouped inputs for the ingestion-edge guardrail interception pass."""
+
+    org_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    run_id: uuid.UUID
+    payload: dict[str, Any]
+    is_replay: bool | None
+    snapshot_id: uuid.UUID
+    guardrails_kill_switch: bool
+
+
+def _has_guardrail_work(
+    guardrail_rows: list[Any],
+    pinned_defs: list[Any],
+    skipped_guardrails: list[Any],
+    guardrail_blocked: bool,
+) -> bool:
+    """Whether any bound guardrail row, pinned def, skip, or block needs evaluation."""
+    return bool(guardrail_rows or pinned_defs or skipped_guardrails or guardrail_blocked)
+
+
+def _has_pinned_guardrail_set(
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+) -> bool:
+    """A snapshot carries a pinned set when pins exist OR a fingerprint was saved.
+
+    A saved fingerprint marks a PINNED snapshot even when its stored pin list is
+    empty (a zeroed set is a tamper, not a legacy no-pin snapshot — FAR-309 PR B).
+    """
+    return bool(snap_pins or saved_fingerprint is not None)
+
+
+def _pin_fingerprint_mismatch(saved_fingerprint: str | None, recomputed: str | None) -> bool:
+    """A saved fingerprint that disagrees with the recomputed pins is a tamper."""
+    return saved_fingerprint is not None and recomputed != saved_fingerprint
+
+
+def _is_valid_pin_entry(entry: Any) -> bool:
+    """A pin entry must be a dict carrying a non-empty ``name``."""
+    return isinstance(entry, dict) and bool(entry.get("name"))
+
+
+async def _load_snapshot_guardrail_pins(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Read a snapshot's pinned guardrail set + fingerprint (fail-open).
+
+    Column/table absent on an unmigrated DB during bluegreen (or a backend that
+    cannot resolve the column) → ``(None, None)`` so the replay falls back to
+    the live rows (pre-pinning behaviour).
+    """
+    try:
+        snap_pin_row = (
+            await session.execute(
+                select(
+                    PipelineSnapshot.guardrail_pins_json,
+                    PipelineSnapshot.guardrail_pins_fingerprint,
+                ).where(PipelineSnapshot.id == snapshot_id)
+            )
+        ).one_or_none()
+        if snap_pin_row is not None:
+            return snap_pin_row[0], snap_pin_row[1]
+    except SQLAlchemyError:
+        _log.warning("guardrails.pins_read_unavailable", extra={"org_id": str(org_id)})
+    return None, None
+
+
+async def _rebuild_pinned_guardrail_defs(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    guardrail_rows: list[Any],
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+) -> tuple[list[Any], list[Any], bool, str]:
+    """Re-verify the pinned fingerprint and rebuild engine defs from the pins.
+
+    A fingerprint mismatch fails CLOSED (blocked=True); soft-deleted or
+    unreadable pins become GuardrailSkips (never a run failure). Returns
+    ``(pinned_defs, skipped_guardrails, blocked, block_message)``.
+    """
+    from modulo.core.guardrails import (
+        GuardrailSkip,
+        fingerprint_guardrail_pins,
+        notify_guardrail_event,
+        to_engine_definition_from_pin,
+    )
+
+    pinned_defs: list[Any] = []
+    skipped_guardrails: list[GuardrailSkip] = []
+    if not _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
+        return pinned_defs, skipped_guardrails, False, ""
+
+    recomputed_fingerprint = fingerprint_guardrail_pins(snap_pins)
+    if _pin_fingerprint_mismatch(saved_fingerprint, recomputed_fingerprint):
+        block_message = "guardrail mechanism error: snapshot guardrail pin fingerprint mismatch"
+        _log.error(
+            "guardrails.pin_fingerprint_mismatch",
+            extra={"org_id": str(org_id), "snapshot_id": str(snapshot_id)},
+        )
+        await notify_guardrail_event(
+            org_id,
+            "guardrail_enforcement_gap",
+            {
+                "guardrail": "<snapshot-pins>",
+                "reason": "pin_fingerprint_mismatch",
+                "detail": "snapshot guardrail pin fingerprint mismatch at run start",
+                "snapshot_id": str(snapshot_id),
+                "run_id": str(run_id),
+            },
+            run_id=run_id,
+        )
+        return pinned_defs, skipped_guardrails, True, block_message
+
+    if not snap_pins:
+        return pinned_defs, skipped_guardrails, False, ""
+
+    live_by_name = {row.name: row for row in guardrail_rows}
+    for entry in snap_pins:
+        if not _is_valid_pin_entry(entry):
+            continue
+        name = str(entry["name"])
+        if name not in live_by_name:
+            skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted"))
+            continue
+        try:
+            pinned_defs.append(to_engine_definition_from_pin(entry))
+        except Exception:
+            _log.exception("guardrails.pin_rebuild_error", extra={"guardrail": name})
+            skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable"))
+    return pinned_defs, skipped_guardrails, False, ""
+
+
+def _select_guardrail_definitions(
+    guardrail_rows: list[Any],
+    pinned_defs: list[Any],
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+) -> list[Any]:
+    """Item 10 invariant: pinned defs when the snapshot is pinned, else live rows.
+
+    A snapshot with a NON-EMPTY pinned set evaluates exactly that set, even when
+    EVERY pin fails to rebuild. Only a snapshot with NO pins (pre-migration /
+    read failure) falls back to the live rows.
+    """
+    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
+        return pinned_defs
+    from modulo.core.guardrails import to_engine_definition
+
+    return [to_engine_definition(row) for row in guardrail_rows]
+
+
+def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
+    """Item 9 — kill-switch: downgrade EVERY bound guardrail to observe."""
+    from modulo.core.guardrails import GuardrailAction
+
+    downgraded = []
+    for d in guardrail_defs:
+        cfg = dict(d.config)
+        cfg["action"] = GuardrailAction.OBSERVE.value
+        downgraded.append(d.model_copy(update={"config": cfg}))
+    return downgraded
+
+
+async def _run_guardrail_interception_pass(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    guardrail_defs: list[Any],
+    payload: dict[str, Any],
+    is_replay: bool | None,
+    skipped_guardrails: list[Any],
+    any_guarding: bool,
+) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
+    """Execute the interception pass and return every mutated run state field.
+
+    Fail-closed for block/redact guardrails (any_guarding); observe/warn-only
+    guardrails log-and-continue. Emits the interception latency metric. Returns
+    ``(payload, results, redactions, blocked, block_message, skipped,
+    blocking_eval_name)`` in assignment order.
+    """
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails import run_interception_pass_async
+
+    start_wall = time.perf_counter()
+    try:
+        outcome = await run_interception_pass_async(
+            EvalEngine(),
+            guardrail_defs,
+            payload,
+            detection_only=bool(is_replay),
+            skipped=skipped_guardrails,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("guardrails.interception_error")
+        if any_guarding:
+            payload_out: dict[str, Any] = payload
+            results: list[Any] = []
+            redactions: list[Any] = []
+            blocked = True
+            block_message = "guardrail mechanism error at ingestion edge"
+        else:
+            payload_out = payload
+            results = []
+            redactions = []
+            blocked = False
+            block_message = ""
+        latency_ms = (time.perf_counter() - start_wall) * 1000
+        _log.info(
+            "guardrails.interception_latency_ms",
+            extra={
+                "org_id": str(org_id),
+                "guardrail_count": len(guardrail_defs),
+                "latency_ms": round(latency_ms, 3),
+            },
+        )
+        return payload_out, results, redactions, blocked, block_message, skipped_guardrails, ""
+    latency_ms = (time.perf_counter() - start_wall) * 1000
+    _log.info(
+        "guardrails.interception_latency_ms",
+        extra={
+            "org_id": str(org_id),
+            "guardrail_count": len(guardrail_defs),
+            "latency_ms": round(latency_ms, 3),
+        },
+    )
+    return (
+        outcome.payload,
+        outcome.results,
+        outcome.redactions,
+        outcome.blocked,
+        outcome.block_message,
+        outcome.skipped,
+        outcome.blocking_eval_name,
+    )
+
+
+async def _enforce_guardrail_conformance(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
-    pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
-    payload: dict[str, Any],
-    is_replay: bool | None,
-    snapshot_id: uuid.UUID,
-    guardrails_kill_switch: bool,
+    guardrail_defs: list[Any],
+) -> tuple[bool, str]:
+    """Conformance enforcement (FAR-223 item 7 "Plus").
+
+    A block-action guardrail carrying ``required_capabilities`` that the org
+    cannot satisfy blocks (fail closed — absent AND unknown) and fires a paging
+    Notification via the alert path. Returns ``(blocked, block_message)``.
+    """
+    from modulo.core.guardrails import non_conformant_blocking_guardrails, notify_guardrail_event
+
+    conformance_registered = await _load_registered_guardrail_capabilities(session, org_id, guardrail_defs)
+    for eval_def, derivation in non_conformant_blocking_guardrails(guardrail_defs, conformance_registered):
+        _log.warning(
+            "guardrails.conformance_block",
+            extra={
+                "org_id": str(org_id),
+                "guardrail": eval_def.name,
+                "state": derivation.state,
+            },
+        )
+        block_message = (
+            f"guardrail {eval_def.name!r} non-conformant: required capabilities unavailable "
+            f"({', '.join(derivation.missing + derivation.unreadable) or 'unknown'})"
+        )
+        await notify_guardrail_event(
+            org_id,
+            "guardrail_enforcement_gap",
+            {
+                "guardrail": eval_def.name,
+                "reason": "non_conformant",
+                "state": derivation.state,
+                "run_id": str(run_id),
+            },
+            run_id=run_id,
+        )
+        return True, block_message
+    return False, ""
+
+
+async def _audit_and_alert_skipped_guardrails(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    skipped_guardrails: list[Any],
+) -> None:
+    """Item 10/11 — audit + alert skipped pinned guardrails (best-effort)."""
+    from modulo.core.guardrails import (
+        GUARDRAIL_SKIP_EXPECTED_REASONS,
+        alert_unexpected_guardrail_skip,
+        audit_guardrail_skip,
+    )
+
+    for skip in skipped_guardrails:
+        await audit_guardrail_skip(session, org_id, run_id, skip)
+        if skip.reason not in GUARDRAIL_SKIP_EXPECTED_REASONS:
+            await alert_unexpected_guardrail_skip(org_id, run_id, skip)
+
+
+async def _derive_guardrail_summary(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    guardrail_defs: list[Any],
+    guardrail_results: list[Any],
+    guardrail_redactions: list[Any],
+    skipped_guardrails: list[Any],
+    guardrail_observed_by_eval: dict[uuid.UUID, bool],
+) -> dict[str, int] | None:
+    """Item 11 — guardrail_summary telemetry snapshot + fired-signature log.
+
+    TELEMETRY: best-effort fail-open — a summary-derivation failure must never
+    break run creation; it degrades to no summary + a log.
+    """
+    from modulo.core.guardrails import (
+        build_guardrail_summary,
+        log_guardrail_fired_signatures,
+    )
+
+    try:
+        summary_json = build_guardrail_summary(
+            bound=len(guardrail_defs) + len(skipped_guardrails),
+            definitions=guardrail_defs,
+            results=guardrail_results,
+            redactions=guardrail_redactions,
+            skipped=skipped_guardrails,
+            observed_by_eval=guardrail_observed_by_eval,
+        ).to_dict()
+        log_guardrail_fired_signatures(
+            org_id=org_id,
+            run_id=run_id,
+            definitions=guardrail_defs,
+            results=guardrail_results,
+        )
+        return summary_json
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("guardrails.summary_derive_failed", extra={"run_id": str(run_id)})
+        return None
+
+
+async def _intercept_guardrails(
+    session: AsyncSession,
+    request: _InterceptionRequest,
 ) -> _GuardrailInterception:
     """Guardrail interception (FAR-208 item 2) — the ingestion edge.
 
@@ -447,22 +819,17 @@ async def _intercept_guardrails(
     redact action (item 7: warn-on-error applies to warn-action only);
     observe/warn-only guardrails log-and-continue on mechanism error.
     """
-    from modulo.core.eval_engine import EvalEngine
+    org_id = request.org_id
+    pipeline_id = request.pipeline_id
+    run_id = request.run_id
+    payload = request.payload
+    is_replay = request.is_replay
+    snapshot_id = request.snapshot_id
+    guardrails_kill_switch = request.guardrails_kill_switch
+
     from modulo.core.guardrails import (
-        GUARDRAIL_SKIP_EXPECTED_REASONS,
         GuardrailAction,
-        GuardrailSkip,
-        alert_unexpected_guardrail_skip,
-        audit_guardrail_skip,
-        build_guardrail_summary,
-        fingerprint_guardrail_pins,
         guardrail_cap_violation,
-        log_guardrail_fired_signatures,
-        non_conformant_blocking_guardrails,
-        notify_guardrail_event,
-        run_interception_pass_async,
-        to_engine_definition,
-        to_engine_definition_from_pin,
     )
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
 
@@ -485,93 +852,27 @@ async def _intercept_guardrails(
     # enforcement-gap alert. A snapshot with no pins (pre-migration) falls back
     # to the live rows.
     pinned_defs: list[Any] = []
-    skipped_guardrails: list[GuardrailSkip] = []
+    skipped_guardrails: list[Any] = []
     snap_pins: list[dict[str, Any]] | None = None
     saved_fingerprint: str | None = None
     if is_replay and snapshot_id is not None:
-        try:
-            snap_pin_row = (
-                await session.execute(
-                    select(
-                        PipelineSnapshot.guardrail_pins_json,
-                        PipelineSnapshot.guardrail_pins_fingerprint,
-                    ).where(PipelineSnapshot.id == snapshot_id)
-                )
-            ).one_or_none()
-            if snap_pin_row is not None:
-                snap_pins = snap_pin_row[0]
-                saved_fingerprint = snap_pin_row[1]
-        except SQLAlchemyError:
-            # Column/table absent on an unmigrated DB during bluegreen (or a
-            # backend that cannot resolve the column) — the pinned set is
-            # unavailable, so the replay falls back to the live rows
-            # (pre-pinning behaviour).
-            _log.warning("guardrails.pins_read_unavailable", extra={"org_id": str(org_id)})
-        # Run-start snapshot-integrity re-verify (FAR-309 PR B): the
-        # fingerprint saved at snapshot creation must match the CURRENT
-        # pins. A mismatch means the snapshot's pin set was tampered with
-        # (or drifted) since creation — fail CLOSED as a mechanism error
-        # (a terminal eval_failed run): the tampered pins are NEVER
-        # evaluated and the live rows are NEVER silently used. A legacy
-        # snapshot WITHOUT a saved fingerprint is still trusted (the
-        # fingerprint is verified only when present). The check also runs
-        # when the stored pins are an EMPTY list but a fingerprint exists —
-        # zeroing the pin set is itself a tamper and must not fall back to
-        # the live rows.
-        if snap_pins or saved_fingerprint is not None:
-            recomputed_fingerprint = fingerprint_guardrail_pins(snap_pins)
-            if saved_fingerprint is not None and recomputed_fingerprint != saved_fingerprint:
-                guardrail_blocked = True
-                guardrail_block_message = "guardrail mechanism error: snapshot guardrail pin fingerprint mismatch"
-                _log.error(
-                    "guardrails.pin_fingerprint_mismatch",
-                    extra={"org_id": str(org_id), "snapshot_id": str(snapshot_id)},
-                )
-                await notify_guardrail_event(
-                    org_id,
-                    "guardrail_enforcement_gap",
-                    {
-                        "guardrail": "<snapshot-pins>",
-                        "reason": "pin_fingerprint_mismatch",
-                        "detail": "snapshot guardrail pin fingerprint mismatch at run start",
-                        "snapshot_id": str(snapshot_id),
-                        "run_id": str(run_id),
-                    },
-                    run_id=run_id,
-                )
-            elif snap_pins:
-                live_by_name = {row.name: row for row in guardrail_rows}
-                for entry in snap_pins:
-                    if not isinstance(entry, dict) or not entry.get("name"):
-                        continue
-                    name = str(entry["name"])
-                    if name not in live_by_name:
-                        skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted"))
-                        continue
-                    try:
-                        pinned_defs.append(to_engine_definition_from_pin(entry))
-                    except Exception:
-                        _log.exception("guardrails.pin_rebuild_error", extra={"guardrail": name})
-                        skipped_guardrails.append(
-                            GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable")
-                        )
-
-    if guardrail_rows or pinned_defs or skipped_guardrails or guardrail_blocked:
-        # Item 10 invariant — a snapshot with a NON-EMPTY pinned set evaluates
-        # exactly that set, even when EVERY pin fails to rebuild (all pinned
-        # rows soft-deleted → ``pinned_defs`` empty). It must never fall back
-        # to the live rows: the skip audit + enforcement-gap alert is then the
-        # sole signal that the pinned control is not enforcing. Only a
-        # snapshot with NO pins (pre-migration / read failure) falls back.
-        # FAR-309 PR B: a snapshot carrying a SAVED fingerprint is a pinned
-        # snapshot even when its stored pin list is empty (a zeroed set is a
-        # tamper, not a legacy no-pin snapshot) — it never falls back to live
-        # rows either.
-        guardrail_defs = (
-            pinned_defs
-            if (snap_pins or saved_fingerprint is not None)
-            else [to_engine_definition(row) for row in guardrail_rows]
+        snap_pins, saved_fingerprint = await _load_snapshot_guardrail_pins(session, org_id, snapshot_id)
+        (
+            pinned_defs,
+            skipped_guardrails,
+            guardrail_blocked,
+            guardrail_block_message,
+        ) = await _rebuild_pinned_guardrail_defs(
+            org_id=org_id,
+            run_id=run_id,
+            snapshot_id=snapshot_id,
+            guardrail_rows=guardrail_rows,
+            snap_pins=snap_pins,
+            saved_fingerprint=saved_fingerprint,
         )
+
+    if _has_guardrail_work(guardrail_rows, pinned_defs, skipped_guardrails, guardrail_blocked):
+        guardrail_defs = _select_guardrail_definitions(guardrail_rows, pinned_defs, snap_pins, saved_fingerprint)
 
         # Item 7 — cap enforcement (fail closed): a single node binding more
         # than the per-node guardrail cap is a mechanism error. Graph-save
@@ -586,12 +887,7 @@ async def _intercept_guardrails(
             # (shadow-only — compute + log, never block, never redact). Never a
             # full disable: observe mode still computes and logs.
             if guardrails_kill_switch:
-                downgraded = []
-                for d in guardrail_defs:
-                    cfg = dict(d.config)
-                    cfg["action"] = GuardrailAction.OBSERVE.value
-                    downgraded.append(d.model_copy(update={"config": cfg}))
-                guardrail_defs = downgraded
+                guardrail_defs = _downgrade_guardrails_to_observe(guardrail_defs)
                 _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
 
             guardrail_observed_by_eval = {
@@ -605,79 +901,36 @@ async def _intercept_guardrails(
             # guardrail carrying required_capabilities that the org cannot
             # satisfy blocks (fail closed — absent AND unknown) and fires a
             # paging Notification via the alert path. The derivation helper is
-            # shipped; this is its dispatch-time wiring.
-            conformance_registered = await _load_registered_guardrail_capabilities(session, org_id, guardrail_defs)
-            for eval_def, derivation in non_conformant_blocking_guardrails(guardrail_defs, conformance_registered):
-                _log.warning(
-                    "guardrails.conformance_block",
-                    extra={
-                        "org_id": str(org_id),
-                        "guardrail": eval_def.name,
-                        "state": derivation.state,
-                    },
-                )
+            # shipped; this is its dispatch-time wiring. Only applied when a
+            # conformance block actually fires — a clean conformance result must
+            # never clear a block already set by the pin-fingerprint check.
+            conformance_blocked, conformance_message = await _enforce_guardrail_conformance(
+                session,
+                org_id=org_id,
+                run_id=run_id,
+                guardrail_defs=guardrail_defs,
+            )
+            if conformance_blocked:
                 guardrail_blocked = True
-                guardrail_block_message = (
-                    f"guardrail {eval_def.name!r} non-conformant: required capabilities unavailable "
-                    f"({', '.join(derivation.missing + derivation.unreadable) or 'unknown'})"
-                )
-                await notify_guardrail_event(
-                    org_id,
-                    "guardrail_enforcement_gap",
-                    {
-                        "guardrail": eval_def.name,
-                        "reason": "non_conformant",
-                        "state": derivation.state,
-                        "run_id": str(run_id),
-                    },
-                    run_id=run_id,
-                )
-                break
+                guardrail_block_message = conformance_message
 
             if not guardrail_blocked:
-                start_wall = time.perf_counter()
-                try:
-                    outcome = await run_interception_pass_async(
-                        EvalEngine(),
-                        guardrail_defs,
-                        payload,
-                        detection_only=bool(is_replay),
-                        skipped=skipped_guardrails,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # Fail-closed for block/redact guardrails; log-and-continue
-                    # for observe/warn-only guardrails. NEVER a raw payload in
-                    # the log.
-                    _log.exception("guardrails.interception_error")
-                    if any_guarding:
-                        guardrail_blocked = True
-                        guardrail_block_message = "guardrail mechanism error at ingestion edge"
-                    else:
-                        guardrail_blocked = False
-                else:
-                    payload = outcome.payload
-                    guardrail_results = outcome.results
-                    guardrail_redactions = outcome.redactions
-                    guardrail_blocked = outcome.blocked
-                    guardrail_block_message = outcome.block_message
-                    skipped_guardrails = outcome.skipped
-                    # FAR-213: the blocking eval name feeds the blocked_partial
-                    # summary written at terminalization below.
-                    guardrail_blocking_eval_name = outcome.blocking_eval_name
-                # Item 7 — guardrail latency metric: the interception runs
-                # BEFORE the first node starts, so its wall-clock is accounted
-                # separately (a structured log line) and never silently eats
-                # the first node's timeout budget.
-                latency_ms = (time.perf_counter() - start_wall) * 1000
-                _log.info(
-                    "guardrails.interception_latency_ms",
-                    extra={
-                        "org_id": str(org_id),
-                        "guardrail_count": len(guardrail_defs),
-                        "latency_ms": round(latency_ms, 3),
-                    },
+                (
+                    payload,
+                    guardrail_results,
+                    guardrail_redactions,
+                    guardrail_blocked,
+                    guardrail_block_message,
+                    skipped_guardrails,
+                    guardrail_blocking_eval_name,
+                ) = await _run_guardrail_interception_pass(
+                    org_id=org_id,
+                    run_id=run_id,
+                    guardrail_defs=guardrail_defs,
+                    payload=payload,
+                    is_replay=is_replay,
+                    skipped_guardrails=skipped_guardrails,
+                    any_guarding=any_guarding,
                 )
             # NOTE (item 10 invariant): a conformance block (``guardrail_blocked``
             # True via the block above) must NOT clear the accumulated pin-skips
@@ -691,10 +944,12 @@ async def _intercept_guardrails(
         # Item 11 — a skip NOT explained by soft-deleted pin state is
         # UNEXPECTED and pages an additional ``guardrail_unexpected_skip``
         # alert (Notification Log + Error Forwarders).
-        for skip in skipped_guardrails:
-            await audit_guardrail_skip(session, org_id, run_id, skip)
-            if skip.reason not in GUARDRAIL_SKIP_EXPECTED_REASONS:
-                await alert_unexpected_guardrail_skip(org_id, run_id, skip)
+        await _audit_and_alert_skipped_guardrails(
+            session,
+            org_id=org_id,
+            run_id=run_id,
+            skipped_guardrails=skipped_guardrails,
+        )
 
         # Item 11 — guardrail_summary telemetry snapshot + per-pattern
         # fired-signature regression log. Computed BEFORE the run row exists so
@@ -705,26 +960,15 @@ async def _intercept_guardrails(
         # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
         # summary-derivation failure must never break run creation (the
         # enforcement already happened); it degrades to no summary + a log.
-        summary_json: dict[str, int] | None = None
-        try:
-            summary_json = build_guardrail_summary(
-                bound=len(guardrail_defs) + len(skipped_guardrails),
-                definitions=guardrail_defs,
-                results=guardrail_results,
-                redactions=guardrail_redactions,
-                skipped=skipped_guardrails,
-                observed_by_eval=guardrail_observed_by_eval,
-            ).to_dict()
-            log_guardrail_fired_signatures(
-                org_id=org_id,
-                run_id=run_id,
-                definitions=guardrail_defs,
-                results=guardrail_results,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("guardrails.summary_derive_failed", extra={"run_id": str(run_id)})
+        summary_json = await _derive_guardrail_summary(
+            org_id=org_id,
+            run_id=run_id,
+            guardrail_defs=guardrail_defs,
+            guardrail_results=guardrail_results,
+            guardrail_redactions=guardrail_redactions,
+            skipped_guardrails=skipped_guardrails,
+            guardrail_observed_by_eval=guardrail_observed_by_eval,
+        )
     else:
         summary_json = None
 
@@ -796,13 +1040,15 @@ async def create_run(
     run_id = uuid.uuid4()
     interception = await _intercept_guardrails(
         session,
-        org_id=org_id,
-        pipeline_id=pipeline_id,
-        run_id=run_id,
-        payload=stored_payload,
-        is_replay=is_replay,
-        snapshot_id=snapshot_id,
-        guardrails_kill_switch=guardrails_kill_switch,
+        _InterceptionRequest(
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+            payload=stored_payload,
+            is_replay=is_replay,
+            snapshot_id=snapshot_id,
+            guardrails_kill_switch=guardrails_kill_switch,
+        ),
     )
     stored_payload = interception.payload
     guardrail_results = interception.results
@@ -1151,6 +1397,30 @@ def _json_bind(value: Any) -> str | bytes | None:
     return json.dumps(value)
 
 
+@dataclass
+class _RunStatusUpdate:
+    """Grouped optional field updates for a run-status write.
+
+    Carried by :func:`update_run_status` into both the ORM path and the fenced
+    variant so the status-write machinery never threads a dozen scalar params.
+    ``cost_breakdown`` defaults to the ``_COST_BREAKDOWN_SENTINEL`` ("leave
+    alone"); passing ``None`` writes an explicit NULL.
+    """
+
+    error_code: str | None = None
+    error_detail: str | None = None
+    total_tokens: int | None = None
+    total_cost_usd: Decimal | None = None
+    cost_breakdown: Any = _COST_BREAKDOWN_SENTINEL
+    node_token_usage: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    node_telemetry_json: dict[str, Any] | None = None
+    claimed_by: str | None = None
+    clear_error_code: bool = False
+    claim_token: str | None = None
+    from_status: str | None = None
+
+
 async def _write_unclassified_classification(session: AsyncSession, run: Run) -> None:
     """Fail-closed marker write for a terminal run the classifier could not process.
 
@@ -1225,24 +1495,22 @@ async def update_run_status(
 ) -> Run | None:
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
-    if claim_token is not None:
-        return await _update_run_status_fenced(
-            session,
-            run_id,
-            status,
-            error_code=error_code,
-            error_detail=error_detail,
-            total_tokens=total_tokens,
-            total_cost_usd=total_cost_usd,
-            cost_breakdown=cost_breakdown,
-            node_token_usage=node_token_usage,
-            outputs_json=outputs_json,
-            node_telemetry_json=node_telemetry_json,
-            claimed_by=claimed_by,
-            clear_error_code=clear_error_code,
-            claim_token=claim_token,
-            from_status=from_status,
-        )
+    update = _RunStatusUpdate(
+        error_code=error_code,
+        error_detail=error_detail,
+        total_tokens=total_tokens,
+        total_cost_usd=total_cost_usd,
+        cost_breakdown=cost_breakdown,
+        node_token_usage=node_token_usage,
+        outputs_json=outputs_json,
+        node_telemetry_json=node_telemetry_json,
+        claimed_by=claimed_by,
+        clear_error_code=clear_error_code,
+        claim_token=claim_token,
+        from_status=from_status,
+    )
+    if update.claim_token is not None:
+        return await _update_run_status_fenced(session, run_id, status, update=update)
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
     if run is None:
@@ -1250,39 +1518,39 @@ async def update_run_status(
     run.status = status
     if status == "running" and run.started_at is None:
         run.started_at = datetime.now(UTC)
-    if claimed_by is not None:
-        run.claimed_by = claimed_by
-    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled", "budget_exceeded"):
+    if update.claimed_by is not None:
+        run.claimed_by = update.claimed_by
+    if _is_terminal_status(status):
         run.completed_at = datetime.now(UTC)
-    if clear_error_code:
+    if update.clear_error_code:
         # Explicitly clear a prior capacity marker (the error_code=... writes
         # below are conditional on non-None, so None alone cannot clear it).
         run.error_code = None
         run.error_detail = None
-    if error_code is not None:
-        run.error_code = error_code
-    if error_detail is not None:
-        run.error_detail = error_detail
-    if total_tokens is not None:
-        run.total_tokens = total_tokens
-    if total_cost_usd is not None:
-        run.total_cost_usd = total_cost_usd
-    if cost_breakdown is not _COST_BREAKDOWN_SENTINEL:
+    if update.error_code is not None:
+        run.error_code = update.error_code
+    if update.error_detail is not None:
+        run.error_detail = update.error_detail
+    if update.total_tokens is not None:
+        run.total_tokens = update.total_tokens
+    if update.total_cost_usd is not None:
+        run.total_cost_usd = update.total_cost_usd
+    if update.cost_breakdown is not _COST_BREAKDOWN_SENTINEL:
         # The eval_failed direct write PRESERVES the terminal field set: it
         # sets status + completed_at and leaves the cost fields untouched (the
         # eval pipeline never passes the cost kwargs). Passing the sentinel
         # (the default) means "leave cost_breakdown alone"; passing None writes
         # an explicit NULL (the pre-component-read terminal transition).
-        run.cost_breakdown = cost_breakdown
-    if node_token_usage is not None:
-        run.node_token_usage = node_token_usage
-    if outputs_json is not None:
-        run.outputs_json = outputs_json
-    if node_telemetry_json is not None:
+        run.cost_breakdown = update.cost_breakdown
+    if update.node_token_usage is not None:
+        run.node_token_usage = update.node_token_usage
+    if update.outputs_json is not None:
+        run.outputs_json = update.outputs_json
+    if update.node_telemetry_json is not None:
         # Split-out per-node telemetry (Agent Return Contract, FAR-125) —
         # persisted on the SAME ORM object and flushed with outputs_json so the
         # pair lands in one atomic write, never a torn half-state.
-        run.node_telemetry_json = node_telemetry_json
+        run.node_telemetry_json = update.node_telemetry_json
     await session.flush()
     if run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, run)
@@ -1327,18 +1595,7 @@ async def _update_run_status_fenced(
     run_id: uuid.UUID,
     status: str,
     *,
-    error_code: str | None,
-    error_detail: str | None,
-    total_tokens: int | None,
-    total_cost_usd: Decimal | None,
-    cost_breakdown: Any,
-    node_token_usage: dict[str, Any] | None,
-    outputs_json: dict[str, Any] | None,
-    node_telemetry_json: dict[str, Any] | None,
-    claimed_by: str | None,
-    clear_error_code: bool,
-    claim_token: str,
-    from_status: str | None,
+    update: _RunStatusUpdate,
 ) -> Run | None:
     """Fenced variant of :func:`update_run_status` (dist/runtime-core A1).
 
@@ -1357,24 +1614,26 @@ async def _update_run_status_fenced(
         {
             "status": status,
             "rid": str(run_id),
-            "tok": claim_token,
-            "from_status": from_status,
-            "error_code": error_code,
-            "error_detail": error_detail,
-            "total_tokens": total_tokens,
-            "total_cost_usd": total_cost_usd,
-            "cost_breakdown_sentinel": cost_breakdown is _COST_BREAKDOWN_SENTINEL,
+            "tok": update.claim_token,
+            "from_status": update.from_status,
+            "error_code": update.error_code,
+            "error_detail": update.error_detail,
+            "total_tokens": update.total_tokens,
+            "total_cost_usd": update.total_cost_usd,
+            "cost_breakdown_sentinel": update.cost_breakdown is _COST_BREAKDOWN_SENTINEL,
             # When the sentinel is used the ELSE branch is never taken, but the
             # parameter still must be bindable (NULL json) — never the sentinel
             # object itself. JSON-typed params are serialized via ``_json_bind``:
             # asyncpg's json codec rejects raw dict/list (DataError), so the
             # fenced terminal write must encode them exactly like the ORM path.
-            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(cost_breakdown),
-            "node_token_usage": _json_bind(node_token_usage),
-            "outputs_json": _json_bind(outputs_json),
-            "node_telemetry_json": _json_bind(node_telemetry_json),
-            "claimed_by": claimed_by,
-            "clear_error_code": clear_error_code,
+            "cost_breakdown": (
+                None if update.cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(update.cost_breakdown)
+            ),
+            "node_token_usage": _json_bind(update.node_token_usage),
+            "outputs_json": _json_bind(update.outputs_json),
+            "node_telemetry_json": _json_bind(update.node_telemetry_json),
+            "claimed_by": update.claimed_by,
+            "clear_error_code": update.clear_error_code,
         },
     )
     if result.fetchone() is None:
@@ -1709,7 +1968,7 @@ async def _read_org_int_limit(
     raw = settings.get(key)
     if raw is None:
         return None
-    if isinstance(raw, bool) or not isinstance(raw, int):
+    if not _is_valid_int_limit_value(raw):
         _log.warning(
             f"{log_prefix}.invalid_type",
             extra={"org_id": str(org_id), "value": repr(raw)},
@@ -1890,7 +2149,7 @@ async def _get_run_stats_python(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif r.status in ("failed", "cancelled", "eval_failed", "expired", "stalled"):
+        elif _is_failure_bucket_status(r.status):
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
@@ -1902,7 +2161,7 @@ async def _get_run_stats_python(
 
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if r.status in ("failed", "eval_failed", "stalled") and r.error_code:
+        if _is_failure_reason_status(r.status) and r.error_code:
             failure_reasons[r.error_code] += 1
 
     return {
@@ -1949,9 +2208,7 @@ async def _get_run_stats_postgres(
                     day,
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
-                    func.sum(
-                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired", "stalled")), 1), else_=0)
-                    ).label("failed"),
+                    func.sum(case((Run.status.in_(_FAILURE_BUCKET_STATUSES), 1), else_=0)).label("failed"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
                 .select_from(Run)
@@ -2000,7 +2257,7 @@ async def _get_run_stats_postgres(
                 .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(
                     *base_where,
-                    Run.status.in_(("failed", "eval_failed", "stalled")),
+                    Run.status.in_(_FAILURE_REASON_STATUSES),
                     Run.error_code.is_not(None),
                     Run.error_code != "",
                 )
