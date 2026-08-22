@@ -4,8 +4,9 @@ import copy
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -135,9 +136,57 @@ async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) ->
     await set_rls_user_context(session, principal.account_id, principal.org_role)
 
 
+@dataclass(frozen=True)
+class _PrimitiveListQuery:
+    """Grouped query parameters for the library browse endpoint."""
+
+    page: int
+    page_size: int
+    cursor: str | None
+    primitive_type: str | None
+    primitive_types: str | None
+    search: str | None
+    source: str | None
+    include_in_dev: bool
+
+
+@dataclass(frozen=True)
+class _BundleResolution:
+    """Collected state produced by resolving an import bundle."""
+
+    pipeline_name: str
+    warnings: list[str]
+    resolved_schemas: list[dict[str, Any]]
+    resolved_connectors: list[dict[str, Any]]
+    resolved_model_backends: list[dict[str, Any]]
+    name_conflicts: list[dict[str, str]]
+    available_teams: list[dict[str, Any]]
+
+
+def _require_organisation_id(principal: TenantPrincipal) -> uuid.UUID:
+    """Return the principal's organisation id or reject the request."""
+    if principal.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_MSG_ORGANISATION_ID_REQUIRED,
+        )
+    return principal.organisation_id
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
+
+def _trust_tier_for(source: str, verified: bool | None) -> str | None:
+    """Compute the trust tier label from a primitive's provenance."""
+    if source == "modulo":
+        return "modulo"
+    if source == "registry" and verified is True:
+        return "green"
+    if source == "registry":
+        return "amber"
+    return None
 
 
 class LibraryPrimitiveResponse(BaseModel):
@@ -173,14 +222,7 @@ class LibraryPrimitiveResponse(BaseModel):
 
     @model_validator(mode="after")
     def _compute_trust_tier(self) -> Self:
-        if self.source == "modulo":
-            self.trust_tier = "modulo"
-        elif self.source == "registry" and self.verified is True:
-            self.trust_tier = "green"
-        elif self.source == "registry":
-            self.trust_tier = "amber"
-        else:
-            self.trust_tier = None
+        self.trust_tier = _trust_tier_for(self.source, self.verified)
         return self
 
 
@@ -340,9 +382,7 @@ async def list_library_primitives_endpoint(
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "library.search.in_dev")
-    result = await _fetch_primitives(
-        session,
-        principal,
+    query = _PrimitiveListQuery(
         page=page,
         page_size=page_size,
         cursor=cursor,
@@ -352,20 +392,34 @@ async def list_library_primitives_endpoint(
         source=source,
         include_in_dev=include_in_dev,
     )
+    result = await _fetch_primitives(session, principal, query)
+    items = _validate_primitive_items(result.items)
+    return _build_primitive_list_response(items, result)
+
+
+def _validate_primitive_items(items: list[LibraryPrimitive]) -> list[LibraryPrimitiveResponse]:
+    """Validate ORM primitives into response models, mapping failures to HTTP 500."""
     try:
-        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+        return [LibraryPrimitiveResponse.model_validate(p) for p in items]
     except Exception:
-        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
-        if result.items:
+        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(items))
+        if items:
             _log.error(
                 "first item type=%s id=%s",
-                type(result.items[0]).__name__,
-                getattr(result.items[0], "id", "?"),
+                type(items[0]).__name__,
+                getattr(items[0], "id", "?"),
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to parse library primitives. The schema may be out of sync with the database.",
         ) from None
+
+
+def _build_primitive_list_response(
+    items: list[LibraryPrimitiveResponse],
+    result: PageResult[LibraryPrimitive],
+) -> LibraryPrimitiveListResponse:
+    """Build the paged list response, mapping construction failures to HTTP 500."""
     try:
         return LibraryPrimitiveListResponse(
             items=items,
@@ -386,33 +440,25 @@ async def list_library_primitives_endpoint(
 async def _fetch_primitives(
     session: AsyncSession,
     principal: TenantPrincipal,
-    *,
-    page: int,
-    page_size: int,
-    cursor: str | None,
-    primitive_type: str | None,
-    primitive_types: str | None,
-    search: str | None,
-    source: str | None,
-    include_in_dev: bool,
+    query: _PrimitiveListQuery,
 ) -> PageResult[LibraryPrimitive]:
     """Query the library primitives list, translating DB failures to HTTP errors."""
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            include_community = source != "local"
+            include_community = query.source != "local"
             return await list_primitives(
                 session,
                 principal.organisation_id,
-                primitive_type=primitive_type,
-                primitive_types=_split_primitive_types(primitive_types),
-                search=search,
-                page=page,
-                page_size=page_size,
+                primitive_type=query.primitive_type,
+                primitive_types=_split_primitive_types(query.primitive_types),
+                search=query.search,
+                page=query.page,
+                page_size=query.page_size,
                 include_community=include_community,
-                source=source,
-                cursor=cursor,
-                excluded_tiers=[] if include_in_dev else None,
+                source=query.source,
+                cursor=query.cursor,
+                excluded_tiers=[] if query.include_in_dev else None,
             )
     except ProgrammingError:
         _log.exception("library.list_library_primitives_endpoint")
@@ -728,68 +774,8 @@ async def _analyse_bundle(
 ) -> ImportBundleResponse:
     """Shared analysis logic — validates a bundle and returns resolution state."""
     bundle = copy.deepcopy(bundle)  # avoid mutating caller's dict
-    warnings: list[str] = []
-    resolved_schemas: list[dict[str, Any]] = []
-    resolved_connectors: list[dict[str, Any]] = []
-    resolved_model_backends_list: list[dict[str, Any]] = []
-    name_conflicts: list[dict[str, str]] = []
-
     try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-
-            pipeline_info = bundle.get("pipeline", {})
-            pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
-            await _resolve_pipeline_name_conflict(
-                session,
-                principal,
-                pipeline_name,
-                name_conflicts,
-                warnings,
-            )
-
-            await _resolve_bundle_schemas(
-                session,
-                principal,
-                bundle,
-                resolved_schemas,
-                warnings,
-            )
-
-            connector_instance_map = await _resolve_bundle_connectors(
-                session,
-                principal,
-                bundle,
-                resolved_connectors,
-                warnings,
-            )
-
-            mb_id_by_name = await _resolve_bundle_model_backends(
-                session,
-                principal,
-                bundle,
-                resolved_model_backends_list,
-                warnings,
-            )
-
-            _warn_duplicate_agent_names(bundle, warnings)
-            await _resolve_existing_agent_conflicts(
-                session,
-                principal,
-                bundle,
-                name_conflicts,
-                warnings,
-            )
-            _bind_connector_instances_to_graph(pipeline_info, connector_instance_map)
-            _bind_model_backends_to_agents(bundle, mb_id_by_name)
-
-            teams_result = await session.execute(
-                select(Team).where(
-                    Team.organisation_id == principal.organisation_id,
-                    Team.deleted_at.is_(None),
-                )
-            )
-            teams = list(teams_result.scalars())
+        resolution = await _resolve_import_bundle(session, principal, bundle)
     except IntegrityError:
         _log.exception("library._analyse_bundle")
         raise _conflict_error() from None
@@ -806,18 +792,105 @@ async def _analyse_bundle(
             detail="Database connection failed. Please try again later.",
         ) from None
 
+    return ImportBundleResponse(
+        warnings=resolution.warnings,
+        pipeline_name=resolution.pipeline_name,
+        bundle_json=json.dumps(bundle, default=str),
+        resolved_schemas=resolution.resolved_schemas,
+        resolved_connectors=resolution.resolved_connectors,
+        resolved_model_backends=resolution.resolved_model_backends,
+        name_conflicts=resolution.name_conflicts,
+        available_teams=resolution.available_teams,
+    )
+
+
+async def _resolve_import_bundle(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+) -> _BundleResolution:
+    """Resolve every reference in the bundle inside one RLS-scoped transaction."""
+    warnings: list[str] = []
+    resolved_schemas: list[dict[str, Any]] = []
+    resolved_connectors: list[dict[str, Any]] = []
+    resolved_model_backends_list: list[dict[str, Any]] = []
+    name_conflicts: list[dict[str, str]] = []
+
+    async with session.begin():
+        await _set_rls_context(session, principal)
+
+        pipeline_info = bundle.get("pipeline", {})
+        pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
+        await _resolve_pipeline_name_conflict(
+            session,
+            principal,
+            pipeline_name,
+            name_conflicts,
+            warnings,
+        )
+
+        await _resolve_bundle_schemas(
+            session,
+            principal,
+            bundle,
+            resolved_schemas,
+            warnings,
+        )
+
+        connector_instance_map = await _resolve_bundle_connectors(
+            session,
+            principal,
+            bundle,
+            resolved_connectors,
+            warnings,
+        )
+
+        mb_id_by_name = await _resolve_bundle_model_backends(
+            session,
+            principal,
+            bundle,
+            resolved_model_backends_list,
+            warnings,
+        )
+
+        _warn_duplicate_agent_names(bundle, warnings)
+        await _resolve_existing_agent_conflicts(
+            session,
+            principal,
+            bundle,
+            name_conflicts,
+            warnings,
+        )
+        _bind_connector_instances_to_graph(pipeline_info, connector_instance_map)
+        _bind_model_backends_to_agents(bundle, mb_id_by_name)
+
+        teams = await _fetch_available_teams(session, principal)
+
     available_teams = [{"id": str(t.id), "name": t.name} for t in teams]
 
-    return ImportBundleResponse(
-        warnings=warnings,
+    return _BundleResolution(
         pipeline_name=pipeline_name,
-        bundle_json=json.dumps(bundle, default=str),
+        warnings=warnings,
         resolved_schemas=resolved_schemas,
         resolved_connectors=resolved_connectors,
         resolved_model_backends=resolved_model_backends_list,
         name_conflicts=name_conflicts,
         available_teams=available_teams,
     )
+
+
+async def _fetch_available_teams(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> list[Team]:
+    """Return the org's non-deleted teams for the import team picker."""
+    teams_result = await session.execute(
+        select(Team).where(
+            Team.organisation_id == principal.organisation_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    return list(teams_result.scalars())
 
 
 async def _resolve_pipeline_name_conflict(
@@ -965,17 +1038,8 @@ def _bind_model_backends_to_agents(
             agent["model_backend_id"] = mb_id_by_name[mb_name]
 
 
-@router.post("/import/upload-zip")
-@handle_db_errors("library.upload_zip_and_analyse_endpoint")
-async def upload_zip_and_analyse_endpoint(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
-) -> ImportBundleResponse:
-    """Upload a .modulo.zip file, extract bundle.json, and return analysis.
-
-    Replaces the client-side ZIP parsing for a reliable server-side extraction.
-    """
+async def _read_zip_upload(file: UploadFile) -> bytes:
+    """Validate and read an uploaded .zip file, enforcing the size limit."""
     name = file.filename or ""
     if not name.lower().endswith(".zip"):
         raise HTTPException(
@@ -993,6 +1057,21 @@ async def upload_zip_and_analyse_endpoint(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
         )
+    return zip_bytes
+
+
+@router.post("/import/upload-zip")
+@handle_db_errors("library.upload_zip_and_analyse_endpoint")
+async def upload_zip_and_analyse_endpoint(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> ImportBundleResponse:
+    """Upload a .modulo.zip file, extract bundle.json, and return analysis.
+
+    Replaces the client-side ZIP parsing for a reliable server-side extraction.
+    """
+    zip_bytes = await _read_zip_upload(file)
     try:
         bundle = extract_bundle_json_from_zip(zip_bytes)
     except (LookupError, json.JSONDecodeError) as e:
@@ -1269,6 +1348,23 @@ def _build_template_node_id_map(graph_nodes: list[dict[str, Any]]) -> dict[str, 
     return node_id_map
 
 
+def _node_label(
+    node: dict[str, Any],
+    agents: list[dict[str, Any]],
+    agent_index: int | None,
+) -> str:
+    """Compute the display label for a template node.
+
+    Manual-gate nodes always prefer their own label; otherwise an in-range
+    ``agent_index`` falls back to the referenced agent's name.
+    """
+    if node.get("node_type") == "manual":
+        return cast(str, node.get("label", "Manual Gate"))
+    if agent_index is not None and agent_index < len(agents):
+        return cast(str, node.get("label") or agents[agent_index].get("name", "Agent"))
+    return cast(str, node.get("label", "Node"))
+
+
 def _convert_template_nodes(
     graph_nodes: list[dict[str, Any]],
     agents: list[dict[str, Any]],
@@ -1283,21 +1379,17 @@ def _convert_template_nodes(
     pipeline_nodes: list[dict[str, Any]] = []
     for node in graph_nodes:
         tid = node.get("id", "")
+        agent_index = node.get("agent_index")
         pipeline_node: dict[str, Any] = {
             "id": node_id_map.get(tid, tid or str(uuid.uuid4())),
             "node_type": node.get("node_type", "agent"),
             "position": node.get("position", {"x": 0, "y": 0}),
+            "label": _node_label(node, agents, agent_index),
         }
-        agent_index = node.get("agent_index")
         if agent_index is not None and agent_index < len(agents):
             pipeline_node["template_agent"] = agents[agent_index]
-            pipeline_node["label"] = node.get("label") or agents[agent_index].get("name", "Agent")
-        else:
-            pipeline_node["label"] = node.get("label", "Node")
-
         if node.get("node_type") == "manual":
             pipeline_node["output_schema_id"] = node.get("output_schema_id")
-            pipeline_node["label"] = node.get("label", "Manual Gate")
 
         pipeline_nodes.append(pipeline_node)
     return pipeline_nodes
@@ -1327,6 +1419,49 @@ def _convert_template_edges(
             pipeline_edge["hitl_gate_config"] = hitl_config
         pipeline_edges.append(pipeline_edge)
     return pipeline_edges
+
+
+def _add_pipeline_edges(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline: Any,
+    edges: list[dict[str, Any]],
+) -> None:
+    """Persist converted template edges as PipelineEdge rows for a new pipeline."""
+    for edge_data in edges:
+        session.add(
+            PipelineEdge(
+                id=uuid.uuid4(),
+                organisation_id=org_id,
+                pipeline_id=pipeline.id,
+                source_node_id=uuid.UUID(edge_data["source_node_id"]),
+                target_node_id=uuid.UUID(edge_data["target_node_id"]),
+                edge_type=edge_data["edge_type"],
+                hitl_gate_config=edge_data.get("hitl_gate_config"),
+            )
+        )
+
+
+def _pipeline_from_template_response(
+    pipeline: Any,
+    primitive_id: uuid.UUID,
+    agent_count: int,
+    edge_count: int,
+) -> PipelineFromTemplateResponse:
+    """Build the pipeline-from-template response from a freshly created pipeline."""
+    return PipelineFromTemplateResponse(
+        id=pipeline.id,
+        organisation_id=pipeline.organisation_id,
+        name=pipeline.name,
+        description=pipeline.description,
+        visibility=pipeline.visibility,
+        template_source_id=primitive_id,
+        agent_count=agent_count,
+        edge_count=edge_count,
+        ready_to_run=True,
+        created_at=pipeline.created_at,
+        updated_at=pipeline.updated_at,
+    )
 
 
 @router.post(
@@ -1378,18 +1513,7 @@ async def create_pipeline_from_template_endpoint(
                 run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
             )
             pipeline.graph_nodes_json = graph_nodes
-            for edge_data in edges:
-                session.add(
-                    PipelineEdge(
-                        id=uuid.uuid4(),
-                        organisation_id=principal.organisation_id,
-                        pipeline_id=pipeline.id,
-                        source_node_id=uuid.UUID(edge_data["source_node_id"]),
-                        target_node_id=uuid.UUID(edge_data["target_node_id"]),
-                        edge_type=edge_data["edge_type"],
-                        hitl_gate_config=edge_data.get("hitl_gate_config"),
-                    )
-                )
+            _add_pipeline_edges(session, principal.organisation_id, pipeline, edges)
             await session.flush()
     except IntegrityError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
@@ -1398,19 +1522,7 @@ async def create_pipeline_from_template_endpoint(
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise _not_implemented_error() from None
 
-    return PipelineFromTemplateResponse(
-        id=pipeline.id,
-        organisation_id=pipeline.organisation_id,
-        name=pipeline.name,
-        description=pipeline.description,
-        visibility=pipeline.visibility,
-        template_source_id=primitive_id,
-        agent_count=agent_count,
-        edge_count=edge_count,
-        ready_to_run=True,
-        created_at=pipeline.created_at,
-        updated_at=pipeline.updated_at,
-    )
+    return _pipeline_from_template_response(pipeline, primitive_id, agent_count, edge_count)
 
 
 @router.post(
@@ -1500,14 +1612,10 @@ async def community_contribute_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:
-        if principal.organisation_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_MSG_ORGANISATION_ID_REQUIRED,
-            )
+        org_id = _require_organisation_id(principal)
         result = await contribute_primitive(
             session,
-            org_id=principal.organisation_id,
+            org_id=org_id,
             created_by=principal.account_id,
             primitive_type=req.primitive_type,
             name=req.name,
@@ -1540,15 +1648,11 @@ async def list_community_contributions_endpoint(
 ) -> CommunityContributionListResponse:
     """List the org's own community contributions, optionally filtered by status."""
     try:
-        if principal.organisation_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_MSG_ORGANISATION_ID_REQUIRED,
-            )
+        org_id = _require_organisation_id(principal)
         try:
             result = await list_org_contributions(
                 session,
-                principal.organisation_id,
+                org_id,
                 contribution_status=contribution_status,
                 page=page,
                 page_size=page_size,
@@ -1596,14 +1700,10 @@ async def admin_publish_contribution_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Publish a community contribution to the community library (admin only)."""
     try:
-        if principal.organisation_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_MSG_ORGANISATION_ID_REQUIRED,
-            )
+        org_id = _require_organisation_id(principal)
         result = await publish_contribution(
             session,
-            principal.organisation_id,
+            org_id,
             primitive_id,
         )
     except ContributionNotFoundError:
