@@ -1,4 +1,4 @@
-name: Qlty Analysis
+name: Qlty Analysis (baseline vs main)
 
 on:
   workflow_dispatch:
@@ -17,6 +17,6 @@ jobs:
         uses: qltysh/qlty-action/install@08a0a862c159eae9b9003081da6663d96efef637
 
       - name: Run Qlty check
-        run: qlty check
+        run: qlty check --upstream origin/main
         env:
           QLTY_API_KEY: ${{ secrets.QLTY_API_KEY }}
