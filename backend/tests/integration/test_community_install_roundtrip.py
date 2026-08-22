@@ -175,8 +175,8 @@ async def seeded(db_engine: AsyncEngine) -> AsyncGenerator[None, None]:
     yield
 
 
-@pytest_asyncio.fixture
-async def fake_blob(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def fake_blob(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _blob(_sha256: str) -> dict:
         return dict(BLOB_CONTENT)
 
