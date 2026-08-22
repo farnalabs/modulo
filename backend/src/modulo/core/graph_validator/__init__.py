@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple, TypeGuard
 
 import jmespath
 import jmespath.exceptions
@@ -58,6 +58,9 @@ _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
+# Maximum recursion depth for the field-level schema compatibility check.
+_SCHEMA_MAX_DEPTH = 20
+
 # Known-good E2B sandbox templates. "opencode" is the product default (has the
 # opencode CLI pre-installed); "modulo-opencode" is the managed cache-warmed
 # image built for Modulo's own pipelines.
@@ -83,6 +86,21 @@ def _is_pre_existing(snapshot: PipelineSnapshot) -> bool:
 
 def _string_or_default(value: object, default: str = "?") -> str:
     return default if value is None else str(value)
+
+
+def _is_valid_number(value: object) -> TypeGuard[int | float]:
+    """True for int/float values that are not bool (bool is a subclass of int)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_non_negative_int(value: object) -> bool:
+    """True for a genuine (non-bool) int that is >= 0."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_valid_retry_budget(value: object) -> bool:
+    """True for a genuine (non-bool) int within the retry_policy budget bound."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _RETRY_POLICY_MAX_RETRIES
 
 
 def _check_list_type_mismatch(path: str, out_type: object, in_type: list[object]) -> list[str]:
@@ -118,6 +136,26 @@ def _check_additional_properties(
         extra = out_props - in_props
         if extra:
             errors.append(f"{path}: extra properties {extra} not allowed (additionalProperties: false)")
+
+
+def _check_scalar_type_mismatch(path: str, out_type: Any, in_type: Any) -> list[str]:
+    """Flag a primitive type mismatch (integer is promotable to number)."""
+    if out_type and in_type and out_type != in_type:
+        promotable = {"integer": ["number"]}
+        if in_type not in promotable.get(out_type, []):
+            return [f"{path}: type mismatch '{out_type}' -> '{in_type}'"]
+    return []
+
+
+def _check_enum_subset(
+    path: str,
+    out_enum: Any,
+    in_enum: Any,
+) -> list[str]:
+    """Output enum values must be a subset of the input enum values."""
+    if out_enum is not None and in_enum is not None and not set(out_enum).issubset(set(in_enum)):
+        return [f"{path}: output enum values {out_enum} not subset of input enum {in_enum}"]
+    return []
 
 
 def _resolve_parameter_schema(
@@ -253,6 +291,13 @@ def _check_parameter_node(
         _check_parameter_set_drift(node_id, schema, set_id, ps, result)
 
 
+class _CompositeContext(NamedTuple):
+    """Shared (template, node_id) context for composite sub-pipeline validation."""
+
+    template: CompositeTemplate
+    node_id: str
+
+
 def _check_composite_node(
     node: dict[str, Any],
     node_ref_map: dict[str, uuid.UUID],
@@ -294,12 +339,12 @@ def _check_composite_node(
 
 
 def _check_composite_sub_nodes(
-    template: CompositeTemplate,
-    node_id: str,
+    ctx: _CompositeContext,
     sub_nodes: list[Any],
     result: ValidationResult,
 ) -> set[str]:
     """Validate a composite template's sub-nodes; returns the sub-node id set."""
+    template, node_id = ctx.template, ctx.node_id
     sub_ids: set[str] = set()
     for sub in sub_nodes:
         if not isinstance(sub, dict):
@@ -326,18 +371,18 @@ def _check_composite_sub_nodes(
                 node_id=node_id,
             )
         if node_type == "sandbox_agent":
-            _check_composite_sandbox_sub_node(template, node_id, sid, sub, result)
+            _check_composite_sandbox_sub_node(ctx, sid, sub, result)
     return sub_ids
 
 
 def _check_composite_sandbox_sub_node(
-    template: CompositeTemplate,
-    node_id: str,
+    ctx: _CompositeContext,
     sid: str,
     sub: dict[str, Any],
     result: ValidationResult,
 ) -> None:
     """Validate a sandbox_agent composite sub-node's command + template config."""
+    template, node_id = ctx.template, ctx.node_id
     cmd = sub.get("agent_command", "")
     if not cmd or not str(cmd).strip():
         result.error(
@@ -354,13 +399,13 @@ def _check_composite_sandbox_sub_node(
 
 
 def _check_composite_sub_edges(
-    template: CompositeTemplate,
-    node_id: str,
+    ctx: _CompositeContext,
     sub_ids: set[str],
     sub_edges: list[Any],
     result: ValidationResult,
 ) -> None:
     """Validate a composite template's sub-edge references + gate support."""
+    template, node_id = ctx.template, ctx.node_id
     for edge in sub_edges:
         if not isinstance(edge, dict):
             result.error(
@@ -529,23 +574,35 @@ def _check_sandbox_stall_detectors(node: dict[str, Any], nid: str, result: Valid
     - ``watch_log_path`` must be a string if set.
     - ``enable_heartbeat`` must be a boolean if set.
     """
+    _check_sandbox_stdout_delta(node, nid, result)
+    _check_sandbox_watch_globs(node, nid, result)
+    _check_sandbox_watch_log_path(node, nid, result)
+    _check_sandbox_enable_heartbeat(node, nid, result)
+
+
+def _check_sandbox_stdout_delta(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """stdout_percentage_delta must be a number in (0, 1] if set."""
     delta = node.get("stdout_percentage_delta")
-    if delta is not None:
-        try:
-            d = float(delta) if not isinstance(delta, (int, float)) else delta
-            if not (0.0 < d <= 1.0):
-                result.warning(
-                    "SANDBOX_STDOUT_DELTA_INVALID",
-                    f"Sandbox agent node '{nid}' stdout_percentage_delta={d} is outside (0, 1]",
-                    node_id=nid,
-                )
-        except (ValueError, TypeError):
+    if delta is None:
+        return
+    try:
+        d = float(delta) if not isinstance(delta, (int, float)) else delta
+        if not (0.0 < d <= 1.0):
             result.warning(
                 "SANDBOX_STDOUT_DELTA_INVALID",
-                f"Sandbox agent node '{nid}' stdout_percentage_delta is not a valid number",
+                f"Sandbox agent node '{nid}' stdout_percentage_delta={d} is outside (0, 1]",
                 node_id=nid,
             )
+    except (ValueError, TypeError):
+        result.warning(
+            "SANDBOX_STDOUT_DELTA_INVALID",
+            f"Sandbox agent node '{nid}' stdout_percentage_delta is not a valid number",
+            node_id=nid,
+        )
 
+
+def _check_sandbox_watch_globs(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """watch_globs must be an array of strings if set."""
     globs = node.get("watch_globs")
     if globs is not None and not isinstance(globs, list):
         result.warning(
@@ -563,6 +620,9 @@ def _check_sandbox_stall_detectors(node: dict[str, Any], nid: str, result: Valid
                 )
                 break
 
+
+def _check_sandbox_watch_log_path(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """watch_log_path must be an absolute string path if set."""
     log_path = node.get("watch_log_path")
     if log_path is not None and not isinstance(log_path, str):
         result.warning(
@@ -577,6 +637,9 @@ def _check_sandbox_stall_detectors(node: dict[str, Any], nid: str, result: Valid
             node_id=nid,
         )
 
+
+def _check_sandbox_enable_heartbeat(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """enable_heartbeat must be a boolean if set."""
     heartbeat = node.get("enable_heartbeat")
     if heartbeat is not None and not isinstance(heartbeat, bool):
         result.warning(
@@ -890,7 +953,7 @@ def _check_loop_default_target(
 def _check_loop_max_iterations(edge: dict[str, Any], source: str, result: ValidationResult) -> None:
     """Loop constraint 2: max_iterations must be a positive integer if set."""
     max_it = edge.get("max_iterations")
-    if max_it is not None and (not isinstance(max_it, int) or isinstance(max_it, bool) or max_it < 0):
+    if max_it is not None and not _is_non_negative_int(max_it):
         result.error(
             "LOOP_INVALID_MAX_ITERATIONS",
             f"Loop edge from '{source}' max_iterations must be a non-negative integer (got {max_it!r})",
@@ -923,6 +986,11 @@ def _check_llm_routing_prompt(node: dict[str, Any], nid: str, result: Validation
         )
 
 
+def _edge_source(edge: dict[str, Any]) -> str:
+    """Normalised source node id for an edge (falls back to ``source_node_id``)."""
+    return _string_or_default(edge.get("source"), _string_or_default(edge.get("source_node_id"), ""))
+
+
 def _check_llm_routing_labels(
     node: dict[str, Any],
     edges: list[dict[str, Any]],
@@ -932,7 +1000,7 @@ def _check_llm_routing_labels(
     """LLM routing 2: outgoing non-reject edges must have unique routing_labels."""
     labels: list[str] = []
     for edge in edges:
-        if _string_or_default(edge.get("source"), _string_or_default(edge.get("source_node_id"), "")) != nid:
+        if _edge_source(edge) != nid:
             continue
         if edge.get("type", edge.get("edge_type", "")) == "reject":
             continue
@@ -1155,6 +1223,45 @@ class GraphValidator:
     def _find_entry_candidates(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:
         return [str(n["id"]) for n in nodes if str(n["id"]) not in {str(e["target"]) for e in edges}]
 
+    @staticmethod
+    def _collect_node_ids(nodes: list[dict[str, Any]], result: ValidationResult) -> set[str] | None:
+        """Collect unique node ids; emits TOPOLOGY_NODE_MISSING_ID and returns None on a missing id."""
+        node_ids: set[str] = set()
+        for n in nodes:
+            nid = n.get("id")
+            if nid is None:
+                result.error("TOPOLOGY_NODE_MISSING_ID", "A node is missing its 'id' field")
+                return None
+            node_ids.add(str(nid))
+        return node_ids
+
+    @staticmethod
+    def _build_flow_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Forwarding edges only: exclude kickback, reject, and loop from topology flow."""
+        return [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
+
+    @staticmethod
+    def _build_adjacency(nodes: list[dict[str, Any]], flow_edges: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """Adjacency map from forwarding edges."""
+        adj: dict[str, list[str]] = {str(n["id"]): [] for n in nodes}
+        for edge in flow_edges:
+            src, tgt = str(edge["source"]), str(edge["target"])
+            adj[src].append(tgt)
+        return adj
+
+    @staticmethod
+    def _find_reachable(adj: dict[str, list[str]], primary_entry: str) -> set[str]:
+        """BFS from the primary entry candidate over forwarding edges."""
+        visited: set[str] = set()
+        queue: deque[str] = deque([primary_entry])
+        while queue:
+            nid = queue.popleft()
+            if nid in visited:
+                continue
+            visited.add(nid)
+            queue.extend(adj.get(nid, []))
+        return visited
+
     def _check_topology(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
         nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
         edges: list[dict[str, Any]] = graph_json.get("edges", [])
@@ -1163,13 +1270,9 @@ class GraphValidator:
             result.error("TOPOLOGY_NO_NODES", "Graph has no nodes")
             return
 
-        node_ids: set[str] = set()
-        for n in nodes:
-            nid = n.get("id")
-            if nid is None:
-                result.error("TOPOLOGY_NODE_MISSING_ID", "A node is missing its 'id' field")
-                return
-            node_ids.add(str(nid))
+        node_ids = self._collect_node_ids(nodes, result)
+        if node_ids is None:
+            return
 
         _check_edge_references(edges, node_ids, result)
 
@@ -1186,7 +1289,7 @@ class GraphValidator:
         self._check_llm_routing(nodes, edges, node_ids, result)
 
         # Determine forwarding edges (exclude kickback + reject + loop from topology flow).
-        flow_edges = [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
+        flow_edges = self._build_flow_edges(edges)
 
         # Entry node: no incoming forwarding edges
         entry_candidates = self._find_entry_candidates(nodes, flow_edges)
@@ -1195,22 +1298,11 @@ class GraphValidator:
             return
 
         # Build adjacency from forwarding edges.
-        adj: dict[str, list[str]] = {str(n["id"]): [] for n in nodes}
-        for edge in flow_edges:
-            src, tgt = str(edge["source"]), str(edge["target"])
-            adj[src].append(tgt)
+        adj = self._build_adjacency(nodes, flow_edges)
 
         # BFS from the first entry candidate over forwarding edges.
         # Nodes not visited (including other entry candidates) are unreachable.
-        visited: set[str] = set()
-        primary_entry = entry_candidates[0]
-        queue: deque[str] = deque([primary_entry])
-        while queue:
-            nid = queue.popleft()
-            if nid in visited:
-                continue
-            visited.add(nid)
-            queue.extend(adj.get(nid, []))
+        visited = self._find_reachable(adj, entry_candidates[0])
 
         for nid in sorted(node_ids - visited):
             result.warning(
@@ -1335,7 +1427,7 @@ class GraphValidator:
             )
             return
         threshold = eval_cond.get("threshold")
-        if threshold is None or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        if not _is_valid_number(threshold):
             result.error(
                 "HITL_EVAL_CONDITION_INVALID_THRESHOLD",
                 f"Edge from '{src}': eval_condition.threshold must be a number",
@@ -1540,8 +1632,7 @@ class GraphValidator:
         nested properties, array items, and enum subsets. Returns a list of error
         messages (empty means compatible).
         """
-        max_depth_val = 20
-        if depth > max_depth_val:
+        if depth > _SCHEMA_MAX_DEPTH:
             return []
 
         errors: list[str] = []
@@ -1557,49 +1648,68 @@ class GraphValidator:
             errors.extend(_check_nullable_type_mismatch(path, out_type, in_type))
             return errors
 
-        if out_type and in_type and out_type != in_type:
-            promotable = {"integer": ["number"]}
-            if in_type not in promotable.get(out_type, []):
-                errors.append(f"{path}: type mismatch '{out_type}' -> '{in_type}'")
+        errors.extend(_check_scalar_type_mismatch(path, out_type, in_type))
 
         # Check additionalProperties
         _check_additional_properties(in_field, out_field, path, errors)
 
         # Check nested properties
+        errors.extend(self._check_nested_properties(out_field, in_field, path, depth))
+
+        # Check array items
+        errors.extend(self._check_array_items(out_field, in_field, path, depth))
+
+        # Check enum compatibility
+        errors.extend(_check_enum_subset(path, out_field.get("enum"), in_field.get("enum")))
+
+        return errors
+
+    def _check_nested_properties(
+        self,
+        out_field: dict[str, Any],
+        in_field: dict[str, Any],
+        path: str,
+        depth: int,
+    ) -> list[str]:
+        """Check required fields in the output and recurse into shared properties."""
+        errors: list[str] = []
         out_properties = out_field.get("properties", {})
         in_properties = in_field.get("properties", {})
 
-        if isinstance(out_properties, dict) and isinstance(in_properties, dict):
-            in_required = in_field.get("required", [])
-            errors.extend(
-                f"{path}.{req_field}: required field missing in output"
-                for req_field in in_required
-                if req_field not in out_properties
-            )
+        if not (isinstance(out_properties, dict) and isinstance(in_properties, dict)):
+            return errors
 
-            for field_name in set(out_properties) & set(in_properties):
-                sub_errors = self._check_schema_fields(
+        in_required = in_field.get("required", [])
+        errors.extend(
+            f"{path}.{req_field}: required field missing in output"
+            for req_field in in_required
+            if req_field not in out_properties
+        )
+
+        for field_name in set(out_properties) & set(in_properties):
+            errors.extend(
+                self._check_schema_fields(
                     out_properties[field_name],
                     in_properties[field_name],
                     f"{path}.{field_name}",
                     depth + 1,
                 )
-                errors.extend(sub_errors)
+            )
+        return errors
 
-        # Check array items
+    def _check_array_items(
+        self,
+        out_field: dict[str, Any],
+        in_field: dict[str, Any],
+        path: str,
+        depth: int,
+    ) -> list[str]:
+        """Recurse into array item schemas when both sides declare items."""
         out_items = out_field.get("items", {})
         in_items = in_field.get("items", {})
-        if isinstance(out_items, dict) and isinstance(in_items, dict):
-            sub_errors = self._check_schema_fields(out_items, in_items, f"{path}.items", depth + 1)
-            errors.extend(sub_errors)
-
-        # Check enum compatibility
-        out_enum = out_field.get("enum")
-        in_enum = in_field.get("enum")
-        if out_enum is not None and in_enum is not None and not set(out_enum).issubset(set(in_enum)):
-            errors.append(f"{path}: output enum values {out_enum} not subset of input enum {in_enum}")
-
-        return errors
+        if not (isinstance(out_items, dict) and isinstance(in_items, dict)):
+            return []
+        return self._check_schema_fields(out_items, in_items, f"{path}.items", depth + 1)
 
     async def _resolve_schema_definitions(
         self,
@@ -2083,12 +2193,13 @@ class GraphValidator:
             )
             return
 
-        sub_ids = _check_composite_sub_nodes(template, node_id, sub_nodes, result)
+        ctx = _CompositeContext(template=template, node_id=node_id)
+        sub_ids = _check_composite_sub_nodes(ctx, sub_nodes, result)
 
         sub_edges = graph.get("edges")
         if not isinstance(sub_edges, list):
             return
-        _check_composite_sub_edges(template, node_id, sub_ids, sub_edges, result)
+        _check_composite_sub_edges(ctx, sub_ids, sub_edges, result)
 
     def _check_output_validation(
         self,
@@ -2310,8 +2421,7 @@ class GraphValidator:
                     "allowed values are ['stall','timeout','failure']",
                 )
         max_retries = policy.get("max_retries", 0)
-        budget_ok = isinstance(max_retries, int) and not isinstance(max_retries, bool)
-        if not budget_ok or not 0 <= max_retries <= _RETRY_POLICY_MAX_RETRIES:
+        if not _is_valid_retry_budget(max_retries):
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'max_retries' must be an integer between 0 and 5",
