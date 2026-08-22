@@ -188,34 +188,36 @@ async def test_write_file_utf8_content_round_trips(connector) -> None:
 
 
 async def test_write_file_missing_content_raises(connector) -> None:
+    payload = ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"})
     with pytest.raises(ValueError, match=r"requires 'content' \(raw text\) or 'content_base64'"):
-        await connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"}))
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_file_both_content_and_content_base64_raises(connector) -> None:
+    payload = ConnectorPayload(
+        resource="file",
+        data={
+            "repo": "owner/repo",
+            "path": "x",
+            "content": "raw",
+            "content_base64": "cmF3",
+        },
+    )
     with pytest.raises(ValueError, match="exactly one of 'content' or 'content_base64'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="file",
-                data={
-                    "repo": "owner/repo",
-                    "path": "x",
-                    "content": "raw",
-                    "content_base64": "cmF3",
-                },
-            )
-        )
+        await connector.write(payload)
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported GitHub resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="branch", data={})
     with pytest.raises(ValueError, match="Unsupported GitHub write resource"):
-        await connector.write(ConnectorPayload(resource="branch", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
@@ -330,8 +332,9 @@ async def test_write_issue_operations(
     ],
 )
 async def test_query_missing_filters(connector, resource, filters, match_text):
+    query = ConnectorQuery(resource=resource, filters=filters)
     with pytest.raises(ValueError, match=match_text):
-        await connector.query(ConnectorQuery(resource=resource, filters=filters))
+        await connector.query(query)
 
 
 @pytest.mark.parametrize(
