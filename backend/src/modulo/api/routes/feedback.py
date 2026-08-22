@@ -312,6 +312,7 @@ async def list_feedback_inbox(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
             result = await mgr.get_feedback_records_inbox(
                 handler_type=handler_type,
