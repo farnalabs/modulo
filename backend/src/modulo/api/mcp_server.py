@@ -23,6 +23,7 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
@@ -1168,6 +1169,95 @@ def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[st
         return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
 
 
+def _serialize_edges(edges: list[Any]) -> list[dict[str, Any]]:
+    """Serialize pipeline-graph edges to the MCP response shape."""
+    return [
+        {
+            "id": str(e.id),
+            "source_node_id": str(e.source_node_id),
+            "target_node_id": str(e.target_node_id),
+            "edge_type": e.edge_type,
+        }
+        for e in edges
+    ]
+
+
+def _serialize_run_evals(evals: list[Any]) -> list[dict[str, Any]]:
+    """Serialize run eval rows to the MCP response shape."""
+    return [
+        {
+            "id": str(e.id),
+            "eval_id": str(e.eval_id),
+            "node_id": str(e.node_id) if e.node_id else None,
+            "passed": e.passed,
+            "score": e.score,
+            "detail": e.detail,
+            "evaluated_at": e.evaluated_at.isoformat() if e.evaluated_at else None,
+        }
+        for e in evals
+    ]
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-format a datetime column, or None."""
+    return value.isoformat() if value else None
+
+
+def _parse_basic_auth_header(request: Request, params: dict[str, str]) -> tuple[dict[str, str], JSONResponse | None]:
+    """Parse an HTTP Basic Authorization header into client credentials.
+
+    Extracts ``client_id`` / ``client_secret`` from the ``Authorization``
+    header when present, only filling fields the form body did not supply.
+    Returns ``(creds_delta, None)`` on success or ``({}, error_response)`` on a
+    malformed header. RFC 6749 §2.3.1.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith(_BASIC_PREFIX):
+        return {}, None
+    import base64 as _base64
+
+    try:
+        decoded = _base64.b64decode(auth_header[len(_BASIC_PREFIX) :]).decode("utf-8")
+        basic_id, _, basic_secret = decoded.partition(":")
+    except Exception:
+        return {}, JSONResponse(
+            {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
+            status_code=400,
+        )
+    creds: dict[str, str] = {}
+    if not params.get("client_secret", ""):
+        creds["client_secret"] = basic_secret
+    if not params.get("client_id", ""):
+        creds["client_id"] = basic_id
+    return creds, None
+
+
+async def _load_trigger_row(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
+    """Load a non-deleted trigger row, org-scoped. None when not found."""
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+
+    q = select(Trigger).where(
+        Trigger.id == tid,
+        Trigger.organisation_id == org_id,
+        Trigger.deleted_at.is_(None),
+    )
+    return (await s.execute(q)).scalar_one_or_none()
+
+
+def _validate_trigger_numbers(
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+) -> dict[str, Any] | None:
+    """Validate the numeric trigger fields; returns an error dict, or None."""
+    if max_concurrent_runs is not None and max_concurrent_runs < 1:
+        return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+    if daily_spend_limit is not None and daily_spend_limit < 0:
+        return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    return None
+
+
 @mcp.tool(
     name="list_pipelines",
     description=(
@@ -1299,39 +1389,7 @@ async def list_runs(
     limit: int = 20,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_runs")
-        from modulo.db.crud.run import get_child_run_rollup
-        from modulo.db.crud.run import list_runs as db_list_runs
-
-        org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
-        async with _session(org_id) as s:
-            if pid is not None:
-                owner_team_id = await _pipeline_owner_team_id(s, pid)
-                if _team_scoped_key_mismatch(owner_team_id):
-                    return _team_scope_error("pipeline", str(pid))
-            result = await db_list_runs(
-                s,
-                pipeline_id=pid,
-                status=status,
-                page=1,
-                page_size=limit,
-                cursor=cursor,
-                team_id=_ctx_team_id_val(),
-            )
-            # Child-run cost+count rollup: ONE GROUP BY query for the whole
-            # page, joined in Python — never a per-row aggregate (avoids N+1).
-            run_ids = [r.id for r in result.items]
-            child_rollup = await get_child_run_rollup(s, run_ids) if run_ids else {}
-        items = [_mcp_run_item(r, child_rollup) for r in result.items]
-        return {
-            "items": items,
-            "total": result.total,
-            "next_cursor": result.next_cursor,
-            "has_more": result.has_more,
-        }
+        return await _list_runs_impl(pipeline_id, status, cursor, limit)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -1340,6 +1398,47 @@ async def list_runs(
     except Exception:
         _log.exception("list_runs failed")
         return _tool_error("Failed to list runs")
+
+
+async def _list_runs_impl(
+    pipeline_id: str | None,
+    status: str | None,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "list_runs")
+    from modulo.db.crud.run import get_child_run_rollup
+    from modulo.db.crud.run import list_runs as db_list_runs
+
+    org_id = _ctx_org_id_val()
+    pid = uuid.UUID(pipeline_id) if pipeline_id else None
+    async with _session(org_id) as s:
+        if pid is not None:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", str(pid))
+        result = await db_list_runs(
+            s,
+            pipeline_id=pid,
+            status=status,
+            page=1,
+            page_size=limit,
+            cursor=cursor,
+            team_id=_ctx_team_id_val(),
+        )
+        # Child-run cost+count rollup: ONE GROUP BY query for the whole
+        # page, joined in Python — never a per-row aggregate (avoids N+1).
+        run_ids = [r.id for r in result.items]
+        child_rollup = await get_child_run_rollup(s, run_ids) if run_ids else {}
+    items = [_mcp_run_item(r, child_rollup) for r in result.items]
+    return {
+        "items": items,
+        "total": result.total,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
 
 
 def _parse_mcp_datetime(value: str, name: str) -> datetime:
@@ -1403,6 +1502,89 @@ async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[s
     return None
 
 
+def _parse_analytics_enums(
+    group_by: str,
+    trigger_type: str | None,
+    status: str | None,
+    dimension: str | None = None,
+    error_detail: str = "",
+) -> tuple[
+    AnalyticsGroupBy | None,
+    AnalyticsTriggerType | None,
+    AnalyticsStatus | None,
+    AnalyticsDimension | None,
+    dict[str, Any] | None,
+]:
+    """Parse analytics enum params, returning ``(group_by, trigger, status, dimension, error)``."""
+    try:
+        grp = AnalyticsGroupBy(group_by)
+        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+        st = AnalyticsStatus(status) if status is not None else None
+        dim = AnalyticsDimension(dimension) if dimension is not None else None
+    except ValueError:
+        return (
+            None,
+            None,
+            None,
+            None,
+            {
+                "error": "invalid_params",
+                "detail": error_detail,
+            },
+        )
+    return grp, tt, st, dim, None
+
+
+def _parse_analytics_ids(
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+) -> tuple[tuple[uuid.UUID, ...], uuid.UUID | None, dict[str, Any] | None]:
+    """Parse the analytics pipeline/folder filters, returning ``(pids, fid, error)``."""
+    pids: tuple[uuid.UUID, ...] = ()
+    if pipeline_id:
+        try:
+            pids = tuple(uuid.UUID(p) for p in pipeline_id)
+        except ValueError:
+            return (), None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+    fid: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            fid = uuid.UUID(folder_id)
+        except ValueError:
+            return (), None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+    return pids, fid, None
+
+
+def _build_analytics_params(
+    group_by: AnalyticsGroupBy,
+    auto_granularity: bool,
+    trigger_type: AnalyticsTriggerType | None,
+    status: AnalyticsStatus | None,
+    dimension: AnalyticsDimension | None,
+    pipeline_ids: tuple[uuid.UUID, ...],
+    folder_id: uuid.UUID | None,
+    error_code: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> AnalyticsParams:
+    return AnalyticsParams(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=pipeline_ids,
+        team_id=_ctx_team_id_val(),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+        limit=max(1, min(limit, 1000)),
+    )
+
+
 def _parse_analytics_params(
     dimension: str | None,
     group_by: str,
@@ -1416,44 +1598,21 @@ def _parse_analytics_params(
     date_to: str | None,
     limit: int,
 ) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
-    try:
-        dim = AnalyticsDimension(dimension) if dimension is not None else None
-        grp = AnalyticsGroupBy(group_by)
-        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-        st = AnalyticsStatus(status) if status is not None else None
-    except ValueError:
-        return None, {
-            "error": "invalid_params",
-            "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
-        }
-
-    pids: tuple[uuid.UUID, ...] = ()
-    if pipeline_id:
-        try:
-            pids = tuple(uuid.UUID(p) for p in pipeline_id)
-        except ValueError:
-            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-    fid: uuid.UUID | None = None
-    if folder_id is not None:
-        try:
-            fid = uuid.UUID(folder_id)
-        except ValueError:
-            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-    params = AnalyticsParams(
-        group_by=grp,
-        auto_granularity=auto_granularity,
-        dimension=dim,
-        trigger_type=tt,
-        status=st,
-        pipeline_ids=pids,
-        team_id=_ctx_team_id_val(),
-        error_code=error_code,
-        folder_id=fid,
-        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-        limit=max(1, min(limit, 1000)),
+    grp, tt, st, dim, enum_err = _parse_analytics_enums(
+        group_by,
+        trigger_type,
+        status,
+        dimension,
+        error_detail=f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
+    )
+    if enum_err:
+        return None, enum_err
+    assert grp is not None  # nosec B101 -- _parse_analytics_enums returns (None, error) only on failure, already handled above
+    pids, fid, id_err = _parse_analytics_ids(pipeline_id, folder_id)
+    if id_err:
+        return None, id_err
+    params = _build_analytics_params(
+        grp, auto_granularity, tt, st, dim, pids, fid, error_code, date_from, date_to, limit
     )
     return params, None
 
@@ -1469,60 +1628,41 @@ def _parse_analytics_concurrency_params(
     date_to: str | None,
     limit: int,
 ) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
-    try:
-        grp = AnalyticsGroupBy(group_by)
-        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-        st = AnalyticsStatus(status) if status is not None else None
-    except ValueError:
-        return None, {
-            "error": "invalid_params",
-            "detail": f"invalid enum value (group_by={group_by!r})",
-        }
-
-    pids: tuple[uuid.UUID, ...] = ()
-    if pipeline_id:
-        try:
-            pids = tuple(uuid.UUID(p) for p in pipeline_id)
-        except ValueError:
-            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-    fid: uuid.UUID | None = None
-    if folder_id is not None:
-        try:
-            fid = uuid.UUID(folder_id)
-        except ValueError:
-            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-    params = AnalyticsParams(
-        group_by=grp,
-        auto_granularity=auto_granularity,
+    grp, tt, st, _dim, enum_err = _parse_analytics_enums(
+        group_by,
+        trigger_type,
+        status,
         dimension=None,
-        trigger_type=tt,
-        status=st,
-        pipeline_ids=pids,
-        team_id=_ctx_team_id_val(),
-        error_code=None,
-        folder_id=fid,
-        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-        limit=max(1, min(limit, 1000)),
+        error_detail=f"invalid enum value (group_by={group_by!r})",
     )
+    if enum_err:
+        return None, enum_err
+    assert grp is not None  # nosec B101 -- _parse_analytics_enums returns (None, error) only on failure, already handled above
+    pids, fid, id_err = _parse_analytics_ids(pipeline_id, folder_id)
+    if id_err:
+        return None, id_err
+    params = _build_analytics_params(grp, auto_granularity, tt, st, None, pids, fid, None, date_from, date_to, limit)
     return params, None
 
 
-async def _query_analytics_impl(
-    dimension: str | None,
-    group_by: str,
-    auto_granularity: bool,
-    trigger_type: str | None,
-    status: str | None,
-    pipeline_id: list[str] | None,
-    error_code: str | None,
-    folder_id: str | None,
-    date_from: str | None,
-    date_to: str | None,
-    limit: int,
-) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _AnalyticsQueryInput:
+    """Raw MCP tool params for an analytics query (or concurrency query)."""
+
+    dimension: str | None = None
+    group_by: str = "day"
+    auto_granularity: bool = False
+    trigger_type: str | None = None
+    status: str | None = None
+    pipeline_id: list[str] | None = None
+    error_code: str | None = None
+    folder_id: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    limit: int = 1000
+
+
+async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     check_tool_scope(_ctx_role_val(), "query_analytics")
@@ -1535,17 +1675,17 @@ async def _query_analytics_impl(
         return feat_err
 
     params, p_err = _parse_analytics_params(
-        dimension,
-        group_by,
-        auto_granularity,
-        trigger_type,
-        status,
-        pipeline_id,
-        folder_id,
-        error_code,
-        date_from,
-        date_to,
-        limit,
+        input.dimension,
+        input.group_by,
+        input.auto_granularity,
+        input.trigger_type,
+        input.status,
+        input.pipeline_id,
+        input.folder_id,
+        input.error_code,
+        input.date_from,
+        input.date_to,
+        input.limit,
     )
     if p_err:
         return p_err
@@ -1593,17 +1733,19 @@ async def query_analytics(
 ) -> dict[str, Any]:
     try:
         return await _query_analytics_impl(
-            dimension,
-            group_by,
-            auto_granularity,
-            trigger_type,
-            status,
-            pipeline_id,
-            error_code,
-            folder_id,
-            date_from,
-            date_to,
-            limit,
+            _AnalyticsQueryInput(
+                dimension=dimension,
+                group_by=group_by,
+                auto_granularity=auto_granularity,
+                trigger_type=trigger_type,
+                status=status,
+                pipeline_id=pipeline_id,
+                error_code=error_code,
+                folder_id=folder_id,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+            )
         )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1625,17 +1767,7 @@ async def query_analytics(
         return _tool_error("Failed to query analytics")
 
 
-async def _query_analytics_concurrency_impl(
-    group_by: str,
-    auto_granularity: bool,
-    trigger_type: str | None,
-    status: str | None,
-    pipeline_id: list[str] | None,
-    folder_id: str | None,
-    date_from: str | None,
-    date_to: str | None,
-    limit: int,
-) -> dict[str, Any]:
+async def _query_analytics_concurrency_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
@@ -1648,15 +1780,15 @@ async def _query_analytics_concurrency_impl(
         return feat_err
 
     params, p_err = _parse_analytics_concurrency_params(
-        group_by,
-        auto_granularity,
-        trigger_type,
-        status,
-        pipeline_id,
-        folder_id,
-        date_from,
-        date_to,
-        limit,
+        input.group_by,
+        input.auto_granularity,
+        input.trigger_type,
+        input.status,
+        input.pipeline_id,
+        input.folder_id,
+        input.date_from,
+        input.date_to,
+        input.limit,
     )
     if p_err:
         return p_err
@@ -1701,15 +1833,17 @@ async def query_analytics_concurrency(
 ) -> dict[str, Any]:
     try:
         return await _query_analytics_concurrency_impl(
-            group_by,
-            auto_granularity,
-            trigger_type,
-            status,
-            pipeline_id,
-            folder_id,
-            date_from,
-            date_to,
-            limit,
+            _AnalyticsQueryInput(
+                group_by=group_by,
+                auto_granularity=auto_granularity,
+                trigger_type=trigger_type,
+                status=status,
+                pipeline_id=pipeline_id,
+                folder_id=folder_id,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+            )
         )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1764,15 +1898,7 @@ async def get_pipeline_graph_tool(
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
 
         nodes, edges = result
-        edge_dicts = [
-            {
-                "id": str(e.id),
-                "source_node_id": str(e.source_node_id),
-                "target_node_id": str(e.target_node_id),
-                "edge_type": e.edge_type,
-            }
-            for e in edges
-        ]
+        edge_dicts = _serialize_edges(edges)
 
         return {
             "pipeline_id": pipeline_id,
@@ -1948,15 +2074,7 @@ async def _update_pipeline_graph_impl(
     return {
         "pipeline_id": pipeline_id,
         "nodes": updated_nodes,
-        "edges": [
-            {
-                "id": str(e.id),
-                "source_node_id": str(e.source_node_id),
-                "target_node_id": str(e.target_node_id),
-                "edge_type": e.edge_type,
-            }
-            for e in updated_edges
-        ],
+        "edges": _serialize_edges(updated_edges),
         "node_count": len(updated_nodes),
         "edge_count": len(updated_edges),
     }
@@ -2381,38 +2499,7 @@ def _detect_masked_fields(masked: Any) -> list[str]:
 @_RETRY_DB
 async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "get_run_output")
-        from modulo.api.routes.runs import _mask_output_value
-
-        org_id = _ctx_org_id_val()
-        try:
-            rid = uuid.UUID(run_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
-        async with _session(org_id) as s:
-            run = await get_run(s, rid)
-            if run is None:
-                return {"error": "run_not_found", "run_id": run_id}
-            run_owner_team_id = await _run_owner_team_id(s, run)
-        if _team_scoped_key_mismatch(run_owner_team_id):
-            return _team_scope_error("run", run_id)
-        outputs = run.outputs_json or {}
-        telemetry = run.node_telemetry_json
-        if not isinstance(telemetry, dict):
-            telemetry = {}
-        node_output = _resolve_run_node_output(outputs, telemetry, node_id)
-        if node_output is None:
-            return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
-        masked = _mask_output_value(node_output)
-        masked_fields = _detect_masked_fields(masked)
-
-        return {
-            "node_id": node_id,
-            "output": masked,
-            "masked_fields": masked_fields,
-        }
+        return await _get_run_output_impl(run_id, node_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2423,6 +2510,41 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         return _tool_error("Failed to get node output")
 
 
+async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "get_run_output")
+    from modulo.api.routes.runs import _mask_output_value
+
+    org_id = _ctx_org_id_val()
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    async with _session(org_id) as s:
+        run = await get_run(s, rid)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        run_owner_team_id = await _run_owner_team_id(s, run)
+    if _team_scoped_key_mismatch(run_owner_team_id):
+        return _team_scope_error("run", run_id)
+    outputs = run.outputs_json or {}
+    telemetry = run.node_telemetry_json
+    if not isinstance(telemetry, dict):
+        telemetry = {}
+    node_output = _resolve_run_node_output(outputs, telemetry, node_id)
+    if node_output is None:
+        return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
+    masked = _mask_output_value(node_output)
+    masked_fields = _detect_masked_fields(masked)
+
+    return {
+        "node_id": node_id,
+        "output": masked,
+        "masked_fields": masked_fields,
+    }
+
+
 @mcp.tool(
     description="Get eval results for a given run. Returns structured eval outcomes "
     "including pass/fail status, scores, and detailed feedback.",
@@ -2430,43 +2552,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
 @_RETRY_DB
 async def get_run_evals(run_id: str) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "get_run_evals")
-        from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
-
-        org_id = _ctx_org_id_val()
-        rid, rid_err = _parse_uuid_param(run_id, "run_id")
-        if rid_err:
-            return rid_err
-        if rid is None:
-            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
-
-        async with _session(org_id) as s:
-            run = await get_run(s, rid)
-            if run is None:
-                return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
-                return _team_scope_error("run", run_id)
-            evals = await db_get_run_evals(s, rid)
-
-        return {
-            "run_id": run_id,
-            "status": run.status,
-            "evals": [
-                {
-                    "id": str(e.id),
-                    "eval_id": str(e.eval_id),
-                    "node_id": str(e.node_id) if e.node_id else None,
-                    "passed": e.passed,
-                    "score": e.score,
-                    "detail": e.detail,
-                    "evaluated_at": e.evaluated_at.isoformat() if e.evaluated_at else None,
-                }
-                for e in evals
-            ],
-            "eval_count": len(evals),
-        }
+        return await _get_run_evals_impl(run_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2475,6 +2561,34 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
     except Exception:
         _log.exception("get_run_evals failed")
         return _tool_error("Failed to get run evals")
+
+
+async def _get_run_evals_impl(run_id: str) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "get_run_evals")
+    from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
+
+    org_id = _ctx_org_id_val()
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    async with _session(org_id) as s:
+        run = await get_run(s, rid)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+            return _team_scope_error("run", run_id)
+        evals = await db_get_run_evals(s, rid)
+
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "evals": _serialize_run_evals(evals),
+        "eval_count": len(evals),
+    }
 
 
 @mcp.tool(
@@ -2530,40 +2644,7 @@ async def list_eval_definitions(
 @_RETRY_DB
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "cancel_run")
-        from modulo.db.crud.run import request_cancellation
-
-        org_id = _ctx_org_id_val()
-        rid, rid_err = _parse_uuid_param(run_id, "run_id")
-        if rid_err:
-            return rid_err
-        if rid is None:
-            return {"error": "invalid_id", "field": "run_id", "detail": "UUID parse failed"}
-        async with _session(org_id) as s:
-            from modulo.db.crud.run import get_run
-
-            run = await get_run(s, rid)
-            if run is None:
-                return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
-                return _team_scope_error("run", run_id)
-            if run.status in TERMINAL_STATUSES:
-                detail = f"Run is already in terminal status: {run.status}"
-                return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
-            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
-            # finalize (§4.2). A STREAMED running run cancelled cross-process is
-            # routed through finalize_cost, re-reading the STORED cumulative
-            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
-            # accrued cost (cost_components_partial_spend_lost log).
-            was_paused = run.status in ("awaiting_human", "claimed")
-            run = await request_cancellation(s, rid)
-            if not was_paused:
-                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
-        if run is None:
-            return {"error": "run_not_found", "run_id": run_id}
-        return {"run_id": run_id, "cancellation_requested": True}
+        return await _cancel_run_impl(run_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2574,73 +2655,45 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         return _tool_error("Failed to cancel run")
 
 
+async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "cancel_run")
+    from modulo.db.crud.run import get_run, request_cancellation
+
+    org_id = _ctx_org_id_val()
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    async with _session(org_id) as s:
+        run = await get_run(s, rid)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+            return _team_scope_error("run", run_id)
+        if run.status in TERMINAL_STATUSES:
+            detail = f"Run is already in terminal status: {run.status}"
+            return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
+        # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
+        # finalize (§4.2). A STREAMED running run cancelled cross-process is
+        # routed through finalize_cost, re-reading the STORED cumulative
+        # sets; a NEVER-PAUSED in-flight run has none and forfeits its
+        # accrued cost (cost_components_partial_spend_lost log).
+        was_paused = run.status in ("awaiting_human", "claimed")
+        run = await request_cancellation(s, rid)
+        if not was_paused:
+            await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
+    if run is None:
+        return {"error": "run_not_found", "run_id": run_id}
+    return {"run_id": run_id, "cancellation_requested": True}
+
+
 @mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
 @_RETRY_DB
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_pending_hitl")
-        from sqlalchemy import func, select
-
-        from modulo.db.models.pipeline import Pipeline
-
-        terminal_statuses = TERMINAL_STATUSES
-        org_id = _ctx_org_id_val()
-        async with _session(org_id) as s:
-            base_where: list[Any] = [
-                HitlClaim.organisation_id == org_id,
-                HitlClaim.decision.is_(None),
-                Run.status.not_in(terminal_statuses),
-            ]
-            key_team_id = _ctx_team_id_val()
-            if key_team_id is not None:
-                # A team-scoped key only sees pending gates for runs owned by its
-                # own team (or org-level runs with no owner team) — the same
-                # boundary the run tools enforce. The run's owner is the source
-                # of truth; runs predating the create-time stamp (NULL) fall
-                # back to the pipeline's owner so a NULL stamp can never widen
-                # the boundary.
-                from modulo.db.crud.team_scope import team_scope_clause
-
-                effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
-                base_where.append(team_scope_clause(effective_owner, key_team_id))
-            total_result = await s.execute(
-                select(func.count())
-                .select_from(HitlClaim)
-                .join(Run, HitlClaim.run_id == Run.id)
-                .join(Pipeline, Run.pipeline_id == Pipeline.id)
-                .where(*base_where)
-            )
-            total = total_result.scalar_one()
-
-            offset = (page - 1) * page_size
-            result = await s.execute(
-                select(HitlClaim)
-                .join(Run, HitlClaim.run_id == Run.id)
-                .join(Pipeline, Run.pipeline_id == Pipeline.id)
-                .where(*base_where)
-                .offset(offset)
-                .limit(page_size)
-            )
-            gates = list(result.scalars())
-        return {
-            "gates": [
-                {
-                    "run_id": str(g.run_id),
-                    "gate_id": g.gate_id,
-                    "pipeline_id": str(g.pipeline_id),
-                    "claimed_by": str(g.account_id) if g.account_id else None,
-                    "expires_at": g.expires_at.isoformat() if g.expires_at else None,
-                    "required_team_id": str(g.required_team_id) if g.required_team_id else None,
-                }
-                for g in gates
-            ],
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "has_more": (page * page_size) < total,
-        }
+        return await _list_pending_hitl_impl(page, page_size)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2649,6 +2702,82 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
     except Exception:
         _log.exception("list_pending_hitl failed")
         return _tool_error("Failed to list pending HITL gates")
+
+
+async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "list_pending_hitl")
+    from sqlalchemy import func
+
+    from modulo.db.models.pipeline import Pipeline
+
+    org_id = _ctx_org_id_val()
+    async with _session(org_id) as s:
+        base_where: list[Any] = [
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.decision.is_(None),
+            Run.status.not_in(TERMINAL_STATUSES),
+        ]
+        key_team_id = _ctx_team_id_val()
+        if key_team_id is not None:
+            # A team-scoped key only sees pending gates for runs owned by its
+            # own team (or org-level runs with no owner team) — the same
+            # boundary the run tools enforce. The run's owner is the source
+            # of truth; runs predating the create-time stamp (NULL) fall
+            # back to the pipeline's owner so a NULL stamp can never widen
+            # the boundary.
+            from modulo.db.crud.team_scope import team_scope_clause
+
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(team_scope_clause(effective_owner, key_team_id))
+        gates, total = await _load_pending_hitl_gates(s, base_where, page, page_size)
+    return {
+        "gates": [
+            {
+                "run_id": str(g.run_id),
+                "gate_id": g.gate_id,
+                "pipeline_id": str(g.pipeline_id),
+                "claimed_by": str(g.account_id) if g.account_id else None,
+                "expires_at": _iso_or_none(g.expires_at),
+                "required_team_id": str(g.required_team_id) if g.required_team_id else None,
+            }
+            for g in gates
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "has_more": (page * page_size) < total,
+    }
+
+
+async def _load_pending_hitl_gates(
+    s: AsyncSession, base_where: list[Any], page: int, page_size: int
+) -> tuple[list[HitlClaim], int]:
+    """Load a page of pending HITL gates plus the total count (one transaction)."""
+    from sqlalchemy import func, select
+
+    from modulo.db.models.pipeline import Pipeline
+
+    total_result = await s.execute(
+        select(func.count())
+        .select_from(HitlClaim)
+        .join(Run, HitlClaim.run_id == Run.id)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
+        .where(*base_where)
+    )
+    total = total_result.scalar_one()
+
+    offset = (page - 1) * page_size
+    result = await s.execute(
+        select(HitlClaim)
+        .join(Run, HitlClaim.run_id == Run.id)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
+        .where(*base_where)
+        .offset(offset)
+        .limit(page_size)
+    )
+    return list(result.scalars()), total
 
 
 _TEAM_SCOPE_ERROR = object()
@@ -3416,10 +3545,9 @@ def _validate_trigger_create_inputs(
             "field": "pipeline_id",
             "detail": f"Invalid UUID format: {pipeline_id}",
         }
-    if max_concurrent_runs < 1:
-        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-    if daily_spend_limit is not None and daily_spend_limit < 0:
-        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    num_err = _validate_trigger_numbers(max_concurrent_runs, daily_spend_limit)
+    if num_err:
+        return None, num_err
     return pid, None
 
 
@@ -3621,18 +3749,10 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         if tid is None:
             return {"error": "invalid_id", "field": "trigger_id", "detail": "UUID parse failed"}
 
-        from sqlalchemy import select
-
         from modulo.core.cron_helpers import _count_ongoing_runs
-        from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
-            q = select(Trigger).where(
-                Trigger.id == tid,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-            trigger = (await s.execute(q)).scalar_one_or_none()
+            trigger = await _load_trigger_row(s, org_id, tid)
             if trigger is not None:
                 owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
                 if _team_scoped_key_mismatch(owner_team_id):
@@ -3670,25 +3790,15 @@ def _validate_trigger_update_inputs(
     if tid_err:
         return None, tid_err
     assert tid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
-    if max_concurrent_runs is not None and max_concurrent_runs < 1:
-        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-    if daily_spend_limit is not None and daily_spend_limit < 0:
-        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    num_err = _validate_trigger_numbers(max_concurrent_runs, daily_spend_limit)
+    if num_err:
+        return None, num_err
     return tid, None
 
 
 async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
     """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
-    from sqlalchemy import select
-
-    from modulo.db.models.trigger import Trigger
-
-    q = select(Trigger).where(
-        Trigger.id == tid,
-        Trigger.organisation_id == org_id,
-        Trigger.deleted_at.is_(None),
-    )
-    trigger = (await s.execute(q)).scalar_one_or_none()
+    trigger = await _load_trigger_row(s, org_id, tid)
     if trigger is None:
         return None
     if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
@@ -6061,22 +6171,11 @@ def _extract_oauth_client_credentials(
 
     # client_secret may come from the body (RFC 6749) OR Basic auth.
     client_secret = params.get("client_secret", "")
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith(_BASIC_PREFIX):
-        import base64 as _base64
-
-        try:
-            decoded = _base64.b64decode(auth_header[len(_BASIC_PREFIX) :]).decode("utf-8")
-            basic_id, _, basic_secret = decoded.partition(":")
-            if not client_secret:
-                client_secret = basic_secret
-            if not client_id:
-                client_id = basic_id
-        except Exception:
-            return {}, JSONResponse(
-                {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
-                status_code=400,
-            )
+    creds_delta, auth_err = _parse_basic_auth_header(request, params)
+    if auth_err:
+        return {}, auth_err
+    client_id = creds_delta.get("client_id", client_id)
+    client_secret = creds_delta.get("client_secret", client_secret)
 
     if not code or not redirect_uri or not client_id or not client_secret:
         return {}, JSONResponse(
@@ -6280,22 +6379,11 @@ def _extract_oauth_refresh_credentials(
     client_id = params.get("client_id", "")
     client_secret = params.get("client_secret", "")
 
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith(_BASIC_PREFIX):
-        import base64 as _base64
-
-        try:
-            decoded = _base64.b64decode(auth_header[len(_BASIC_PREFIX) :]).decode("utf-8")
-            basic_id, _, basic_secret = decoded.partition(":")
-            if not client_secret:
-                client_secret = basic_secret
-            if not client_id:
-                client_id = basic_id
-        except Exception:
-            return {}, JSONResponse(
-                {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
-                status_code=400,
-            )
+    creds_delta, auth_err = _parse_basic_auth_header(request, params)
+    if auth_err:
+        return {}, auth_err
+    client_id = creds_delta.get("client_id", client_id)
+    client_secret = creds_delta.get("client_secret", client_secret)
 
     if not refresh_token_value or not client_id or not client_secret:
         return {}, JSONResponse(
