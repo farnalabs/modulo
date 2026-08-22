@@ -171,6 +171,16 @@ class Settings(BaseSettings):
     # below the run_claim_stale_seconds claim fence so the watchdog wins before
     # a stale-heartbeat re-claim can double-execute the hung run.
     saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # FAR-369: absolute node-deadline watchdog fallback. When a node's
+    # ``timeout_seconds`` is not present in the graph (or the node id is
+    # unknown), the watchdog holds the node to this default. Intentionally a
+    # generous floor: every real sandbox_agent node ships its own
+    # ``timeout_seconds`` (e.g. 1200s), and the watchdog keys off that value —
+    # this only guards the degenerate case. Never smaller than the smallest
+    # legitimate node timeout.
+    saq_node_default_timeout_seconds: int = Field(
+        default=1200, alias="SAQ_NODE_DEFAULT_TIMEOUT_SECONDS", ge=30, le=7200
+    )
     # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
     # heartbeat but ZERO LangGraph checkpoints for its thread after this many
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog

@@ -234,6 +234,17 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Hit the timeout guard.",
     ),
+    "node.deadline_exceeded": ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "A node did not complete within its configured timeout_seconds. "
+            "Distinct from the short setup-grace executor_stalled: the node "
+            "started executing but never finished (the idle-watchdog could not "
+            "catch a half-alive SSE stall)."
+        ),
+    ),
     _CODE_NODE_RUNAWAY: ErrorCodeSpec(
         error_class="node",
         retryable=False,
@@ -367,6 +378,7 @@ LEGACY_ALIASES: dict[str, str] = {
     # Node guards.
     "node_timeout": _CODE_NODE_TIMEOUT,
     "TimeoutError": _CODE_NODE_TIMEOUT,
+    "node_deadline_exceeded": "node.deadline_exceeded",
     "runaway": _CODE_NODE_RUNAWAY,
     "runaway.tokens_exceeded": _CODE_NODE_RUNAWAY,
     "node_cancelled": "node.cancelled",
