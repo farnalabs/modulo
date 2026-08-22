@@ -218,6 +218,11 @@ class TestMetricsDumpSkipConditions:
         factory = _FakeSessionFactory()
         with (
             patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
                 "modulo.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=False,
@@ -239,6 +244,11 @@ class TestMetricsDumpSkipConditions:
         factory = _FakeSessionFactory()
 
         with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
             patch(
                 "modulo.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
@@ -267,6 +277,11 @@ class TestMetricsDumpSkipConditions:
         orgs = [{"id": "org-1", "level_changed_at": date(2026, 8, 1)}]
 
         with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
             patch(
                 "modulo.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
