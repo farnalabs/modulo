@@ -5954,7 +5954,7 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _mcp_healthz(request: Request) -> JSONResponse:
+def _mcp_healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
@@ -6546,7 +6546,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-async def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log unhandled MCP exceptions and return a structured JSON error.
 
     Starlette's ``ServerErrorMiddleware`` (outermost in the middleware stack)
