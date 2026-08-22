@@ -14,6 +14,15 @@ interface ConsentData {
   instance_enabled: boolean
 }
 
+interface TransparencyData {
+  last_successful_dump_at: string | null
+  dump_count_total: number
+  consent_level: string
+  instance_enabled: boolean
+  enforcement_enabled: boolean
+  warning: string | null
+}
+
 const PROMPT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 
 function emptyConsent(): ConsentData {
@@ -33,6 +42,8 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
   const instanceEnabled = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const transparency = ref<TransparencyData | null>(null)
+  const isLoading = ref(false)
 
   const isOptedIn = computed(() => consent.value.level === 'all')
 
@@ -108,15 +119,37 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     })
   }
 
+  async function fetchTransparency(): Promise<void> {
+    isLoading.value = true
+    error.value = null
+    try {
+      const { data, error: apiError } = await api.GET(
+        '/api/v1/product-analytics/transparency',
+      )
+      if (apiError) {
+        error.value = formatApiError(apiError)
+        return
+      }
+      transparency.value = data as TransparencyData
+    } catch (e: unknown) {
+      error.value = formatApiError(e)
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   return {
     consent,
     instanceEnabled,
     loading,
     error,
+    isLoading,
+    transparency,
     isOptedIn,
     isPromptEligible,
     fetchConsent,
     submitConsent,
     updateLevel,
+    fetchTransparency,
   }
 })
