@@ -176,15 +176,19 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _truncate_metrics_staging(db_engine: AsyncEngine) -> AsyncGenerator[None, None]:
-    """Isolate each test: the module-scoped ``org_a``/``org_b`` fixtures are
-    reused across every test, and the metrics endpoint appends rows to the
-    shared ``metrics_staging`` table. Without a clean slate a test that writes
-    to org A bleeds rows into a later test that asserts ``org A has exactly one
-    staged row``, producing a false cross-tenant-isolation failure."""
-    yield
+async def _clean_metrics_staging(db_engine: AsyncEngine) -> AsyncGenerator[None, None]:
+    """Isolate each test against the shared session database.
+
+    Every test in this module stages rows for the same module-scoped ``org_a`` /
+    ``org_b``, and several assert on exact ``metrics_staging`` counts. Postgres
+    is shared across the session, so a row staged by one test (e.g. ``rt-1`` from
+    ``TestRoundTripWrite``) leaks into the next and pollutes those exact-count
+    assertions. Truncate the staging table before each test so every test starts
+    from a known-empty table.
+    """
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(text("DELETE FROM metrics_staging"))
+        await conn.execute(text("TRUNCATE metrics_staging"))
+    yield
 
 
 # ---------------------------------------------------------------------------
