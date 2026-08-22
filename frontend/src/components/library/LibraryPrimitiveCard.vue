@@ -29,6 +29,14 @@
       >
         {{ $t('views.LibraryView.preview_badge') }}
       </span>
+      <span
+        v-if="installed"
+        class="badge badge-context-emerald flex items-center gap-1"
+        data-testid="library-installed-badge"
+      >
+        <CheckIcon class="h-3 w-3" />
+        {{ $t('views.LibraryView.installed') }}
+      </span>
     </div>
 
     <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
@@ -68,6 +76,30 @@
 
     <div class="flex items-center gap-2 mt-auto">
       <button
+        v-if="!installed"
+        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        :disabled="installing"
+        :aria-busy="installing"
+        @click="$emit('install', prim)"
+        data-testid="library-install-button"
+      >
+        <LoaderIcon v-if="installing" class="h-3 w-3 animate-spin" />
+        {{
+          installing
+            ? $t('views.LibraryView.installing')
+            : $t('views.LibraryView.install')
+        }}
+      </button>
+      <button
+        v-else
+        class="flex-1 px-3 py-2 border border-border bg-muted text-muted-foreground text-sm font-medium rounded-lg disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        disabled
+        data-testid="library-installed-button"
+      >
+        <CheckIcon class="h-3 w-3" />
+        {{ $t('views.LibraryView.installed') }}
+      </button>
+      <button
         v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
         class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
         @click="$emit('create-pipeline', prim)"
@@ -101,6 +133,8 @@
 </template>
 
 <script setup lang="ts">
+import { Check as CheckIcon, Loader as LoaderIcon } from '@lucide/vue'
+
 export interface LibraryPrimitive {
   id: string
   source: string
@@ -120,11 +154,15 @@ withDefaults(defineProps<{
   showAutoUpdate?: boolean
   toggleLoading?: Record<string, boolean>
   adapting?: Record<string, boolean>
+  installed?: boolean
+  installing?: boolean
 }>(), {
   showTags: true,
   showAutoUpdate: false,
   toggleLoading: () => ({}),
   adapting: () => ({}),
+  installed: false,
+  installing: false,
 })
 
 defineEmits<{
@@ -132,6 +170,7 @@ defineEmits<{
   'create-lifecycle-map': [prim: LibraryPrimitive]
   'view-details': [prim: LibraryPrimitive]
   'toggle-auto-update': [prim: LibraryPrimitive]
+  'install': [prim: LibraryPrimitive]
 }>()
 
 function typeBadgeClass(type: string): string {

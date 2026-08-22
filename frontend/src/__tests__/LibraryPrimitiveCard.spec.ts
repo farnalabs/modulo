@@ -18,6 +18,9 @@ const i18n = createI18n({
           auto_update: 'Auto update',
           copy_to_adapt: 'Copy to Adapt',
           copy_to_adapt_creating: 'Copying...',
+          install: 'Install',
+          installing: 'Installing...',
+          installed: 'Installed',
         },
       },
     },
@@ -133,5 +136,37 @@ describe('LibraryPrimitiveCard', () => {
     expect(button.attributes('disabled')).toBeDefined()
     expect(button.attributes('aria-busy')).toBe('true')
     expect(wrapper.text()).toContain('Copying...')
+  })
+
+  it('renders an install button when the primitive is not installed', () => {
+    const wrapper = mountCard()
+    const button = wrapper.find('[data-testid="library-install-button"]')
+    expect(button.exists()).toBe(true)
+    expect(wrapper.text()).toContain('Install')
+    expect(wrapper.find('[data-testid="library-installed-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="library-installed-button"]').exists()).toBe(false)
+  })
+
+  it('emits install with the prim payload when the install button is clicked', async () => {
+    const wrapper = mountCard()
+    await wrapper.find('[data-testid="library-install-button"]').trigger('click')
+    expect(wrapper.emitted('install')).toHaveLength(1)
+    expect(wrapper.emitted('install')![0]).toEqual([wrapper.props('prim')])
+  })
+
+  it('disables the install button and shows a loading label while installing', () => {
+    const wrapper = mountCard({ installing: true })
+    const button = wrapper.find('[data-testid="library-install-button"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(wrapper.text()).toContain('Installing...')
+  })
+
+  it('shows an installed button and badge when the primitive is installed', () => {
+    const wrapper = mountCard({ installed: true })
+    expect(wrapper.find('[data-testid="library-install-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="library-installed-button"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="library-installed-badge"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Installed')
   })
 })
