@@ -126,7 +126,7 @@ def _build_consent_response(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/consent", response_model=ConsentResponse)
+@router.post("/consent")
 @handle_db_errors("product_analytics.consent")
 async def post_consent(
     req: ConsentRequest,
@@ -175,7 +175,7 @@ async def post_consent(
         ) from None
 
 
-@router.get("", response_model=ConsentResponse)
+@router.get("")
 @handle_db_errors("product_analytics.get")
 async def get_product_analytics(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -203,7 +203,7 @@ async def get_product_analytics(
         ) from None
 
 
-@router.put("", response_model=LevelUpdateResponse)
+@router.put("")
 @handle_db_errors("product_analytics.update_level")
 async def update_product_analytics_level(
     req: LevelUpdateRequest,
