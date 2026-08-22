@@ -1,7 +1,7 @@
 """Create the library_sync_state singleton table (FAR-363).
 
-Revision ID: 0121_library_sync_state
-Revises: 0120_org_fk_hardening
+Revision ID: 0122_library_sync_state
+Revises: 0121_metrics_staging
 Create Date: 2026-08-22
 
 Instance-global cache of the community-library sync (NOT org-scoped): a
@@ -22,8 +22,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0121_library_sync_state"
-down_revision: str | None = "0120_org_fk_hardening"
+revision: str = "0122_library_sync_state"
+down_revision: str | None = "0121_metrics_staging"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

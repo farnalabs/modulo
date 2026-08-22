@@ -1,7 +1,7 @@
 """Relax the registry arm of ck_library_primitives_source_fields (FAR-363).
 
-Revision ID: 0122_relax_registry_signature_check
-Revises: 0121_library_sync_state
+Revision ID: 0123_relax_registry_signature_check
+Revises: 0122_library_sync_state
 Create Date: 2026-08-22
 
 Community-library installs write ``source='registry'`` rows with a NULL
@@ -28,8 +28,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0122_relax_registry_signature_check"
-down_revision: str | None = "0121_library_sync_state"
+revision: str = "0123_relax_registry_signature_check"
+down_revision: str | None = "0122_library_sync_state"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
