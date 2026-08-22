@@ -6,6 +6,7 @@ import json
 import random
 import re
 import time
+from collections.abc import Iterable
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -202,6 +203,13 @@ def _paginate_params(params: dict[str, Any], cursor: str | None) -> None:
             raise ValueError(f"Invalid GitLab pagination cursor: {cursor!r}") from None
 
 
+def _copy_optional(source: dict[str, Any], target: dict[str, Any], keys: Iterable[str]) -> None:
+    """Copy present keys from ``source`` into ``target``, skipping absent ones."""
+    for key in keys:
+        if key in source:
+            target[key] = source[key]
+
+
 def _safe_json(response: httpx.Response) -> Any:
     """Safely parse JSON response, handling decode errors."""
     try:
@@ -212,6 +220,51 @@ def _safe_json(response: httpx.Response) -> Any:
 
 def _safe_json_object(response: httpx.Response) -> dict[str, Any]:
     return cast("dict[str, Any]", _safe_json(response))
+
+
+def _single_result(response: httpx.Response) -> ConnectorResult:
+    """Build a single-record ConnectorResult carrying rate-limit metadata."""
+    return ConnectorResult(records=[_safe_json(response)], metadata={"rate_limit": _rate_limit_metadata(response)})
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff delay (capped at ``_MAX_DELAY``) for a retry attempt."""
+    return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+
+
+def _should_retry_status(status_code: int, attempt: int) -> bool:
+    """Whether a retryable HTTP status may be retried on this attempt."""
+    return status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES
+
+
+def _should_retry_attempt(attempt: int) -> bool:
+    """Whether a transport-level failure may be retried on this attempt."""
+    return attempt < _MAX_RETRIES
+
+
+def _http_error_message(exc: httpx.HTTPStatusError) -> str:
+    """Build the ValueError detail for an HTTPStatusError, adding quota info on 429."""
+    detail = _error_detail(exc.response)
+    if exc.response.status_code == 429:
+        quota = _rate_limit_detail(exc.response)
+        if quota:
+            detail = f"{detail} (quota: {quota})"
+    return f"GitLab API HTTP {exc.response.status_code}: {detail}"
+
+
+def _parse_scope_field(raw: Any) -> frozenset[str]:
+    """Parse a token-info ``scope``/``scopes`` value into a declared-scope set.
+
+    Accepts a space-delimited string or a list/tuple of scope strings. Anything
+    else (``None``, non-collection, empty) yields an empty set.
+    """
+    if raw is None:
+        return frozenset()
+    if isinstance(raw, str):
+        raw = raw.split()
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    return frozenset(s for s in raw if isinstance(s, str) and s)
 
 
 def _project_path(project_id: str) -> str:
@@ -351,38 +404,33 @@ class GitLabConnector(ConnectorBase):
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
                         raise ValueError("GitLab API returned 304 Not Modified — resource unchanged")
-                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                    if _should_retry_status(r.status_code, attempt):
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                if _should_retry_status(exc.response.status_code, attempt):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                detail = _error_detail(exc.response)
-                if exc.response.status_code == 429:
-                    quota = _rate_limit_detail(exc.response)
-                    if quota:
-                        detail = f"{detail} (quota: {quota})"
-                raise ValueError(f"GitLab API HTTP {exc.response.status_code}: {detail}") from exc
+                raise ValueError(_http_error_message(exc)) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                if _should_retry_attempt(attempt):
+                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
                     continue
                 raise ValueError("GitLab API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                if _should_retry_attempt(attempt):
+                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
                     continue
                 raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                if _should_retry_attempt(attempt):
+                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
                     continue
                 raise ValueError(f"GitLab API HTTP error: {exc}") from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
@@ -407,14 +455,11 @@ class GitLabConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+        return _backoff_delay(attempt)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
-        try:
-            return cast("dict[str, Any]", response.json())
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"GitLab API invalid response: {exc}") from exc
+        return cast("dict[str, Any]", _safe_json(response))
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -451,14 +496,7 @@ class GitLabConnector(ConnectorBase):
             return frozenset()
         if not isinstance(info, dict):
             return frozenset()
-        raw = info.get("scope", info.get("scopes"))
-        if raw is None:
-            return frozenset()
-        if isinstance(raw, str):
-            raw = raw.split()
-        if not isinstance(raw, (list, tuple)):
-            return frozenset()
-        declared = frozenset(s for s in raw if isinstance(s, str) and s)
+        declared = _parse_scope_field(info.get("scope", info.get("scopes")))
         if not declared:
             return frozenset()
         return _effective_scopes(declared)
@@ -542,19 +580,79 @@ class GitLabConnector(ConnectorBase):
             metadata={"rate_limit": _rate_limit_metadata(response)},
         )
 
+    @staticmethod
+    def _user_health_result(r: httpx.Response) -> HealthResult | None:
+        """Map a ``/user`` response to a failure HealthResult, or ``None`` when healthy."""
+        if r.status_code == 401:
+            return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
+        if r.status_code == 403:
+            return HealthResult(
+                ok=False,
+                detail=("Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)),
+            )
+        if r.status_code != 200:
+            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {_error_detail(r)}")
+        return None
+
+    @staticmethod
+    def _projects_health_result(r: httpx.Response) -> HealthResult | None:
+        """Map a ``/projects`` response to a failure HealthResult, or ``None`` when healthy."""
+        if r.status_code == 401:
+            return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
+        if r.status_code == 403:
+            return HealthResult(
+                ok=False,
+                detail=("Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(r)),
+            )
+        if not r.is_success:
+            return HealthResult(
+                ok=False,
+                detail=f"Projects API returned HTTP {r.status_code}: {_error_detail(r)}",
+            )
+        return None
+
+    @staticmethod
+    def _scope_missing_result(declared_scopes: frozenset[str]) -> HealthResult | None:
+        """Return a missing-scopes HealthResult, or ``None`` when satisfied/unknown."""
+        if not declared_scopes:
+            return None
+        missing_scopes = REQUIRED_SCOPES - declared_scopes
+        if not missing_scopes:
+            return None
+        return HealthResult(
+            ok=False,
+            detail=(
+                "Missing scopes: "
+                + ", ".join(sorted(missing_scopes))
+                + f". Required: {', '.join(sorted(REQUIRED_SCOPES))}"
+            ),
+        )
+
+    async def _probe_instance_version(self, client: httpx.AsyncClient) -> str | None:
+        """Best-effort fetch of the instance version (self-hosted diagnostics only).
+
+        Never fails the health check: a missing or inaccessible ``/version``
+        endpoint simply yields ``None``.
+        """
+        if self._base_url == _GITLAB_API:
+            return None
+        try:
+            version_r = await client.get("/version")
+            if version_r.is_success:
+                version_info = _safe_json(version_r)
+                if isinstance(version_info, dict):
+                    return version_info.get("version")
+        except (httpx.RequestError, ValueError):
+            pass
+        return None
+
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:
                 r = await client.get("/user")
-                if r.status_code == 401:
-                    return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
-                if r.status_code == 403:
-                    return HealthResult(
-                        ok=False,
-                        detail=("Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)),
-                    )
-                if r.status_code != 200:
-                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {_error_detail(r)}")
+                user_health = self._user_health_result(r)
+                if user_health is not None:
+                    return user_health
 
                 try:
                     user_info = r.json()
@@ -563,35 +661,14 @@ class GitLabConnector(ConnectorBase):
                 username = user_info.get("username", "")
 
                 projects_r = await client.get("/projects", params={"per_page": 1})
-                if projects_r.status_code == 401:
-                    detail = f"Invalid or expired GitLab token (HTTP 401){_id_suffix(projects_r)}"
-                    return HealthResult(ok=False, detail=detail)
-                if projects_r.status_code == 403:
-                    return HealthResult(
-                        ok=False,
-                        detail=(
-                            "Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(projects_r)
-                        ),
-                    )
-                if not projects_r.is_success:
-                    return HealthResult(
-                        ok=False,
-                        detail=f"Projects API returned HTTP {projects_r.status_code}: {_error_detail(projects_r)}",
-                    )
+                projects_health = self._projects_health_result(projects_r)
+                if projects_health is not None:
+                    return projects_health
 
                 # Diagnostic-only: report the instance version (most useful for
                 # self-hosted GitLab). Best-effort — a missing/inaccessible
                 # /version endpoint must never fail the health check.
-                version = None
-                if self._base_url != _GITLAB_API:
-                    try:
-                        version_r = await client.get("/version")
-                        if version_r.is_success:
-                            version_info = _safe_json(version_r)
-                            if isinstance(version_info, dict):
-                                version = version_info.get("version")
-                    except (httpx.RequestError, ValueError):
-                        version = None
+                version = await self._probe_instance_version(client)
 
                 # Scope verification — read the token's declared scopes from the
                 # Doorkeeper token-introspection endpoint so the
@@ -602,19 +679,9 @@ class GitLabConnector(ConnectorBase):
                 declared_scopes = await self._declared_effective_scopes(client)
                 if declared_scopes:
                     self._scope_cache = (time.monotonic(), declared_scopes)
-                    missing_scopes = REQUIRED_SCOPES - declared_scopes
-                else:
-                    missing_scopes = frozenset()
-
-            if missing_scopes:
-                return HealthResult(
-                    ok=False,
-                    detail=(
-                        "Missing scopes: "
-                        + ", ".join(sorted(missing_scopes))
-                        + f". Required: {', '.join(sorted(REQUIRED_SCOPES))}"
-                    ),
-                )
+                scope_health = self._scope_missing_result(declared_scopes)
+                if scope_health is not None:
+                    return scope_health
 
             detail = username
             if version:
@@ -664,18 +731,27 @@ class GitLabConnector(ConnectorBase):
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
+    @staticmethod
+    def _list_params(q: ConnectorQuery, filter_keys: Iterable[str] = ()) -> dict[str, Any]:
+        """Build base list-query params: per-page limit, optional filters, and cursor."""
+        params: dict[str, Any] = {"per_page": q.limit}
+        _copy_optional(q.filters, params, filter_keys)
+        _paginate_params(params, q.cursor)
+        return params
+
+    def _query_project_encoded(self, q: ConnectorQuery) -> str:
+        """Return the URL-encoded project path required by a query resource."""
+        project = self._require_filter(q.filters, "project", q.resource)
+        return _project_path(project)
+
+    def _write_project_encoded(self, payload: ConnectorPayload) -> str:
+        """Return the URL-encoded project path required by a write resource."""
+        project = self._require_filter(payload.data, "project", payload.resource)
+        return _project_path(project)
+
     async def _query_projects(self, q: ConnectorQuery) -> ConnectorResult:
         """List projects accessible to the token."""
-        params: dict[str, Any] = {"per_page": q.limit}
-        if "search" in q.filters:
-            params["search"] = q.filters["search"]
-        if "membership" in q.filters:
-            params["membership"] = q.filters["membership"]
-        if "visibility" in q.filters:
-            params["visibility"] = q.filters["visibility"]
-        if "owned" in q.filters:
-            params["owned"] = q.filters["owned"]
-        _paginate_params(params, q.cursor)
+        params = self._list_params(q, ("search", "membership", "visibility", "owned"))
         r = await self._call_api("GET", "/projects", params=params)
         data = _safe_json(r)
         return self._result(data, r)
@@ -699,8 +775,7 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_tree(self, q: ConnectorQuery) -> ConnectorResult:
         """List repository tree entries (optional recursive + path filters)."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
+        encoded = self._query_project_encoded(q)
         tree_params: dict[str, Any] = {"per_page": q.limit}
         if "path" in q.filters:
             path = q.filters["path"]
@@ -721,16 +796,8 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_merge_requests(self, q: ConnectorQuery) -> ConnectorResult:
         """List project merge requests (filters: state, labels, milestone)."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        mr_params: dict[str, Any] = {"per_page": q.limit}
-        if "state" in q.filters:
-            mr_params["state"] = q.filters["state"]
-        if "labels" in q.filters:
-            mr_params["labels"] = q.filters["labels"]
-        if "milestone" in q.filters:
-            mr_params["milestone"] = q.filters["milestone"]
-        _paginate_params(mr_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        mr_params = self._list_params(q, ("state", "labels", "milestone"))
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/merge_requests",
@@ -748,7 +815,7 @@ class GitLabConnector(ConnectorBase):
             "GET",
             f"/projects/{encoded}/merge_requests/{mr_iid}",
         )
-        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+        return _single_result(r)
 
     async def _query_mr_changes(self, q: ConnectorQuery) -> ConnectorResult:
         """Get the diff/changed files of a merge request."""
@@ -759,17 +826,15 @@ class GitLabConnector(ConnectorBase):
             "GET",
             f"/projects/{encoded}/merge_requests/{mr_iid}/changes",
         )
-        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+        return _single_result(r)
 
     async def _query_issues(self, q: ConnectorQuery) -> ConnectorResult:
         """List project issues (filters: state, labels, milestone, search, sort, order_by, assignee_id)."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        params = {"per_page": q.limit}
-        for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
-            if key in q.filters:
-                params[key] = q.filters[key]
-        _paginate_params(params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        params = self._list_params(
+            q,
+            ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"),
+        )
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/issues",
@@ -787,14 +852,12 @@ class GitLabConnector(ConnectorBase):
             "GET",
             f"/projects/{encoded}/issues/{issue_iid}",
         )
-        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+        return _single_result(r)
 
     async def _query_labels(self, q: ConnectorQuery) -> ConnectorResult:
         """List project labels."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        label_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(label_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        label_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/labels",
@@ -812,14 +875,12 @@ class GitLabConnector(ConnectorBase):
             "GET",
             f"/projects/{encoded}/labels/{label_id}",
         )
-        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+        return _single_result(r)
 
     async def _query_milestones(self, q: ConnectorQuery) -> ConnectorResult:
         """List project milestones."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        milestone_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(milestone_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        milestone_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/milestones",
@@ -830,14 +891,9 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_issue_notes(self, q: ConnectorQuery) -> ConnectorResult:
         """List notes on an issue."""
-        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = self._query_project_encoded(q)
         issue_iid = self._require_filter(q.filters, "iid", q.resource)
-        encoded = _project_path(project)
-        params = {"per_page": q.limit}
-        for key in ("sort", "order_by"):
-            if key in q.filters:
-                params[key] = q.filters[key]
-        _paginate_params(params, q.cursor)
+        params = self._list_params(q, ("sort", "order_by"))
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/issues/{issue_iid}/notes",
@@ -848,11 +904,9 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_issue_discussions(self, q: ConnectorQuery) -> ConnectorResult:
         """List discussions on an issue."""
-        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = self._query_project_encoded(q)
         issue_iid = self._require_filter(q.filters, "iid", q.resource)
-        encoded = _project_path(project)
-        discussion_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(discussion_params, q.cursor)
+        discussion_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/issues/{issue_iid}/discussions",
@@ -870,14 +924,12 @@ class GitLabConnector(ConnectorBase):
             "GET",
             f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
         )
-        return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+        return _single_result(r)
 
     async def _query_branches(self, q: ConnectorQuery) -> ConnectorResult:
         """List repository branches."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        branch_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(branch_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        branch_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/repository/branches",
@@ -888,10 +940,8 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_tags(self, q: ConnectorQuery) -> ConnectorResult:
         """List repository tags."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        tag_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(tag_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        tag_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/repository/tags",
@@ -902,10 +952,8 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_pipelines(self, q: ConnectorQuery) -> ConnectorResult:
         """List pipelines for a project."""
-        project = self._require_filter(q.filters, "project", q.resource)
-        encoded = _project_path(project)
-        pipeline_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(pipeline_params, q.cursor)
+        encoded = self._query_project_encoded(q)
+        pipeline_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/pipelines",
@@ -916,11 +964,9 @@ class GitLabConnector(ConnectorBase):
 
     async def _query_jobs(self, q: ConnectorQuery) -> ConnectorResult:
         """List jobs for a pipeline."""
-        project = self._require_filter(q.filters, "project", q.resource)
+        encoded = self._query_project_encoded(q)
         pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
-        encoded = _project_path(project)
-        job_params: dict[str, Any] = {"per_page": q.limit}
-        _paginate_params(job_params, q.cursor)
+        job_params = self._list_params(q)
         r = await self._call_api(
             "GET",
             f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
@@ -987,42 +1033,43 @@ class GitLabConnector(ConnectorBase):
         )
         return _safe_json_object(r)
 
+    @staticmethod
+    def _normalize_commit_action(action: Any, resource: str) -> dict[str, Any]:
+        """Validate and normalise a single Commits-API action into its wire payload."""
+        if not isinstance(action, dict):
+            raise ValueError(f"GitLab resource {resource!r}: each action must be an object")
+        action_type = action.get("action")
+        if action_type not in _COMMIT_ACTIONS:
+            raise ValueError(
+                f"GitLab resource {resource!r}: action {action_type!r} must be one of {sorted(_COMMIT_ACTIONS)}",
+            )
+        file_path = action.get("file_path")
+        if not file_path:
+            raise ValueError(f"GitLab resource {resource!r}: each action requires 'file_path'")
+        _validate_path(file_path, resource)
+        normalized: dict[str, Any] = {"action": action_type, "file_path": file_path}
+        if "content" in action:
+            normalized["content"] = action["content"]
+        if action_type == "move":
+            previous_path = action.get("previous_path")
+            if not previous_path:
+                msg = f"GitLab resource {resource!r}: move action requires 'previous_path'"
+                raise ValueError(msg)
+            _validate_path(previous_path, resource)
+            normalized["previous_path"] = previous_path
+        return normalized
+
     async def _write_files(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Batch file operations in one commit via the Commits API."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         actions = self._require_filter(payload.data, "actions", payload.resource)
         if not isinstance(actions, list) or not actions:
             raise ValueError(f"GitLab resource {payload.resource!r} requires a non-empty 'actions' list")
-        encoded = _project_path(project)
         commit_body: dict[str, Any] = {
             "branch": payload.data.get("ref", payload.data.get("branch", "main")),
             "commit_message": payload.data.get("message", "Update via Modulo"),
-            "actions": [],
+            "actions": [self._normalize_commit_action(a, payload.resource) for a in actions],
         }
-        for action in actions:
-            if not isinstance(action, dict):
-                raise ValueError(f"GitLab resource {payload.resource!r}: each action must be an object")
-            action_type = action.get("action")
-            if action_type not in _COMMIT_ACTIONS:
-                raise ValueError(
-                    f"GitLab resource {payload.resource!r}: action {action_type!r} must be one of "
-                    f"{sorted(_COMMIT_ACTIONS)}",
-                )
-            file_path = action.get("file_path")
-            if not file_path:
-                raise ValueError(f"GitLab resource {payload.resource!r}: each action requires 'file_path'")
-            _validate_path(file_path, payload.resource)
-            normalized: dict[str, Any] = {"action": action_type, "file_path": file_path}
-            if "content" in action:
-                normalized["content"] = action["content"]
-            if action_type == "move":
-                previous_path = action.get("previous_path")
-                if not previous_path:
-                    msg = f"GitLab resource {payload.resource!r}: move action requires 'previous_path'"
-                    raise ValueError(msg)
-                _validate_path(previous_path, payload.resource)
-                normalized["previous_path"] = previous_path
-            commit_body["actions"].append(normalized)
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/repository/commits",
@@ -1054,17 +1101,15 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_merge_request(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Create a merge request."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
         title = self._require_filter(payload.data, "title", payload.resource)
-        encoded = _project_path(project)
         body = {
             "source_branch": source_branch,
             "target_branch": payload.data.get("target_branch", "main"),
             "title": title,
         }
-        if "description" in payload.data:
-            body["description"] = payload.data["description"]
+        _copy_optional(payload.data, body, ("description",))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/merge_requests",
@@ -1074,10 +1119,9 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_mr_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Add a note to a merge request."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         mr_iid = self._require_filter(payload.data, "iid", payload.resource)
         note_body = self._require_filter(payload.data, "body", payload.resource)
-        encoded = _project_path(project)
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
@@ -1087,18 +1131,14 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_mr_merge(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Merge a merge request."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
         merge_body: dict[str, Any] = {}
-        if "merge_commit_message" in payload.data:
-            merge_body["merge_commit_message"] = payload.data["merge_commit_message"]
-        if "squash" in payload.data:
-            merge_body["squash"] = payload.data["squash"]
-        if "should_remove_source_branch" in payload.data:
-            merge_body["should_remove_source_branch"] = payload.data["should_remove_source_branch"]
-        if "merge_when_pipeline_succeeds" in payload.data:
-            merge_body["merge_when_pipeline_succeeds"] = payload.data["merge_when_pipeline_succeeds"]
+        _copy_optional(
+            payload.data,
+            merge_body,
+            ("merge_commit_message", "squash", "should_remove_source_branch", "merge_when_pipeline_succeeds"),
+        )
         r = await self._call_api(
             "PUT",
             f"/projects/{encoded}/merge_requests/{mr_iid}/merge",
@@ -1108,12 +1148,10 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_mr_approve(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Approve a merge request."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
         approve_body: dict[str, Any] = {}
-        if "sha" in payload.data:
-            approve_body["sha"] = payload.data["sha"]
+        _copy_optional(payload.data, approve_body, ("sha",))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
@@ -1123,9 +1161,8 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_mr_approval_request(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Request approval from specific users via an approval rule."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
         user_ids = payload.data.get("user_ids") or []
         user_emails = payload.data.get("user_emails") or []
         if not user_ids and not user_emails:
@@ -1150,10 +1187,9 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_mr_labels(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Set labels on a merge request."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         mr_iid = self._require_filter(payload.data, "iid", payload.resource)
         labels = self._require_filter(payload.data, "labels", payload.resource)
-        encoded = _project_path(project)
         r = await self._call_api(
             "PUT",
             f"/projects/{encoded}/merge_requests/{mr_iid}",
@@ -1163,20 +1199,12 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Create an issue."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         title = self._require_filter(payload.data, "title", payload.resource)
-        encoded = _project_path(project)
         body = {
             "title": title,
         }
-        if "description" in payload.data:
-            body["description"] = payload.data["description"]
-        if "labels" in payload.data:
-            body["labels"] = payload.data["labels"]
-        if "milestone_id" in payload.data:
-            body["milestone_id"] = payload.data["milestone_id"]
-        if "assignee_ids" in payload.data:
-            body["assignee_ids"] = payload.data["assignee_ids"]
+        _copy_optional(payload.data, body, ("description", "labels", "milestone_id", "assignee_ids"))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/issues",
@@ -1186,13 +1214,10 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Update an issue (close/reopen, edit title/description)."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
-        body = {}
-        for key in ("state_event", "title", "description"):
-            if key in payload.data:
-                body[key] = payload.data[key]
+        body: dict[str, Any] = {}
+        _copy_optional(payload.data, body, ("state_event", "title", "description"))
         r = await self._call_api(
             "PUT",
             f"/projects/{encoded}/issues/{issue_iid}",
@@ -1202,25 +1227,20 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_issue_note(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Add a note to an issue."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
-        body = self._require_filter(payload.data, "body", payload.resource)
-        body = {
-            "body": body,
-        }
+        note_body = self._require_filter(payload.data, "body", payload.resource)
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/issues/{issue_iid}/notes",
-            json=body,
+            json={"body": note_body},
         )
         return _safe_json_object(r)
 
     async def _write_issue_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Replace labels on an issue."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         issue_iid = self._require_filter(payload.data, "iid", payload.resource)
-        encoded = _project_path(project)
         labels = self._require_filter(payload.data, "labels", payload.resource)
         body = {
             "labels": labels,
@@ -1234,15 +1254,13 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Create a project label."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         name = self._require_filter(payload.data, "name", payload.resource)
-        encoded = _project_path(project)
         body = {
             "name": name,
             "color": payload.data.get("color", "#428BCA"),
         }
-        if "description" in payload.data:
-            body["description"] = payload.data["description"]
+        _copy_optional(payload.data, body, ("description",))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/labels",
@@ -1252,16 +1270,12 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_milestone(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Create a project milestone."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         title = self._require_filter(payload.data, "title", payload.resource)
-        encoded = _project_path(project)
         body = {
             "title": title,
         }
-        if "description" in payload.data:
-            body["description"] = payload.data["description"]
-        if "due_date" in payload.data:
-            body["due_date"] = payload.data["due_date"]
+        _copy_optional(payload.data, body, ("description", "due_date"))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/milestones",
@@ -1271,14 +1285,12 @@ class GitLabConnector(ConnectorBase):
 
     async def _write_pipeline_run(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Trigger a pipeline."""
-        project = self._require_filter(payload.data, "project", payload.resource)
+        encoded = self._write_project_encoded(payload)
         ref = self._require_filter(payload.data, "ref", payload.resource)
-        encoded = _project_path(project)
         body = {
             "ref": ref,
         }
-        if "variables" in payload.data:
-            body["variables"] = payload.data["variables"]
+        _copy_optional(payload.data, body, ("variables",))
         r = await self._call_api(
             "POST",
             f"/projects/{encoded}/pipeline",
