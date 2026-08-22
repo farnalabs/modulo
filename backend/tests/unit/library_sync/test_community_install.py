@@ -90,6 +90,10 @@ class _FakeSession:
     async def flush(self) -> None:
         return None
 
+    async def commit(self) -> None:
+        if self._in_tx:
+            self._in_tx = False
+
     async def execute(self, stmt: Any) -> _FakeResult:
         text = str(stmt)
         if "LibraryPrimitive.id" in text or "library_primitives.id" in text:
