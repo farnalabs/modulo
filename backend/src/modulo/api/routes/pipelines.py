@@ -1393,19 +1393,19 @@ async def _assert_team_transition_allowed(
         )
 
     # Current team gate (if the pipeline is currently team-private): the caller
-    # must be a member of the CURRENT team (or admin).
-    if _is_team_private(current.visibility, current.owner_team_id):
-        assert current.owner_team_id is not None
+    # must be a member of the CURRENT team (or admin). ``_is_team_private`` is
+    # only True when an owner team is set, so this never skips a real gate.
+    current_team_id = current.owner_team_id
+    if current_team_id is not None and _is_team_private(current.visibility, current_team_id):
         await _require_team_membership(
             session,
             account_id=principal.account_id,
-            team_id=current.owner_team_id,
+            team_id=current_team_id,
             denial_detail="Not a member of the team that owns this resource",
         )
 
     # New team gate: reassigning to a team requires membership of the NEW team.
-    if _is_owner_reassignment(new_owner_team_id, current.owner_team_id):
-        assert new_owner_team_id is not None
+    if new_owner_team_id is not None and _is_owner_reassignment(new_owner_team_id, current.owner_team_id):
         await _require_team_membership(
             session,
             account_id=principal.account_id,
