@@ -155,7 +155,7 @@ def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> b
     return all(config_json.get(k) for k in keys)
 
 
-@router.get("", response_model=ForwarderListResponse, dependencies=[require_feature("error_forwarders")])
+@router.get("", dependencies=[require_feature("error_forwarders")])
 async def list_forwarders(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -214,7 +214,6 @@ async def list_forwarders(
 
 @router.put(
     "/{forwarder_type}",
-    response_model=ForwarderConfigResponse,
     dependencies=[require_feature("error_forwarders")],
 )
 async def configure_forwarder(
@@ -305,7 +304,6 @@ async def configure_forwarder(
 
 @router.post(
     "/{forwarder_type}/test",
-    response_model=ForwarderTestResult,
     dependencies=[require_feature("error_forwarders")],
 )
 async def test_forwarder(
@@ -490,7 +488,6 @@ async def delete_forwarder(
 
 @router.post(
     "/{forwarder_type}/restore",
-    response_model=ForwarderConfigResponse,
     dependencies=[require_feature("error_forwarders")],
 )
 async def restore_forwarder(

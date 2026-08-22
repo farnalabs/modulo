@@ -167,7 +167,6 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
 
 @router.post(
     "/runs/{run_id}/hitl/{gate_id}/claim",
-    response_model=ClaimResponse,
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.claim_gate")
@@ -700,7 +699,6 @@ async def submit_manual_output(
 
 @router.get(
     "/runs/{run_id}/hitl/pending",
-    response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_run_pending_gates")
 async def list_run_pending_gates(
@@ -766,7 +764,6 @@ async def list_run_pending_gates(
 
 @router.get(
     "/hitl/pending",
-    response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_org_pending_gates")
 async def list_org_pending_gates(

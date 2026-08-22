@@ -156,6 +156,8 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # the failure write, and log names cannot drift (S1192).
 _ERROR_CODE_AGENT_FAILED = "agent.failed"
 _ERROR_CODE_NODE_TIMEOUT = "node.timeout"
+_ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"
+_ERROR_CODE_HARNESS_IDEMPOTENCY_GATE = "harness.idempotency_gate"
 
 # Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
 # retry must NOT re-fire back-to-back — the run is re-dispatched only after a
@@ -316,7 +318,7 @@ _NEVER_RETRYABLE_SCRIPT_CODES: frozenset[str] = frozenset(
     {
         "script.failed",
         "script.invalid_output",
-        "script.side_effect_unknown",
+        _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN,
         "script.session_lost",
         "script.budget_killed",
     }
@@ -2585,7 +2587,7 @@ class PipelineExecutor:
             # ``_maybe_retry_after_policy``; here we surface the code/detail so
             # the terminalization write matches.
             final_status = "failed"
-            error_code = "script.side_effect_unknown"
+            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
             error_detail = _sanitize_detail(
                 "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
                 "not retried — needs human review.",
@@ -2729,7 +2731,7 @@ class PipelineExecutor:
             return {
                 "decision": "gate",
                 "final_status": "complete",
-                "error_code": "harness.idempotency_gate",
+                "error_code": _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE,
                 "error_detail": "delivery already sent; transient retry suppressed by idempotency gate",
                 "gated_node_id": _gated_node_id,
             }
@@ -3179,7 +3181,7 @@ class PipelineExecutor:
             # requeue — a script process may have run, so the side-effect
             # state is unknown. Terminal (never retried) with the
             # needs-human ``script.side_effect_unknown`` code.
-            error_code = "script.side_effect_unknown"
+            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
             error_detail = _sanitize_detail(
                 "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
                 "not retried — needs human review: " + str(exc),
@@ -3324,14 +3326,16 @@ class PipelineExecutor:
             # silently looping or being left stuck in ``running``.
             _log.warning(
                 "script.lease_probe.terminal_side_effect_unknown",
-                extra={"run_id": str(run_id), "error_code": "script.side_effect_unknown"},
+                extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
             )
             error_detail_value = _sanitize_detail(
                 "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
                 "not retried — needs human review.",
                 limit=5000,
             )
-            broker.publish("run_failed", {"error": "script.side_effect_unknown", "detail": error_detail_value})
+            broker.publish(
+                "run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value}
+            )
             return "side_effect_unknown"
         return "none"
 
@@ -3364,7 +3368,7 @@ class PipelineExecutor:
             # gated run (error_code harness.idempotency_gate) is excluded — the
             # delivery was already made by a PRIOR attempt; running evals /
             # firing agent_signal against the skip envelope would be wrong.
-            if final_status == "complete" and error_code != "harness.idempotency_gate":
+            if final_status == "complete" and error_code != _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
                     final_status, error_code, error_detail = await self._check_eval_suites_for_run(
@@ -3469,7 +3473,7 @@ class PipelineExecutor:
         terminal-failed as ``eval_suite_blocked`` with the audit event recorded
         here. Returns the (possibly mutated) triplet.
         """
-        if final_status != "complete" or error_code == "harness.idempotency_gate":
+        if final_status != "complete" or error_code == _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
             return final_status, error_code, error_detail
         try:
             await self._check_eval_suites(session, run_id, pipeline_id)

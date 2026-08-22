@@ -43,7 +43,7 @@ class TriggerEventListResponse(BaseModel):
     total: int
 
 
-@router.get("", response_model=TriggerEventListResponse)
+@router.get("")
 @handle_db_errors("admin.triggers.list_trigger_events")
 async def list_trigger_events(
     trigger_type: str | None = Query(None),

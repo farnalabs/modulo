@@ -140,7 +140,7 @@ class ContextSourceModeUpdate(BaseModel):
 # ── Config endpoints ──────────────────────────────────────────────────
 
 
-@router.get("/config", response_model=RemyConfigResponse)
+@router.get("/config")
 @handle_db_errors("admin.remy.get_remy_config")
 async def get_remy_config(
     session: AsyncSession = Depends(get_db_session),
@@ -187,7 +187,7 @@ async def get_remy_config(
         ) from None
 
 
-@router.get("/available-providers", response_model=AvailableProvidersResponse)
+@router.get("/available-providers")
 @handle_db_errors("admin.remy.get_available_providers")
 async def get_available_providers(
     principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
@@ -217,7 +217,7 @@ async def get_available_providers(
         ) from None
 
 
-@router.put("/config", response_model=RemyConfigResponse)
+@router.put("/config")
 @handle_db_errors("admin.remy.update_remy_config")
 async def update_remy_config(
     req: RemyConfigUpdate,
@@ -326,7 +326,7 @@ def _skill_to_response(skill: RemySkill) -> SkillResponse:
     )
 
 
-@router.get("/skills", response_model=list[SkillResponse])
+@router.get("/skills")
 @handle_db_errors("admin.remy.list_org_skills")
 async def list_org_skills(
     session: AsyncSession = Depends(get_db_session),
@@ -367,7 +367,7 @@ async def list_org_skills(
         ) from None
 
 
-@router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/skills", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.remy.create_org_skill")
 async def create_org_skill(
     req: SkillCreate,
@@ -412,7 +412,7 @@ async def create_org_skill(
         ) from None
 
 
-@router.put("/skills/{skill_id}", response_model=SkillResponse)
+@router.put("/skills/{skill_id}")
 @handle_db_errors("admin.remy.update_org_skill")
 async def update_org_skill(
     skill_id: uuid.UUID,

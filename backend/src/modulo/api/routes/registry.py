@@ -117,7 +117,7 @@ class RegisterPublisherRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/primitives", response_model=RegistryRankedListResponse)
+@router.get("/primitives")
 @handle_db_errors("registry.list_registry_primitives_endpoint")
 async def list_registry_primitives_endpoint(
     author: str | None = Query(None),
@@ -164,7 +164,7 @@ async def list_registry_primitives_endpoint(
     return RegistryRankedListResponse(items=items, total=total)
 
 
-@router.get("/primitives/{slug:path}", response_model=PullResponse)
+@router.get("/primitives/{slug:path}")
 @handle_db_errors("registry.get_registry_primitive_endpoint")
 async def get_registry_primitive_endpoint(
     slug: str,
@@ -215,7 +215,6 @@ async def get_registry_primitive_endpoint(
 
 @router.post(
     "/primitives",
-    response_model=RegistryEntryResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("registry.publish_primitive_endpoint")
@@ -252,7 +251,6 @@ async def publish_primitive_endpoint(
 
 @router.post(
     "/primitives/{slug:path}/download",
-    response_model=PullResponse,
 )
 @handle_db_errors("registry.download_registry_primitive_endpoint")
 async def download_registry_primitive_endpoint(
@@ -398,7 +396,7 @@ class VerifyResponseV2(BaseModel):
     trust_anchor_verified: bool = False
 
 
-@router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
+@router.post("/publish", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("registry.publish_primitive_v2")
 async def publish_primitive_v2(
     req: PublishRequestV2,
@@ -487,7 +485,7 @@ async def publish_primitive_v2(
     )
 
 
-@router.get("/pull/{slug:path}", response_model=PullResponseV2)
+@router.get("/pull/{slug:path}")
 @handle_db_errors("registry.pull_registry_primitive_v2")
 async def pull_registry_primitive_v2(
     slug: str,
@@ -524,7 +522,7 @@ async def pull_registry_primitive_v2(
     )
 
 
-@router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
+@router.get("/verify/{slug:path}")
 @handle_db_errors("registry.verify_registry_primitive_v2")
 async def verify_registry_primitive_v2(
     slug: str,

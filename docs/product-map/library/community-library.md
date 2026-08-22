@@ -12,6 +12,7 @@ code:
   - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
   - backend/src/modulo/core/library_service/__init__.py
   - backend/src/modulo/api/routes/library.py
+  - backend/src/modulo/api/routes/community_library.py
   - frontend/src/views/LibraryView.vue
 unit-tests:
   - backend/tests/unit/library_service/test_library_service.py

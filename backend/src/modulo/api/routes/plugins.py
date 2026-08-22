@@ -48,7 +48,7 @@ def _to_response(manifest: PluginManifest, health: PluginHealth) -> PluginRespon
     )
 
 
-@router.get("", response_model=list[PluginResponse], dependencies=[require_feature("plugin_management")])
+@router.get("", dependencies=[require_feature("plugin_management")])
 async def list_plugins_endpoint(
     principal: TenantPrincipal = require_permission("plugin.list"),
 ) -> list[PluginResponse]:

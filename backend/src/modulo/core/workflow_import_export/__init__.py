@@ -1319,7 +1319,7 @@ async def _create_schema_with_retry(
             if existing_schema_names is None:
                 existing_schema_names = await _load_schema_names(ctx)
             existing_schema_names.add(sname)
-            new_sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
+            new_sname = suggest_import_name(existing_schema_names, sname, suffix=_IMPORTED_SUFFIX)
             ctx.warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
             sname = new_sname
             existing_schema_names.add(sname)

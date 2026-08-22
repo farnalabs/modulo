@@ -72,7 +72,7 @@ class NodeCategoryListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=NodeCategoryListResponse)
+@router.get("")
 @handle_db_errors("node_categories.list_node_categories_endpoint")
 async def list_node_categories_endpoint(
     page: int = Query(default=1, ge=1),
@@ -125,7 +125,7 @@ async def list_node_categories_endpoint(
     )
 
 
-@router.post("", response_model=NodeCategoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("node_categories.create_node_category_endpoint")
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
@@ -179,7 +179,7 @@ async def create_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.get("/{category_id}", response_model=NodeCategoryResponse)
+@router.get("/{category_id}")
 @handle_db_errors("node_categories.get_node_category_endpoint")
 async def get_node_category_endpoint(
     category_id: uuid.UUID,
@@ -226,7 +226,7 @@ async def get_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.patch("/{category_id}", response_model=NodeCategoryResponse)
+@router.patch("/{category_id}")
 @handle_db_errors("node_categories.update_node_category_endpoint")
 async def update_node_category_endpoint(
     category_id: uuid.UUID,
@@ -328,7 +328,7 @@ async def delete_node_category_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
 
 
-@router.post("/{category_id}/restore", response_model=NodeCategoryResponse)
+@router.post("/{category_id}/restore")
 @handle_db_errors("node_categories.restore_node_category_endpoint")
 async def restore_node_category_endpoint(
     category_id: uuid.UUID,

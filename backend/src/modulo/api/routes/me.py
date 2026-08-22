@@ -192,7 +192,7 @@ async def change_password(
 # ── User-level Remy Skills ────────────────────────────────────────────
 
 
-@router.get("/me/remy/skills", response_model=list[SkillResponse])
+@router.get("/me/remy/skills")
 @handle_db_errors("me.list_user_skills")
 async def list_user_skills(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -212,7 +212,7 @@ async def list_user_skills(
     return [_skill_to_response(s) for s in skills]
 
 
-@router.post("/me/remy/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/me/remy/skills", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("me.create_user_skill")
 async def create_user_skill(
     req: SkillCreate,
@@ -244,7 +244,7 @@ async def create_user_skill(
     return _skill_to_response(skill)
 
 
-@router.put("/me/remy/skills/{skill_id}", response_model=SkillResponse)
+@router.put("/me/remy/skills/{skill_id}")
 @handle_db_errors("me.update_user_skill")
 async def update_user_skill(
     skill_id: uuid.UUID,

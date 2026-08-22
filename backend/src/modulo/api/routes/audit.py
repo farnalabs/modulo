@@ -36,7 +36,7 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
-@router.get("", response_model=dict[str, object])
+@router.get("")
 @handle_db_errors("audit.list_audit_events_endpoint")
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
@@ -105,7 +105,7 @@ async def list_audit_events_endpoint(
     return result
 
 
-@router.post("/batch-detail", response_model=list[dict[str, object]], dependencies=[require_feature("audit_viewer")])
+@router.post("/batch-detail", dependencies=[require_feature("audit_viewer")])
 async def batch_detail_endpoint(
     req: BatchDetailRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -143,7 +143,7 @@ async def batch_detail_endpoint(
     return result
 
 
-@router.get("/verify", response_model=dict[str, object])
+@router.get("/verify")
 @handle_db_errors("audit.verify_chain_endpoint")
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -177,7 +177,7 @@ async def verify_chain_endpoint(
     return result
 
 
-@router.get("/export", response_model=dict[str, object], dependencies=[require_feature("audit_viewer")])
+@router.get("/export", dependencies=[require_feature("audit_viewer")])
 async def export_chain_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),

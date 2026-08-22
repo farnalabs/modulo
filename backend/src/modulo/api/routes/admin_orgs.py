@@ -46,6 +46,8 @@ _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
 _MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
 _CODE_ADMIN_ORGS_ADMIN_REMOVE = "admin_orgs.admin_remove_org_license"
+_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED = "admin_orgs.admin_set_org_triggers_paused"
+_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH = "admin_orgs.admin_set_org_guardrails_kill_switch"
 
 _MSG_MIGRATIONS_REQUIRED = "Feature is not available. Run database migrations to enable it."
 
@@ -185,7 +187,7 @@ class CreateOrgResponse(BaseModel):
     created_at: str
 
 
-@router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.orgs.admin_create_org")
 async def admin_create_org(
     req: CreateOrgRequest,
@@ -240,7 +242,7 @@ class ListOrgItem(BaseModel):
     created_at: str
 
 
-@router.get("", response_model=list[ListOrgItem])
+@router.get("")
 @handle_db_errors("admin.orgs.admin_list_orgs")
 async def admin_list_orgs(
     _: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
@@ -359,7 +361,7 @@ def _create_org_user_response(account: Any, membership: Any) -> "CreateOrgUserRe
     )
 
 
-@router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{org_id}/users", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.orgs.admin_create_org_user")
 async def admin_create_org_user(
     org_id: uuid.UUID,
@@ -475,7 +477,7 @@ def _resolve_org_license(org: Organisation) -> OrgLicenseResponse:
     return OrgLicenseResponse(has_license=False)
 
 
-@router.get("/{org_id}/license", response_model=OrgLicenseResponse)
+@router.get("/{org_id}/license")
 @handle_db_errors("admin.orgs.admin_get_org_license")
 async def admin_get_org_license(
     org_id: uuid.UUID,
@@ -529,7 +531,7 @@ def _clear_org_license_key(settings_json: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-@router.put("/{org_id}/license", response_model=OrgLicenseResponse)
+@router.put("/{org_id}/license")
 @handle_db_errors("admin.orgs.admin_set_org_license")
 async def admin_set_org_license(
     org_id: uuid.UUID,
@@ -568,7 +570,7 @@ async def admin_set_org_license(
     return _license_response_from_data(d)
 
 
-@router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
+@router.delete("/{org_id}/license")
 @handle_db_errors("admin.orgs.admin_remove_org_license")
 async def admin_remove_org_license(
     org_id: uuid.UUID,
@@ -618,7 +620,7 @@ class SetOrgAuthzEnforceResponse(BaseModel):
     enforce: bool
 
 
-@router.patch("/{org_id}/authz-enforce", response_model=SetOrgAuthzEnforceResponse)
+@router.patch("/{org_id}/authz-enforce")
 @handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
 async def admin_set_org_authz_enforce(
     org_id: uuid.UUID,
@@ -668,7 +670,7 @@ class SetOrgTriggersPausedResponse(BaseModel):
     paused_at: str | None
 
 
-@router.put("/{org_id}/triggers/pause", response_model=SetOrgTriggersPausedResponse)
+@router.put("/{org_id}/triggers/pause")
 @handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
 async def admin_set_org_triggers_paused(
     org_id: uuid.UUID,
@@ -710,10 +712,10 @@ async def admin_set_org_triggers_paused(
                 paused_at=_timestamp_response(org.triggers_paused_at),
             )
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_set_org_triggers_paused", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
         _raise_db_unavailable(
-            "admin_orgs.admin_set_org_triggers_paused",
+            _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED,
             "Database error while updating org trigger pause state.",
             exc,
         )
@@ -742,7 +744,6 @@ class SetOrgGuardrailsKillSwitchResponse(BaseModel):
 
 @router.get(
     "/{org_id}/guardrails/kill-switch",
-    response_model=GetOrgGuardrailsKillSwitchResponse,
     # FAR-309 PR B org-global invariant: the kill-switch is the org-global
     # guardrail safety control -- a break-glass account must never be able to
     # disable it (or read it) even though it is an admin-scoped endpoint.
@@ -780,7 +781,6 @@ async def admin_get_org_guardrails_kill_switch(
 
 @router.put(
     "/{org_id}/guardrails/kill-switch",
-    response_model=SetOrgGuardrailsKillSwitchResponse,
     # FAR-309 PR B org-global invariant: the kill-switch is the org-global
     # guardrail safety control -- a break-glass account must NEVER be able to
     # disable it (or read it) even though it is an admin-scoped endpoint.
@@ -841,10 +841,10 @@ async def admin_set_org_guardrails_kill_switch(
                 enabled_at=_timestamp_response(org.guardrails_kill_switch_at),
             )
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_set_org_guardrails_kill_switch", _MSG_MIGRATIONS_REQUIRED, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH, _MSG_MIGRATIONS_REQUIRED, exc)
     except SQLAlchemyError as exc:
         _raise_db_unavailable(
-            "admin_orgs.admin_set_org_guardrails_kill_switch",
+            _CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH,
             "Database error while updating org guardrails kill-switch state.",
             exc,
         )

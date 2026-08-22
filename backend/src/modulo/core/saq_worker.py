@@ -84,6 +84,25 @@ _CRON_EVERY_MINUTE = "* * * * *"
 _CRON_EVERY_5_MINUTES = "*/5 * * * *"
 _CRON_HOURLY = "0 * * * *"
 
+
+def _sync_interval_to_cron(interval_seconds: int) -> str:
+    """Map the community-library sync interval (seconds) to a 5-field cron.
+
+    croniter parses 5-field cron with a 1-minute floor, so sub-minute intervals
+    collapse to every minute. Multiples of 3600 map to an hourly cadence
+    (``0 */N * * *``); anything else is expressed as ``*/N * * * *`` minutes.
+    """
+    if interval_seconds <= 60:
+        return _CRON_EVERY_MINUTE
+    minutes = max(1, interval_seconds // 60)
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        if hours >= 24:
+            return "0 0 * * *"
+        return f"0 */{hours} * * *"
+    return f"*/{minutes} * * * *"
+
+
 # Web UI bind (F8): fly ssh only.
 _SYSTEM_WEB_HOST = "127.0.0.1"
 _SYSTEM_WEB_PORT = 8081
@@ -746,6 +765,36 @@ async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"emitted": emitted}
 
 
+async def library_sync(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — periodic community-library sync (FAR-363).
+
+    No-op when ``modulo_library_endpoint`` is empty (library not configured).
+    Never raises (fail-open): ``sync_library`` already returns a result on every
+    failure path and this wrapper adds a final guard so a session/DB failure
+    cannot crash the worker. The last-good cached manifest survives a bad tick.
+    """
+    settings = get_settings()
+    if not settings.modulo_library_endpoint:
+        _log.info("saq.library_sync.disabled")
+        return {"status": "disabled"}
+    try:
+        from modulo.core.library_sync import sync_library
+
+        async with _make_session_factory()() as session:
+            result = await sync_library(session)
+        return {
+            "status": "ok" if result.success else "failed",
+            "entries_count": result.entries_count,
+            "revoked_count": result.revoked_count,
+            "error": result.error,
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq.library_sync.failed")
+        return {"status": "failed", "error": "unexpected cron failure"}
+
+
 async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — daily product analytics metrics dump (FAR-356).
 
@@ -889,6 +938,7 @@ def _system_functions() -> list[Any]:
         analytics_facts_maintenance,
         journey_reconcile,
         check_missed_fire_alerts_cron,
+        library_sync,
         metrics_dump,
     ]
 
@@ -1035,6 +1085,19 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             timeout=300,
             heartbeat=30,
             retries=2,
+            ttl=300,
+        ),
+        # library_sync: cadence derives from modulo_library_sync_interval_seconds
+        # (default 300s -> every 5 min). Fail-open: the job never raises (a bad
+        # tick is logged and the last-good cached manifest survives). unique=True
+        # so overlapping ticks cannot double-write the singleton state row.
+        CronJob(
+            library_sync,
+            cron=_sync_interval_to_cron(get_settings().modulo_library_sync_interval_seconds),
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=1,
             ttl=300,
         ),
         # metrics_dump: daily 01:00 UTC, unique=True, system session factory.

@@ -147,7 +147,19 @@ async def _load_trigger_and_org(
     return trigger, org_id
 
 
-@router.post("/{trigger_id}/slack", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{trigger_id}/slack",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        400: {"description": "Bad request"},
+        401: {"description": "Unauthorized"},
+        404: {"description": "Not Found"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_SLACK_RECEIVE_EVENT)
 async def receive_slack_event(
     trigger_id: uuid.UUID,
