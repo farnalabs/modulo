@@ -35,6 +35,10 @@ router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-librar
 
 _log = logging.getLogger(__name__)
 
+# Log tag used for every exception path in the install endpoint, kept as a
+# single constant to avoid duplicating the literal.
+_INSTALL_LOG_TAG = "community_library.install"
+
 
 class CommunityLibraryEntryBase(BaseModel):
     """Shared fields of a community-library catalog entry.
@@ -184,16 +188,16 @@ async def install(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Community entry content could not be fetched",
             ) from None
-        _log.exception("community_library.install")
+        _log.exception(_INSTALL_LOG_TAG)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message) from None
     except SQLAlchemyError:
-        _log.exception("community_library.install")
+        _log.exception(_INSTALL_LOG_TAG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
-        _log.exception("community_library.install")
+        _log.exception(_INSTALL_LOG_TAG)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while installing the community entry.",

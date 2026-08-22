@@ -36,6 +36,11 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Error message raised by ``install_community_entry`` when the requested entry
+# is unknown or revoked. Kept as a single constant so the API layer can match
+# on it without duplicating the literal.
+_ENTRY_NOT_FOUND_MSG = "entry not found"
+
 # Values accepted by the ``ck_library_primitives_type`` CHECK constraint on
 # ``library_primitives.primitive_type``.
 _VALID_PRIMITIVE_TYPES = {
@@ -185,11 +190,11 @@ async def install_community_entry(
     """
     manifest = await get_cached_manifest(session)
     if not manifest:
-        raise ValueError("entry not found")
+        raise ValueError(_ENTRY_NOT_FOUND_MSG)
     data = parse_manifest(manifest)
     entry = _find_entry(data.entries, entry_id)
     if entry is None or await is_revoked(session, entry_id):
-        raise ValueError("entry not found")
+        raise ValueError(_ENTRY_NOT_FOUND_MSG)
 
     if target_team_id is not None:
         raise ValueError("registry entries are org-owned")
@@ -209,7 +214,7 @@ async def install_community_entry(
         or not isinstance(version, str)
         or not isinstance(author, str)
     ):
-        raise ValueError("entry not found")
+        raise ValueError(_ENTRY_NOT_FOUND_MSG)
 
     content = await _fetch_blob(content_sha256)
     if content is None:
