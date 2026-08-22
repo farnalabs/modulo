@@ -4,8 +4,11 @@ A user who is a member of Team B must NOT be able to read Team A's
 team-private pipeline (``visibility='team'``, ``owner_team_id=Team A``) via
 GET /pipelines/{id}. The DB root cause (an OR'd org-only RLS policy that made
 the team policy dead weight) is fixed by migration ``0122_fix_team_rls_policies``;
-the app-layer defense-in-depth is the ``require_team_membership_or_admin`` gate
-on the GET route. These tests exercise the app-layer gate.
+post-migration the resolver SELECT runs under RLS, so a non-member's row is
+invisible at the DB layer and GET returns 404. The app-layer defense-in-depth
+is the ``require_team_membership_or_admin`` gate on the GET route; these tests
+exercise that layer (the non-member case simulates RLS filtering via a
+row-invisible resolver).
 
 A member of Team A CAN read the pipeline; an org admin bypasses the gate; and
 org-visible pipelines (``visibility='org'``, ``owner_team_id=None``) are NOT
@@ -79,11 +82,22 @@ class _ResolverRow:
     row's ``owner_team_id``/``visibility`` with a ``SELECT ... FROM pipelines``.
     This holder lets each test set what that resolver sees without rebuilding
     the whole mock session.
+
+    ``row_visible=False`` simulates post-migration RLS filtering: the resolver's
+    SELECT returns no row (the DB layer hides it from a non-member), so the
+    dependency raises 404 before the membership check ever fires.
     """
 
-    def __init__(self, *, owner_team_id: uuid.UUID | None, visibility: str) -> None:
+    def __init__(
+        self,
+        *,
+        owner_team_id: uuid.UUID | None,
+        visibility: str,
+        row_visible: bool = True,
+    ) -> None:
         self.owner_team_id = owner_team_id
         self.visibility = visibility
+        self.row_visible = row_visible
 
 
 def _make_mock_session(resolver: _ResolverRow) -> AsyncMock:
@@ -93,7 +107,10 @@ def _make_mock_session(resolver: _ResolverRow) -> AsyncMock:
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         if isinstance(stmt, Select) and "FROM pipelines" in str(stmt):
             row = MagicMock()
-            row.first.return_value = (resolver.owner_team_id, resolver.visibility)
+            if resolver.row_visible:
+                row.first.return_value = (resolver.owner_team_id, resolver.visibility)
+            else:
+                row.first.return_value = None
             return row
         return base_effect(stmt, *args, **kwargs)
 
@@ -114,8 +131,9 @@ def make_client() -> Generator[Callable[..., tuple[TestClient, _ResolverRow]], N
         org_role: str = "operator",
         owner_team_id: uuid.UUID | None = None,
         visibility: str = "org",
+        row_visible: bool = True,
     ) -> tuple[TestClient, _ResolverRow]:
-        resolver = _ResolverRow(owner_team_id=owner_team_id, visibility=visibility)
+        resolver = _ResolverRow(owner_team_id=owner_team_id, visibility=visibility, row_visible=row_visible)
         mock_session = _make_mock_session(resolver)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -155,8 +173,28 @@ class TestCrossTeamPipelineVisibility:
     def test_non_member_cannot_get_team_private_pipeline(
         self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]
     ) -> None:
-        client, _ = make_client(org_role="operator", owner_team_id=_TEAM_A, visibility="team")
-        assert _get(client, membership=False) == 403
+        """Post-migration, a non-member gets 404, not 403.
+
+        After migration ``0122_fix_team_rls_policies`` drops the org-only
+        ``rls_org_isolation`` policy on team-scoped tables, the
+        ``require_team_membership_or_admin`` dependency's resolver SELECT
+        (``SELECT owner_team_id, visibility FROM pipelines WHERE id = ...``)
+        runs UNDER RLS in its own transaction. A non-member's SELECT is
+        filtered to no row, so the dependency raises 404 before the
+        membership check ever fires — the row is invisible at the DB layer.
+
+        ``row_visible=False`` simulates that RLS filtering (the resolver sees
+        no row). The app-layer ``require_team_membership_or_admin`` gate is
+        defense-in-depth that would return 403 only on non-Postgres backends
+        or before the migration applies.
+        """
+        client, _ = make_client(
+            org_role="operator",
+            owner_team_id=_TEAM_A,
+            visibility="team",
+            row_visible=False,
+        )
+        assert _get(client, membership=False) == 404
 
     def test_member_can_get_team_private_pipeline(
         self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]

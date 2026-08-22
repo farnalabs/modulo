@@ -323,6 +323,43 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
 
 
+async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine) -> None:
+    """The OR'd org-only RLS policy was dropped on team-scoped tables (0122).
+
+    Regression guard for the cross-team leak: a team-scoped table must carry
+    ONLY the team-visibility policy (which includes the org check), never the
+    org-only policy that ORs in every org row. lifecycle_maps is org-only by
+    design and must keep its org policy.
+
+    This pins the FINAL policy state on a real Postgres (migrations applied),
+    so the policy-creating migrations, ``team_scope.py``, and the migration's
+    hardcoded ``_TEAM_SCOPED_TABLES`` tuple cannot drift independently without
+    this test failing.
+    """
+    team_scoped = {
+        "pipelines",
+        "connector_instances",
+        "model_backends",
+        "environment_profiles",
+        "library_primitives",
+    }
+    org_only_tables = {"lifecycle_maps"}
+
+    async with db_engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT tablename, policyname FROM pg_policies"))).fetchall()
+
+    policies: dict[str, set[str]] = {}
+    for table, policy in rows:
+        policies.setdefault(table, set()).add(policy)
+
+    for table in team_scoped:
+        assert "rls_team_isolation" in policies.get(table, set()), f"{table} missing team policy"
+        assert "rls_org_isolation" not in policies.get(table, set()), f"{table} still has org-only policy"
+
+    for table in org_only_tables:
+        assert "rls_org_isolation" in policies.get(table, set()), f"{table} missing org policy"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
