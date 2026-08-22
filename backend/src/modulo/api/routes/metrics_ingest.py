@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
@@ -120,8 +120,8 @@ def _consent_active(settings_json: dict[str, Any] | None) -> bool:
 async def ingest_events(
     req: MetricsEventBatchRequest,
     request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: TenantPrincipal = require_permission("metrics.ingest"),
-    session: AsyncSession = Depends(get_db_session),
 ) -> None:
     """Ingest a batch of curated product analytics events.
 

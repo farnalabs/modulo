@@ -172,12 +172,12 @@ async def _fetch_value(
     )
 
 
-@router.post("/reveal", response_model=RevealResponse)
+@router.post("/reveal")
 async def reveal_sensitive_value(
     payload: RevealRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_system_or_org_admin("admin.sensitive.manage"),
-    settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
 ) -> RevealResponse:
 
     try:

@@ -64,7 +64,6 @@ class TestEmailRequest(BaseModel):
 
 @router.get(
     "/{org_id}/email-settings",
-    response_model=EmailSettingsResponse,
     dependencies=[require_feature("email_config")],
 )
 @handle_db_errors("admin.email.admin_get_email_settings")
@@ -118,7 +117,6 @@ async def admin_get_email_settings(
 
 @router.put(
     "/{org_id}/email-settings",
-    response_model=EmailSettingsResponse,
     dependencies=[require_feature("email_config")],
 )
 @handle_db_errors("admin.email.admin_update_email_settings")

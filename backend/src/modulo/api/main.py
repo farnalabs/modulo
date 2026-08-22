@@ -57,6 +57,7 @@ from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
+from modulo.api.routes.community_library import router as community_library_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
@@ -1178,6 +1179,7 @@ app.include_router(viewmodel_router)
 app.include_router(api_keys_router)
 app.include_router(audit_router)
 app.include_router(library_router)
+app.include_router(community_library_router)
 app.include_router(lifecycle_maps_router)
 app.include_router(mcp_oauth_router)
 app.include_router(mcp_setup_router)

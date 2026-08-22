@@ -122,8 +122,9 @@ async def test_query_secret(connector: AzureKeyVaultConnector) -> None:
 
 @respx.mock
 async def test_query_secret_missing_name(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="secret")
     with pytest.raises(ValueError, match="Azure Key Vault secret query requires 'name'"):
-        await connector.query(ConnectorQuery(resource="secret"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -138,8 +139,9 @@ async def test_query_secret_versions(connector: AzureKeyVaultConnector) -> None:
 
 @respx.mock
 async def test_query_secret_versions_missing_name(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="secret_versions")
     with pytest.raises(ValueError, match="Azure Key Vault secret_versions query requires 'name'"):
-        await connector.query(ConnectorQuery(resource="secret_versions"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -157,14 +159,16 @@ async def test_query_secret_by_version(connector: AzureKeyVaultConnector) -> Non
 
 @respx.mock
 async def test_query_secret_by_version_missing_name(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="secret_by_version", filters={"version": "abc"})
     with pytest.raises(ValueError, match="Azure Key Vault secret_by_version query requires 'name'"):
-        await connector.query(ConnectorQuery(resource="secret_by_version", filters={"version": "abc"}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_query_secret_by_version_missing_version(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="secret_by_version", filters={"name": "my-secret"})
     with pytest.raises(ValueError, match="Azure Key Vault secret_by_version query requires 'version'"):
-        await connector.query(ConnectorQuery(resource="secret_by_version", filters={"name": "my-secret"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -196,8 +200,9 @@ async def test_query_key(connector: AzureKeyVaultConnector) -> None:
 
 @respx.mock
 async def test_query_key_missing_name(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="key")
     with pytest.raises(ValueError, match="Azure Key Vault key query requires 'name'"):
-        await connector.query(ConnectorQuery(resource="key"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -235,8 +240,9 @@ async def test_query_certificate(connector: AzureKeyVaultConnector) -> None:
 
 @respx.mock
 async def test_query_certificate_missing_name(connector: AzureKeyVaultConnector) -> None:
+    query = ConnectorQuery(resource="certificate")
     with pytest.raises(ValueError, match="Azure Key Vault certificate query requires 'name'"):
-        await connector.query(ConnectorQuery(resource="certificate"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -277,14 +283,16 @@ async def test_write_secret_with_content_type_and_tags(connector: AzureKeyVaultC
 
 @respx.mock
 async def test_write_secret_missing_name(connector: AzureKeyVaultConnector) -> None:
+    payload = ConnectorPayload(resource="secret", data={"value": "val"})
     with pytest.raises(ValueError, match="Azure Key Vault secret write requires 'name'"):
-        await connector.write(ConnectorPayload(resource="secret", data={"value": "val"}))
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_secret_missing_value(connector: AzureKeyVaultConnector) -> None:
+    payload = ConnectorPayload(resource="secret", data={"name": "my-secret"})
     with pytest.raises(ValueError, match="Azure Key Vault secret write requires 'value'"):
-        await connector.write(ConnectorPayload(resource="secret", data={"name": "my-secret"}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -316,8 +324,9 @@ async def test_write_secret_update_with_tags(connector: AzureKeyVaultConnector) 
 
 @respx.mock
 async def test_write_secret_update_missing_name(connector: AzureKeyVaultConnector) -> None:
+    payload = ConnectorPayload(resource="secret_update", data={"enabled": False})
     with pytest.raises(ValueError, match="Azure Key Vault secret_update write requires 'name'"):
-        await connector.write(ConnectorPayload(resource="secret_update", data={"enabled": False}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -335,8 +344,9 @@ async def test_write_secret_delete(connector: AzureKeyVaultConnector) -> None:
 
 @respx.mock
 async def test_write_secret_delete_missing_name(connector: AzureKeyVaultConnector) -> None:
+    payload = ConnectorPayload(resource="secret_delete", data={})
     with pytest.raises(ValueError, match="Azure Key Vault secret_delete write requires 'name'"):
-        await connector.write(ConnectorPayload(resource="secret_delete", data={}))
+        await connector.write(payload)
 
 
 @respx.mock

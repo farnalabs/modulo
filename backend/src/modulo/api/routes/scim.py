@@ -256,7 +256,7 @@ async def get_service_provider_config(
 # ── Users ────────────────────────────────────────────────────────────
 
 
-@router.get("/Users", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
+@router.get("/Users", dependencies=[Depends(require_scim_feature)])
 async def list_users(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
@@ -724,7 +724,7 @@ async def delete_user(
 # ── Groups ───────────────────────────────────────────────────────────
 
 
-@router.get("/Groups", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
+@router.get("/Groups", dependencies=[Depends(require_scim_feature)])
 async def list_groups(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),

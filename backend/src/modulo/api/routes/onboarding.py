@@ -218,7 +218,7 @@ def _build_action_list(
     return result
 
 
-@router.get("/status", response_model=OnboardingStatusResponse)
+@router.get("/status")
 @handle_db_errors("onboarding.get_onboarding_status")
 async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
@@ -248,7 +248,7 @@ async def get_onboarding_status(
     )
 
 
-@router.post("/actions/{action_id}/complete", response_model=ActionCompletedResponse)
+@router.post("/actions/{action_id}/complete")
 @handle_db_errors("onboarding.mark_action_completed")
 async def mark_action_completed(
     action_id: str,
@@ -281,7 +281,7 @@ async def mark_action_completed(
     )
 
 
-@router.post("/actions/{action_id}/skip", response_model=ActionSkippedResponse)
+@router.post("/actions/{action_id}/skip")
 @handle_db_errors("onboarding.mark_action_skipped")
 async def mark_action_skipped(
     action_id: str,
@@ -312,7 +312,7 @@ async def mark_action_skipped(
     )
 
 
-@router.post("/dismiss", response_model=DismissResponse)
+@router.post("/dismiss")
 @handle_db_errors("onboarding.dismiss")
 async def dismiss_onboarding(
     session: AsyncSession = Depends(get_db_session),
@@ -326,7 +326,7 @@ async def dismiss_onboarding(
     return DismissResponse(dismissed=True)
 
 
-@router.post("/seed-examples", response_model=SeedExamplesResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/seed-examples", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("onboarding.seed_examples")
 async def seed_examples(
     session: AsyncSession = Depends(get_db_session),
@@ -465,7 +465,7 @@ async def seed_examples(
     )
 
 
-@router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/starter-pipeline", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("onboarding.create_starter_pipeline")
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),

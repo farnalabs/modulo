@@ -417,7 +417,6 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
 
 async def _is_ui_driving_enabled(
     org_id: uuid.UUID,
-    db_session: AsyncSession,
     user_id: uuid.UUID | None = None,
 ) -> bool:
     """Check if the remy_ui_driving feature flag is enabled for the given org.
@@ -466,7 +465,7 @@ def _has_destructive_pattern(selector: str) -> bool:
     return any(p in lower for p in DESTRUCTIVE_PATTERNS)
 
 
-def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str) -> bool:
+def _check_nogo(tool_name: str, args: dict[str, Any], page_context: str) -> bool:
     page_path = page_context
     for pattern in NOGO_PAGE_PATTERNS:
         if pattern in page_path:
@@ -482,7 +481,7 @@ def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any], page_c
 def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
     """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
     # 0. No-go zone check (highest priority)
-    if _check_nogo(config, tool_name, args, page_context) and config.permission_mode == "full_auto":
+    if _check_nogo(tool_name, args, page_context) and config.permission_mode == "full_auto":
         return "disabled"
 
     # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
@@ -692,15 +691,13 @@ async def _save_stream_user_message(
 async def _build_stream_tools_param(
     backend: ModelBackendBase,
     principal: TenantPrincipal,
-    db_session: AsyncSession,
     req: StreamRequest,
 ) -> list[dict[str, Any]] | None:
     if not getattr(backend, "supports_tools", False):
         return None
     await build_tool_registry()
     return _get_all_tool_definitions(
-        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id, db_session))
-        and not req.exclude_ui_tools,
+        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id)) and not req.exclude_ui_tools,
     )
 
 
@@ -1550,7 +1547,7 @@ async def stream_chat(
                     full_content = ""
                     tool_call_buffers: dict[int, dict[str, Any]] = {}
 
-                    tools_param = await _build_stream_tools_param(backend, principal, db_session, req)
+                    tools_param = await _build_stream_tools_param(backend, principal, req)
 
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
@@ -1593,7 +1590,7 @@ async def stream_chat(
 
                     # Handle UI tools
                     if ui_tool_calls and (
-                        req.exclude_ui_tools or not await _is_ui_driving_enabled(principal.organisation_id, db_session)
+                        req.exclude_ui_tools or not await _is_ui_driving_enabled(principal.organisation_id)
                     ):
                         ui_driving_error = (
                             "UI driving is not available in this view"
@@ -1746,7 +1743,10 @@ async def stream_chat(
 # ── UI Command endpoints ─────────────────────────────────────────────────
 
 
-@router.post("/sessions/{session_id}/permission-response")
+@router.post(
+    "/sessions/{session_id}/permission-response",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.submit_permission_response")
 async def submit_permission_response(
     session_id: uuid.UUID,
@@ -1754,7 +1754,7 @@ async def submit_permission_response(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
-    if not await _is_ui_driving_enabled(principal.organisation_id, session):
+    if not await _is_ui_driving_enabled(principal.organisation_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
@@ -1807,7 +1807,10 @@ async def submit_permission_response(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/ui-command-results")
+@router.post(
+    "/sessions/{session_id}/ui-command-results",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.submit_ui_command_results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
@@ -1815,7 +1818,7 @@ async def submit_ui_command_results(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
-    if not await _is_ui_driving_enabled(principal.organisation_id, session):
+    if not await _is_ui_driving_enabled(principal.organisation_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
@@ -1860,7 +1863,10 @@ async def submit_ui_command_results(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/reset-permissions")
+@router.post(
+    "/sessions/{session_id}/reset-permissions",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.reset_session_permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
@@ -1898,7 +1904,16 @@ async def reset_session_permissions(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/resume")
+@router.post(
+    "/sessions/{session_id}/resume",
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.resume_session")
 async def resume_session(
     session_id: uuid.UUID,
@@ -1941,7 +1956,16 @@ async def resume_session(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/stop")
+@router.post(
+    "/sessions/{session_id}/stop",
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.stop_session")
 async def stop_session(
     session_id: uuid.UUID,
@@ -1994,7 +2018,14 @@ async def stop_session(
     return {"status": "stopped"}
 
 
-@router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}/audit-trail",
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+    },
+)
 @handle_db_errors("remy.get_audit_trail")
 async def get_audit_trail(
     session_id: uuid.UUID,
@@ -2058,7 +2089,10 @@ async def get_audit_trail(
         ) from None
 
 
-@router.post("/sessions/{session_id}/undo")
+@router.post(
+    "/sessions/{session_id}/undo",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.undo_last_action")
 async def undo_last_action(
     session_id: uuid.UUID,

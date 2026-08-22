@@ -17,14 +17,18 @@ from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
 
+_DRIVER_POSTGRES_SYNC = "postgresql+psycopg"
+_DRIVER_MYSQL_SYNC = "mysql+pymysql"
+_CONFIG_KEY_SQLALCHEMY_URL = "sqlalchemy.url"
+
 _DRIVER_MAP: dict[str, str] = {
-    "postgresql+asyncpg": "postgresql+psycopg",
+    "postgresql+asyncpg": _DRIVER_POSTGRES_SYNC,
     "sqlite+aiosqlite": "sqlite",
-    "mysql+aiomysql": "mysql+pymysql",
-    "mysql+asyncmy": "mysql+pymysql",
-    "postgresql": "postgresql+psycopg",
-    "postgres": "postgresql+psycopg",
-    "mysql": "mysql+pymysql",
+    "mysql+aiomysql": _DRIVER_MYSQL_SYNC,
+    "mysql+asyncmy": _DRIVER_MYSQL_SYNC,
+    "postgresql": _DRIVER_POSTGRES_SYNC,
+    "postgres": _DRIVER_POSTGRES_SYNC,
+    "mysql": _DRIVER_MYSQL_SYNC,
 }
 
 
@@ -119,7 +123,7 @@ if config is not None:
     # run DDL without RLS interference. Falls back to DATABASE_URL for compat.
     _db_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL")
     if _db_url:
-        config.set_main_option("sqlalchemy.url", _to_sync_url(_db_url))
+        config.set_main_option(_CONFIG_KEY_SQLALCHEMY_URL, _to_sync_url(_db_url))
 
 
 def _detect_backend(url: str) -> str:
@@ -135,7 +139,7 @@ def _detect_backend(url: str) -> str:
 def run_migrations_offline() -> None:
     if config is None:
         raise RuntimeError("Alembic config is unavailable")
-    url = config.get_main_option("sqlalchemy.url") or ""
+    url = config.get_main_option(_CONFIG_KEY_SQLALCHEMY_URL) or ""
     backend = _detect_backend(url)
     _log.info("Running migrations offline for %s backend", backend)
 
@@ -250,7 +254,7 @@ def run_migrations_online() -> None:
     """
     if config is None:
         raise RuntimeError("Alembic config is unavailable")
-    url = config.get_main_option("sqlalchemy.url") or ""
+    url = config.get_main_option(_CONFIG_KEY_SQLALCHEMY_URL) or ""
     sync_url = _to_sync_url(url)
 
     engine = create_engine(sync_url, poolclass=NullPool)
