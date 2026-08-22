@@ -47,29 +47,38 @@ async def set_config(
         existing_row.updated_by = updated_by
         entity = existing_row
     else:
-        entity = SystemConfig(key=key, value=value, updated_by=updated_by)
-        session.add(entity)
-        # Wrap the INSERT in a savepoint so a concurrent first-write's unique
-        # violation rolls back only this scope. ``begin_nested`` requires an
-        # active transaction; under autocommit-style usage (or a mock session in
-        # unit tests) there is no transaction to nest, so fall back to a plain
-        # flush — there is no real concurrency to guard against in that context.
+        # Begin the nested savepoint BEFORE the entity is queued. SQLAlchemy's
+        # ``begin_nested`` takes a snapshot that auto-flushes anything already
+        # pending, so adding the entity first would emit its INSERT into the
+        # OUTER transaction — where the concurrent unique-key violation escapes
+        # before the ``except IntegrityError`` below can catch it (observed as
+        # an uncaught IntegrityError in the TOFU convergence integration test).
+        # ``begin_nested`` requires an active transaction; under autocommit-style
+        # usage (or a mock session in unit tests) there is no transaction to
+        # nest, so fall back to a plain flush — there is no real concurrency to
+        # guard against in that context.
         savepoint = None
         try:
             savepoint = await session.begin_nested()
         except (TypeError, AttributeError, InvalidRequestError):
             savepoint = None
+        entity = SystemConfig(key=key, value=value, updated_by=updated_by)
+        session.add(entity)
         try:
             await session.flush()
         except IntegrityError:
             if savepoint is not None:
                 await savepoint.rollback()
-            # The losing caller's ``entity`` is still pending in the session after
-            # the savepoint rollback — it is NOT expunged, so the trailing flush
-            # would re-emit its INSERT and re-raise the same unique-constraint
-            # violation (a dead/no-op recovery that never converges). Expunge it
-            # now so the only row the session knows about is the winner's.
-            session.expunge(entity)
+            # The savepoint rollback may already have expunged the losing
+            # caller's rolled-back ``entity``; if it is still pending it must be
+            # removed here, otherwise the trailing flush re-emits its INSERT and
+            # re-raises the same unique-constraint violation (a dead/no-op
+            # recovery that never converges). The only row the session should
+            # still know about is the winner's.
+            try:
+                session.expunge(entity)
+            except InvalidRequestError:
+                pass
             existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
             entity = existing.scalar_one()
             # First-write-wins: the winning caller's row is authoritative. Do NOT
