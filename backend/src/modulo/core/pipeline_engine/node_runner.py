@@ -2847,7 +2847,7 @@ def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
         _span = _otel_trace.get_current_span()
         if _span.is_recording():
             _span.add_event(name, {k: str(v)[:_MAX_OTEL_LOG_ATTR] for k, v in attrs.items()})
-    except Exception:  # noqa: S110 -- never fail on observability
+    except Exception:  # noqa: S110  # nosec B110 -- never fail on observability
         pass
 
 
