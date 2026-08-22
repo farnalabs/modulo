@@ -200,7 +200,7 @@ async def test_comment_is_prefixed(connector):
     assert result["comment_id"] == "cm1"
 
     sent = json.loads(captured["body"])
-    assert sent["variables"]["body"] == "[Modulo] hello"
+    assert sent["variables"]["input"]["body"] == "[Modulo] hello"
 
 
 @respx.mock
@@ -216,7 +216,7 @@ async def test_comment_dedup_no_double_prefix(connector):
     assert result["comment_id"] == "cm1"
 
     sent = json.loads(captured["body"])
-    assert sent["variables"]["body"] == "[Modulo] hello"
+    assert sent["variables"]["input"]["body"] == "[Modulo] hello"
 
 
 async def test_comment_empty_issue_ref(connector):
@@ -294,7 +294,7 @@ async def test_write_comment_resource(connector):
     assert result["comment_id"] == "cm1"
 
     sent = json.loads(captured["body"])
-    assert sent["variables"]["body"] == "[Modulo] looks good"
+    assert sent["variables"]["input"]["body"] == "[Modulo] looks good"
 
 
 @respx.mock
@@ -322,3 +322,69 @@ async def test_graphql_error_raises(connector):
     respx.post(_URL).mock(return_value=httpx.Response(200, json={"errors": [{"message": "Something broke"}]}))
     with pytest.raises(ValueError, match="Something broke"):
         await connector.resolve("ENG-123")
+
+
+# ---------------------------------------------------------------------------
+# Wire-contract tests — these validate the GraphQL TEXT against Linear's real
+# schema, not just the mocked response shape. Linear's ``Query.issue`` takes a
+# single required ``id`` argument (no ``identifier``), and ``commentCreate``
+# takes a single ``input: CommentCreateInput!`` (issueId/body are fields INSIDE
+# that input, not top-level args). The respx router cannot catch schema drift
+# because it intercepts before validation, so we assert on the sent query here.
+# ---------------------------------------------------------------------------
+
+
+def _capture_sent_body(request: httpx.Request) -> dict[str, object]:
+    return json.loads(request.read().decode("utf-8"))
+
+
+@respx.mock
+async def test_issue_read_uses_id_only_not_identifier(connector):
+    sent: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent.update(_capture_sent_body(request))
+        return _graphql_router(request)
+
+    respx.post(_URL).mock(side_effect=_capture)
+    await connector.resolve("ENG-123")
+    query = sent["query"]
+    assert "issue(id: $id)" in query
+    assert "identifier:" not in query
+    assert sent["variables"] == {"id": "ENG-123"}
+
+
+@respx.mock
+async def test_issue_read_by_uuid_uses_id_only(connector):
+    sent: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent.update(_capture_sent_body(request))
+        return _graphql_router(request)
+
+    respx.post(_URL).mock(side_effect=_capture)
+    await connector.resolve("c1a2b3c4-0000-0000-0000-000000000001")
+    query = sent["query"]
+    assert "issue(id: $id)" in query
+    assert "identifier:" not in query
+    assert sent["variables"] == {"id": "c1a2b3c4-0000-0000-0000-000000000001"}
+
+
+@respx.mock
+async def test_comment_create_uses_input_argument(connector):
+    sent: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent.update(_capture_sent_body(request))
+        return _graphql_router(request)
+
+    respx.post(_URL).mock(side_effect=_capture)
+    await connector.comment("ENG-123", "hello")
+    query = sent["query"]
+    assert "commentCreate(input: $input)" in query
+    assert "commentCreate(issueId:" not in query
+    assert "commentCreate(body:" not in query
+    variables = sent["variables"]
+    assert "input" in variables
+    assert variables["input"]["issueId"] == "c1a2b3c4-0000-0000-0000-000000000001"
+    assert variables["input"]["body"] == "[Modulo] hello"

@@ -20,7 +20,6 @@ Bearer API key (the connector credential ``token``).
 from __future__ import annotations
 
 import asyncio
-import re
 from typing import Any
 
 import httpx
@@ -35,7 +34,6 @@ from modulo.connectors.base import (
 from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
 
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 # Retryable transport / upstream conditions for the thin GraphQL client.
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -119,21 +117,25 @@ class LinearConnector(TicketTrackerBase):
 
     @staticmethod
     def _issue_args(issue_ref: str) -> dict[str, Any]:
-        """Map an issue_ref to Linear GraphQL ``issue`` resolver args."""
+        """Map an issue_ref to Linear GraphQL ``issue`` resolver args.
+
+        Linear's ``Query.issue`` accepts only a single required ``id`` argument
+        (``String!``) — there is no ``identifier`` argument. Linear resolves
+        both the internal UUID and the human ``TEAM-123`` identifier via ``id``,
+        so the ref is always passed through ``id``.
+        """
         issue_ref = (issue_ref or "").strip()
         if not issue_ref:
             raise ValueError("issue_ref is required")
-        if _UUID_RE.match(issue_ref):
-            return {"id": issue_ref, "identifier": None}
-        return {"id": None, "identifier": issue_ref}
+        return {"id": issue_ref}
 
     async def _resolve_id(self, issue_ref: str) -> str:
         """Return the internal Linear issue id for *issue_ref* (id or identifier)."""
         args = self._issue_args(issue_ref)
         data = await self._graphql(
             """
-            query ($id: ID, $identifier: String) {
-              issue(id: $id, identifier: $identifier) { id }
+            query ($id: ID!) {
+              issue(id: $id) { id }
             }
             """,
             args,
@@ -151,8 +153,8 @@ class LinearConnector(TicketTrackerBase):
         args = self._issue_args(issue_ref)
         data = await self._graphql(
             """
-            query ($id: ID, $identifier: String) {
-              issue(id: $id, identifier: $identifier) {
+            query ($id: ID!) {
+              issue(id: $id) {
                 id
                 identifier
                 title
@@ -186,8 +188,8 @@ class LinearConnector(TicketTrackerBase):
         args = self._issue_args(issue_ref)
         data = await self._graphql(
             """
-            query ($id: ID, $identifier: String) {
-              issue(id: $id, identifier: $identifier) { description }
+            query ($id: ID!) {
+              issue(id: $id) { description }
             }
             """,
             args,
@@ -203,8 +205,8 @@ class LinearConnector(TicketTrackerBase):
         args = self._issue_args(issue_ref)
         data = await self._graphql(
             """
-            query ($id: ID, $identifier: String) {
-              issue(id: $id, identifier: $identifier) {
+            query ($id: ID!) {
+              issue(id: $id) {
                 comments { nodes { id body createdAt } }
               }
             }
@@ -263,8 +265,8 @@ class LinearConnector(TicketTrackerBase):
         args = self._issue_args(issue_ref)
         data = await self._graphql(
             """
-            query ($id: ID, $identifier: String) {
-              issue(id: $id, identifier: $identifier) {
+            query ($id: ID!) {
+              issue(id: $id) {
                 team { states { nodes { id name type } } }
               }
             }
@@ -291,14 +293,14 @@ class LinearConnector(TicketTrackerBase):
         issue_id = await self._resolve_id(issue_ref)
         data = await self._graphql(
             """
-            mutation ($issueId: String!, $body: String!) {
-              commentCreate(issueId: $issueId, body: $body) {
+            mutation ($input: CommentCreateInput!) {
+              commentCreate(input: $input) {
                 success
                 comment { id body }
               }
             }
             """,
-            {"issueId": issue_id, "body": body},
+            {"input": {"issueId": issue_id, "body": body}},
         )
         result = data.get("commentCreate") or {}
         comment = result.get("comment") or {}
