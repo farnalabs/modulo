@@ -24,7 +24,6 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from test_metrics_ingest import integration_client  # noqa: F401
 
 from modulo.api.routes.product_analytics_identity import _SEQUENCE_KEY_PREFIX
 from modulo.auth.jwt import create_access_token
