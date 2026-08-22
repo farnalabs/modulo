@@ -679,7 +679,7 @@ async def _resolve_live_org_role(
     return live_org_role
 
 
-@router.post("/ws-token", response_model=WsTokenResponse)
+@router.post("/ws-token")
 @handle_db_errors("auth.ws_token")
 async def ws_token(
     current_user: TenantPrincipal = require_permission("run.status"),
@@ -731,7 +731,7 @@ async def ws_token(
         ) from None
 
 
-@router.get("/me", response_model=MeResponse)
+@router.get("/me")
 @handle_db_errors("auth.me")
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

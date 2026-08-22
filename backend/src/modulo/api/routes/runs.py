@@ -882,7 +882,18 @@ async def _create_manual_run(
     return run
 
 
-@router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -962,7 +973,7 @@ async def trigger_run(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/stats", response_model=dict[str, Any])
+@router.get("/stats")
 @handle_db_errors("runs.get_run_stats_endpoint")
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
@@ -998,7 +1009,7 @@ async def get_run_stats_endpoint(
         ) from None
 
 
-@router.get("/stats/heatmap", response_model=list[dict[str, Any]])
+@router.get("/stats/heatmap")
 @handle_db_errors("runs.get_run_heatmap_endpoint")
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
@@ -1034,7 +1045,7 @@ async def get_run_heatmap_endpoint(
         ) from None
 
 
-@router.get("/{run_id}", response_model=RunResponse)
+@router.get("/{run_id}")
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
@@ -1281,7 +1292,7 @@ class FixtureExportResponse(BaseModel):
     fixture_map: dict[str, str]
 
 
-@router.get("/{run_id}/io", response_model=RunIOResponse)
+@router.get("/{run_id}/io")
 @handle_db_errors("runs.get_run_io_endpoint")
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
@@ -1364,7 +1375,7 @@ async def get_run_io_endpoint(
     return resp
 
 
-@router.get("/{run_id}/export-fixture", response_model=FixtureExportResponse)
+@router.get("/{run_id}/export-fixture")
 @handle_db_errors("runs.export_run_fixture")
 async def export_run_fixture(
     run_id: uuid.UUID,
@@ -1596,7 +1607,7 @@ class NodeOutputResponse(BaseModel):
     output: Any = None
 
 
-@router.get("/{run_id}/nodes/{node_id}/output", response_model=NodeOutputResponse)
+@router.get("/{run_id}/nodes/{node_id}/output")
 @handle_db_errors("runs.get_run_node_output")
 async def get_run_node_output(
     run_id: uuid.UUID,
@@ -1686,7 +1697,7 @@ class RunEventsResponse(BaseModel):
     events: list[RunEventItem]
 
 
-@router.get("/{run_id}/events", response_model=RunEventsResponse)
+@router.get("/{run_id}/events")
 @handle_db_errors("runs.get_run_events")
 async def get_run_events(
     run_id: uuid.UUID,
@@ -1744,7 +1755,7 @@ class ObserveNodeResponse(BaseModel):
     human_observed_by: str | None = None
 
 
-@router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
+@router.post("/{run_id}/nodes/{node_id}/observe")
 @handle_db_errors(_CODE_RUNS_OBSERVE_RUN_NODE)
 async def observe_run_node(
     run_id: uuid.UUID,
@@ -1862,7 +1873,6 @@ class NodeRecoverResponse(BaseModel):
 
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",
-    response_model=NodeRecoverResponse,
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("runs.recover_run_node")
@@ -2000,7 +2010,6 @@ class GuardrailOverrideResponse(BaseModel):
 
 @router.post(
     "/{run_id}/guardrail-override",
-    response_model=GuardrailOverrideResponse,
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("runs.guardrail_override")
@@ -2306,7 +2315,7 @@ def _lookup_agent_for_node(
     return None
 
 
-@router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
+@router.post("/{run_id}/nodes/{node_id}/prompt/reveal")
 @handle_db_errors(_CODE_RUNS_REVEAL_NODE_PROMPT)
 async def reveal_node_prompt(
     run_id: uuid.UUID,
@@ -2453,7 +2462,7 @@ class NodeOutputDiffResponse(BaseModel):
     has_diff: bool
 
 
-@router.post("/diff", response_model=NodeOutputDiffResponse)
+@router.post("/diff")
 @handle_db_errors("runs.diff_node_output")
 async def diff_node_output(
     req: NodeOutputDiffRequest,

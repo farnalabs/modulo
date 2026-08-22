@@ -43,6 +43,8 @@ _CODE_EVALS_DELETE_EVAL_DEFINITION = "evals.delete_eval_definition"
 _CODE_EVALS_LIST_RUN_EVALS = "evals.list_run_evals"
 _CODE_EVALS_COMPARE_EVALS = "evals.compare_evals"
 _CODE_EVALS_CREATE_EVAL_RUN = "evals.create_eval_from_run"
+_EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail)$"
+_MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
 
 
 _log = logging.getLogger(__name__)
@@ -59,7 +61,7 @@ class CreateEvalRequest(BaseModel):
     pipeline_id: uuid.UUID
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
+    eval_type: str = Field(pattern=_EVAL_TYPE_PATTERN)
     config_json: dict[str, Any] = Field(default_factory=dict)
     failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
@@ -156,7 +158,7 @@ def _validate_guardrail_request(
 class UpdateEvalRequest(BaseModel):
     node_id: uuid.UUID | None = None
     name: str | None = Field(None, min_length=1, max_length=255)
-    eval_type: str | None = Field(None, pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
+    eval_type: str | None = Field(None, pattern=_EVAL_TYPE_PATTERN)
     config_json: dict[str, Any] | None = None
     failure_behaviour: str | None = None
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
@@ -177,9 +179,16 @@ class EvalDefinitionListResponse(BaseModel):
 
 @router.post(
     "/evals",
-    response_model=dict[str, Any],
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
 )
 @handle_db_errors(_CODE_EVALS_CREATE_EVAL_DEFINITION)
 async def create_eval_definition(
@@ -217,7 +226,7 @@ async def create_eval_definition(
                 )
             ).scalar_one_or_none()
             if pipeline is None:
-                raise HTTPException(status_code=404, detail="Pipeline not found")
+                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
 
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
@@ -269,13 +278,13 @@ async def create_eval_definition(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals", response_model=EvalDefinitionListResponse)
+@router.get("/evals")
 @handle_db_errors(_CODE_EVALS_LIST_EVAL_DEFINITIONS)
 async def list_eval_definitions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     pipeline_id: uuid.UUID | None = None,
-    eval_type: str | None = Query(None, pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$"),
+    eval_type: str | None = Query(None, pattern=_EVAL_TYPE_PATTERN),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> EvalDefinitionListResponse:
@@ -345,7 +354,17 @@ async def list_eval_definitions(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
+@router.get(
+    "/evals/coverage",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_EVALS_EVAL_COVERAGE)
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
@@ -367,7 +386,7 @@ async def eval_coverage(
                 )
             ).scalar_one_or_none()
             if pipeline is None:
-                raise HTTPException(status_code=404, detail="Pipeline not found")
+                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
 
             nodes_raw = pipeline.graph_nodes_json or []
             node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
@@ -450,7 +469,7 @@ async def eval_coverage(
     }
 
 
-@router.get("/evals/{eval_id}", response_model=dict[str, Any])
+@router.get("/evals/{eval_id}")
 @handle_db_errors(_CODE_EVALS_GET_EVAL_DEFINITION)
 async def get_eval_definition(
     eval_id: uuid.UUID,
@@ -501,7 +520,7 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@router.put("/evals/{eval_id}", response_model=dict[str, Any], dependencies=[Depends(deny_break_glass_mint)])
+@router.put("/evals/{eval_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_EVALS_UPDATE_EVAL_DEFINITION)
 async def update_eval_definition(
     eval_id: uuid.UUID,
@@ -671,7 +690,7 @@ async def delete_eval_definition(
         ) from None
 
 
-@router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+@router.get("/runs/{run_id}/evals", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_EVALS_LIST_RUN_EVALS)
 async def list_run_evals(
     run_id: uuid.UUID,
@@ -798,7 +817,17 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/evals/compare", status_code=status.HTTP_200_OK)
+@router.post(
+    "/evals/compare",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_EVALS_COMPARE_EVALS)
 async def compare_evals(
     req: CompareEvalsRequest,
@@ -992,6 +1021,14 @@ async def compare_evals(
     "/evals/from-run",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
 )
 @handle_db_errors(_CODE_EVALS_CREATE_EVAL_RUN)
 async def create_eval_from_run(
@@ -1031,7 +1068,7 @@ async def create_eval_from_run(
                 )
             ).scalar_one_or_none()
             if pipeline is None:
-                raise HTTPException(status_code=404, detail="Pipeline not found")
+                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
 
             outputs = run.outputs_json or {}
             node_output = (

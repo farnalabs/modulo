@@ -52,6 +52,8 @@ _MSG_MODEL_BACKEND_NOT_FOUND = "Model backend not found"
 _CODE_MODEL_BACKENDS_UPDATE_MODEL = "model_backends.update_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_DELETE_MODEL = "model_backends.delete_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_RECHECK_MODEL = "model_backends.recheck_model_backend_health_endpoint"
+_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED = "model_backends.audit_append_failed"
+_PERM_MODEL_BACKEND_LIST = "model_backend.list"
 _CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoint"
 
 
@@ -322,14 +324,14 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-@router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
+@router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors(_CODE_MODEL_BACKENDS_LIST_MODEL)
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "model_backend.list.in_dev")
@@ -494,7 +496,6 @@ def _validate_provider(provider: str) -> None:
 
 @router.post(
     "",
-    response_model=ModelBackendResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -587,7 +588,7 @@ async def create_model_backend_endpoint(
                 "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
                 "has_credentials": bool(mb.credentials_ciphertext),
             },
-            log_key="model_backends.audit_append_failed",
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
@@ -618,12 +619,12 @@ async def create_model_backend_endpoint(
     return response
 
 
-@router.get("/{backend_id}", response_model=ModelBackendResponse)
+@router.get("/{backend_id}")
 @handle_db_errors(_CODE_MODEL_BACKENDS_GET_MODEL)
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendResponse:
     try:
         async with session.begin():
@@ -661,14 +662,14 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
-@router.get("/{backend_id}/pipeline-references", response_model=PipelineReferenceListResponse)
+@router.get("/{backend_id}/pipeline-references")
 @handle_db_errors(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
 async def list_pipeline_references_endpoint(
     backend_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.list"),
+    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> PipelineReferenceListResponse:
     try:
         async with session.begin():
@@ -718,7 +719,7 @@ async def list_pipeline_references_endpoint(
     )
 
 
-@router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
@@ -784,7 +785,7 @@ async def update_model_backend_endpoint(
                 event_type="model_backend.updated",
                 resource_id=mb.id,
                 payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
-                log_key="model_backends.audit_append_failed",
+                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
             )
         if req.api_key is not None:
             await append_audit_event_isolated(
@@ -799,7 +800,7 @@ async def update_model_backend_endpoint(
                     "provider": mb.provider,
                     "model_id": mb.model_id,
                 },
-                log_key="model_backends.audit_append_failed",
+                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
             )
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
@@ -830,7 +831,7 @@ async def update_model_backend_endpoint(
     return response
 
 
-@router.post("/{backend_id}/health-check", response_model=ModelBackendHealthCheckResponse)
+@router.post("/{backend_id}/health-check")
 @handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,
@@ -989,5 +990,5 @@ async def delete_model_backend_endpoint(
             event_type="model_backend.deleted",
             resource_id=backend_id,
             payload=audit_payload,
-            log_key="model_backends.audit_append_failed",
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )

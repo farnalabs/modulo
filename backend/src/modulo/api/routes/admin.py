@@ -98,6 +98,7 @@ _MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable
 _CODE_ADMIN_ADMIN_CREATE_TEAM = "admin.admin_create_team"
 _MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _MSG_USER_NOT_FOUND = "User not found"
+_MSG_USER_NOT_FOUND_IN_ORGANISATION = "User not found in this organisation"
 _MSG_BREAK_GLASS_ACCOUNTS_CANNOT = "Break-glass accounts cannot be managed via the admin API"
 _CODE_ADMIN_ADMIN_DEACTIVATE_USER = "admin.admin_deactivate_user"
 _CODE_ADMIN_ADMIN_REACTIVATE_USER = "admin.admin_reactivate_user"
@@ -523,7 +524,7 @@ async def _search_library(
     return items, count
 
 
-@router.get("/search", response_model=SearchResponse)
+@router.get("/search")
 @handle_db_errors("admin.global_search")
 async def global_search(
     q: str = Query(min_length=1),
@@ -601,7 +602,7 @@ class CreateUserResponse(BaseModel):
     org_role: str
 
 
-@router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/users", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.admin_create_user")
 async def admin_create_user(
     req: CreateUserRequest,
@@ -717,7 +718,6 @@ class AdminCreateTeamResponse(BaseModel):
 
 @router.post(
     "/teams",
-    response_model=AdminCreateTeamResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[require_feature("team_rbac")],
 )
@@ -803,7 +803,7 @@ class OrgProfileResponse(BaseModel):
     created_at: str
 
 
-@router.get("/org", response_model=OrgProfileResponse)
+@router.get("/org")
 @handle_db_errors("admin.admin_get_org")
 async def admin_get_org(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -841,7 +841,7 @@ async def admin_get_org(
     )
 
 
-@router.put("/org", response_model=OrgProfileResponse)
+@router.put("/org")
 @handle_db_errors("admin.admin_update_org")
 async def admin_update_org(
     req: UpdateOrgRequest,
@@ -956,7 +956,7 @@ class UserListResponse(BaseModel):
     page_size: int
 
 
-@router.get("/users", response_model=UserListResponse)
+@router.get("/users")
 @handle_db_errors("admin.admin_list_users")
 async def admin_list_users(
     page: int = Query(1, ge=1),
@@ -1033,7 +1033,7 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-@router.put("/users/{user_id}", response_model=UserListItem)
+@router.put("/users/{user_id}")
 @handle_db_errors("admin.admin_update_user")
 async def admin_update_user(
     user_id: uuid.UUID,
@@ -1059,7 +1059,7 @@ async def admin_update_user(
             if target_membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             target_role_after = req.org_role
@@ -1179,7 +1179,7 @@ def _raise_bg_pgcode(
         ) from None
 
 
-@router.post("/users/{user_id}/deactivate", response_model=UserListItem)
+@router.post("/users/{user_id}/deactivate")
 @handle_db_errors(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
@@ -1215,7 +1215,7 @@ async def admin_deactivate_user(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             await assert_not_last_admin(
@@ -1296,7 +1296,7 @@ async def admin_deactivate_user(
     return _to_user_list_item(account, org_role)
 
 
-@router.post("/users/{user_id}/reactivate", response_model=UserListItem)
+@router.post("/users/{user_id}/reactivate")
 @handle_db_errors(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
@@ -1324,7 +1324,7 @@ async def admin_reactivate_user(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             account.active = True
@@ -1384,7 +1384,7 @@ class AdminResetPasswordResponse(BaseModel):
     temporary_password: str
 
 
-@router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
+@router.post("/users/{user_id}/reset-password")
 @handle_db_errors("admin.admin_reset_password")
 async def admin_reset_password(
     user_id: uuid.UUID,
@@ -1412,7 +1412,7 @@ async def admin_reset_password(
             if membership is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found in this organisation",
+                    detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
             temporary_password = secrets.token_urlsafe(18)[:24]
@@ -1453,7 +1453,7 @@ class AdminTeamListResponse(BaseModel):
     page_size: int
 
 
-@router.get("/teams", response_model=AdminTeamListResponse, dependencies=[require_feature("team_rbac")])
+@router.get("/teams", dependencies=[require_feature("team_rbac")])
 async def admin_list_teams(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=1000),
@@ -1519,7 +1519,7 @@ async def admin_list_teams(
     )
 
 
-@router.put("/teams/{team_id}", response_model=AdminTeamItem, dependencies=[require_feature("team_rbac")])
+@router.put("/teams/{team_id}", dependencies=[require_feature("team_rbac")])
 async def admin_update_team(
     team_id: uuid.UUID,
     req: AdminUpdateTeamRequest,
@@ -1616,7 +1616,6 @@ class BulkReassignResponse(BaseModel):
 
 @router.post(
     "/teams/{team_id}/reassign-all",
-    response_model=BulkReassignResponse,
     dependencies=[require_feature("team_rbac")],
 )
 @handle_db_errors("admin.reassign_all_team_resources")
@@ -1782,7 +1781,7 @@ class QueueMetricsResponse(BaseModel):
     queues: dict[str, int]
 
 
-@router.get("/queues/metrics", response_model=QueueMetricsResponse)
+@router.get("/queues/metrics")
 @handle_db_errors("admin.queue_metrics")
 async def admin_queue_metrics(
     current_user: TenantPrincipal = require_permission("admin.queue_metrics"),
@@ -1842,7 +1841,7 @@ class BillingOverviewResponse(BaseModel):
     license_key: str | None = None
 
 
-@router.get("/billing/overview", response_model=BillingOverviewResponse)
+@router.get("/billing/overview")
 @handle_db_errors("admin.admin_billing_overview")
 async def admin_billing_overview(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1920,7 +1919,6 @@ class DeletionRequestResponse(BaseModel):
 
 @router.post(
     "/org/deletion-request",
-    response_model=DeletionRequestResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 @handle_db_errors(_CODE_ADMIN_REQUEST_ORG_DELETION)
@@ -1997,7 +1995,7 @@ class ConfirmDeletionResponse(BaseModel):
     hard_deleted_runs: int
 
 
-@router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
+@router.post("/org/deletion-confirm")
 @handle_db_errors(_CODE_ADMIN_CONFIRM_ORG_DELETION)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
@@ -2049,7 +2047,7 @@ class OrgExportResponse(BaseModel):
     exported_at: str
 
 
-@router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
+@router.patch("/org/deletion-cancel")
 @handle_db_errors(_CODE_ADMIN_CANCEL_ORG_DELETION)
 async def cancel_org_deletion(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -2077,7 +2075,7 @@ async def cancel_org_deletion(
     return CancelDeletionResponse(**result)
 
 
-@router.get("/org/export", response_model=OrgExportResponse)
+@router.get("/org/export")
 @handle_db_errors(_CODE_ADMIN_EXPORT_ORG_DATA)
 async def export_org_data(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -2116,7 +2114,7 @@ async def export_org_data(
     )
 
 
-@router.delete("/org", response_model=ConfirmDeletionResponse)
+@router.delete("/org")
 @handle_db_errors(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
 async def delete_org_immediate(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -2380,7 +2378,7 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
     ]
 
 
-@router.get("/evals/dashboard", response_model=EvalDashboardResponse)
+@router.get("/evals/dashboard")
 @handle_db_errors("admin.eval_dashboard")
 async def eval_dashboard(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -2439,7 +2437,7 @@ class RegressionAlertsResponse(BaseModel):
     trend: str | None = None
 
 
-@router.get("/evals/regressions", response_model=RegressionAlertsResponse)
+@router.get("/evals/regressions")
 @handle_db_errors("admin.eval_regressions")
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
@@ -2547,7 +2545,7 @@ class OkrProgressResponse(BaseModel):
     breach: bool
 
 
-@router.get("/evals/okr-progress/{suite_id}", response_model=OkrProgressResponse)
+@router.get("/evals/okr-progress/{suite_id}")
 @handle_db_errors("admin.okr_progress")
 async def okr_progress(
     suite_id: str,
@@ -2650,7 +2648,7 @@ class PublisherListResponse(BaseModel):
     page_size: int
 
 
-@router.get("/publishers", response_model=PublisherListResponse)
+@router.get("/publishers")
 @handle_db_errors("admin.admin_list_publishers")
 async def admin_list_publishers(
     page: int = Query(1, ge=1),
@@ -2688,7 +2686,7 @@ async def admin_list_publishers(
     )
 
 
-@router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/publishers", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.admin_create_publisher")
 async def admin_create_publisher(
     req: PublisherCreateRequest,
@@ -2740,7 +2738,7 @@ async def admin_create_publisher(
     return _to_publisher_response(publisher)
 
 
-@router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
+@router.put("/publishers/{publisher_id}")
 @handle_db_errors("admin.admin_update_publisher")
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
@@ -2993,7 +2991,6 @@ class StorageInfoResponse(BaseModel):
 
 @router.get(
     "/runs/retention",
-    response_model=RetentionConfigResponse,
     dependencies=[require_feature("admin_run_retention")],
 )
 async def admin_get_retention(
@@ -3097,7 +3094,7 @@ class UpdateSandboxConcurrencyRequest(BaseModel):
     sandbox_concurrency_limit: int | None = Field(default=None, ge=1, le=100)
 
 
-@router.get("/org/sandbox-concurrency", response_model=SandboxConcurrencyResponse)
+@router.get("/org/sandbox-concurrency")
 async def admin_get_sandbox_concurrency(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -3138,7 +3135,7 @@ async def admin_get_sandbox_concurrency(
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit)
 
 
-@router.put("/org/sandbox-concurrency", response_model=SandboxConcurrencyResponse, status_code=status.HTTP_200_OK)
+@router.put("/org/sandbox-concurrency", status_code=status.HTTP_200_OK)
 async def admin_update_sandbox_concurrency(
     req: UpdateSandboxConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3259,7 +3256,7 @@ class UpdateRunConcurrencyRequest(BaseModel):
     run_concurrency_limit: int | None = Field(default=None, ge=1, le=100)
 
 
-@router.get("/org/run-concurrency", response_model=RunConcurrencyResponse)
+@router.get("/org/run-concurrency")
 async def admin_get_run_concurrency(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -3300,7 +3297,7 @@ async def admin_get_run_concurrency(
     return RunConcurrencyResponse(run_concurrency_limit=limit)
 
 
-@router.put("/org/run-concurrency", response_model=RunConcurrencyResponse, status_code=status.HTTP_200_OK)
+@router.put("/org/run-concurrency", status_code=status.HTTP_200_OK)
 async def admin_update_run_concurrency(
     req: UpdateRunConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3405,7 +3402,7 @@ async def admin_update_run_concurrency(
     return RunConcurrencyResponse(run_concurrency_limit=req.run_concurrency_limit)
 
 
-@router.get("/runs/storage", response_model=StorageInfoResponse)
+@router.get("/runs/storage")
 @handle_db_errors("admin.admin_get_storage")
 async def admin_get_storage(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3467,7 +3464,7 @@ class OverdueClaimsResponse(BaseModel):
     claims: list[OverdueClaimItem]
 
 
-@router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
+@router.get("/hitl/overdue")
 @handle_db_errors("admin.admin_overdue_hitl_claims")
 async def admin_overdue_hitl_claims(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

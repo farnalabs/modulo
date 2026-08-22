@@ -33,7 +33,14 @@ class ConfigEntry(BaseModel):
     updated_at: str | None = None
 
 
-@router.get("")
+@router.get(
+    "",
+    responses={
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.system_config.admin_list_config")
 async def admin_list_config(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
@@ -75,7 +82,15 @@ class SetConfigRequest(BaseModel):
     value: Any = Field(..., description="JSON value to store")
 
 
-@router.put("/{key}")
+@router.put(
+    "/{key}",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.system_config.admin_set_config")
 async def admin_set_config(
     key: str,
@@ -116,7 +131,16 @@ async def admin_set_config(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
-@router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{key}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        404: {"description": "Not Found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.system_config.admin_delete_config")
 async def admin_delete_config(
     key: str,

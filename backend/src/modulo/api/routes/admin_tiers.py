@@ -24,7 +24,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
 
 
-@router.get("")
+@router.get(
+    "",
+    responses={
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.tiers.list_tiers_endpoint")
 async def list_tiers_endpoint(
     settings: Settings = Depends(get_settings),

@@ -317,7 +317,7 @@ async def _store_pin(session: AsyncSession, org_id: uuid.UUID, pin: GuardrailPin
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=GuardrailConfigResponse)
+@router.get("")
 @handle_db_errors("guardrail_config.get")
 async def get_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -363,7 +363,7 @@ async def get_guardrail_config(
         )
 
 
-@router.get("/elevated", response_model=GuardrailConfigResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.get("/elevated", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.elevated")
 async def get_guardrail_config_elevated(
     session: AsyncSession = Depends(get_db_session),
@@ -403,7 +403,7 @@ async def get_guardrail_config_elevated(
         )
 
 
-@router.post("/propose", response_model=GuardrailProposalResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.post("/propose", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.propose")
 async def propose_guardrail_config(
     req: ProposeGuardrailConfigRequest,
@@ -462,7 +462,7 @@ async def propose_guardrail_config(
     )
 
 
-@router.post("/apply", response_model=GuardrailApplyResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.post("/apply", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.apply")
 async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -550,7 +550,7 @@ async def apply_guardrail_config(
     return GuardrailApplyResponse(applied=True, hash=applied_hash, applied_at=now, status="clean")
 
 
-@router.post("/reject", response_model=GuardrailRejectResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.post("/reject", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.reject")
 async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -592,7 +592,7 @@ async def reject_guardrail_config(
     return GuardrailRejectResponse(rejected=True, status="clean")
 
 
-@router.get("/drift", response_model=GuardrailDriftResponse)
+@router.get("/drift")
 @handle_db_errors("guardrail_config.drift")
 async def get_guardrail_drift(
     session: AsyncSession = Depends(get_db_session),

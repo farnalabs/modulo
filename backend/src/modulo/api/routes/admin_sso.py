@@ -120,7 +120,7 @@ class SsoProviderTestResult(BaseModel):
     provider_info: dict[str, Any] | None = None
 
 
-@router.get("/providers", response_model=list[SsoProviderResponse])
+@router.get("/providers")
 @handle_db_errors("admin.sso.get_providers")
 async def get_providers(
     _: object = require_feature("sso"),
@@ -156,7 +156,6 @@ async def get_providers(
 
 @router.post(
     "/providers",
-    response_model=SsoProviderResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -221,7 +220,6 @@ async def create_provider_endpoint(
 
 @router.put(
     "/providers/{provider_id}",
-    response_model=SsoProviderResponse,
     dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors("admin.sso.update_provider_endpoint")
@@ -338,7 +336,7 @@ async def delete_provider_endpoint(
         )
 
 
-@router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
+@router.post("/providers/{provider_id}/test")
 @handle_db_errors("admin.sso.test_provider_connection")
 async def test_provider_connection(
     provider_id: uuid.UUID,
@@ -526,9 +524,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     )
 
 
-@router.put(
-    "/providers/{provider_id}/toggle", response_model=SsoProviderResponse, dependencies=[Depends(deny_break_glass_mint)]
-)
+@router.put("/providers/{provider_id}/toggle", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("admin.sso.toggle_provider_endpoint")
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
@@ -593,7 +589,7 @@ class GroupMappingsResponse(BaseModel):
     mappings: list[GroupMappingItem]
 
 
-@router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+@router.put("/providers/{provider_id}/group-mappings")
 @handle_db_errors("admin.sso.set_group_mappings_endpoint")
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
@@ -646,7 +642,7 @@ async def set_group_mappings_endpoint(
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
 
 
-@router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+@router.get("/providers/{provider_id}/group-mappings")
 @handle_db_errors("admin.sso.get_group_mappings_endpoint")
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
