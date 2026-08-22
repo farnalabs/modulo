@@ -162,6 +162,7 @@ __all__ = [
     "staging_system_settings",
     "validate_node_category",
     "verify_write_scopes",
+    "fetch_blob",  # LibraryClient.fetch_blob (FAR-363) - public blob-fetch API exercised by tests/unit/library_sync
     "_aggregate_sandbox_cost",
     "_compute_token_costs",
     # --- Observability / read-model properties referenced only by tests ---
@@ -185,6 +186,9 @@ __all__ = [
     "checkpointer",
     "input_hash",
     "deleted_by",  # eval_definitions write-only audit column (set on soft-delete, FAR-309 PR B)
+    "catalog_json",  # LibrarySyncState (FAR-363) write-only cache column - consumed by the future library browser
+    "last_synced_at",  # LibrarySyncState (FAR-363) write-only sync-stamp column
+    "last_success_at",  # LibrarySyncState (FAR-363) write-only success-stamp column
     "_superseded",
     "_task_group",
     "lifespan_context",

@@ -18,6 +18,7 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.journey import Journey
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.library_sync_state import LibrarySyncState
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.mcp_setup_token import McpSetupToken
@@ -95,6 +96,7 @@ __all__ = [
     "Journey",
     "JourneyFact",
     "LibraryPrimitive",
+    "LibrarySyncState",
     "LifecycleMap",
     "LifecycleMapStage",
     "McpSetupToken",
