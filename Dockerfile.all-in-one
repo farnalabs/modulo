@@ -15,10 +15,11 @@ COPY frontend/ ./
 RUN pnpm run build
 
 FROM python:3.12-slim AS runtime
-ENV UV_LINK_MODE=copy
+ENV UV_LINK_MODE=copy \
+    HOME=/tmp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends nginx supervisor postgresql-client
+    apt-get update && apt-get install -y --no-install-recommends nginx supervisor postgresql-client libcap2-bin
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --only-binary :all: uv==0.11.13
@@ -33,5 +34,25 @@ COPY deploy/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/supervisor/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Run as the unprivileged www-data user (docker:S6471). nginx binds the
+# privileged port 80 in all-in-one.conf, so setcap cap_net_bind_service is
+# required for non-root binding. Debian nginx keeps proxy/body temp files
+# under /var/lib/nginx (not /var/cache/nginx), so those dirs are pre-created
+# and chowned. supervisord log/pid paths are chowned so both write as
+# www-data.
+RUN mkdir -p /var/cache/nginx /var/lib/nginx/body /var/lib/nginx/fastcgi /var/lib/nginx/proxy /var/lib/nginx/scgi /var/lib/nginx/uwsgi /var/log/supervisor \
+    && chown -R www-data:www-data /var/cache/nginx \
+    && chown -R www-data:www-data /var/lib/nginx \
+    && chown -R www-data:www-data /var/log/nginx \
+    && chown -R www-data:www-data /var/log/supervisor \
+    && chown -R www-data:www-data /usr/share/nginx/html \
+    && touch /var/run/nginx.pid \
+    && touch /var/run/supervisord.pid \
+    && chown www-data:www-data /var/run/nginx.pid /var/run/supervisord.pid \
+    && setcap 'cap_net_bind_service=+ep' "$(command -v nginx)"
+
+USER www-data
+
 EXPOSE 80
 ENTRYPOINT ["/entrypoint.sh"]
