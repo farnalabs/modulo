@@ -40,9 +40,20 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_auth_password": "pw",
         "saq_auth_username": "admin",
         "fernet_key": "x" * 44,
+        "modulo_library_sync_interval_seconds": 300,
     }
     base.update(overrides)
     return MagicMock(**base)
+
+
+# Minimal env so ``modulo.db.session`` can be imported in a worktree (no .env):
+# its module-level ``engine = _build_engine()`` constructs ``Settings()``, which
+# requires DATABASE_URL/SECRET_KEY/FERNET_KEY. On main these come from .env.
+_MIN_ENV = {
+    "DATABASE_URL": "postgresql+asyncpg://localhost/test",
+    "SECRET_KEY": "s" * 44,
+    "FERNET_KEY": "f" * 44,
+}
 
 
 def _make_retention_factory() -> tuple[MagicMock, MagicMock]:
@@ -86,9 +97,13 @@ class TestFunctionsWiring:
         assert "stale_run_recovery" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
+        assert "library_sync" in names
 
     def test_system_cron_knobs_explicit(self) -> None:
-        jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
+        # _system_cron_jobs derives the library_sync cadence from settings, so
+        # the settings factory is patched (real Settings() requires env vars).
+        with patch.object(sw, "get_settings", return_value=_settings()):
+            jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
         assert set(jobs) == {
             "fire_due_triggers",
             "dispatcher_reconcile",
@@ -102,6 +117,7 @@ class TestFunctionsWiring:
             "analytics_facts_maintenance",
             "journey_reconcile",
             "check_missed_fire_alerts_cron",
+            "library_sync",
             "metrics_dump",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
@@ -145,6 +161,16 @@ class TestFunctionsWiring:
         assert jr.heartbeat == 30
         assert jr.ttl == 300
         assert jr.unique is True
+        # library_sync: cadence derives from modulo_library_sync_interval_seconds
+        # (default 300s -> */5 * * * *), fail-open (retries=1, never raises).
+        ls = jobs["library_sync"]
+        assert ls.cron == "*/5 * * * *"
+        assert ls.timeout == 300
+        assert ls.retries == 1
+        assert ls.heartbeat == 30
+        assert ls.ttl == 300
+        assert ls.unique is True
+
         # metrics_dump: daily 01:00 UTC, unique=True, long timeout (full
         # organisation scan), single retry, generous ttl.
         md = jobs["metrics_dump"]
@@ -154,6 +180,14 @@ class TestFunctionsWiring:
         assert md.retries == 1
         assert md.ttl == 900
         assert md.unique is True
+
+    def test_sync_interval_to_cron_maps_seconds_to_5_field_cron(self) -> None:
+        assert sw._sync_interval_to_cron(300) == "*/5 * * * *"
+        assert sw._sync_interval_to_cron(60) == "* * * * *"
+        assert sw._sync_interval_to_cron(30) == "* * * * *"
+        assert sw._sync_interval_to_cron(3600) == "0 */1 * * *"
+        assert sw._sync_interval_to_cron(7200) == "0 */2 * * *"
+        assert sw._sync_interval_to_cron(86400) == "0 0 * * *"
 
     def test_settings_after_process_and_metadata(self) -> None:
         with patch.object(sw, "get_settings", return_value=_settings()):
@@ -805,6 +839,7 @@ class TestGetAsyncEngine:
 
     def test_uses_shared_engine_with_per_worker_pool_override(self) -> None:
         with (
+            patch.dict(os.environ, _MIN_ENV),
             patch.object(
                 sw,
                 "get_settings",
@@ -820,6 +855,7 @@ class TestGetAsyncEngine:
 
     def test_uses_plain_shared_engine_for_non_postgres_backend(self) -> None:
         with (
+            patch.dict(os.environ, _MIN_ENV),
             patch.object(
                 sw,
                 "get_settings",
@@ -834,6 +870,7 @@ class TestGetAsyncEngine:
 
     def test_caches_engine_across_calls(self) -> None:
         with (
+            patch.dict(os.environ, _MIN_ENV),
             patch.object(sw, "get_settings", return_value=_settings()),
             patch.object(sw, "_ASYNC_ENGINE", None),
             patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
@@ -1259,6 +1296,55 @@ class TestSystemJobDelegates:
         check.assert_awaited_once()
         assert "check_missed_fire_alerts.emitted" not in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_library_sync_noop_when_disabled(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Empty MODULO_LIBRARY_ENDPOINT must short-circuit to a disabled no-op."""
+        with (
+            patch.object(sw, "get_settings", return_value=_settings(modulo_library_endpoint="")),
+            patch.object(sw, "_make_session_factory") as factory,
+            caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.library_sync({})
+
+        assert result == {"status": "disabled"}
+        factory.assert_not_called()
+        assert "saq.library_sync.disabled" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_library_sync_reports_result(self) -> None:
+        session = MagicMock()
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock()
+        factory.return_value = session_cm
+        result_obj = MagicMock(success=True, entries_count=3, revoked_count=1, error=None)
+        with (
+            patch.object(
+                sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")
+            ),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch("modulo.core.library_sync.sync_library", new_callable=AsyncMock, return_value=result_obj) as sync,
+        ):
+            result = await sw.library_sync({})
+
+        assert result == {"status": "ok", "entries_count": 3, "revoked_count": 1, "error": None}
+        sync.assert_awaited_once()
+        assert sync.await_args.args[0] is session
+
+    @pytest.mark.asyncio
+    async def test_library_sync_fail_open_on_cron_failure(self) -> None:
+        """A session/DB failure in the cron wrapper must never raise (fail-open)."""
+        with (
+            patch.object(
+                sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")
+            ),
+            patch.object(sw, "_make_session_factory", side_effect=RuntimeError("redis down")),
+        ):
+            result = await sw.library_sync({})
+
+        assert result == {"status": "failed", "error": "unexpected cron failure"}
+
 
 class TestClaimExpiry:
     @staticmethod
@@ -1401,6 +1487,7 @@ class TestCancellationPropagation:
     @pytest.mark.asyncio
     async def test_fire_cron_trigger_cancellation_propagates(self) -> None:
         with (
+            patch.object(sw, "get_settings", return_value=_settings()),
             patch(
                 "modulo.core.cron_helpers.fire_cron_trigger",
                 new_callable=AsyncMock,
@@ -1424,6 +1511,7 @@ class TestCancellationPropagation:
     @pytest.mark.asyncio
     async def test_fire_polling_trigger_cancellation_propagates(self) -> None:
         with (
+            patch.object(sw, "get_settings", return_value=_settings()),
             patch(
                 "modulo.core.cron_helpers.fire_polling_trigger",
                 new_callable=AsyncMock,
