@@ -187,13 +187,13 @@ def _eval_self_reported(
 ) -> tuple[dict[str, Any], Decimal]:
     rk = component.report_key or "model_cost_usd"
     amount = telemetry.reported.get(rk, Decimal(0)).quantize(_QUANT, rounding=ROUND_HALF_UP)
-    raw_vals = {nid: raw for nid, raw in telemetry.raw_reported.items() if nid in _reporting_nodes(telemetry, rk)}
+    raw_vals = {nid: raw for nid, raw in telemetry.raw_reported.items() if nid in _reporting_nodes(telemetry)}
     basis: dict[str, Any] = {
         "reported": float(amount),
         "raw_reported": raw_vals if len(raw_vals) > 1 else next(iter(raw_vals.values()), float(amount)),
         "node_count": len(raw_vals),
     }
-    if component.name in telemetry.clamped_nodes or _any_clamped(telemetry, rk):
+    if component.name in telemetry.clamped_nodes or _any_clamped(telemetry):
         basis["clamped"] = True
     missing = rk in telemetry.missing_report_keys
     entry: dict[str, Any] = {
@@ -210,12 +210,12 @@ def _eval_self_reported(
     return entry, amount
 
 
-def _reporting_nodes(telemetry: RunCostTelemetry, rk: str) -> set[str]:
+def _reporting_nodes(telemetry: RunCostTelemetry) -> set[str]:
     """Node ids that contributed to a given report_key (best-effort via raw map)."""
     return set(telemetry.raw_reported)
 
 
-def _any_clamped(telemetry: RunCostTelemetry, rk: str) -> bool:
+def _any_clamped(telemetry: RunCostTelemetry) -> bool:
     return bool(telemetry.clamped_nodes)
 
 

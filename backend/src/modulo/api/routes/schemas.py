@@ -1401,7 +1401,7 @@ class SchemaValidateResponse(BaseModel):
     errors: list[SchemaValidationError]
 
 
-def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> tuple[int | None, int | None]:
+def _find_json_location(raw: str, error_path: str) -> tuple[int | None, int | None]:
     """Best-effort line/column lookup for a validation error path in raw JSON text."""
     try:
         parsed = json.loads(raw)
@@ -1451,7 +1451,7 @@ async def validate_schema_endpoint(
     except (ValidationError, JsSchemaError) as exc:
         path_copy = list(exc.path)
         path_parts = str(path_copy[0]) if path_copy else ""
-        line, col = _find_json_location(raw, req.definition, path_parts)
+        line, col = _find_json_location(raw, path_parts)
         errors.append(
             SchemaValidationError(
                 line=line,

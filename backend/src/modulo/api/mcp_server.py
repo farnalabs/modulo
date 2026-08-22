@@ -961,10 +961,8 @@ async def _authenticate_oauth_jwt(
 
 
 async def _verify_oauth_token_family(
-    request: Request,
     token: str,
     claims: Any,
-    settings: Any,
 ) -> Response | None:
     """Return an error response if the OAuth token family is blacklisted.
 
@@ -1025,7 +1023,6 @@ async def _finalize_oauth_principal(
     request: Request,
     token: str,
     claims: Any,
-    settings: Any,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     """Resolve the OAuth principal role, set request context, and continue.
@@ -1121,11 +1118,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Verify token family is not blacklisted.
-        family_err = await _verify_oauth_token_family(request, token, claims, settings)
+        family_err = await _verify_oauth_token_family(token, claims)
         if family_err is not None:
             return family_err
 
-        return await _finalize_oauth_principal(request, token, claims, settings, call_next)
+        return await _finalize_oauth_principal(request, token, claims, call_next)
 
 
 # ---------------------------------------------------------------------------
@@ -2349,7 +2346,7 @@ async def trigger_pipeline(
         return _tool_error("Failed to trigger pipeline")
 
 
-async def _load_run_for_status(s: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, run_id: str) -> Any | None:
+async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
     run = await get_run(s, rid)
     if run is None:
         return None
@@ -2446,7 +2443,7 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_run_for_status(s, org_id, rid, run_id)
+        run = await _load_run_for_status(s, rid)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -2816,10 +2813,7 @@ def _parse_hitl_action(
 
 async def _load_hitl_run(
     s: AsyncSession,
-    org_id: uuid.UUID,
     rid: uuid.UUID,
-    run_id: str,
-    gate_id: str,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
 
@@ -2971,7 +2965,7 @@ async def _review_hitl_impl(
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+        run = await _load_hitl_run(s, rid)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
