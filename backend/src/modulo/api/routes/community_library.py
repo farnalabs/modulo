@@ -20,7 +20,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.routes.library import LibraryPrimitiveResponse
+from modulo.api.routes.library import (
+    CommunityContributionListResponse,
+    LibraryPrimitiveResponse,
+    list_community_contributions_endpoint,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service.community import (
     get_community_entry,
@@ -32,6 +36,15 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-library"])
+
+# The community router is mounted before ``library_router`` so the static
+# ``GET /api/v1/libraries/community`` list route is not shadowed by the
+# library router's single-segment ``GET /{primitive_id}`` (UUID-typed) route,
+# which would otherwise 422 on the literal ``community`` segment. Mounting it
+# first means its ``GET /{entry_id}`` would shadow the library router's
+# ``GET /community/contributions`` route, so that existing endpoint is
+# re-exposed here under the community prefix (same handler, same contract).
+router.get("/contributions", response_model=CommunityContributionListResponse)(list_community_contributions_endpoint)
 
 _log = logging.getLogger(__name__)
 

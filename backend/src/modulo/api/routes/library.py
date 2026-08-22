@@ -1533,7 +1533,6 @@ async def community_contribute_endpoint(
     return LibraryPrimitiveResponse.model_validate(result)
 
 
-@router.get("/community/contributions", response_model=CommunityContributionListResponse)
 @handle_db_errors("library.list_community_contributions_endpoint")
 async def list_community_contributions_endpoint(
     contribution_status: str | None = Query(default=None),
