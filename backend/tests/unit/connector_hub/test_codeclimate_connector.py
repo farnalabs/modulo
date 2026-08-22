@@ -94,8 +94,9 @@ async def test_query_repo(connector):
 
 
 async def test_query_repo_missing_id(connector):
+    query = ConnectorQuery(resource="repo")
     with pytest.raises(ValueError, match="'id' in filters"):
-        await connector.query(ConnectorQuery(resource="repo"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +125,15 @@ async def test_query_snapshot(connector):
 
 
 async def test_query_snapshots_missing_repo_id(connector):
+    query = ConnectorQuery(resource="snapshots")
     with pytest.raises(ValueError, match="'repo_id' in filters"):
-        await connector.query(ConnectorQuery(resource="snapshots"))
+        await connector.query(query)
 
 
 async def test_query_snapshot_missing_id(connector):
+    query = ConnectorQuery(resource="snapshot", filters={"repo_id": "repo-123"})
     with pytest.raises(ValueError, match="'id' in filters"):
-        await connector.query(ConnectorQuery(resource="snapshot", filters={"repo_id": "repo-123"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +164,9 @@ async def test_query_test_report(connector):
 
 
 async def test_query_test_reports_missing_repo_id(connector):
+    query = ConnectorQuery(resource="test_reports")
     with pytest.raises(ValueError, match="'repo_id' in filters"):
-        await connector.query(ConnectorQuery(resource="test_reports"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -213,26 +217,24 @@ async def test_write_test_report_with_files(connector):
 
 
 async def test_write_test_report_missing_fields(connector):
+    payload = ConnectorPayload(resource="test_report", data={"duration": 1})
     with pytest.raises(ValueError, match="'repo_id' in data"):
-        await connector.write(ConnectorPayload(resource="test_report", data={"duration": 1}))
+        await connector.write(payload)
+    payload = ConnectorPayload(resource="test_report", data={"repo_id": "repo-123", "exit_code": 0})
     with pytest.raises(ValueError, match="'duration' in data"):
-        await connector.write(
-            ConnectorPayload(resource="test_report", data={"repo_id": "repo-123", "exit_code": 0}),
-        )
+        await connector.write(payload)
+    payload = ConnectorPayload(
+        resource="test_report",
+        data={"repo_id": "repo-123", "duration": 1, "commit_sha": "abc"},
+    )
     with pytest.raises(ValueError, match="'exit_code' in data"):
-        await connector.write(
-            ConnectorPayload(
-                resource="test_report",
-                data={"repo_id": "repo-123", "duration": 1, "commit_sha": "abc"},
-            ),
-        )
+        await connector.write(payload)
+    payload = ConnectorPayload(
+        resource="test_report",
+        data={"repo_id": "repo-123", "duration": 1, "exit_code": 0},
+    )
     with pytest.raises(ValueError, match="'commit_sha' in data"):
-        await connector.write(
-            ConnectorPayload(
-                resource="test_report",
-                data={"repo_id": "repo-123", "duration": 1, "exit_code": 0},
-            ),
-        )
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------

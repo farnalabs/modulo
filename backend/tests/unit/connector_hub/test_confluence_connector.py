@@ -101,8 +101,9 @@ async def test_query_single_page(connector):
 
 
 async def test_query_single_page_missing_id(connector):
+    query = ConnectorQuery(resource="page")
     with pytest.raises(ValueError, match="'page_id' filter"):
-        await connector.query(ConnectorQuery(resource="page"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +150,9 @@ async def test_query_single_space(connector):
 
 
 async def test_query_single_space_missing_id(connector):
+    query = ConnectorQuery(resource="space")
     with pytest.raises(ValueError, match="'space_id' filter"):
-        await connector.query(ConnectorQuery(resource="space"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +176,9 @@ async def test_query_content_search(connector):
 
 
 async def test_query_content_missing_cql(connector):
+    query = ConnectorQuery(resource="content")
     with pytest.raises(ValueError, match="'cql' filter"):
-        await connector.query(ConnectorQuery(resource="content"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +201,9 @@ async def test_query_children(connector):
 
 
 async def test_query_children_missing_page_id(connector):
+    query = ConnectorQuery(resource="children")
     with pytest.raises(ValueError, match="'page_id' filter"):
-        await connector.query(ConnectorQuery(resource="children"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -257,8 +261,9 @@ async def test_query_labels(connector):
 
 
 async def test_query_labels_missing_page_id(connector):
+    query = ConnectorQuery(resource="labels")
     with pytest.raises(ValueError, match="'page_id' filter"):
-        await connector.query(ConnectorQuery(resource="labels"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------

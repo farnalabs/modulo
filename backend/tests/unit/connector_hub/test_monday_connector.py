@@ -94,8 +94,9 @@ async def test_query_board(connector):
 
 
 async def test_query_board_missing_board_id(connector):
+    query = ConnectorQuery(resource="board")
     with pytest.raises(ValueError, match="'board_id' filter"):
-        await connector.query(ConnectorQuery(resource="board"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +126,9 @@ async def test_query_items(connector):
 
 
 async def test_query_items_missing_board_id(connector):
+    query = ConnectorQuery(resource="items")
     with pytest.raises(ValueError, match="'board_id' filter"):
-        await connector.query(ConnectorQuery(resource="items"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +147,9 @@ async def test_query_item(connector):
 
 
 async def test_query_item_missing_item_id(connector):
+    query = ConnectorQuery(resource="item")
     with pytest.raises(ValueError, match="'item_id' filter"):
-        await connector.query(ConnectorQuery(resource="item"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +200,9 @@ async def test_query_workspaces(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match=r"Unsupported Monday\.com resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +244,9 @@ async def test_write_create_item_with_column_values(connector):
 
 
 async def test_write_create_item_missing_fields(connector):
+    payload = ConnectorPayload(resource="item", data={"board_id": 10})
     with pytest.raises(ValueError, match="'board_id' and 'item_name'"):
-        await connector.write(ConnectorPayload(resource="item", data={"board_id": 10}))
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
