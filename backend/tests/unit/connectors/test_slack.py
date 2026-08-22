@@ -231,8 +231,9 @@ async def test_query_channels_api_error(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_authed"}),
     )
+    query = ConnectorQuery(resource="channels")
     with pytest.raises(ValueError, match="not_authed"):
-        await connector.query(ConnectorQuery(resource="channels"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -240,8 +241,9 @@ async def test_query_channels_http_error(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(403, text="Forbidden"),
     )
+    query = ConnectorQuery(resource="channels")
     with pytest.raises(ValueError, match="Slack API HTTP 403"):
-        await connector.query(ConnectorQuery(resource="channels"))
+        await connector.query(query)
 
 
 # -- query: messages --
@@ -277,8 +279,9 @@ async def test_query_messages_with_filters(connector):
 
 @respx.mock
 async def test_query_messages_missing_channel(connector):
+    query = ConnectorQuery(resource="messages")
     with pytest.raises(ValueError, match="requires 'channel' filter"):
-        await connector.query(ConnectorQuery(resource="messages"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -286,8 +289,9 @@ async def test_query_messages_api_error(connector):
     respx.get("https://slack.com/api/conversations.history").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "channel_not_found"}),
     )
+    query = ConnectorQuery(resource="messages", filters={"channel": "C99999"})
     with pytest.raises(ValueError, match="channel_not_found"):
-        await connector.query(ConnectorQuery(resource="messages", filters={"channel": "C99999"}))
+        await connector.query(query)
 
 
 # -- query: users --
@@ -339,8 +343,9 @@ async def test_query_users_api_error(connector):
     respx.get("https://slack.com/api/users.list").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "token_revoked"}),
     )
+    query = ConnectorQuery(resource="users")
     with pytest.raises(ValueError, match="token_revoked"):
-        await connector.query(ConnectorQuery(resource="users"))
+        await connector.query(query)
 
 
 @respx.mock

@@ -127,13 +127,15 @@ async def test_write_mr(connector):
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported GitLab resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="branch", data={})
     with pytest.raises(ValueError, match="Unsupported GitLab write resource"):
-        await connector.write(ConnectorPayload(resource="branch", data={}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -154,14 +156,16 @@ async def test_health_check_timeout(connector):
 
 @respx.mock
 async def test_query_missing_project_filter(connector):
+    query = ConnectorQuery(resource="file", filters={})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.query(ConnectorQuery(resource="file", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_write_missing_project_data(connector):
+    payload = ConnectorPayload(resource="file", data={})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
