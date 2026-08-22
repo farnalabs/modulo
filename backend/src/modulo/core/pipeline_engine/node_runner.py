@@ -3362,7 +3362,7 @@ async def _sandbox_agent_impl(
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
 
-    from e2b import AsyncSandbox  # type: ignore[import-untyped]
+    from e2b import AsyncSandbox
     from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
