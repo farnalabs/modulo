@@ -87,25 +87,14 @@
           class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
         >
           {{ typeLabel(type) }}
-          <button
-            type="button"
-            class="ml-0.5 rounded-full p-0.5 hover:bg-primary/20 transition-colors"
-            @click="removeType(type)"
-            :aria-label="`Remove ${typeLabel(type)} filter`"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+              <button
+                type="button"
+                class="ml-0.5 rounded-full p-0.5 hover:bg-primary/20 transition-colors"
+                @click="removeType(type)"
+                :aria-label="`Remove ${typeLabel(type)} filter`"
+              >
+                <XIcon class="h-3 w-3" />
+              </button>
         </span>
         <button
           type="button"
@@ -211,16 +200,12 @@
       />
 
       <LibraryPrimitiveGrid
-        v-else-if="section === 'native' && nativePrimitives.length > 0"
+        v-if="section === 'native' && nativePrimitives.length > 0"
         :items="nativePrimitives"
         badge="modulo"
         show-auto-update
-        :adapting="adapting"
-        :toggle-loading="toggleLoading"
-        @create-pipeline="createPipeline"
-        @create-lifecycle-map="createLifecycleMap"
-        @view-details="viewPrimitive"
-        @toggle-auto-update="toggleAutoUpdate"
+        v-bind="gridSharedProps"
+        v-on="gridSharedHandlers"
       />
 
       <details
@@ -244,12 +229,8 @@
           :items="previewPrimitives"
           badge="preview"
           :show-tags="false"
-          :adapting="adapting"
-          :toggle-loading="toggleLoading"
-          @create-pipeline="createPipeline"
-          @create-lifecycle-map="createLifecycleMap"
-          @view-details="viewPrimitive"
-          @toggle-auto-update="toggleAutoUpdate"
+          v-bind="gridSharedProps"
+          v-on="gridSharedHandlers"
         />
       </details>
 
@@ -257,12 +238,8 @@
         v-if="section === 'community' && communityPrimitives.length > 0"
         :items="communityPrimitives"
         badge="community"
-        :adapting="adapting"
-        :toggle-loading="toggleLoading"
-        @create-pipeline="createPipeline"
-        @create-lifecycle-map="createLifecycleMap"
-        @view-details="viewPrimitive"
-        @toggle-auto-update="toggleAutoUpdate"
+        v-bind="gridSharedProps"
+        v-on="gridSharedHandlers"
       />
 
       <div
@@ -337,6 +314,7 @@ import { useDataFetch } from "../composables/useDataFetch";
 import { formatApiError } from "../lib/api/formatError";
 import { api } from "../lib/api/client";
 import { useI18n } from "vue-i18n";
+import { X as XIcon } from "@lucide/vue";
 import { usePlanStore } from "../stores/planStore";
 import type { LibraryPrimitive } from "../components/library/LibraryPrimitiveCard.vue";
 import type { CommunityLibraryEntry } from "../lib/api/communityLibrary";
@@ -650,6 +628,17 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
     toggleLoading.value[prim.id] = false;
   }
 }
+
+const gridSharedProps = computed(() => ({
+  adapting: adapting.value,
+  "toggle-loading": toggleLoading.value,
+}));
+const gridSharedHandlers = {
+  "create-pipeline": (prim: LibraryPrimitive) => createPipeline(prim),
+  "create-lifecycle-map": (prim: LibraryPrimitive) => createLifecycleMap(prim),
+  "view-details": (prim: LibraryPrimitive) => viewPrimitive(prim),
+  "toggle-auto-update": (prim: LibraryPrimitive) => toggleAutoUpdate(prim),
+};
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onClickOutside);

@@ -154,6 +154,7 @@
 <script setup lang="ts">
 import { Check as CheckIcon, Loader as LoaderIcon } from "@lucide/vue";
 import { typeBadgeClass } from "../../lib/ui/typeBadge";
+import type { LibraryCardEmits } from "../../components/library/libraryCardContracts";
 
 const primaryActionButton =
   "flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60";
@@ -193,11 +194,5 @@ withDefaults(
   },
 );
 
-defineEmits<{
-  "create-pipeline": [prim: LibraryPrimitive];
-  "create-lifecycle-map": [prim: LibraryPrimitive];
-  "view-details": [prim: LibraryPrimitive];
-  "toggle-auto-update": [prim: LibraryPrimitive];
-  install: [prim: LibraryPrimitive];
-}>();
+defineEmits<LibraryCardEmits>();
 </script>

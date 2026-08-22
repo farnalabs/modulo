@@ -23,6 +23,7 @@
 <script setup lang="ts">
 import LibraryPrimitiveCard from "./LibraryPrimitiveCard.vue";
 import type { LibraryPrimitive } from "./LibraryPrimitiveCard.vue";
+import type { LibraryCardEmits } from "./libraryCardContracts";
 
 withDefaults(
   defineProps<{
@@ -45,11 +46,5 @@ withDefaults(
   },
 );
 
-defineEmits<{
-  "create-pipeline": [prim: LibraryPrimitive];
-  "create-lifecycle-map": [prim: LibraryPrimitive];
-  "view-details": [prim: LibraryPrimitive];
-  "toggle-auto-update": [prim: LibraryPrimitive];
-  install: [prim: LibraryPrimitive];
-}>();
+defineEmits<LibraryCardEmits>();
 </script>
