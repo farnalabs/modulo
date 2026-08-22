@@ -68,7 +68,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 if TYPE_CHECKING:
-    from e2b import AsyncSandbox
+    from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -3362,8 +3362,8 @@ async def _sandbox_agent_impl(
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
 
-    from e2b import AsyncSandbox
-    from e2b.exceptions import RateLimitException
+    from e2b import AsyncSandbox  # type: ignore[import-untyped]
+    from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
     from modulo.core.guardrails.loop_intercept import (
