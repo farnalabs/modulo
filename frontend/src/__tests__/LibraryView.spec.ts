@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick as vueNextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
 async function nextTick() {
   await vueNextTick()
@@ -68,6 +69,7 @@ const COMMUNITY_ITEM = {
 
 describe('LibraryView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
   })
@@ -250,6 +252,80 @@ describe('LibraryView', () => {
     })
     await vi.waitFor(() => {
       expect(router.push).toHaveBeenCalledWith({ name: 'lifecycle-map-detail', params: { id: 'map-created-1' } })
+    })
+  })
+
+  it('renders the Hosted Community section only when the feature flag is enabled', async () => {
+    const { usePlanStore } = await import('../stores/planStore')
+    usePlanStore().features['community_library'] = true
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="library-section-hosted"]').exists()).toBe(true)
+  })
+
+  it('hides the Hosted Community tab when the feature flag is disabled', async () => {
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="library-section-hosted"]').exists()).toBe(false)
+  })
+
+  it('renders hosted community entries and installs one on click', async () => {
+    const { usePlanStore } = await import('../stores/planStore')
+    usePlanStore().features['community_library'] = true
+
+    const HOSTED_ITEM = {
+      id: 'hosted-1',
+      type: 'workflow',
+      slug: 'Hosted Workflow',
+      author: 'community',
+      version: '1.0',
+      content_sha256: 'abc123',
+      license: 'MIT',
+      status: 'published',
+      published_at: '2024-01-01T00:00:00Z',
+      installed: false,
+    }
+    getMock.mockResolvedValue({
+      items: [HOSTED_ITEM],
+      total: 1,
+      synced_at: '2024-01-01T00:00:00Z',
+    })
+    postMock.mockResolvedValue({ id: 'installed-prim-1' })
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    await wrapper.get('[data-testid="library-section-hosted"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Hosted Workflow')
+
+    await wrapper.get('[data-testid="library-install-button"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(postMock).toHaveBeenCalledWith('/api/v1/libraries/community/{entry_id}/install', {
+      params: { path: { entry_id: 'hosted-1' } },
+      body: {},
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="library-installed-badge"]').exists()).toBe(true)
     })
   })
 })

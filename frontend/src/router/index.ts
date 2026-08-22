@@ -49,6 +49,7 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
 const AnalyticsView = () => import('../views/AnalyticsView.vue')
 const DashboardView = () => import('../views/DashboardView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
+const LibraryCommunityDetailView = () => import('../views/LibraryCommunityDetailView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
 const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')
 const SettingsRateLimitsView = () => import('../views/SettingsRateLimitsView.vue')
@@ -166,6 +167,13 @@ const router = createRouter({
       path: '/library',
       name: 'library',
       component: LibraryView,
+    },
+    {
+      path: '/library/community/:id',
+      name: 'library-community-detail',
+      component: LibraryCommunityDetailView,
+      props: true,
+      meta: { breadcrumb: 'Community Entry', parent: 'library' },
     },
     {
       path: '/library/:id/create-pipeline',
