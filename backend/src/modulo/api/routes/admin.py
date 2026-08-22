@@ -543,6 +543,7 @@ async def global_search(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             params = _SearchParams(
                 org_id=current_user.organisation_id,
