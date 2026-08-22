@@ -22,12 +22,19 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from test_metrics_ingest import integration_client  # noqa: F401
 
+from modulo.api.routes.product_analytics_identity import _SEQUENCE_KEY_PREFIX
 from modulo.auth.jwt import create_access_token
 from modulo.core.product_analytics.hmac_verify import sign_rotation_request
-from modulo.core.product_analytics.instance_identity import get_or_create_instance_identity
+from modulo.core.product_analytics.instance_identity import (
+    _INSTANCE_ID_KEY,
+    _SECRET_KEY,
+    get_or_create_instance_identity,
+)
+from modulo.db.models.system_config import SystemConfig
 
 pytestmark = pytest.mark.integration
 
@@ -73,6 +80,32 @@ async def _reset_rate_limiter() -> AsyncGenerator[None, None]:
 
     with patch.object(pa, "_rotation_timestamps", defaultdict(list)):
         yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fresh_instance_identity(db_engine) -> AsyncGenerator[None, None]:
+    """Give every test a genuinely fresh TOFU instance-identity state.
+
+    The instance identity (instance id + secret) and the per-instance rotation
+    sequence live in GLOBAL ``system_config`` rows keyed by constant values, so
+    they survive across tests in the shared session-scoped DB. A rotation test
+    leaves ``product_analytics_last_sequence_<instance_id>`` behind; the next
+    rotate test then mints the SAME (stale) instance and its first ``seq=1`` is
+    rejected with ``Sequence must be > N``. Deleting the three key families
+    before every test restores the pristine instance the TOFU/rotation tests
+    assume.
+    """
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            delete(SystemConfig).where(
+                or_(
+                    SystemConfig.key == _INSTANCE_ID_KEY,
+                    SystemConfig.key == _SECRET_KEY,
+                    SystemConfig.key.like(_SEQUENCE_KEY_PREFIX + "%"),
+                )
+            )
+        )
+    yield
 
 
 class TestIdentityAuthGate:
