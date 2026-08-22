@@ -1165,6 +1165,7 @@ async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1537,6 +1538,11 @@ async def update_pipeline_endpoint(
                 account_id=principal.account_id,
                 request_id=getattr(principal, "request_id", None),
             )
+            # Refresh the ORM row inside the transaction so the DB-computed
+            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+            # the transaction is active. Accessing it after commit with
+            # autobegin=False raises InvalidRequestError -> 422 silent-success.
+            await session.refresh(pipeline)
     except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
