@@ -168,7 +168,7 @@ async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> E
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=ProfileListResponse, dependencies=[require_feature("environment_profiles")])
+@router.get("", dependencies=[require_feature("environment_profiles")])
 async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -215,7 +215,6 @@ async def list_profiles(
 
 @router.post(
     "",
-    response_model=ProfileResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[require_feature("environment_profiles")],
 )
@@ -273,7 +272,7 @@ async def create_profile(
     return _to_response(profile)
 
 
-@router.get("/{profile_id}", response_model=ProfileResponse, dependencies=[require_feature("environment_profiles")])
+@router.get("/{profile_id}", dependencies=[require_feature("environment_profiles")])
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -312,7 +311,7 @@ async def get_profile(
     return _to_response(profile)
 
 
-@router.patch("/{profile_id}", response_model=ProfileResponse, dependencies=[require_feature("environment_profiles")])
+@router.patch("/{profile_id}", dependencies=[require_feature("environment_profiles")])
 async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,

@@ -11,27 +11,13 @@ import types
 from typing import Self
 
 import pytest
+from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
 from modulo.core.library_sync import get_cached_manifest, is_revoked, sync_library
 from modulo.core.library_sync import sync as sync_module
-from modulo.core.library_sync.manifest import canonical_manifest_bytes
 from modulo.core.library_sync.models import SINGLETON_ID, LibrarySyncState
-from modulo.registry.crypto import generate_keypair, sign
 
 ENDPOINT = "https://library.modulo.run"
-
-
-def _signed_manifest(
-    private_key_pem: str, *, entries: list[dict] | None = None, revoked: list[dict] | None = None
-) -> dict:
-    body: dict[str, object] = {
-        "schema_version": "1",
-        "generated_at": "2026-08-22T00:00:00Z",
-        "entries": entries if entries is not None else [],
-        "revoked": revoked if revoked is not None else [],
-    }
-    canonical = canonical_manifest_bytes(body)
-    return {**body, "signature": {"algorithm": "ed25519", "value": sign(private_key_pem, canonical)}}
 
 
 def _settings(*, endpoint: str = ENDPOINT, root_key: str = "", timeout: float = 15.0) -> types.SimpleNamespace:
@@ -98,11 +84,6 @@ class _FakeClient:
 
     async def close(self) -> None:
         self.closed = True
-
-
-@pytest.fixture
-def keys() -> tuple[str, str]:
-    return generate_keypair()
 
 
 class TestSyncLibrary:

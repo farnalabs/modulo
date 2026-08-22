@@ -43,6 +43,8 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_FEEDBACK_CREATE_FEEDBACK = "feedback.create_feedback"
+_CODE_FEEDBACK_AUDIT_APPEND_FAILED = "feedback.audit_append_failed"
+_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL = "feedback.publish_eval_proposal"
 _MSG_RESOURCE_CONFLICT_OCCURRED_PLEASE = "A resource conflict occurred. Please try again."
 _MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE = "Feedback system is not available. Run database migrations to enable this feature."
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
@@ -204,7 +206,7 @@ async def create_feedback(
             "gate_id": record.gate_id,
             "feedback_handler_type": record.feedback_handler_type,
         },
-        log_key="feedback.audit_append_failed",
+        log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
 
     return {
@@ -460,7 +462,7 @@ async def _resolve_producing_node_uuid(
 
 
 @router.post("/feedback/proposals/{record_id}/publish", status_code=status.HTTP_201_CREATED)
-@handle_db_errors("feedback.publish_eval_proposal")
+@handle_db_errors(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
 async def publish_eval_proposal(
     record_id: uuid.UUID,
     req: PublishEvalProposalRequest,
@@ -530,19 +532,19 @@ async def publish_eval_proposal(
 
             await mgr.update_status(record_id, "resolved")
     except IntegrityError:
-        logger.exception("feedback.publish_eval_proposal")
+        logger.exception(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from None
     except ProgrammingError:
-        logger.exception("feedback.publish_eval_proposal")
+        logger.exception(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("feedback.publish_eval_proposal")
+        logger.exception(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -579,7 +581,7 @@ async def publish_eval_proposal(
             "eval_type": eval_def.eval_type,
             "name": eval_def.name,
         },
-        log_key="feedback.audit_append_failed",
+        log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
 
     return {
@@ -706,7 +708,7 @@ async def update_feedback_status(
             "run_id": str(record.run_id) if record.run_id else None,
             "gate_id": record.gate_id,
         },
-        log_key="feedback.audit_append_failed",
+        log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
 
     return {
@@ -966,7 +968,7 @@ async def review_feedback(
                 "gate_id": record.gate_id,
                 "correction_run_id": correction_run_id,
             },
-            log_key="feedback.audit_append_failed",
+            log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
         )
 
     return {

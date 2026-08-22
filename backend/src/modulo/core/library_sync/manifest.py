@@ -53,6 +53,12 @@ def canonical_manifest_bytes(manifest: dict[str, Any]) -> bytes:
     The ``signature`` field is excluded (it cannot sign itself); keys are
     sorted and separators are compact so both the signer (vendor) and verifier
     (product) produce byte-identical output.
+
+    Exact byte form: ``json.dumps(stripped, sort_keys=True,
+    separators=(",", ":"), ensure_ascii=False).encode("utf-8")``. The output is
+    UTF-8 encoded with ``ensure_ascii=False`` — non-ASCII keys/values are
+    emitted as their literal UTF-8 bytes rather than ``\\uXXXX`` escapes — so
+    both signer and verifier MUST use this exact call to agree on the digest.
     """
     stripped = {k: v for k, v in manifest.items() if k != _SIGNATURE_KEY}
     return json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

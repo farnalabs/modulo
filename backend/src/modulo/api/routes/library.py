@@ -324,7 +324,7 @@ class PipelineFromTemplateResponse(BaseModel):
 _log = logging.getLogger(__name__)
 
 
-@router.get("", response_model=LibraryPrimitiveListResponse)
+@router.get("")
 @handle_db_errors("library.list_library_primitives_endpoint")
 async def list_library_primitives_endpoint(
     page: int = Query(1, ge=1),
@@ -440,7 +440,7 @@ async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 
-@router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
+@router.get("/{primitive_id}")
 @handle_db_errors("library.get_library_primitive_endpoint")
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -473,7 +473,7 @@ async def get_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("library.create_library_primitive_endpoint")
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
@@ -535,7 +535,7 @@ async def create_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
+@router.patch("/{primitive_id}")
 @handle_db_errors("library.update_library_primitive_endpoint")
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -565,7 +565,7 @@ async def update_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.delete("/{primitive_id}", response_model=LibraryPrimitiveResponse)
+@router.delete("/{primitive_id}")
 @handle_db_errors("library.delete_library_primitive_endpoint")
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -593,7 +593,7 @@ async def delete_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.post("/{primitive_id}/restore", response_model=LibraryPrimitiveResponse)
+@router.post("/{primitive_id}/restore")
 @handle_db_errors("library.restore_library_primitive_endpoint")
 async def restore_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -623,7 +623,7 @@ async def restore_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{primitive_id}/adapt", response_model=LibraryPrimitiveResponse)
+@router.post("/{primitive_id}/adapt")
 @handle_db_errors("library.copy_to_adapt_endpoint")
 async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
@@ -965,7 +965,7 @@ def _bind_model_backends_to_agents(
             agent["model_backend_id"] = mb_id_by_name[mb_name]
 
 
-@router.post("/import/upload-zip", response_model=ImportBundleResponse)
+@router.post("/import/upload-zip")
 @handle_db_errors("library.upload_zip_and_analyse_endpoint")
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
@@ -1004,7 +1004,7 @@ async def upload_zip_and_analyse_endpoint(
     return await _analyse_bundle(session, principal, bundle)
 
 
-@router.post("/import/analyse", response_model=ImportBundleResponse)
+@router.post("/import/analyse")
 @handle_db_errors("library.analyse_import_bundle_endpoint")
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
@@ -1024,7 +1024,7 @@ async def analyse_import_bundle_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/import/confirm", response_model=dict[str, Any])
+@router.post("/import/confirm")
 @handle_db_errors("library.confirm_import_endpoint")
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
@@ -1093,7 +1093,7 @@ async def confirm_import_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{primitive_id}/ratings", response_model=RatingListResponse)
+@router.get("/{primitive_id}/ratings")
 @handle_db_errors("library.list_ratings_endpoint")
 async def list_ratings_endpoint(
     primitive_id: uuid.UUID,
@@ -1121,7 +1121,7 @@ async def list_ratings_endpoint(
     )
 
 
-@router.get("/{primitive_id}/ratings/aggregate", response_model=RatingAggregateResponse)
+@router.get("/{primitive_id}/ratings/aggregate")
 @handle_db_errors("library.get_rating_aggregate_endpoint")
 async def get_rating_aggregate_endpoint(
     primitive_id: uuid.UUID,
@@ -1149,7 +1149,6 @@ async def get_rating_aggregate_endpoint(
 
 @router.post(
     "/{primitive_id}/ratings",
-    response_model=RatingResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("library.submit_rating_endpoint")
@@ -1196,7 +1195,6 @@ async def submit_rating_endpoint(
 
 @router.post(
     "/{primitive_id}/ratings/abuse",
-    response_model=AbuseReportResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("library.submit_abuse_report_endpoint")
@@ -1333,7 +1331,6 @@ def _convert_template_edges(
 
 @router.post(
     "/{primitive_id}/create-pipeline",
-    response_model=PipelineFromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
@@ -1418,7 +1415,6 @@ async def create_pipeline_from_template_endpoint(
 
 @router.post(
     "/{primitive_id}/create-lifecycle-map",
-    response_model=LifecycleMapResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("library.create_lifecycle_map_from_primitive_endpoint")
@@ -1495,7 +1491,7 @@ class CommunityContributionListResponse(BaseModel):
     page_size: int
 
 
-@router.post("/community/contribute", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/community/contribute", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("library.community_contribute_endpoint")
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
@@ -1533,6 +1529,7 @@ async def community_contribute_endpoint(
     return LibraryPrimitiveResponse.model_validate(result)
 
 
+@router.get("/community/contributions")
 @handle_db_errors("library.list_community_contributions_endpoint")
 async def list_community_contributions_endpoint(
     contribution_status: str | None = Query(default=None),
@@ -1588,7 +1585,6 @@ async def list_community_contributions_endpoint(
 
 @router.post(
     "/admin/library/community/publish/{primitive_id}",
-    response_model=LibraryPrimitiveResponse,
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("library.admin_publish_contribution_endpoint")

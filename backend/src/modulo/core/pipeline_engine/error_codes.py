@@ -42,6 +42,10 @@ _CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
 _CODE_NODE_TIMEOUT = "node.timeout"
 _CODE_NODE_RUNAWAY = "node.runaway"
 _CODE_EVAL_BLOCKED = "eval.blocked"
+_CODE_CONTRACT_SCHEMA = "contract.schema"
+_CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
+_CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
+_CODE_CAPACITY_ORG = "capacity.org"
 
 
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
@@ -65,7 +69,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance="Agent went silent.",
     ),
     # --- contract (output) codes ----------------------------------------
-    "contract.schema": ErrorCodeSpec(
+    _CODE_CONTRACT_SCHEMA: ErrorCodeSpec(
         error_class="contract",
         retryable=False,
         alert_severity="warning",
@@ -212,13 +216,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Sandbox network failure.",
     ),
-    "sandbox.rate_limited": ErrorCodeSpec(
+    _CODE_SANDBOX_RATE_LIMITED: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
         guidance="E2B provisioner rate-limited sandbox creation (429); the run will be retried.",
     ),
-    "sandbox.queue_timeout": ErrorCodeSpec(
+    _CODE_SANDBOX_QUEUE_TIMEOUT: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
@@ -233,6 +237,17 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=True,
         alert_severity="warning",
         guidance="Hit the timeout guard.",
+    ),
+    "node.deadline_exceeded": ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "A node did not complete within its configured timeout_seconds. "
+            "Distinct from the short setup-grace executor_stalled: the node "
+            "started executing but never finished (the idle-watchdog could not "
+            "catch a half-alive SSE stall)."
+        ),
     ),
     _CODE_NODE_RUNAWAY: ErrorCodeSpec(
         error_class="node",
@@ -308,7 +323,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance="A connection to the model provider failed.",
     ),
     # --- capacity codes --------------------------------------------------
-    "capacity.org": ErrorCodeSpec(
+    _CODE_CAPACITY_ORG: ErrorCodeSpec(
         error_class="capacity",
         retryable=True,
         alert_severity=None,
@@ -367,22 +382,23 @@ LEGACY_ALIASES: dict[str, str] = {
     # Node guards.
     "node_timeout": _CODE_NODE_TIMEOUT,
     "TimeoutError": _CODE_NODE_TIMEOUT,
+    "node_deadline_exceeded": "node.deadline_exceeded",
     "runaway": _CODE_NODE_RUNAWAY,
     "runaway.tokens_exceeded": _CODE_NODE_RUNAWAY,
     "node_cancelled": "node.cancelled",
     # Run-level.
     "executor_superseded": "run.superseded",
     # Contract.
-    "output_rejected": "contract.schema",
+    "output_rejected": _CODE_CONTRACT_SCHEMA,
     # Executor maps manual/agent output schema validation failures to this
     # domain code (PRD §8.9 error table) instead of a raw "ValueError".
-    "schema_validation_failure": "contract.schema",
+    "schema_validation_failure": _CODE_CONTRACT_SCHEMA,
     # FAR-296 Phase 2: script-mode stage-split aliases. These canonicalize to
     # ONE string per failure class — ``script.schema_failed`` is the same
     # contract.schema class, ``script.no_output`` the same contract.no_output
     # class. A script exception class name that the executor's generic catch
     # publishes (``type(exc).__name__``) also resolves to its canonical code.
-    "script.schema_failed": "contract.schema",
+    "script.schema_failed": _CODE_CONTRACT_SCHEMA,
     "script.no_output": "contract.no_output",
     "ScriptFailedError": "script.failed",
     "ScriptInvalidOutputError": "script.invalid_output",
@@ -400,14 +416,14 @@ LEGACY_ALIASES: dict[str, str] = {
     # or the un-retried e2b ``RateLimitException``), both of which must resolve
     # to the retryable ``sandbox.rate_limited`` code — never the permanent
     # ``harness.unknown`` fallback.
-    "SandboxRateLimitedError": "sandbox.rate_limited",
-    "RateLimitException": "sandbox.rate_limited",
+    "SandboxRateLimitedError": _CODE_SANDBOX_RATE_LIMITED,
+    "RateLimitException": _CODE_SANDBOX_RATE_LIMITED,
     # FAR-296 Phase 4b: rate-limit retry exhaustion maps to the distinct
     # ``sandbox.queue_timeout`` code (the "queue" for capacity timed out).
-    "SandboxQueueTimeoutError": "sandbox.queue_timeout",
-    "SandboxRateLimitExhaustedError": "sandbox.queue_timeout",
+    "SandboxQueueTimeoutError": _CODE_SANDBOX_QUEUE_TIMEOUT,
+    "SandboxRateLimitExhaustedError": _CODE_SANDBOX_QUEUE_TIMEOUT,
     # FAR-296 Phase 4b: dispatch-time capacity gate maps to ``capacity.org``.
-    "SandboxCapacityExceededError": "capacity.org",
+    "SandboxCapacityExceededError": _CODE_CAPACITY_ORG,
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
@@ -432,7 +448,7 @@ LEGACY_ALIASES: dict[str, str] = {
     # Capacity.
     "claim_cap_exhausted": "capacity.claim",
     "pipeline_capacity": "capacity.pipeline",
-    "org_capacity_limited": "capacity.org",
+    "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",
 }
 

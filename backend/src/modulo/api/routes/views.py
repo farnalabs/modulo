@@ -78,7 +78,7 @@ class ViewListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=ViewListResponse, dependencies=[require_feature("view_modes")])
+@router.get("", dependencies=[require_feature("view_modes")])
 async def list_views_endpoint(
     view_type: str | None = Query(None, pattern=r"^(run_list|pipeline_list|audit_log)$"),
     page: int = Query(default=1, ge=1),
@@ -123,7 +123,6 @@ async def list_views_endpoint(
 
 @router.post(
     "",
-    response_model=ViewResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[require_feature("view_modes")],
 )
@@ -173,7 +172,7 @@ async def create_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.get("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@router.get("/{view_id}", dependencies=[require_feature("view_modes")])
 async def get_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -211,7 +210,7 @@ async def get_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.patch("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@router.patch("/{view_id}", dependencies=[require_feature("view_modes")])
 async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
@@ -288,7 +287,7 @@ async def delete_view_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
 
 
-@router.post("/{view_id}/restore", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@router.post("/{view_id}/restore", dependencies=[require_feature("view_modes")])
 async def restore_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import types
 import uuid
-from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -84,23 +83,16 @@ class _FakeSession:
     async def begin(self) -> None:
         self._in_tx = True
 
-    @asynccontextmanager
-    async def begin_nested(self) -> Any:
-        """Stand-in for a savepoint: rolls back (and closes the tx) on error."""
-        self._in_tx = True
-        try:
-            yield
-        except BaseException:
-            self._in_tx = False
-            self.rolled_back = True
-            raise
-
     async def rollback(self) -> None:
         self._in_tx = False
         self.rolled_back = True
 
     async def flush(self) -> None:
         return None
+
+    async def commit(self) -> None:
+        if self._in_tx:
+            self._in_tx = False
 
     async def execute(self, stmt: Any) -> _FakeResult:
         text = str(stmt)

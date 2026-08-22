@@ -52,8 +52,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "OR (source = 'registry' AND owner_team_id IS NULL AND visibility = 'org' "
             "AND forked_from IS NULL AND source_url IS NOT NULL AND checksum IS NOT NULL "
             "AND verified IS NOT NULL "
-            "AND download_count IS NOT NULL AND average_rating IS NOT NULL "
-            "AND review_count IS NOT NULL)",
+            "AND download_count IS NOT NULL)",
             name="ck_library_primitives_source_fields",
         ),
         CheckConstraint(

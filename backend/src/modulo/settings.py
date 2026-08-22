@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings
 _log = logging.getLogger(__name__)
 
 _MIN_KEY_LEN = 32
+_POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
 # Minimum length for each operator secret (MODULO_BREAK_GLASS_SECRET /
 # _STANDBY_SECRET). Validated unconditionally when set (break-glass plan §3).
 _MIN_BREAK_GLASS_SECRET_LEN = 24
@@ -181,6 +182,16 @@ class Settings(BaseSettings):
     # below the run_claim_stale_seconds claim fence so the watchdog wins before
     # a stale-heartbeat re-claim can double-execute the hung run.
     saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # FAR-369: absolute node-deadline watchdog fallback. When a node's
+    # ``timeout_seconds`` is not present in the graph (or the node id is
+    # unknown), the watchdog holds the node to this default. Intentionally a
+    # generous floor: every real sandbox_agent node ships its own
+    # ``timeout_seconds`` (e.g. 1200s), and the watchdog keys off that value —
+    # this only guards the degenerate case. Never smaller than the smallest
+    # legitimate node timeout.
+    saq_node_default_timeout_seconds: int = Field(
+        default=1200, alias="SAQ_NODE_DEFAULT_TIMEOUT_SECONDS", ge=30, le=7200
+    )
     # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
     # heartbeat but ZERO LangGraph checkpoints for its thread after this many
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
@@ -496,7 +507,7 @@ class Settings(BaseSettings):
     def _fix_database_url(self) -> "Settings":
         url = self.database_url
         if url.startswith("postgres://"):
-            url = "postgresql+asyncpg://" + url[len("postgres://") :]
+            url = _POSTGRES_ASYNC_PREFIX + url[len("postgres://") :]
         if url.startswith("mysql+asyncmy://"):
             url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
             _log.warning("settings.legacy_asyncmy_url_replaced")
@@ -514,12 +525,12 @@ class Settings(BaseSettings):
     def _apply_sqlite_mode(self) -> "Settings":
         if self.modulo_db.lower() == "sqlite":
             _log.warning("settings.sqlite_mode")
-            if self.database_url.startswith("postgresql+asyncpg://"):
+            if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
                 self.database_url = "sqlite+aiosqlite:///./modulo.db"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         elif self.modulo_db.lower() in ("mariadb", "mysql"):
             _log.warning("settings.mariadb_mode")
-            if self.database_url.startswith("postgresql+asyncpg://"):
+            if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
                 self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self

@@ -146,7 +146,20 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
         await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
-@router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{trigger_id}/webhook",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        400: {"description": "Bad request"},
+        401: {"description": "Unauthorized"},
+        404: {"description": "Not Found"},
+        422: {"description": "Unprocessable Entity"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
 async def receive_webhook(
     trigger_id: uuid.UUID,
@@ -381,7 +394,21 @@ async def receive_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{trigger_id}/webhook/replay/{event_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        400: {"description": "Bad request"},
+        401: {"description": "Unauthorized"},
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        422: {"description": "Unprocessable Entity"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("webhooks.replay_webhook")
 async def replay_webhook(
     trigger_id: uuid.UUID,

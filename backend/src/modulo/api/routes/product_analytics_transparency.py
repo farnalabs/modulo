@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -35,8 +36,8 @@ class TransparencyResponse(BaseModel):
 @router.get("/transparency")
 @handle_db_errors("product_analytics.transparency")
 async def get_transparency(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_PRODUCT_ANALYTICS_MANAGE),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
 ) -> TransparencyResponse:
     async with session.begin():
         last_dump_entry = await get_config(session, "product_analytics_last_dump_at")

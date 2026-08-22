@@ -1619,13 +1619,13 @@ The v2 bundle format moves from ZIP+JSON to a single YAML file with expanded cap
 
 ### 8.16 Schema Inference (v1)
 
-Schema Inference reduces the primary friction in SDLC onboarding: teams have existing data in their tools (Jira tickets, Linear issues, GitHub PRs, Notion pages) but don't know what Modulo schemas to define because they've never needed to make their data shape explicit.
+Schema Inference reduces the primary friction in SDLC onboarding: teams have existing data in their tools but don't know what Modulo schemas to define because they've never needed to make their data shape explicit. Note (FAR-370): inference is scoped to STRUCTURED sources — PRs, databases, and JSON APIs whose shape is regular and machine-readable. Inference from free-form tickets (Jira/Linear) and documents (Notion/Confluence) is deferred and lower-priority, because their unstructured-to-schema yield is poor relative to structured sources.
 
 #### How it works
 
 When a ConnectorInstance is configured and health-checked, an operator can trigger schema inference on a resource type within that connector. Modulo samples recent records (configurable, default: 200), sends them through an LLM analysis step, and produces a draft Modulo schema — field names, types, required/optional, and an inferred `abstract_name` suggestion.
 
-Example: connect to a Jira project → select "Issues" → Modulo samples 200 recent issues → produces a draft schema with fields like `summary` (string, required), `description` (string, optional), `issue_type` (enum: Story/Bug/Task, required), `story_points` (integer, optional), `labels` (string[], optional). Fields that appear in fewer than 10% of sampled records are flagged as rarely-used and excluded from the draft by default.
+Example: connect to a GitHub repo → select "Pull requests" → Modulo samples 200 recent PRs → produces a draft schema with fields like `title` (string, required), `body` (string, optional), `state` (enum: open/closed/merged, required), `additions` (integer, optional), `labels` (string[], optional). Fields that appear in fewer than 10% of sampled records are flagged as rarely-used and excluded from the draft by default. (Under FAR-370, the supported inference sources are structured — PRs, databases, JSON APIs — not free-form tickets or documents.)
 
 The draft schema opens in the schema editor for the operator to review, rename fields, adjust types, and publish as a versioned schema. Schema inference produces a starting point — the operator always reviews before publishing.
 
@@ -1633,16 +1633,17 @@ The draft schema opens in the schema editor for the operator to review, rename f
 
 | Resource | Connector | Notes |
 |---|---|---|
-| Issues / tickets | `issue-tracker` (Jira, Linear) | Infers field usage frequency; enum detection for `issue_type`, `status`, `priority` |
-| Pull requests | `git-host` (GitHub, GitLab) | Infers PR metadata shape; body treated as `string` |
-| Documents | `document-store` (Notion, Confluence) | Page structure inferred; block types collapsed to string fields |
+| Pull requests | `git-host` (GitHub, GitLab) | Structured source — infers PR metadata shape; body treated as `string` |
+| Databases / JSON APIs | any structured source | Structured sources — field/type/required inference over regular, machine-readable shape |
+| Issues / tickets | `issue-tracker` (Jira, Linear) | **Deferred under FAR-370** — free-form tickets are not a structured inference source; low yield |
+| Documents | `document-store` (Notion, Confluence) | **Deferred under FAR-370** — free-form docs are not a structured inference source; low yield |
 
 Schema inference is read-only — it never writes to the connected system. The LLM prompt used for inference is sandboxed (`SandboxedEnvironment`) and the sampled records are treated as untrusted input (structural separators, no prompt interpolation of raw field values). Sampled data is not stored after inference completes.
 
 #### SDLC onboarding path
 
 Schema inference is the entry point for "onboard your existing SDLC":
-1. Connect tools (Jira, GitHub, Notion)
+1. Connect tools (Jira, GitHub, Notion — integrations are thin reference + read, plus scoped status/comment for trackers; not deep management, per FAR-370)
 2. Run schema inference on each resource type → get draft schemas in minutes
 3. Review and publish schemas
 4. Browse the community library filtered by your inferred `abstract_name` values — see which off-the-shelf agents are compatible with your actual data shape
@@ -1780,7 +1781,7 @@ The guardrail trust-model migrations are **down-migration rollback-safe** (FAR-3
 
 A guardrail block is TERMINAL `eval_failed`/`eval_blocked`, but nodes that executed BEFORE the block may have already performed external side effects (a pushed PR, a flipped Linear status, a sent notification) that now stand. Run-termination compensation (`modulo.core.guardrails.compensation`) inverts those side effects best-effort at terminalization:
 
-- **Connector compensating-callback contract** — `ConnectorBase.compensate(operation, context, error)` (additive; the default returns `not_supported`, so connectors OPT IN). Given the performed operation (resource, write payload, returned entity) and the termination reason, the connector attempts the inverse and reports `CompensationResult(outcome: compensated|not_supported|failed)`. Shipped implementations: GitHub closes a PR the run opened (`pr`); Linear unassigns (`issue_assign`) and archives a created issue (`issue`). Compensation never changes a connector's forward operation behaviour.
+- **Connector compensating-callback contract** — `ConnectorBase.compensate(operation, context, error)` (additive; the default returns `not_supported`, so connectors OPT IN). Given the performed operation (resource, write payload, returned entity) and the termination reason, the connector attempts the inverse and reports `CompensationResult(outcome: compensated|not_supported|failed)`. Shipped implementation: GitHub closes a PR the run opened (`pr`). Compensation never changes a connector's forward operation behaviour. Compensation is narrow and guardrail-block-only (FAR-213) — it is NOT expanded into user-facing ticket revert, and the previously referenced Linear `issue_assign`/`issue` archive compensation is not built (deferred under FAR-370, which keeps connector writes scoped to status/comment for trackers).
 - **Best-effort + failure-isolated orchestration** — `compensate_blocked_run` walks the run's executed node outputs, resolves each node's connector binding from the snapshot graph, and invokes the connector's compensating callback via the ConnectorHub. One node's failure never prevents the others and never crashes terminalization (guard-the-guard). Every attempt writes an audit event (`guardrail.compensation_attempted` / `guardrail.compensation_failed`) with a summary-only payload (node_id, resource, outcome, truncated reason — never raw payloads). Security/safety operations still fail closed; compensation of external side effects is fail-open-WITH-log.
 - **blocked_partial run summary** — a guardrail-blocked run stores a structured `blocked_partial_summary` (JSONB column, migration 0111) recording: executed nodes (in order), per-node publish status (`published`/`compensated`/`not-compensated`), output references (`{run_id, node_id}` — the record never duplicates raw payloads; the full outputs live in `outputs_json`), and per-attempt compensation outcomes. Exposed on the run detail API (`GET /api/v1/runs/{id}`, `RunResponse.blocked_partial_summary`). The wiring runs AFTER the terminal status write in both the `create_run` guardrail-blocked seam (at the ingestion edge no nodes have executed, so only the summary + summary audit are written there) and the executor's mid-run guardrail-block terminalization (`eval_failed`/`eval_blocked`, FAR-291). In the executor, `_finalize_run_after_stream` — the shared finalization tail for both `execute()` and `resume()` — invokes `compensate_blocked_run` after the terminal status write with the run's executed node outputs and a fresh connector hub for the compensation window, so a run whose earlier nodes performed connector side effects (a pushed PR, a flipped Linear status) gets those compensated when a later node's output is guardrail-blocked. The compensation is best-effort + failure-isolated (guard-the-guard): a compensation failure never crashes terminalization and never touches the claim-token-fenced `finalize_cost` transaction.
 - **Dependent-trigger suppression** — dependent triggers (agent_signal children fired on a source node's completion) are suppressed at fire time when the source run is guardrail-blocked (`TriggerEngine.is_guardrail_blocked_run`: terminal `eval_failed` + `error_code` `eval_blocked`). A suppressed fire is audited (`guardrail.dependent_suppressed`, summary-only) and never creates a child run. This is defense-in-depth: the executor only reaches the agent_signal fire path for completing runs, but the fire-time guard is the durable invariant.
@@ -3263,7 +3264,9 @@ The primer is a Markdown block injected before page context:
 
 ### What is Modulo
 Agent governance for AI-powered SDLC pipelines — automated workflows that
-connect tools like GitHub, Linear, Notion, Jira, and Slack. Pipelines are built
+connect tools like GitHub, Linear, Notion, Jira, and Slack (via thin reference +
+read integrations, plus scoped status/comment writes for issue trackers — not deep
+management, per FAR-370). Pipelines are built
 from composable AI agents, run with human-in-the-loop gates, evaluated,
 and improved continuously.
 
@@ -3272,7 +3275,7 @@ and improved continuously.
 - **Run** — A single execution of a pipeline with a specific input payload
 - **Agent** — An LLM-powered node with a prompt template, schema, and model backend
 - **Schema** — Typed JSON structure defining input/output contracts between nodes
-- **Connector** — Integration with external tools (GitHub, Linear, Slack, etc.)
+- **Connector** — Integration with external tools (GitHub, Linear, Slack, etc.). Per FAR-370 the integration-depth model is deliberately thin: **T1** thin reference + read (`resolve(ref) → {title, status, link, …}`) powering Lifecycle Map labels, HITL context, run/audit traceability, and notifications; **T2** read-only enrichment (body/comments/search for agent prompt context); **T3** scoped write for issue trackers ONLY — status update + structured, rate-limited, deduped comment, native-only (no user agent, e.g. Lifecycle Map transitions, deploy, cron sweepers, merge queue). Full management (auto `create_ticket`), `compensate`/undo expansion, and schema inference from unstructured tickets/docs are dropped; document stores (Notion, Confluence, Dropbox Paper) are T1 + T2 read-only with no T3 write.
 - **Trigger** — Event source that starts a pipeline run (webhook, schedule, manual)
 - **HITL Gate** — Human-in-the-loop approval point between nodes
 - **Eval** — Quality check on agent output (llm_judge, regex, JSON schema, custom)
@@ -3752,13 +3755,13 @@ The minimum viable public release. Ships together.
 - Team cost attribution: `team_id` on all usage events; per-team spend reporting
 - Org/team admin spend and run limits (`org_daily_run_limit`, `team_daily_run_limit`)
 - Eval System: llm_judge, regex, json_schema, custom_function; warn/block failure behaviour; per-node eval results in run detail
-- Schema Inference: LLM-assisted schema draft from connected tool data (samples 200 records); supports issue-tracker, git-host, and document-store connectors; draft opens in schema editor for operator review; SDLC onboarding path (§8.16)
+- Schema Inference: LLM-assisted schema draft from connected tool data (samples 200 records); scoped to STRUCTURED sources (git-host PRs, databases, JSON APIs) per FAR-370 — free-form issue-tracker tickets and document-store pages are deferred; draft opens in schema editor for operator review; SDLC onboarding path (§8.16)
 - Run Variants / A/B Testing: variant groups with `run_context_overrides`; all-or-nothing pre-flight quota check; side-by-side eval comparison; eval coverage gap signal; pre-eval degraded mode (cost + output diff); partial completion with HITL; prompt version comparison (§8.19)
 - Feedback System: `FeedbackRecord` entity; `human` / `ai_correction` / `ai_correction_with_human_review` handler types; AI correction agent as library primitive; correction run mechanics (new thread pre-seeded from original checkpoint); eval gap detection via standalone `EvalEngine.evaluate()`; feedback inbox UI; eval proposals queue; eval suite growth flywheel. **Delivery dependency**: Eval System ships first; human feedback inbox can ship earlier as standalone (§8.20)
 - Complexity-reviewer library primitive (v1 completion of Run Context Propagation: context-setter enforcement validated, complexity-reviewer canonical agent published to library)
 - HITL claim_token upgraded to JWT; conditional gates (eval→HITL); modify-then-approve; deliver manually
 - Community library UI + workflow import/export; rating system
-- Additional connectors: GitLab (`git-host`), Jira (`issue-tracker`), Linear (`issue-tracker`)
+- Additional connectors (thin reference + read; scoped T3 status/comment for trackers only, per FAR-370): GitLab (`git-host`), Jira (`issue-tracker`), Linear (`issue-tracker`)
 - Plugin entry-point API documented and stable (`modulo.connectors`, `modulo.evals`, `modulo.model_backends`)
 - Cron trigger
 - Cost controls UI; Audit log viewer; Run trace / observability UI
@@ -4208,7 +4211,7 @@ Lifecycle Maps exist because a single pipeline cannot capture an entire SDLC. Pi
 
 From the user's perspective: the Lifecycle Map is the first thing they see when they want to understand or design "how we deliver software." It is the TL;DR of their SDLC — each heading is a clickable stage, each arrow is a documented handoff. It is useful on day 0 with zero Modulo-managed steps. Over time, stages graduate to Modulo-managed pipelines. The goal is not 100% management — it is 100% model fidelity. Some stages will always live in external systems (deploy pipelines in CircleCI, incident response in PagerDuty), and the map documents that honestly.
 
-**Core philosophy**: the Lifecycle Map is a semantic model, not a workflow engine. It says "tasks should flow through these stages in this order" without prescribing *how* each transition happens. Some transitions are tight (pipeline A's output triggers pipeline B via Modulo signals). Others are loose (a label change on a Jira ticket is detected by an external cron; Modulo just documents the relationship). Both belong in the same map.
+**Core philosophy**: the Lifecycle Map is a semantic model, not a workflow engine. It says "tasks should flow through these stages in this order" without prescribing *how* each transition happens. Some transitions are tight (pipeline A's output triggers pipeline B via Modulo signals). Others reflect external state — e.g. a Jira ticket's status is updated programmatically by Modulo itself (a native T3 scoped write, per FAR-370, used only for programmatic flows with no user agent) or is detected loosely via an external cron. Modulo may also reflect a ticket's current status in the map directly (T1 reference + read), not just document a loose relationship. Both tight and loose transitions belong in the same map.
 
 #### 8.31.1 Map Concepts
 

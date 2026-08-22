@@ -45,6 +45,7 @@ class ConnectorType(StrEnum):
     TRELLO = "trello"
     ASANA = "asana"
     TICKET_TRACKER = "ticket-tracker"
+    LINEAR = "linear"
     SLACK = "slack"
     SHELL = "shell"
     SHAREPOINT = "sharepoint"
@@ -308,6 +309,8 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.AUTOMATION, Capability.READ, Capability.WRITE})
             case ConnectorType.TICKET_TRACKER:
                 return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
+            case ConnectorType.LINEAR:
+                return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE})
             case _:
                 return frozenset()
 

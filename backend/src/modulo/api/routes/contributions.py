@@ -62,7 +62,7 @@ class ContributionStatusResponse(BaseModel):
     slug: str
 
 
-@router.post("", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("contributions.create_contribution")
 async def create_contribution(
     req: ContributeFixtureRequest,
@@ -119,7 +119,7 @@ async def create_contribution(
     )
 
 
-@router.post("/{primitive_id}/submit", response_model=ContributionStatusResponse)
+@router.post("/{primitive_id}/submit")
 @handle_db_errors("contributions.submit_for_review")
 async def submit_for_review(
     primitive_id: uuid.UUID,
@@ -167,7 +167,7 @@ async def submit_for_review(
     )
 
 
-@router.post("/{primitive_id}/publish", response_model=ContributionStatusResponse)
+@router.post("/{primitive_id}/publish")
 @handle_db_errors("contributions.publish_contribution_endpoint")
 async def publish_contribution_endpoint(
     primitive_id: uuid.UUID,
@@ -231,7 +231,7 @@ class VersionListResponse(BaseModel):
     total: int
 
 
-@router.post("/{primitive_id}/versions", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{primitive_id}/versions", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("contributions.submit_contribution_version_endpoint")
 async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
@@ -294,7 +294,7 @@ async def submit_contribution_version_endpoint(
     )
 
 
-@router.get("/{primitive_id}/versions", response_model=VersionListResponse)
+@router.get("/{primitive_id}/versions")
 @handle_db_errors("contributions.list_contribution_versions_endpoint")
 async def list_contribution_versions_endpoint(
     primitive_id: uuid.UUID,
@@ -346,7 +346,7 @@ async def list_contribution_versions_endpoint(
     )
 
 
-@router.get("", response_model=dict[str, object])
+@router.get("")
 @handle_db_errors("contributions.list_contributions_endpoint")
 async def list_contributions_endpoint(
     page: int = Query(1, ge=1),

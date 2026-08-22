@@ -850,7 +850,6 @@ async def _build_polling_connector(
 async def _run_poll_query(
     session: AsyncSession,
     connector: Any,
-    connector_instance_id: uuid.UUID,
     trigger: Any,
     org_id: uuid.UUID,
     trigger_id: uuid.UUID,
@@ -893,7 +892,6 @@ async def _run_poll_query(
 async def _evaluate_poll_condition(
     session: AsyncSession,
     query_result: Any,
-    connector_instance_id: uuid.UUID,
     trigger: Any,
     org_id: uuid.UUID,
     trigger_id: uuid.UUID,
@@ -1171,14 +1169,12 @@ async def fire_polling_trigger(
         if connector is None:
             return {"status": "error", "reason": "connector_init_failed"}
 
-        query_result, query_skip = await _run_poll_query(
-            session, connector, connector_instance_id, trigger, org_id, trigger_id, poll_query
-        )
+        query_result, query_skip = await _run_poll_query(session, connector, trigger, org_id, trigger_id, poll_query)
         if query_skip is not None:
             return query_skip
 
         condition_met, condition_error = await _evaluate_poll_condition(
-            session, query_result, connector_instance_id, trigger, org_id, trigger_id, condition_expression
+            session, query_result, trigger, org_id, trigger_id, condition_expression
         )
         if condition_error is not None:
             return {"status": "error", "reason": "condition_eval_failed", "error": condition_error}

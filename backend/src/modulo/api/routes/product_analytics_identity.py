@@ -7,6 +7,7 @@ import hmac
 import logging
 import time
 from collections import defaultdict
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -77,10 +78,17 @@ class RotateResponse(BaseModel):
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 
-@router.get("/identity", response_model=IdentityResponse)
+@router.get(
+    "/identity",
+    responses={
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 async def get_identity(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
 ) -> IdentityResponse:
     """Return instance_id and whether a secret exists (never the secret itself).
 
@@ -115,12 +123,22 @@ async def get_identity(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
-@router.post("/rotate", response_model=RotateResponse)
+@router.post(
+    "/rotate",
+    responses={
+        400: {"description": "Bad Request"},
+        401: {"description": "Unauthorized"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 async def rotate_identity_secret(
     req: RotateRequest,
     request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
 ) -> RotateResponse:
     """Rotate the shared secret, authenticated by the old secret.
 

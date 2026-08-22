@@ -172,7 +172,7 @@ class SetSpendLimitRequest(BaseModel):
     daily_spend_limit: float | None = Field(None, ge=0)
 
 
-@router.get("", response_model=CostReportResponse)
+@router.get("")
 @handle_db_errors("costs.get_costs")
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
@@ -256,7 +256,7 @@ async def get_costs(
     )
 
 
-@router.get("/limits", response_model=SpendLimitResponse)
+@router.get("/limits")
 @handle_db_errors("costs.get_spend_limits")
 async def get_spend_limits(
     _: object = require_feature("admin_spend_limits"),
@@ -308,7 +308,7 @@ async def get_spend_limits(
     )
 
 
-@router.put("/limits/org", response_model=dict[str, Any])
+@router.put("/limits/org")
 @handle_db_errors("costs.set_org_spend_limit")
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
@@ -355,7 +355,7 @@ async def set_org_spend_limit(
     }
 
 
-@router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
+@router.put("/limits/teams/{team_id}")
 @handle_db_errors("costs.set_team_spend_limit")
 async def set_team_spend_limit(
     team_id: uuid.UUID,
@@ -434,7 +434,7 @@ class UpdateCostControlsRequest(BaseModel):
         return value
 
 
-@router.get("/controls", response_model=CostControlsResponse)
+@router.get("/controls")
 @handle_db_errors("costs.get_cost_controls")
 async def get_cost_controls(
     _: object = require_feature("admin_cost_controls"),
@@ -486,7 +486,7 @@ async def get_cost_controls(
     )
 
 
-@router.put("/controls", response_model=CostControlsResponse)
+@router.put("/controls")
 @handle_db_errors("costs.update_cost_controls")
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
@@ -572,7 +572,7 @@ class CircuitBreakerResetResponse(BaseModel):
     triggers_reactivated: int
 
 
-@router.post("/circuit-breaker/{pipeline_id}/reset", response_model=CircuitBreakerResetResponse)
+@router.post("/circuit-breaker/{pipeline_id}/reset")
 @handle_db_errors("costs.reset_circuit_breaker")
 async def reset_circuit_breaker(
     pipeline_id: uuid.UUID,
@@ -733,7 +733,7 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
     )
 
 
-@router.post("/reports", response_model=ReportResponse, status_code=201)
+@router.post("/reports", status_code=201)
 @handle_db_errors("costs.create_report")
 async def create_report(
     req: CreateReportRequest,
@@ -781,7 +781,7 @@ async def create_report(
     return _report_response(report)
 
 
-@router.get("/reports", response_model=list[ReportResponse])
+@router.get("/reports")
 @handle_db_errors("costs.list_reports")
 async def list_reports(
     _: object = require_feature("admin_cost_controls"),
@@ -879,7 +879,7 @@ class AnomalyResponse(BaseModel):
     dismissed: bool
 
 
-@router.get("/anomalies", response_model=list[AnomalyResponse])
+@router.get("/anomalies")
 @handle_db_errors("costs.get_anomalies")
 async def get_anomalies(
     _: object = require_feature("admin_cost_breakdown"),

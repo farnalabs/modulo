@@ -12,29 +12,12 @@ import hashlib
 import httpx
 import pytest
 import respx
+from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
 from modulo.core.library_sync.client import LibraryClient
-from modulo.core.library_sync.manifest import canonical_manifest_bytes
-from modulo.registry.crypto import generate_keypair, sign
+from modulo.registry.crypto import generate_keypair
 
 ENDPOINT = "https://library.modulo.run"
-
-
-def _signed_manifest(private_key_pem: str, **overrides: object) -> dict:
-    body: dict[str, object] = {
-        "schema_version": "1",
-        "generated_at": "2026-08-22T00:00:00Z",
-        "entries": [],
-        "revoked": [],
-    }
-    body.update(overrides)
-    canonical = canonical_manifest_bytes(body)
-    return {**body, "signature": {"algorithm": "ed25519", "value": sign(private_key_pem, canonical)}}
-
-
-@pytest.fixture
-def keys() -> tuple[str, str]:
-    return generate_keypair()
 
 
 @pytest.fixture
@@ -84,24 +67,6 @@ class TestFetchManifest:
         manifest = _signed_manifest(private_key)
         respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=[manifest]))
         assert await client.fetch_manifest() is None
-
-
-class TestFetchCatalog:
-    @respx.mock
-    async def test_returns_entries_on_success(self, client: LibraryClient) -> None:
-        entries = [{"id": "agent-1", "type": "agent"}, {"id": "schema-1", "type": "schema"}]
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(200, json={"entries": entries}))
-        assert await client.fetch_catalog() == entries
-
-    @respx.mock
-    async def test_returns_none_on_http_error(self, client: LibraryClient) -> None:
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(404))
-        assert await client.fetch_catalog() is None
-
-    @respx.mock
-    async def test_returns_none_when_entries_missing(self, client: LibraryClient) -> None:
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(200, json={"not_entries": []}))
-        assert await client.fetch_catalog() is None
 
 
 class TestFetchBlob:

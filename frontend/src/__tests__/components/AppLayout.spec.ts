@@ -25,6 +25,11 @@ function mockMatchMedia(matches: boolean) {
 
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // afterEach calls vi.restoreAllMocks(), which resets the api.GET mock's
+  // implementation to a no-op. Re-establish it here so every test (AppLayout
+  // mounts ProductAnalyticsConsentPrompt, which fetches consent on mount) gets
+  // a resolvable promise rather than undefined.
+  ;(api.GET as ReturnType<typeof vi.fn>).mockResolvedValue({ data: null, error: undefined })
   // jsdom has no matchMedia; default the layout to the desktop breakpoint so
   // the expanded sidebar (with the plan badge) renders.
   mockMatchMedia(true)
@@ -38,6 +43,7 @@ afterEach(() => {
 import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
 import { useOnboardingStore } from '../../composables/useOnboarding'
+import { api } from '../../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),

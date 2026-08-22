@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -71,13 +71,21 @@ def _validate_fernet_key(key: str, label: str) -> None:
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 
-@router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/rotate-key",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.rotation.rotate_key")
 async def rotate_key(
     req: RotateKeyRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
 ) -> RotateKeyResponse:
     """Start a Fernet key rotation.
 
@@ -157,7 +165,14 @@ async def rotate_key(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
-@router.get("/status", response_model=RotationStatusResponse)
+@router.get(
+    "/status",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.rotation.rotation_status")
 async def rotation_status(
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]

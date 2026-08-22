@@ -240,7 +240,7 @@ def _to_response(component: CostComponent) -> CostComponentResponse:
     return CostComponentResponse.model_validate(component)
 
 
-@router.get("", response_model=list[CostComponentResponse])
+@router.get("")
 @handle_db_errors("costs.components.list")
 async def get_components(
     _: object = require_feature("admin_cost_breakdown"),
@@ -258,7 +258,7 @@ async def get_components(
         raise _map_validation_error(exc) from None
 
 
-@router.post("", response_model=CostComponentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("costs.components.create")
 async def create_component(
     req: CostComponentCreate,
@@ -300,7 +300,7 @@ async def create_component(
         raise _map_validation_error(exc) from None
 
 
-@router.put("/{component_id}", response_model=CostComponentResponse)
+@router.put("/{component_id}")
 @handle_db_errors("costs.components.update")
 async def update_component(
     component_id: uuid.UUID,

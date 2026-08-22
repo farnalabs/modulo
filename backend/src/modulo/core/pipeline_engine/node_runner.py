@@ -59,7 +59,7 @@ from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
 
 import jinja2
 import jmespath
@@ -1415,6 +1415,35 @@ async def _append_conformance_audit(
         )
 
 
+def _resolve_node_run_overrides(
+    run_context: dict[str, Any],
+    node_def: dict[str, Any],
+    agent_id: uuid.UUID | None,
+    *,
+    model_backend_id_str: str | None,
+    prompt_template: str,
+) -> tuple[str | None, str]:
+    """Apply the run's frozen variant overrides on top of the snapshot-embedded node_def.
+
+    FAR-332/342: ``_run_overrides`` (seeded by the executor from the run's
+    frozen variant config) may override the model backend id and the per-agent
+    prompt version. The override is namespaced under the reserved TOP-LEVEL
+    ``_run_overrides`` key — never read from ``run_context["input"]``. Returns
+    ``(model_backend_id_str, prompt_template)`` unchanged when no override
+    applies.
+    """
+    _run_overrides = run_context.get("_run_overrides")
+    if isinstance(_run_overrides, dict):
+        if _run_overrides.get("model_backend_id"):
+            model_backend_id_str = str(_run_overrides["model_backend_id"])
+        prompt_templates = _run_overrides.get("prompt_templates")
+        if isinstance(prompt_templates, dict) and agent_id is not None:
+            per_agent_prompt = prompt_templates.get(str(agent_id))
+            if isinstance(per_agent_prompt, str) and per_agent_prompt:
+                prompt_template = per_agent_prompt
+    return model_backend_id_str, prompt_template
+
+
 def make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -1481,15 +1510,13 @@ def make_node_fn(
         # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
         # run that carries ``_run_overrides`` as caller input never reaches this
         # boundary (FAR-342 injection surface closed).
-        _run_overrides = run_context.get("_run_overrides")
-        if isinstance(_run_overrides, dict):
-            if _run_overrides.get("model_backend_id"):
-                model_backend_id_str = str(_run_overrides["model_backend_id"])
-            prompt_templates = _run_overrides.get("prompt_templates")
-            if isinstance(prompt_templates, dict) and agent_id is not None:
-                per_agent_prompt = prompt_templates.get(str(agent_id))
-                if isinstance(per_agent_prompt, str) and per_agent_prompt:
-                    prompt_template = per_agent_prompt
+        model_backend_id_str, prompt_template = _resolve_node_run_overrides(
+            run_context,
+            node_def,
+            agent_id,
+            model_backend_id_str=model_backend_id_str,
+            prompt_template=prompt_template,
+        )
 
         # If no model_backend_id, fall back to stub behavior
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).
@@ -3234,9 +3261,11 @@ class _SandboxWatchdog:
         # ScriptBudgetKilledError (script-specific, terminal) for an LLM-mode
         # node would be a misclassification.
         if (
-            self._sandbox_mode == "script"
-            and self._wallclock_budget_seconds is not None
-            and (time.monotonic() - self._start_time) >= self._wallclock_budget_seconds
+            _sandbox_wallclock_budget_exceeded(
+                sandbox_mode=self._sandbox_mode,
+                wallclock_budget_seconds=self._wallclock_budget_seconds,
+                start_time=self._start_time,
+            )
             and not self._budget_killed
         ):
             _elapsed = time.monotonic() - self._start_time
@@ -3309,9 +3338,11 @@ def _check_wallclock_budget_pre_run(
     by an earlier check, so it guards against a double kill/raise.
     """
     if (
-        sandbox_mode != "script"
-        or wallclock_budget_seconds is None
-        or (time.monotonic() - start_time) < wallclock_budget_seconds
+        not _sandbox_wallclock_budget_exceeded(
+            sandbox_mode=sandbox_mode,
+            wallclock_budget_seconds=wallclock_budget_seconds,
+            start_time=start_time,
+        )
         or watchdog.budget_killed
     ):
         return
@@ -3326,6 +3357,219 @@ def _check_wallclock_budget_pre_run(
     )
     watchdog._budget_killed = True
     raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+
+
+_UNSET = object()
+
+
+class _SandboxNodeOutput(NamedTuple):
+    """Grouped output fields for a sandbox_agent node envelope.
+
+    The sandbox_agent dispatch builds its ``{artifacts, output}`` envelope in
+    three places (success, schema-failed, generic-exception) with subtly
+    different key sets. Grouping the fields into this NamedTuple and routing
+    them through ``_build_sandbox_node_envelope`` removes the triplicated dict
+    construction while keeping each path's exact key presence (sentinel
+    ``_UNSET`` = key omitted).
+    """
+
+    status: str
+    summary: str
+    exit_code: int
+    wall_clock_time_ms: int
+    cost_estimate_usd: float
+    cost_source: Any = None
+    output_json: Any = _UNSET
+    agent_stdout: str = ""
+    agent_stderr: str = ""
+    stdout_length: int = 0
+    stderr_length: int = 0
+    attempt_key: str | None = None
+    changed_files: Any = _UNSET
+    pr_url: Any = _UNSET
+    agent_status: Any = _UNSET
+    agent_outcome: Any = _UNSET
+    stall_reason: Any = _UNSET
+    sandbox_session_lost: Any = _UNSET
+    error_type: Any = _UNSET
+    error_message: Any = _UNSET
+    sandbox_id: Any = _UNSET
+    sandbox_log_tail: Any = _UNSET
+
+
+def _build_sandbox_node_envelope(
+    *,
+    node_id: str,
+    output: _SandboxNodeOutput,
+    exclude_from_output: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Assemble a sandbox_agent node envelope from grouped output fields.
+
+    The envelope shape is ``{artifacts: [{node_id, status, output}], output}``.
+    The artifact's inner ``output`` carries the FULL field set; the top-level
+    ``output`` is the reduced telemetry view that omits ``output_json`` and
+    ``exit_code`` plus any caller-supplied artifact-only keys (e.g. the
+    success path's ``changed_files``/``pr_url``, the generic-exception path's
+    ``error_type``/``error_message``). Optional fields are omitted when left at
+    the ``_UNSET`` sentinel so each path emits exactly the key set it did
+    before this extraction.
+    """
+    inner: dict[str, Any] = {
+        "status": output.status,
+        "summary": output.summary,
+        "exit_code": output.exit_code,
+        "wall_clock_time_ms": output.wall_clock_time_ms,
+        "cost_estimate_usd": output.cost_estimate_usd,
+        **_build_model_cost_fields(output.cost_source),
+    }
+    if output.output_json is not _UNSET:
+        inner["output_json"] = output.output_json
+    inner["agent_stdout"] = output.agent_stdout
+    inner["agent_stderr"] = output.agent_stderr
+    inner["stdout_length"] = output.stdout_length
+    inner["stderr_length"] = output.stderr_length
+    if output.changed_files is not _UNSET:
+        inner["changed_files"] = output.changed_files
+    if output.pr_url is not _UNSET:
+        inner["pr_url"] = output.pr_url
+    if output.agent_status is not _UNSET:
+        inner["agent_status"] = output.agent_status
+    if output.agent_outcome is not _UNSET:
+        inner["agent_outcome"] = output.agent_outcome
+    if output.stall_reason is not _UNSET and output.stall_reason:
+        inner["stall_reason"] = output.stall_reason
+    if output.sandbox_session_lost is not _UNSET and output.sandbox_session_lost:
+        inner["sandbox_session_lost"] = True
+    if output.error_type is not _UNSET:
+        inner["error_type"] = output.error_type
+    if output.error_message is not _UNSET:
+        inner["error_message"] = output.error_message
+    if output.sandbox_id is not _UNSET:
+        inner["sandbox_id"] = output.sandbox_id
+    if output.sandbox_log_tail is not _UNSET:
+        inner["sandbox_log_tail"] = output.sandbox_log_tail
+    inner["attempt_key"] = output.attempt_key
+    excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
+    outer = {key: value for key, value in inner.items() if key not in excluded}
+    return {
+        "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
+        "output": outer,
+    }
+
+
+def _build_sandbox_envs(
+    *,
+    run_id: str,
+    pipeline_id: str,
+    org_id: str,
+    input_json: str,
+    sandbox_mode: str,
+    env_vars_extra: dict[str, str],
+) -> dict[str, str]:
+    """Compose the sandbox envs dict: system env vars FIRST, then ``**env_vars_extra`` LAST.
+
+    The ordering is DELIBERATE (AGENTS.md b0c4bde97): pipelines must be able to
+    override system defaults for identity separation (e.g. the PR Reviewer
+    injects its own modulo-reviewbot PAT via ``env_vars_extra``). Script mode
+    does NOT auto-inject the long-lived host credentials (opencode API key /
+    GitHub PAT) — a script only gets what the pipeline passes explicitly.
+    """
+    sandbox_envs: dict[str, str] = {
+        "MODULO_RUN_ID": run_id,
+        "MODULO_PIPELINE_ID": pipeline_id,
+        "MODULO_ORG_ID": org_id,
+        "MODULO_INPUT_PAYLOAD": input_json,
+    }
+    if sandbox_mode != "script":
+        sandbox_envs["APP_MODULO_OPENCODE_API_KEY"] = os.environ.get("APP_MODULO_OPENCODE_API_KEY", "")
+        sandbox_envs["GITHUB_TOKEN"] = (
+            os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+            or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+            or os.environ.get("GITHUB_TOKEN", "")
+        )
+    sandbox_envs.update(env_vars_extra)
+    return sandbox_envs
+
+
+def _configure_stall_detector(
+    *,
+    enable_heartbeat: bool,
+    watch_log_path: str | None,
+    stdout_percentage_delta: float | None,
+    watch_globs: list[str],
+) -> _StallDetector:
+    """Build the per-run stall detector for the idle watchdog (FAR-306).
+
+    The agent's ACTUAL output is always a liveness signal (``output`` channel);
+    the heartbeat (connection liveness) is the default extra channel, dropped
+    in strict mode. Opt-in detectors (log-growth, stdout-delta, filesystem) are
+    enabled only when their config is present.
+    """
+    _stall = _StallDetector()
+    _stall.enable("output")
+    _stall.enable("heartbeat")
+    if not enable_heartbeat:
+        _stall.disable("heartbeat")
+    if watch_log_path is not None:
+        _stall.enable("log_growth")
+    if stdout_percentage_delta is not None:
+        _stall.enable("stdout")
+    if watch_globs:
+        _stall.enable("filesystem")
+    return _stall
+
+
+def _should_apply_sandbox_policy(
+    *,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+) -> bool:
+    """True when the FAR-212 sandbox policy step must run before the command."""
+    return (
+        read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
+    )
+
+
+def _is_script_post_claim_fault(sandbox_mode: str, script_lease_claimed: bool) -> bool:
+    """FAR-296 Phase 2 stage-split: a fault AFTER the script's fencing lease was
+    claimed is POST-CLAIM (terminal, never retryable)."""
+    return sandbox_mode == "script" and script_lease_claimed
+
+
+def _sandbox_wallclock_budget_exceeded(
+    *,
+    sandbox_mode: str,
+    wallclock_budget_seconds: int | None,
+    start_time: float,
+) -> bool:
+    """True when a script-mode node's wall-clock spend budget is already exceeded."""
+    return (
+        sandbox_mode == "script"
+        and wallclock_budget_seconds is not None
+        and (time.monotonic() - start_time) >= wallclock_budget_seconds
+    )
+
+
+def _script_enforcement_requires_remote(
+    *,
+    sandbox_mode: str,
+    egress_policy: str | None,
+    resource_limits: dict[str, Any] | None,
+    read_only: bool,
+    git_credentials: str | None,
+) -> bool:
+    """Script mode that REQUIRES enforcement needs a REMOTE E2B provider."""
+    return bool(
+        sandbox_mode == "script"
+        and (
+            egress_policy in ("deny_all", "selected")
+            or resource_limits
+            or read_only
+            or git_credentials in ("scoped", "none")
+        )
+    )
 
 
 async def _sandbox_agent_impl(
@@ -3825,7 +4069,12 @@ async def _sandbox_agent_impl(
         # (an unresolvable host stays denied — fail-closed). The policy is
         # best-effort at the command level (each step is itself fail-closed) and
         # never wedges the dispatch.
-        if read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and egress_allowlist):
+        if _should_apply_sandbox_policy(
+            read_only=read_only,
+            git_credentials=git_credentials,
+            egress_policy=egress_policy,
+            egress_allowlist=egress_allowlist,
+        ):
             from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
             await apply_sandbox_policy(
@@ -3842,25 +4091,12 @@ async def _sandbox_agent_impl(
             # (log-growth, stdout-delta, filesystem) add extra channels that
             # must ALL be silent before the watchdog fires. ``_activity``
             # remains the stream-buffer/throttle dict (not a liveness source).
-            _stall = _StallDetector()
-            # The agent's ACTUAL output is always a liveness signal: its own
-            # redirected log growing is real progress, independent of the
-            # heartbeat. In strict mode (enable_heartbeat=False) this is the
-            # ONLY built-in channel, so a silent-but-connected agent stalls.
-            _stall.enable("output")
-            # Heartbeat (connection liveness) is the DEFAULT extra channel:
-            # a successful get_info proves the sandbox is responsive even
-            # when the agent emits nothing for a long LLM turn (never
-            # false-kills). enable_heartbeat=False drops it (strict mode).
-            _stall.enable("heartbeat")
-            if not enable_heartbeat:
-                _stall.disable("heartbeat")
-            if watch_log_path is not None:
-                _stall.enable("log_growth")
-            if stdout_percentage_delta is not None:
-                _stall.enable("stdout")
-            if watch_globs:
-                _stall.enable("filesystem")
+            _stall = _configure_stall_detector(
+                enable_heartbeat=enable_heartbeat,
+                watch_log_path=watch_log_path,
+                stdout_percentage_delta=stdout_percentage_delta,
+                watch_globs=watch_globs,
+            )
             # Track the last time the agent emitted output so the idle
             # watchdog can fail fast on stalls (FAR-97). The callbacks run
             # from the SDK's event task and may be async or sync.
@@ -3926,25 +4162,14 @@ async def _sandbox_agent_impl(
             # modulo-reviewbot PAT, not the system default farnalabs bot).
             # The reserved-prefix validator already prevents overriding
             # MODULO_* vars, so update() below is the sanctioned override.
-            sandbox_envs: dict[str, str] = {
-                "MODULO_RUN_ID": run_id,
-                "MODULO_PIPELINE_ID": pipeline_id,
-                "MODULO_ORG_ID": org_id,
-                "MODULO_INPUT_PAYLOAD": _input_json,
-            }
-            if sandbox_mode != "script":
-                # LLM mode injects the opencode API key + GitHub PAT for the
-                # agent loop. Script mode does NOT auto-inject these
-                # long-lived host credentials — a script only gets what the
-                # pipeline explicitly passes via env_vars (credential
-                # hygiene, FAR-296 Phase 3).
-                sandbox_envs["APP_MODULO_OPENCODE_API_KEY"] = os.environ.get("APP_MODULO_OPENCODE_API_KEY", "")
-                sandbox_envs["GITHUB_TOKEN"] = (
-                    os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                    or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                    or os.environ.get("GITHUB_TOKEN", "")
-                )
-            sandbox_envs.update(env_vars_extra)
+            sandbox_envs: dict[str, str] = _build_sandbox_envs(
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+                input_json=_input_json,
+                sandbox_mode=sandbox_mode,
+                env_vars_extra=env_vars_extra,
+            )
             # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
             # slow provisioning sequence may already have consumed the budget
             # before the script process starts. Even though no side effects
@@ -4202,7 +4427,7 @@ async def _sandbox_agent_impl(
                 # TERMINAL (never retryable, exactly-once) and distinct from
                 # an unknown side-effect state: the kill REASON is known.
                 raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
-            if sandbox_mode == "script" and _script_lease_claimed:
+            if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
                 # FAR-296 Phase 2 stage-split (3): the script PROCESS started
                 # (fencing lease claimed) and was terminated mid-execution
                 # (timeout / budget / watchdog) with exit undetermined — the
@@ -4296,7 +4521,7 @@ async def _sandbox_agent_impl(
                     # kill REASON is known, so never misclassify as
                     # script.invalid_output / script.side_effect_unknown.
                     raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
-                if sandbox_mode == "script" and _script_lease_claimed:
+                if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
                     # FAR-296 Phase 2 stage-split (2): the script PROCESS
                     # started (lease claimed) and produced no parseable
                     # output.json — post-claim, TERMINAL (never retryable).
@@ -4371,7 +4596,7 @@ async def _sandbox_agent_impl(
                     "sandbox_agent.schema_validation_failed",
                     extra={"node_id": node_id},
                 )
-                if sandbox_mode == "script" and _script_lease_claimed:
+                if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
                     # FAR-296 Phase 2 stage-split (2): the script PROCESS
                     # started (lease claimed) and its output failed schema
                     # validation — post-claim, TERMINAL (never retryable).
@@ -4386,40 +4611,23 @@ async def _sandbox_agent_impl(
                     ) from None
                 elapsed = time.monotonic() - start_time
                 _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
-                return {
-                    "artifacts": [
-                        {
-                            "node_id": node_id,
-                            "status": "failed",
-                            "output": {
-                                "status": "failed",
-                                "summary": "Output failed schema validation",
-                                "exit_code": exit_code,
-                                "wall_clock_time_ms": int(elapsed * 1000),
-                                "cost_estimate_usd": _cost_estimate_usd,
-                                **_build_model_cost_fields(output_json),
-                                "output_json": output_json,
-                                "agent_stdout": agent_stdout,
-                                "agent_stderr": agent_stderr,
-                                "stdout_length": _stdout_len,
-                                "stderr_length": _stderr_len,
-                                "attempt_key": attempt_key,
-                            },
-                        }
-                    ],
-                    "output": {
-                        "status": "failed",
-                        "summary": "Output failed schema validation",
-                        "wall_clock_time_ms": int(elapsed * 1000),
-                        "cost_estimate_usd": _cost_estimate_usd,
-                        **_build_model_cost_fields(output_json),
-                        "agent_stdout": agent_stdout,
-                        "agent_stderr": agent_stderr,
-                        "stdout_length": _stdout_len,
-                        "stderr_length": _stderr_len,
-                        "attempt_key": attempt_key,
-                    },
-                }
+                return _build_sandbox_node_envelope(
+                    node_id=node_id,
+                    output=_SandboxNodeOutput(
+                        status="failed",
+                        summary="Output failed schema validation",
+                        exit_code=exit_code,
+                        wall_clock_time_ms=int(elapsed * 1000),
+                        cost_estimate_usd=_cost_estimate_usd,
+                        cost_source=output_json,
+                        output_json=output_json,
+                        agent_stdout=agent_stdout,
+                        agent_stderr=agent_stderr,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        attempt_key=attempt_key,
+                    ),
+                )
 
         status: str = "completed" if exit_code == 0 else "failed"
         result_summary: str = ""
@@ -4479,20 +4687,6 @@ async def _sandbox_agent_impl(
             result_summary = command_error or "Sandbox agent command failed"
 
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
-        _stall_reason_field: dict[str, str] = {"stall_reason": stall_reason} if stall_reason else {}
-        # FAR-227: distinct marker the executor routes on — present ONLY for
-        # the E2B wrapper's fallback echo (dead session). Absent for normal
-        # nodes, so ordinary envelopes stay byte-identical.
-        _session_lost_field: dict[str, bool] = {"sandbox_session_lost": True} if sandbox_session_lost else {}
-
-        # Only the timeout/stall failure carries the sandbox trace — the
-        # success path doesn't need it and stays small.
-        _sandbox_failure_fields: dict[str, Any] = {}
-        if cmd_result is None:
-            _sandbox_failure_fields = {
-                "sandbox_id": _sandbox_id,
-                "sandbox_log_tail": _sandbox_log_tail,
-            }
 
         # FAR-228 success-path marker: when opt-in AND the sentinel is a
         # FULL-LINE match in the FULL pre-truncation stdout (``agent_stdout_raw``,
@@ -4528,52 +4722,30 @@ async def _sandbox_agent_impl(
                     extra={"node_id": node_id, "run_id": run_id},
                 )
 
-        return {
-            "artifacts": [
-                {
-                    "node_id": node_id,
-                    "status": status,
-                    "output": {
-                        "status": status,
-                        "summary": result_summary,
-                        "changed_files": changed_files,
-                        "pr_url": pr_url,
-                        "exit_code": exit_code,
-                        "wall_clock_time_ms": int(elapsed * 1000),
-                        "cost_estimate_usd": _cost_estimate_usd,
-                        **_build_model_cost_fields(output_json),
-                        "output_json": output_json,
-                        "agent_stdout": agent_stdout,
-                        "agent_stderr": agent_stderr,
-                        "stdout_length": _stdout_len,
-                        "stderr_length": _stderr_len,
-                        "agent_status": agent_status,
-                        "agent_outcome": agent_outcome,
-                        **_stall_reason_field,
-                        **_session_lost_field,
-                        **_sandbox_failure_fields,
-                        "attempt_key": attempt_key,
-                    },
-                }
-            ],
-            "output": {
-                "status": status,
-                "summary": result_summary,
-                "wall_clock_time_ms": int(elapsed * 1000),
-                "cost_estimate_usd": _cost_estimate_usd,
-                **_build_model_cost_fields(output_json),
-                "agent_stdout": agent_stdout,
-                "agent_stderr": agent_stderr,
-                "stdout_length": _stdout_len,
-                "stderr_length": _stderr_len,
-                "agent_status": agent_status,
-                "agent_outcome": agent_outcome,
-                **_stall_reason_field,
-                **_session_lost_field,
-                **_sandbox_failure_fields,
-                "attempt_key": attempt_key,
-            },
-        }
+        return _build_sandbox_node_envelope(
+            node_id=node_id,
+            output=_SandboxNodeOutput(
+                status=status,
+                summary=result_summary,
+                changed_files=changed_files,
+                pr_url=pr_url,
+                exit_code=exit_code,
+                wall_clock_time_ms=int(elapsed * 1000),
+                cost_estimate_usd=_cost_estimate_usd,
+                cost_source=output_json,
+                output_json=output_json,
+                agent_stdout=agent_stdout,
+                agent_stderr=agent_stderr,
+                stdout_length=_stdout_len,
+                stderr_length=_stderr_len,
+                attempt_key=attempt_key,
+                agent_status=agent_status,
+                agent_outcome=agent_outcome,
+                stall_reason=stall_reason,
+                sandbox_session_lost=sandbox_session_lost,
+            ),
+            exclude_from_output=frozenset({"changed_files", "pr_url"}),
+        )
 
     except asyncio.CancelledError:
         # FAR-228 (THE INCIDENT FIX): before re-raising, retain delivery
@@ -4677,45 +4849,27 @@ async def _sandbox_agent_impl(
         # sandbox may already be dead, in which case the helper returns "".
         _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
-        return {
-            "artifacts": [
-                {
-                    "node_id": node_id,
-                    "status": "failed",
-                    "output": {
-                        "status": "failed",
-                        "summary": "Sandbox agent execution failed",
-                        "error_type": _exc_type,
-                        "error_message": _exc_msg,
-                        "exit_code": -1,
-                        "wall_clock_time_ms": int(elapsed * 1000),
-                        "cost_estimate_usd": _cost_estimate_usd,
-                        **_build_model_cost_fields(_exc_output_json),
-                        "agent_stdout": _exc_stdout,
-                        "agent_stderr": _exc_stderr,
-                        "stdout_length": _stdout_len,
-                        "stderr_length": _stderr_len,
-                        "sandbox_id": _sandbox_id,
-                        "sandbox_log_tail": _exc_log_tail,
-                        "attempt_key": attempt_key,
-                    },
-                }
-            ],
-            "output": {
-                "status": "failed",
-                "summary": "Sandbox agent execution failed",
-                "wall_clock_time_ms": int(elapsed * 1000),
-                "cost_estimate_usd": _cost_estimate_usd,
-                **_build_model_cost_fields(_exc_output_json),
-                "agent_stdout": _exc_stdout,
-                "agent_stderr": _exc_stderr,
-                "stdout_length": _stdout_len,
-                "stderr_length": _stderr_len,
-                "sandbox_id": _sandbox_id,
-                "sandbox_log_tail": _exc_log_tail,
-                "attempt_key": attempt_key,
-            },
-        }
+        return _build_sandbox_node_envelope(
+            node_id=node_id,
+            output=_SandboxNodeOutput(
+                status="failed",
+                summary="Sandbox agent execution failed",
+                exit_code=-1,
+                wall_clock_time_ms=int(elapsed * 1000),
+                cost_estimate_usd=_cost_estimate_usd,
+                cost_source=_exc_output_json,
+                agent_stdout=_exc_stdout,
+                agent_stderr=_exc_stderr,
+                stdout_length=_stdout_len,
+                stderr_length=_stderr_len,
+                attempt_key=attempt_key,
+                error_type=_exc_type,
+                error_message=_exc_msg,
+                sandbox_id=_sandbox_id,
+                sandbox_log_tail=_exc_log_tail,
+            ),
+            exclude_from_output=frozenset({"error_type", "error_message"}),
+        )
     finally:
         # FAR-211: stop the loop-interception callback server. Best-effort
         # (shielded + bounded) — a teardown failure must not mask the
@@ -4801,56 +4955,19 @@ async def _sandbox_cancel_retention_persist(
     _uncancel_current_task()
 
 
-def make_sandbox_agent_fn(
+def _build_sandbox_node_config(
     node_def: dict[str, Any],
     *,
-    timeout: float | None = None,
-    session_factory: Callable[..., Any] | None = None,
-    single_sandbox_node: bool = False,
-) -> Any:
-    """Return a decorated async node function that dispatches work to an external
-    agent runtime in an E2B sandbox.
+    timeout: float | None,
+    session_factory: Callable[..., Any] | None,
+    single_sandbox_node: bool,
+) -> _SandboxNodeConfig:
+    """Read + validate a sandbox_agent node's config from ``node_def``.
 
-    The node_def must have:
-      - mode: "llm" | "script" —  (default "llm"). llm mode dispatches an LLM
-        agent; script mode runs a verbatim script.
-      - agent_prompt: str —  REQUIRED in llm mode: Jinja2 template rendered
-        against state (never required in script mode).
-      - template_id: str —  E2B sandbox template ID (default "opencode")
-      - agent_command: str —  REQUIRED in llm mode: command to run inside the
-        sandbox (no default — a sandbox agent cannot run without an explicit
-        command). Belongs to llm mode; mutually exclusive with script_command.
-      - script_command: str —  REQUIRED in script mode: command to run VERBATIM
-        inside the sandbox (no Jinja render). Mutually exclusive with
-        agent_command / agent_commands.
-      - output_schema_json: dict | None —  optional output schema validation
-      - timeout_seconds: int —  max wall-clock time (default 1200)
-      - stall_timeout_seconds: float —  max seconds of agent silence before the
-        idle watchdog treats the command as stalled (default 300)
-      - context_files: dict[str, str] —  optional files to write into the sandbox
-        keyed by path
-      - loop_intercept: dict | None —  optional agent-loop interior tool-call
-        interception config (FAR-211 / ADR 003 amendment). When enabled AND the
-        pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
-        sandbox: tool calls are evaluated against the SAME bound guardrails as
-        the T1 ingestion edge before execution and before results re-enter the
-        model context, under a per-call latency budget (fail-open with audit,
-        never wedges the loop). Best-effort: a bridge setup failure disables it
-        for that node but never blocks the dispatch.
-
-    The node creates an E2B sandbox. In llm mode it writes the rendered prompt +
-    context files and runs the external agent; in script mode it writes the full
-    run input to /home/user/input.json (no 10KB truncation) and runs the script
-    verbatim. Structured output is read from /home/user/output.json and the
-    sandbox is torn down. Wall-clock time and exit code are captured natively —
-    even on failure. Script mode does NOT run the LLM envelope field extraction
-    (summary/changed_files/pr_url/status/outcome) — the raw parsed output is the
-    node output.
-
-    env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
-    resolved at run time from the org vault (when a ``session_factory`` is
-    provided) and fall back to the process environment, so secret rotation
-    takes effect on the next run and secrets never enter the compiled graph.
+    The single source for the ``node_def`` -> ``_SandboxNodeConfig`` mapping
+    used by ``make_sandbox_agent_fn``. All the defensive reads (validated
+    scopes, float coercion, glob-list filtering) live here so the factory stays
+    a thin wrapper around the immutable config.
     """
     node_id: str = str(node_def["id"])
     sandbox_mode, agent_command, _sandbox_mode_config = _validate_sandbox_mode_config(node_def)
@@ -4887,16 +5004,13 @@ def make_sandbox_agent_fn(
     # node with no enforcement config runs fine on any provider (there is nothing
     # to enforce). This keeps the refusal scoped to exactly the security concern
     # it guards.
-    if (
-        sandbox_mode == "script"
-        and (
-            egress_policy in ("deny_all", "selected")
-            or resource_limits
-            or read_only
-            or git_credentials in ("scoped", "none")
-        )
-        and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY"))
-    ):
+    if _script_enforcement_requires_remote(
+        sandbox_mode=sandbox_mode,
+        egress_policy=egress_policy,
+        resource_limits=resource_limits,
+        read_only=read_only,
+        git_credentials=git_credentials,
+    ) and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")):
         raise ValueError(
             f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
             "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "
@@ -4956,40 +5070,100 @@ def make_sandbox_agent_fn(
         except LoopInterceptConfigError as exc:
             raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
 
+    return _SandboxNodeConfig(
+        node_id=node_id,
+        node_def=node_def,
+        sandbox_mode=sandbox_mode,
+        agent_command=agent_command,
+        agent_prompt_template=agent_prompt_template,
+        template_id=template_id,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
+        resource_limits=resource_limits,
+        read_only=read_only,
+        git_credentials=git_credentials,
+        wallclock_budget_seconds=wallclock_budget_seconds,
+        output_schema_json=output_schema_json,
+        sandbox_timeout=sandbox_timeout,
+        stall_timeout_override=stall_timeout_override,
+        context_files=context_files,
+        enable_heartbeat=enable_heartbeat,
+        watch_log_path=watch_log_path,
+        stdout_percentage_delta=stdout_percentage_delta,
+        watch_globs=watch_globs,
+        delivery_sentinel=delivery_sentinel,
+        loop_intercept_config=loop_intercept_config,
+        session_factory=session_factory,
+        single_sandbox_node=single_sandbox_node,
+    )
+
+
+def make_sandbox_agent_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+    session_factory: Callable[..., Any] | None = None,
+    single_sandbox_node: bool = False,
+) -> Any:
+    """Return a decorated async node function that dispatches work to an external
+    agent runtime in an E2B sandbox.
+
+    The node_def must have:
+      - mode: "llm" | "script" —  (default "llm"). llm mode dispatches an LLM
+        agent; script mode runs a verbatim script.
+      - agent_prompt: str —  REQUIRED in llm mode: Jinja2 template rendered
+        against state (never required in script mode).
+      - template_id: str —  E2B sandbox template ID (default "opencode")
+      - agent_command: str —  REQUIRED in llm mode: command to run inside the
+        sandbox (no default — a sandbox agent cannot run without an explicit
+        command). Belongs to llm mode; mutually exclusive with script_command.
+      - script_command: str —  REQUIRED in script mode: command to run VERBATIM
+        inside the sandbox (no Jinja render). Mutually exclusive with
+        agent_command / agent_commands.
+      - output_schema_json: dict | None —  optional output schema validation
+      - timeout_seconds: int —  max wall-clock time (default 1200)
+      - stall_timeout_seconds: float —  max seconds of agent silence before the
+        idle watchdog treats the command as stalled (default 300)
+      - context_files: dict[str, str] —  optional files to write into the sandbox
+        keyed by path
+      - loop_intercept: dict | None —  optional agent-loop interior tool-call
+        interception config (FAR-211 / ADR 003 amendment). When enabled AND the
+        pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
+        sandbox: tool calls are evaluated against the SAME bound guardrails as
+        the T1 ingestion edge before execution and before results re-enter the
+        model context, under a per-call latency budget (fail-open with audit,
+        never wedges the loop). Best-effort: a bridge setup failure disables it
+        for that node but never blocks the dispatch.
+
+    The node creates an E2B sandbox. In llm mode it writes the rendered prompt +
+    context files and runs the external agent; in script mode it writes the full
+    run input to /home/user/input.json (no 10KB truncation) and runs the script
+    verbatim. Structured output is read from /home/user/output.json and the
+    sandbox is torn down. Wall-clock time and exit code are captured natively —
+    even on failure. Script mode does NOT run the LLM envelope field extraction
+    (summary/changed_files/pr_url/status/outcome) — the raw parsed output is the
+    node output.
+
+    env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
+    resolved at run time from the org vault (when a ``session_factory`` is
+    provided) and fall back to the process environment, so secret rotation
+    takes effect on the next run and secrets never enter the compiled graph.
+    """
+    config = _build_sandbox_node_config(
+        node_def,
+        timeout=timeout,
+        session_factory=session_factory,
+        single_sandbox_node=single_sandbox_node,
+    )
+    node_id = config.node_id
+    sandbox_timeout = config.sandbox_timeout
+
     @cancellable_node(
         timeout=(timeout or sandbox_timeout) + _OUTPUT_READ_TIMEOUT + _DECORATOR_GRACE,
         role="sandbox_agent",
     )
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
-        return await _sandbox_agent_impl(
-            state,
-            config=_SandboxNodeConfig(
-                node_id=node_id,
-                node_def=node_def,
-                sandbox_mode=sandbox_mode,
-                agent_command=agent_command,
-                agent_prompt_template=agent_prompt_template,
-                template_id=template_id,
-                egress_policy=egress_policy,
-                egress_allowlist=egress_allowlist,
-                resource_limits=resource_limits,
-                read_only=read_only,
-                git_credentials=git_credentials,
-                wallclock_budget_seconds=wallclock_budget_seconds,
-                output_schema_json=output_schema_json,
-                sandbox_timeout=sandbox_timeout,
-                stall_timeout_override=stall_timeout_override,
-                context_files=context_files,
-                enable_heartbeat=enable_heartbeat,
-                watch_log_path=watch_log_path,
-                stdout_percentage_delta=stdout_percentage_delta,
-                watch_globs=watch_globs,
-                delivery_sentinel=delivery_sentinel,
-                loop_intercept_config=loop_intercept_config,
-                session_factory=session_factory,
-                single_sandbox_node=single_sandbox_node,
-            ),
-        )
+        return await _sandbox_agent_impl(state, config=config)
 
     _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"
     return _sandbox_agent

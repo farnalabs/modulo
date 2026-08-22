@@ -182,7 +182,7 @@ class ValidateResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/parameter-schemas", response_model=SchemaListResponse)
+@router.get("/parameter-schemas")
 @handle_db_errors("parameter_schemas.list")
 async def list_parameter_schemas_endpoint(
     page: int = Query(default=1, ge=1),
@@ -229,7 +229,7 @@ async def list_parameter_schemas_endpoint(
     )
 
 
-@router.post("/parameter-schemas", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/parameter-schemas", status_code=status.HTTP_201_CREATED)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE)
 async def create_parameter_schema_endpoint(
     req: SchemaCreate,
@@ -277,7 +277,7 @@ async def create_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.get("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
+@router.get("/parameter-schemas/{schema_id}")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_GET)
 async def get_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -320,7 +320,7 @@ async def get_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.put("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
+@router.put("/parameter-schemas/{schema_id}")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE)
 async def update_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -374,7 +374,7 @@ async def update_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
+@router.delete("/parameter-schemas/{schema_id}")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE)
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -417,7 +417,7 @@ async def delete_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.post("/parameter-schemas/{schema_id}/restore", response_model=SchemaResponse)
+@router.post("/parameter-schemas/{schema_id}/restore")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE)
 async def restore_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -517,7 +517,7 @@ async def diff_parameter_schema_endpoint(
     }
 
 
-@router.get("/parameter-schemas/{schema_id}/references", response_model=SchemaReferencesResponse)
+@router.get("/parameter-schemas/{schema_id}/references")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_REFERENCES)
 async def get_parameter_schema_references_endpoint(
     schema_id: uuid.UUID,
@@ -555,7 +555,7 @@ async def get_parameter_schema_references_endpoint(
     )
 
 
-@router.post("/parameter-schemas/{schema_id}/validate", response_model=ValidateResponse)
+@router.post("/parameter-schemas/{schema_id}/validate")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_VALIDATE)
 async def validate_parameter_values_endpoint(
     schema_id: uuid.UUID,
@@ -638,7 +638,7 @@ async def validate_parameter_values_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/parameter-schemas/{schema_id}/sets", response_model=list[SetResponse])
+@router.get("/parameter-schemas/{schema_id}/sets")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
 async def list_parameter_sets_endpoint(
     schema_id: uuid.UUID,
@@ -688,7 +688,6 @@ async def list_parameter_sets_endpoint(
 
 @router.post(
     "/parameter-schemas/{schema_id}/sets",
-    response_model=SetResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
@@ -744,7 +743,7 @@ async def create_parameter_set_endpoint(
     return SetResponse.model_validate(ps)
 
 
-@router.get("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
+@router.get("/parameter-schemas/{schema_id}/sets/{set_id}")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_GET_SET)
 async def get_parameter_set_endpoint(
     schema_id: uuid.UUID,
@@ -788,7 +787,7 @@ async def get_parameter_set_endpoint(
     return SetResponse.model_validate(ps)
 
 
-@router.put("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
+@router.put("/parameter-schemas/{schema_id}/sets/{set_id}")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
 async def update_parameter_set_endpoint(
     schema_id: uuid.UUID,
@@ -848,7 +847,6 @@ async def update_parameter_set_endpoint(
 
 @router.delete(
     "/parameter-schemas/{schema_id}/sets/{set_id}",
-    response_model=SetResponse,
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
 async def delete_parameter_set_endpoint(
@@ -898,7 +896,7 @@ async def delete_parameter_set_endpoint(
     return SetResponse.model_validate(ps)
 
 
-@router.post("/parameter-schemas/{schema_id}/sets/{set_id}/restore", response_model=SetResponse)
+@router.post("/parameter-schemas/{schema_id}/sets/{set_id}/restore")
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
 async def restore_parameter_set_endpoint(
     schema_id: uuid.UUID,

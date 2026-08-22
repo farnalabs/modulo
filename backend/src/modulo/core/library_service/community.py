@@ -15,8 +15,6 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import select
@@ -24,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.library_sync import LibraryClient, get_cached_manifest, is_revoked
 from modulo.core.library_sync.manifest import parse_manifest
+from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
@@ -35,11 +34,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-# Error message raised by ``install_community_entry`` when the requested entry
-# is unknown or revoked. Kept as a single constant so the API layer can match
-# on it without duplicating the literal.
-_ENTRY_NOT_FOUND_MSG = "entry not found"
 
 # Values accepted by the ``ck_library_primitives_type`` CHECK constraint on
 # ``library_primitives.primitive_type``.
@@ -55,30 +49,33 @@ _VALID_PRIMITIVE_TYPES = {
 }
 
 
-@asynccontextmanager
-async def _org_context(session: AsyncSession, org_id: uuid.UUID) -> AsyncIterator[None]:
-    """Set the RLS org context for the duration of the block.
+async def _enter_org_context(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Set RLS org context on *session*, beginning a transaction when none is active.
 
-    Uses a savepoint (``session.begin_nested``) so a failure rolls back only
-    this scope's work and leaves any concurrent uncommitted writes on the
-    shared session intact (the ``session-rollback-abuse`` semgrep rule forbids
-    a full ``session.rollback()``). ``set_rls_org`` uses a transaction-local
-    ``set_config(..., true)``, so the savepoint rollback also reverts the RLS
-    context. When the caller already owns an active transaction we set RLS
-    directly and let the caller manage commit/rollback.
+    ``set_rls_org`` requires an active transaction (sessions use
+    ``autobegin=False``), so when the caller has not opened one we begin it
+    here. Returns True when this call began the transaction (the caller owns
+    rollback on failure); False when reusing the caller's transaction.
     """
     if session.in_transaction():
         await set_rls_org(session, org_id)
-        yield
-        return
-    async with session.begin_nested():
+        return False
+    await session.begin()
+    try:
         await set_rls_org(session, org_id)
-        yield
+    except BaseException:
+        # Rollback undoes only the transaction this function opened via
+        # session.begin() above; the caller-owned path returns False at L61 and
+        # is never clobbered here.
+        await session.rollback()  # nosemgrep: session-rollback-abuse
+        raise
+    return True
 
 
 async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> set[tuple[str, str]]:
     """Return the set of (slug, version) registry rows already installed for *org_id*."""
-    async with _org_context(session, org_id):
+    began = await _enter_org_context(session, org_id)
+    try:
         result = await session.execute(
             select(LibraryPrimitive.slug, LibraryPrimitive.version).where(
                 LibraryPrimitive.organisation_id == org_id,
@@ -93,6 +90,13 @@ async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> 
             if isinstance(slug, str) and isinstance(version, str):
                 keys.add((slug, version))
         return keys
+    finally:
+        if began:
+            # Read-only query that opened the txn itself (began is True only for
+            # a txn this function started); committing closes our own txn without
+            # clobbering a concurrent caller's pending writes. session.rollback()
+            # here would violate the no-bare-rollback architecture rule.
+            await session.commit()
 
 
 def _find_entry(entries: list[dict[str, Any]], entry_id: str) -> dict[str, Any] | None:
@@ -190,11 +194,11 @@ async def install_community_entry(
     """
     manifest = await get_cached_manifest(session)
     if not manifest:
-        raise ValueError(_ENTRY_NOT_FOUND_MSG)
+        raise ValueError("entry not found")
     data = parse_manifest(manifest)
     entry = _find_entry(data.entries, entry_id)
     if entry is None or await is_revoked(session, entry_id):
-        raise ValueError(_ENTRY_NOT_FOUND_MSG)
+        raise ValueError("entry not found")
 
     if target_team_id is not None:
         raise ValueError("registry entries are org-owned")
@@ -214,19 +218,10 @@ async def install_community_entry(
         or not isinstance(version, str)
         or not isinstance(author, str)
     ):
-        raise ValueError(_ENTRY_NOT_FOUND_MSG)
+        raise ValueError("entry not found")
 
-    content = await _fetch_blob(content_sha256)
-    if content is None:
-        raise ValueError("blob fetch failed")
-
-    name = slug
-    raw_description = content.get("description")
-    description = raw_description if isinstance(raw_description, str) else None
-    settings = get_settings()
-    source_url = f"{settings.modulo_library_endpoint}/v1/entries/{entry_id}"
-
-    async with _org_context(session, org_id):
+    began = await _enter_org_context(session, org_id)
+    try:
         existing = await session.execute(
             select(LibraryPrimitive.id).where(
                 LibraryPrimitive.organisation_id == org_id,
@@ -238,8 +233,20 @@ async def install_community_entry(
         )
         if existing.scalar_one_or_none() is not None:
             raise ValueError("already installed")
-        primitive = LibraryPrimitive(
-            organisation_id=org_id,
+
+        content = await _fetch_blob(content_sha256)
+        if content is None:
+            raise ValueError("blob fetch failed")
+
+        name = slug
+        raw_description = content.get("description")
+        description = raw_description if isinstance(raw_description, str) else None
+        settings = get_settings()
+        source_url = f"{settings.modulo_library_endpoint}/v1/entries/{entry_id}"
+
+        primitive = await create_library_primitive(
+            session,
+            org_id=org_id,
             source="registry",
             primitive_type=primitive_type,
             name=name,
@@ -263,6 +270,12 @@ async def install_community_entry(
             auto_update=False,
             tier="native",
         )
-        session.add(primitive)
         await session.flush()
-        return primitive
+    except BaseException:
+        if began:
+            # Error path for a txn this function opened (began True only when
+            # _enter_org_context started it); the rollback undoes our own
+            # uncommitted primitive, never a concurrent caller's pending writes.
+            await session.rollback()  # nosemgrep: session-rollback-abuse
+        raise
+    return primitive

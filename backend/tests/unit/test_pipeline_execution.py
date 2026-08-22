@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -1451,7 +1452,11 @@ class TestRunExecutorWithWatchdog:
 
         engine = MagicMock()
         with (
-            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=0.05, saq_node_default_timeout_seconds=1200),
+            ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
         ):
@@ -1479,7 +1484,11 @@ class TestRunExecutorWithWatchdog:
 
         engine = MagicMock()
         with (
-            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=0.05, saq_node_default_timeout_seconds=1200),
+            ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
             patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed") as read_status,
@@ -1528,7 +1537,11 @@ class TestRunExecutorWithWatchdog:
         engine = MagicMock()
         for _ in range(10):
             with (
-                patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.02)),
+                patch.object(
+                    pe,
+                    "get_settings",
+                    return_value=MagicMock(saq_setup_grace_seconds=0.02, saq_node_default_timeout_seconds=1200),
+                ),
                 patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
                 patch.object(pe, "fail_run_terminal", _slow_fail),
                 patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed"),
@@ -1553,7 +1566,11 @@ class TestRunExecutorWithWatchdog:
 
         engine = MagicMock()
         with (
-            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=60)),
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
         ):
@@ -1586,7 +1603,11 @@ class TestRunExecutorWithWatchdog:
 
         engine = MagicMock()
         with (
-            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=0.05, saq_node_default_timeout_seconds=1200),
+            ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail,
         ):
@@ -1602,6 +1623,100 @@ class TestRunExecutorWithWatchdog:
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_failed"
         assert fail.await_args.kwargs["claim_token"] is None
+
+    @pytest.mark.asyncio
+    async def test_node_hooks_fire_for_streamed_events(self) -> None:
+        """Prove-the-fix: the executor's per-node start/completion callbacks are
+        actually wired into the node-deadline watchdog (not silently dropped).
+
+        ``run_executor_with_watchdog`` wires ``executor.on_node_started`` /
+        ``executor.on_node_completed`` to the watchdog's events. This test drives
+        those callbacks from a fake stream and asserts the watchdog observed them
+        (a stalled node that started but never completed is failed with
+        ``node_deadline_exceeded``). If the event-type string ever diverged from
+        the wiring, the watchdog would silently never fire — so we pin the
+        observable wiring here.
+        """
+        executor = MagicMock()
+        executor._node_timeouts = {}  # real dict so the wiring computes a real deadline
+        started: list[str] = []
+        completed: list[str] = []
+
+        async def _execute() -> object:
+            # Mimic the real streamed events: a node starts, then completes.
+            executor.on_first_progress()  # type: ignore[attr-defined]
+            executor.on_node_started("n1")  # type: ignore[attr-defined]
+            started.append("n1")
+            await asyncio.sleep(0.02)
+            executor.on_node_completed("n1")  # type: ignore[attr-defined]
+            completed.append("n1")
+            return SimpleNamespace(status="complete")
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_execute,
+            )
+        assert result == {"status": "complete"}
+        # The hooks fired for the real (simulated) streamed events.
+        assert started == ["n1"]
+        assert completed == ["n1"]
+
+    @pytest.mark.asyncio
+    async def test_node_deadline_exceeded_fails_stalled_node(self) -> None:
+        """Prove-the-fix at the ``run_executor_with_watchdog`` level: a node that
+        starts via the wired ``on_node_started`` hook but never completes is
+        terminal-failed with ``node_deadline_exceeded`` — the actual observable
+        effect of this watchdog (FAR-369). Exercises the full wiring from the
+        streamed node_started event through to the deadline failure.
+        """
+        executor = MagicMock()
+        executor._node_timeouts = {"n1": 0.05}  # short deadline so the test is fast
+
+        async def _hang() -> None:
+            executor.on_first_progress()  # type: ignore[attr-defined]
+            executor.on_node_started("n1")  # type: ignore[attr-defined]
+            await asyncio.sleep(999)  # node never completes -> half-alive stall
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed") as read_status,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        assert result == {"status": "failed"}
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+        # The zombie watchdog (executor_stalled) must NOT fire — the node DID
+        # start, so only the absolute node-deadline watchdog should win.
+        assert fail.await_args.kwargs["error_code"] != "executor_stalled"
+        read_status.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1746,3 +1861,187 @@ class TestResumeRun:
             )
         assert result == {"status": "not_claimed"}
         complete.assert_not_awaited()
+
+
+class TestNodeDeadlineWatchdog:
+    """Absolute node-deadline watchdog (FAR-369): fails a node that does not
+    COMPLETE within its configured timeout_seconds, independent of idle/activity.
+    This catches the half-alive SSE stall that defeats the idle-watchdog.
+    """
+
+    @pytest.mark.asyncio
+    async def test_node_completing_within_deadline_is_not_failed(self) -> None:
+        exec_task = asyncio.create_task(asyncio.sleep(999))  # stays running
+        started = asyncio.Event()
+        completed = asyncio.Event()
+        done = asyncio.Event()
+        deadlines: dict[str, tuple[float, int]] = {}
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail:
+            wd = asyncio.create_task(
+                pe.node_deadline_watchdog(  # type: ignore[arg-type]
+                    MagicMock(),
+                    "run-1",
+                    "org-1",
+                    {"n1": 1200},
+                    exec_task=exec_task,
+                    stall_requested=asyncio.Event(),
+                    node_started_event=started,
+                    node_completed_event=completed,
+                    run_done_event=done,
+                    node_deadlines=deadlines,
+                    default_timeout=1200,
+                )
+            )
+            # Node starts, then completes well within its 1200s deadline.
+            deadlines["n1"] = (time.monotonic() + 1200, 1200)
+            started.set()
+            await asyncio.sleep(0.02)
+            completed.set()
+            await asyncio.sleep(0.05)
+            # Mark the run finished so the watchdog stands down cleanly.
+            done.set()
+            await wd
+        fail.assert_not_awaited()
+        assert not exec_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_node_stalling_past_deadline_is_failed(self) -> None:
+        exec_task = asyncio.create_task(asyncio.sleep(999))
+        started = asyncio.Event()
+        completed = asyncio.Event()
+        done = asyncio.Event()
+        deadlines: dict[str, tuple[float, int]] = {}
+        stall = asyncio.Event()
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail:
+            wd = asyncio.create_task(
+                pe.node_deadline_watchdog(  # type: ignore[arg-type]
+                    MagicMock(),
+                    "run-1",
+                    "org-1",
+                    {"n1": 0.05},
+                    exec_task=exec_task,
+                    stall_requested=stall,
+                    node_started_event=started,
+                    node_completed_event=completed,
+                    run_done_event=done,
+                    node_deadlines=deadlines,
+                    default_timeout=0.05,
+                )
+            )
+            # Node starts but never completes -> deadline exceeded.
+            deadlines["n1"] = (time.monotonic() + 0.05, 0.05)
+            started.set()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(wd, timeout=2.0)
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+        # The stall signal fires BEFORE fail_run_terminal so the wrapper can tell
+        # a watchdog-initiated cancellation from a worker shutdown.
+        assert stall.is_set()
+        assert exec_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_parallel_fanout_stalled_sibling_is_failed(self) -> None:
+        """Regression for the parallel-superstep deadline-evasion gap (review).
+
+        A stalled node A must be failed even while a sibling B starts and
+        completes alongside it (LangGraph runs siblings concurrently within a
+        shared superstep). The single-track ``current_node`` model abandoned A's
+        deadline; the per-node ``node_deadlines`` dict must keep tracking it.
+        """
+        exec_task = asyncio.create_task(asyncio.sleep(999))  # stays running
+        started = asyncio.Event()
+        completed = asyncio.Event()
+        done = asyncio.Event()
+        deadlines: dict[str, tuple[float, int]] = {}
+        stall = asyncio.Event()
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail:
+            wd = asyncio.create_task(
+                pe.node_deadline_watchdog(  # type: ignore[arg-type]
+                    MagicMock(),
+                    "run-1",
+                    "org-1",
+                    {"A": 0.05, "B": 1200},
+                    exec_task=exec_task,
+                    stall_requested=stall,
+                    node_started_event=started,
+                    node_completed_event=completed,
+                    run_done_event=done,
+                    node_deadlines=deadlines,
+                    default_timeout=1200,
+                )
+            )
+            # A starts and stalls (short deadline).
+            deadlines["A"] = (time.monotonic() + 0.05, 0.05)
+            started.set()
+            await asyncio.sleep(0.01)
+            # B starts (parallel fan-out) and completes — must NOT abandon A.
+            deadlines["B"] = (time.monotonic() + 1200, 1200)
+            started.set()
+            await asyncio.sleep(0.01)
+            completed.set()
+            del deadlines["B"]
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(wd, timeout=2.0)
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+        assert fail.await_args.kwargs["error_detail"].find("A") != -1
+        assert stall.is_set()
+        assert exec_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_does_not_fail_already_terminal_run(self) -> None:
+        # A run whose executor task is already done must never be failed by the
+        # watchdog, even if a node is "running" past its deadline.
+        exec_task = asyncio.create_task(asyncio.sleep(0))
+        await exec_task  # ensure completion
+        started = asyncio.Event()
+        completed = asyncio.Event()
+        done = asyncio.Event()
+        deadlines: dict[str, tuple[float, int]] = {}
+        started.set()
+        deadlines["n1"] = (time.monotonic() + 1200, 1200)
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail:
+            await pe.node_deadline_watchdog(  # type: ignore[arg-type]
+                MagicMock(),
+                "run-1",
+                "org-1",
+                {"n1": 1200},
+                exec_task=exec_task,
+                stall_requested=asyncio.Event(),
+                node_started_event=started,
+                node_completed_event=completed,
+                run_done_event=done,
+                node_deadlines=deadlines,
+                default_timeout=1200,
+            )
+        fail.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_done_event_stands_down_without_failing(self) -> None:
+        # If the run is marked done (completed normally) the watchdog must not
+        # fail an in-flight node's stall.
+        exec_task = asyncio.create_task(asyncio.sleep(999))
+        started = asyncio.Event()
+        completed = asyncio.Event()
+        done = asyncio.Event()
+        deadlines: dict[str, tuple[float, int]] = {}
+        started.set()
+        deadlines["n1"] = (time.monotonic() + 1200, 1200)
+        done.set()  # run already finished
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail:
+            await pe.node_deadline_watchdog(  # type: ignore[arg-type]
+                MagicMock(),
+                "run-1",
+                "org-1",
+                {"n1": 1200},
+                exec_task=exec_task,
+                stall_requested=asyncio.Event(),
+                node_started_event=started,
+                node_completed_event=completed,
+                run_done_event=done,
+                node_deadlines=deadlines,
+                default_timeout=1200,
+            )
+        fail.assert_not_awaited()
+        assert not exec_task.cancelled()

@@ -47,7 +47,9 @@ _MIGRATION_PATH = (
 
 # The chain head after the FAR-210 feedback correction_state migration (0112),
 # now topped by the FAR-309 PR B trust-model migration (0116), the TOCTOU
-# hardening migration (0117), and the batch-scoped variants migration (0118).
+# hardening migration (0117), and the batch-scoped variants migration (0118),
+# the metrics_staging migration (0121), and the FAR-363 library_sync_state
+# (0122) + relax_registry_signature_check (0123) migrations.
 _CHAIN_HEAD_MIGRATION_NAME = "0123_relax_registry_signature_check"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"

@@ -170,6 +170,7 @@ class TestFunctionsWiring:
         assert ls.heartbeat == 30
         assert ls.ttl == 300
         assert ls.unique is True
+
         # metrics_dump: daily 01:00 UTC, unique=True, long timeout (full
         # organisation scan), single retry, generous ttl.
         md = jobs["metrics_dump"]
