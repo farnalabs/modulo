@@ -1,5 +1,6 @@
 """CRUD for SystemConfig key-value settings."""
 
+import contextlib
 import uuid
 from typing import Any
 
@@ -75,10 +76,8 @@ async def set_config(
             # re-raises the same unique-constraint violation (a dead/no-op
             # recovery that never converges). The only row the session should
             # still know about is the winner's.
-            try:
+            with contextlib.suppress(InvalidRequestError):
                 session.expunge(entity)
-            except InvalidRequestError:
-                pass
             existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
             entity = existing.scalar_one()
             # First-write-wins: the winning caller's row is authoritative. Do NOT
