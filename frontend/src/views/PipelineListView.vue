@@ -37,7 +37,7 @@
       <main class="flex-1 page-wide min-w-0">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
-          <button class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
+          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -117,7 +117,7 @@
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
-              <button class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
+              <button type="button" class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
                 {{ $t('views.PipelineListView.all_pipelines') }}
               </button>
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
@@ -145,6 +145,7 @@
                   <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row" @dragover.prevent @drop="onTableFolderDrop((row.data as FolderItem).id, $event)">
                     <td colspan="7" class="px-4 py-2">
                       <button
+                        type="button"
                         class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
                         @click="toggleFolder((row.data as FolderItem).id)"
                         :aria-expanded="isFolderExpanded((row.data as FolderItem).id)"
@@ -214,7 +215,7 @@
                     </td>
                     <td class="px-4 py-3">
                       <div class="flex justify-end items-center gap-1">
-                        <button class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
+                        <button type="button" class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
                         </button>
                       </div>
@@ -231,7 +232,7 @@
     </div>
 
       <!-- Move to Folder dialog -->
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+      <button type="button"
         v-if="showMoveToFolder"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showMoveToFolder = false"
@@ -270,7 +271,7 @@
             </Button>
           </div>
         </div>
-      </div>
+      </button>
 
       <!-- Rename dialog -->
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
