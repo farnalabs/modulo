@@ -42,7 +42,7 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.get("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
+@router.get("", dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RateLimitStatusResponse:
@@ -56,7 +56,7 @@ async def get_rate_limits(
     )
 
 
-@router.put("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
+@router.put("", dependencies=[require_feature("rate_limits")])
 async def update_rate_limits(
     req: RateLimitUpdateRequest,
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]

@@ -109,7 +109,7 @@ class CompositeTemplateListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=CompositeTemplateListResponse)
+@router.get("")
 @handle_db_errors("composite_templates.list_composite_templates_endpoint")
 async def list_composite_templates_endpoint(
     page: int = Query(default=1, ge=1),
@@ -154,7 +154,7 @@ async def list_composite_templates_endpoint(
     )
 
 
-@router.post("", response_model=CompositeTemplateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("composite_templates.create_composite_template_endpoint")
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
@@ -200,7 +200,7 @@ async def create_composite_template_endpoint(
         ) from None
 
 
-@router.get("/{template_id}", response_model=CompositeTemplateResponse)
+@router.get("/{template_id}")
 @handle_db_errors("composite_templates.get_composite_template_endpoint")
 async def get_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -236,7 +236,7 @@ async def get_composite_template_endpoint(
     return CompositeTemplateResponse.model_validate(template)
 
 
-@router.patch("/{template_id}", response_model=CompositeTemplateResponse)
+@router.patch("/{template_id}")
 @handle_db_errors("composite_templates.update_composite_template_endpoint")
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -314,7 +314,7 @@ async def delete_composite_template_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
 
 
-@router.post("/{template_id}/restore", response_model=CompositeTemplateResponse)
+@router.post("/{template_id}/restore")
 @handle_db_errors("composite_templates.restore_composite_template_endpoint")
 async def restore_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -367,7 +367,7 @@ class EditorGraphUpdate(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
-@router.get("/{template_id}/editor", response_model=EditorGraphResponse)
+@router.get("/{template_id}/editor")
 @handle_db_errors("composite_templates.get_composite_editor_endpoint")
 async def get_composite_editor_endpoint(
     template_id: uuid.UUID,
@@ -401,7 +401,7 @@ async def get_composite_editor_endpoint(
     )
 
 
-@router.put("/{template_id}/editor", response_model=EditorGraphResponse)
+@router.put("/{template_id}/editor")
 @handle_db_errors("composite_templates.save_composite_editor_endpoint")
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
@@ -517,7 +517,7 @@ def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
     return ports
 
 
-@router.post("/detect-params", response_model=DetectParamsResponse)
+@router.post("/detect-params")
 @handle_db_errors("composite_templates.detect_params_endpoint")
 async def detect_params_endpoint(
     req: DetectParamsRequest,
@@ -557,7 +557,7 @@ class PublishResponse(BaseModel):
     published: bool
 
 
-@router.post("/{template_id}/publish", response_model=PublishResponse)
+@router.post("/{template_id}/publish")
 @handle_db_errors("composite_templates.publish_composite_endpoint")
 async def publish_composite_endpoint(
     template_id: uuid.UUID,

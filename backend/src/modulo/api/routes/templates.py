@@ -77,7 +77,7 @@ class FromTemplateResponse(BaseModel):
     edge_count: int
 
 
-@router.get("/templates", response_model=TemplateListResponse)
+@router.get("/templates")
 @handle_db_errors(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),
@@ -124,7 +124,6 @@ async def list_templates_endpoint(
 
 @router.post(
     "/pipelines/from-template/{template_id}",
-    response_model=FromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)

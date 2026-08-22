@@ -172,7 +172,7 @@ async def _fetch_value(
     )
 
 
-@router.post("/reveal", response_model=RevealResponse)
+@router.post("/reveal")
 async def reveal_sensitive_value(
     payload: RevealRequest,
     principal: TenantPrincipal = require_system_or_org_admin("admin.sensitive.manage"),

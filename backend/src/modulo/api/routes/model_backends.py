@@ -322,7 +322,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-@router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
+@router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors(_CODE_MODEL_BACKENDS_LIST_MODEL)
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
@@ -494,7 +494,6 @@ def _validate_provider(provider: str) -> None:
 
 @router.post(
     "",
-    response_model=ModelBackendResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -618,7 +617,7 @@ async def create_model_backend_endpoint(
     return response
 
 
-@router.get("/{backend_id}", response_model=ModelBackendResponse)
+@router.get("/{backend_id}")
 @handle_db_errors(_CODE_MODEL_BACKENDS_GET_MODEL)
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
@@ -661,7 +660,7 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
-@router.get("/{backend_id}/pipeline-references", response_model=PipelineReferenceListResponse)
+@router.get("/{backend_id}/pipeline-references")
 @handle_db_errors(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
 async def list_pipeline_references_endpoint(
     backend_id: uuid.UUID,
@@ -718,7 +717,7 @@ async def list_pipeline_references_endpoint(
     )
 
 
-@router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
@@ -830,7 +829,7 @@ async def update_model_backend_endpoint(
     return response
 
 
-@router.post("/{backend_id}/health-check", response_model=ModelBackendHealthCheckResponse)
+@router.post("/{backend_id}/health-check")
 @handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,

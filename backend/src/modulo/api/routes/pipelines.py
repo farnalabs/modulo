@@ -999,7 +999,7 @@ async def _resolve_graph_references(
     return schema_pins, model_backend_pins
 
 
-@router.get("", response_model=PipelineListResponse, responses={401: {"description": "Unauthorized"}})
+@router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors("pipelines.list")
 async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
@@ -1039,7 +1039,7 @@ async def list_pipelines_endpoint(
     )
 
 
-@router.post("", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.create")
 async def create_pipeline_endpoint(
     req: PipelineCreate,
@@ -1082,7 +1082,7 @@ async def create_pipeline_endpoint(
     return PipelineResponse.model_validate(pipeline)
 
 
-@router.get("/{pipeline_id}", response_model=PipelineResponse)
+@router.get("/{pipeline_id}")
 @handle_db_errors("pipelines.get")
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1107,7 +1107,7 @@ async def get_pipeline_endpoint(
     return PipelineResponse.model_validate(pipeline)
 
 
-@router.get("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
+@router.get("/{pipeline_id}/graph")
 @handle_db_errors("pipelines.get_graph")
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
@@ -1133,7 +1133,7 @@ async def get_pipeline_graph_endpoint(
     return _graph_response(nodes, edges)
 
 
-@router.patch("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
+@router.patch("/{pipeline_id}/graph")
 @handle_db_errors("pipelines.replace_graph")
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
@@ -1312,7 +1312,7 @@ async def _assert_team_transition_allowed(
             )
 
 
-@router.patch("/{pipeline_id}", response_model=PipelineResponse)
+@router.patch("/{pipeline_id}")
 @handle_db_errors("pipelines.update")
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1452,7 +1452,7 @@ async def delete_pipeline_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
 
 
-@router.post("/{pipeline_id}/restore", response_model=PipelineResponse)
+@router.post("/{pipeline_id}/restore")
 @handle_db_errors("pipelines.restore")
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1475,7 +1475,7 @@ async def restore_pipeline_endpoint(
     return PipelineResponse.model_validate(pipeline)
 
 
-@router.post("/{pipeline_id}/archive", response_model=PipelineResponse)
+@router.post("/{pipeline_id}/archive")
 @handle_db_errors("pipelines.archive")
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1498,7 +1498,7 @@ async def archive_pipeline_endpoint(
     return PipelineResponse.model_validate(pipeline)
 
 
-@router.post("/{pipeline_id}/unarchive", response_model=PipelineResponse)
+@router.post("/{pipeline_id}/unarchive")
 @handle_db_errors("pipelines.unarchive")
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1599,7 +1599,7 @@ async def _clone_pipeline_into_org(
     return cloned, target_name
 
 
-@router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{pipeline_id}/clone", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.clone")
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -1830,7 +1830,6 @@ async def _quality_report_recipient_urls(
 
 @router.post(
     "/{pipeline_id}/quality-report",
-    response_model=QualityReportResponse,
 )
 @handle_db_errors("pipelines.trigger_quality_report")
 async def trigger_quality_report(
@@ -1956,7 +1955,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
     )
 
 
-@router.get("/{pipeline_id}/snapshots", response_model=SnapshotListResponse)
+@router.get("/{pipeline_id}/snapshots")
 @handle_db_errors("pipelines.list_snapshots")
 async def list_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -1988,7 +1987,7 @@ async def list_snapshot_endpoint(
     )
 
 
-@router.get("/{pipeline_id}/snapshots/{snapshot_id}", response_model=SnapshotDetailResponse)
+@router.get("/{pipeline_id}/snapshots/{snapshot_id}")
 @handle_db_errors("pipelines.get_snapshot_detail")
 async def get_snapshot_detail_endpoint(
     pipeline_id: uuid.UUID,
@@ -2020,7 +2019,7 @@ async def get_snapshot_detail_endpoint(
     return _snapshot_to_detail_response(snapshot)
 
 
-@router.patch("/{pipeline_id}/snapshots/{snapshot_id}", response_model=SnapshotResponse)
+@router.patch("/{pipeline_id}/snapshots/{snapshot_id}")
 @handle_db_errors("pipelines.tag_snapshot")
 async def tag_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -2048,7 +2047,7 @@ async def tag_snapshot_endpoint(
     return _snapshot_to_response(snapshot)
 
 
-@router.post("/{pipeline_id}/snapshots/{snapshot_id}/rollback", response_model=SnapshotResponse)
+@router.post("/{pipeline_id}/snapshots/{snapshot_id}/rollback")
 @handle_db_errors("pipelines.rollback_snapshot")
 async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -2149,7 +2148,7 @@ async def delete_snapshot_endpoint(
         )
 
 
-@router.post("/{pipeline_id}/snapshots/diff", response_model=SnapshotDiffResponse)
+@router.post("/{pipeline_id}/snapshots/diff")
 @handle_db_errors("pipelines.diff_snapshots")
 async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -2188,7 +2187,7 @@ class PipelineFolderMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = None
 
 
-@router.patch("/{pipeline_id}/folder", response_model=PipelineResponse)
+@router.patch("/{pipeline_id}/folder")
 @handle_db_errors("pipelines.move_to_folder")
 async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
@@ -2310,7 +2309,6 @@ async def _finalize_locked_graph_save(
 
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
-    response_model=PipelineGraphResponse,
 )
 @handle_db_errors("pipelines.convert_node_to_agent")
 async def convert_node_to_agent_endpoint(
@@ -2414,7 +2412,6 @@ async def convert_node_to_agent_endpoint(
 
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
-    response_model=PipelineGraphResponse,
 )
 @handle_db_errors("pipelines.revert_node_to_manual")
 async def revert_node_to_manual_endpoint(

@@ -134,7 +134,7 @@ class ConnectorTypeListResponse(BaseModel):
     items: list[ConnectorTypeItem]
 
 
-@router.get("/types", response_model=ConnectorTypeListResponse)
+@router.get("/types")
 async def list_connector_types() -> ConnectorTypeListResponse:
     items = [ConnectorTypeItem(id=t.value, display_name=t.value.replace("_", " ").title()) for t in ConnectorType]
     return ConnectorTypeListResponse(items=items)
@@ -158,7 +158,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
-@router.get("", response_model=ConnectorListResponse, responses={401: {"description": "Unauthorized"}})
+@router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
@@ -219,7 +219,6 @@ async def list_connectors_endpoint(
 
 @router.post(
     "",
-    response_model=ConnectorResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -295,7 +294,7 @@ async def create_connector_endpoint(
     return _to_response(ci)
 
 
-@router.get("/{connector_id}", response_model=ConnectorResponse)
+@router.get("/{connector_id}")
 @handle_db_errors(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
@@ -345,7 +344,7 @@ class ConnectorHealthResponse(BaseModel):
     detail: str = ""
 
 
-@router.get("/{connector_id}/health", response_model=ConnectorHealthResponse)
+@router.get("/{connector_id}/health")
 @handle_db_errors("connectors.connector_health_endpoint")
 async def connector_health_endpoint(
     connector_id: uuid.UUID,
@@ -392,7 +391,7 @@ async def connector_health_endpoint(
     return ConnectorHealthResponse(ok=result.ok, detail=result.detail)
 
 
-@router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/{connector_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
 async def update_connector_endpoint(
     connector_id: uuid.UUID,

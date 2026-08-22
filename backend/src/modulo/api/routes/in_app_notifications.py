@@ -128,7 +128,7 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
     )
 
 
-@router.get("/dashboard", response_model=DashboardNotificationResponse)
+@router.get("/dashboard")
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
@@ -209,7 +209,7 @@ async def get_unread(
     return {"count": count}
 
 
-@router.get("", response_model=PaginatedNotificationsResponse)
+@router.get("")
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
@@ -272,7 +272,7 @@ async def list_notifications(
     )
 
 
-@router.get("/preferences", response_model=NotificationPreferencesResponse)
+@router.get("/preferences")
 @handle_db_errors("in_app_notifications.get_preferences")
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
@@ -312,7 +312,7 @@ async def get_preferences(
     )
 
 
-@router.put("/preferences", response_model=NotificationPreferencesResponse)
+@router.put("/preferences")
 @handle_db_errors("in_app_notifications.update_preferences")
 async def update_preferences(
     req: NotificationPreferencesUpdate,
@@ -376,7 +376,7 @@ async def update_preferences(
     )
 
 
-@router.get("/{notification_id}", response_model=NotificationResponse)
+@router.get("/{notification_id}")
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
 async def get_notification_detail(
     notification_id: uuid.UUID,

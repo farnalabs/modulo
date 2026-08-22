@@ -177,7 +177,6 @@ class EvalDefinitionListResponse(BaseModel):
 
 @router.post(
     "/evals",
-    response_model=dict[str, Any],
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -269,7 +268,7 @@ async def create_eval_definition(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals", response_model=EvalDefinitionListResponse)
+@router.get("/evals")
 @handle_db_errors(_CODE_EVALS_LIST_EVAL_DEFINITIONS)
 async def list_eval_definitions(
     page: int = Query(1, ge=1),
@@ -450,7 +449,7 @@ async def eval_coverage(
     }
 
 
-@router.get("/evals/{eval_id}", response_model=dict[str, Any])
+@router.get("/evals/{eval_id}")
 @handle_db_errors(_CODE_EVALS_GET_EVAL_DEFINITION)
 async def get_eval_definition(
     eval_id: uuid.UUID,
@@ -501,7 +500,7 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@router.put("/evals/{eval_id}", response_model=dict[str, Any], dependencies=[Depends(deny_break_glass_mint)])
+@router.put("/evals/{eval_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_EVALS_UPDATE_EVAL_DEFINITION)
 async def update_eval_definition(
     eval_id: uuid.UUID,
@@ -671,7 +670,7 @@ async def delete_eval_definition(
         ) from None
 
 
-@router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+@router.get("/runs/{run_id}/evals", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_EVALS_LIST_RUN_EVALS)
 async def list_run_evals(
     run_id: uuid.UUID,

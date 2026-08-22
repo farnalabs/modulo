@@ -56,7 +56,7 @@ class FolderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.get("", response_model=list[FolderResponse])
+@router.get("")
 @handle_db_errors("pipeline_folders.list")
 async def list_folders_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -76,7 +76,7 @@ async def list_folders_endpoint(
     return [FolderResponse.model_validate(f) for f in folders]
 
 
-@router.post("", response_model=FolderResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipeline_folders.create")
 async def create_folder_endpoint(
     req: FolderCreate,
@@ -108,7 +108,7 @@ async def create_folder_endpoint(
     return FolderResponse.model_validate(folder)
 
 
-@router.patch("/{folder_id}", response_model=FolderResponse)
+@router.patch("/{folder_id}")
 @handle_db_errors("pipeline_folders.update")
 async def update_folder_endpoint(
     folder_id: uuid.UUID,
@@ -162,7 +162,7 @@ async def delete_folder_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
 
 
-@router.patch("/{folder_id}/move", response_model=FolderResponse)
+@router.patch("/{folder_id}/move")
 @handle_db_errors("pipeline_folders.move")
 async def reorder_folder_endpoint(
     folder_id: uuid.UUID,

@@ -54,7 +54,7 @@ class CleanupResponse(BaseModel):
     errors: list[dict[str, str]]
 
 
-@router.get("", response_model=HousekeepingScanResponse)
+@router.get("")
 async def list_housekeeping(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("housekeeping.manage"),
@@ -107,7 +107,7 @@ async def list_housekeeping(
     return HousekeepingScanResponse(categories=categories_list, total_count=total)
 
 
-@router.post("/cleanup", response_model=CleanupResponse)
+@router.post("/cleanup")
 async def perform_cleanup(
     req: CleanupRequest,
     session: AsyncSession = Depends(get_db_session),

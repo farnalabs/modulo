@@ -155,7 +155,6 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
 
 @router.post(
     "",
-    response_model=ApiKeyCreatedResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -262,7 +261,7 @@ async def create_api_key_endpoint(
     )
 
 
-@router.get("", response_model=list[dict[str, Any]])
+@router.get("")
 @handle_db_errors("api_keys.list_api_keys_endpoint")
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -400,7 +399,7 @@ async def update_api_key_endpoint(
     }
 
 
-@router.delete("/{key_id}", response_model=ApiKeyRevokeResponse, dependencies=[Depends(deny_break_glass_mint)])
+@router.delete("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_API_KEYS_REVOKE_API)
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
@@ -463,7 +462,7 @@ async def revoke_api_key_endpoint(
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
 
 
-@router.get("/mcp-config", response_model=McpConfigResponse)
+@router.get("/mcp-config")
 @handle_db_errors("api_keys.mcp_config_endpoint")
 async def mcp_config_endpoint(
     settings: Settings = Depends(get_settings),

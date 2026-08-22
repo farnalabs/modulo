@@ -126,7 +126,7 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
     return email, org_name
 
 
-@router.post("/stripe", response_model=StripeWebhookResponse)
+@router.post("/stripe")
 async def stripe_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
