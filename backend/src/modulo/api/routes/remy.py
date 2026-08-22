@@ -697,8 +697,7 @@ async def _build_stream_tools_param(
         return None
     await build_tool_registry()
     return _get_all_tool_definitions(
-        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id))
-        and not req.exclude_ui_tools,
+        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id)) and not req.exclude_ui_tools,
     )
 
 
