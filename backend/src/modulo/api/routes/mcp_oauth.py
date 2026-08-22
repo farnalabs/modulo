@@ -70,7 +70,6 @@ class DeleteOAuthClientResponse(BaseModel):
 
 @router.post(
     "/clients",
-    response_model=CreateOAuthClientResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
@@ -154,7 +153,7 @@ async def register_oauth_client(
     )
 
 
-@router.get("/clients", response_model=list[OAuthClientItem])
+@router.get("/clients")
 @handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -202,7 +201,6 @@ async def list_oauth_clients_endpoint(
 
 @router.delete(
     "/clients/{client_id}",
-    response_model=DeleteOAuthClientResponse,
     dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors("mcp_oauth.remove_oauth_client")
@@ -276,7 +274,7 @@ class ConsentApproveResponse(BaseModel):
     redirect_url: str
 
 
-@router.post("/consent/approve", response_model=ConsentApproveResponse)
+@router.post("/consent/approve")
 @handle_db_errors("mcp_oauth.approve_consent")
 async def approve_consent(
     req: ConsentApproveRequest,

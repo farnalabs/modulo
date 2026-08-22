@@ -37,7 +37,7 @@ class OrgGuardrailsKillSwitchResponse(BaseModel):
     enabled_at: str | None
 
 
-@router.get("/settings", response_model=OrgSettingsResponse)
+@router.get("/settings")
 @handle_db_errors("org.get_settings")
 async def get_org_settings(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -81,7 +81,7 @@ async def get_org_settings(
     return OrgSettingsResponse(currency=currency)
 
 
-@router.get("/settings/guardrails/kill-switch", response_model=OrgGuardrailsKillSwitchResponse)
+@router.get("/settings/guardrails/kill-switch")
 @handle_db_errors("org.get_guardrails_kill_switch")
 async def get_org_guardrails_kill_switch(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

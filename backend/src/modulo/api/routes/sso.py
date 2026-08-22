@@ -52,7 +52,7 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
-@router.get("/sso/providers", response_model=SsoProvidersResponse)
+@router.get("/sso/providers")
 @handle_db_errors("sso.sso_providers")
 async def sso_providers(
     _: object = require_feature("sso"),

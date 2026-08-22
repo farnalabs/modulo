@@ -6,6 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, OrgScoped
 
+_FK_ACCOUNTS_ID = "accounts.id"
+
 
 class Notification(OrgScoped):
     __tablename__ = "notifications"
@@ -22,7 +24,7 @@ class Notification(OrgScoped):
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
     target_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
-        ForeignKey("accounts.id", ondelete="SET NULL"),
+        ForeignKey(_FK_ACCOUNTS_ID, ondelete="SET NULL"),
         nullable=True,
     )
     level: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -71,7 +73,7 @@ class NotificationPreference(Base):
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("accounts.id", ondelete="CASCADE"),
+        ForeignKey(_FK_ACCOUNTS_ID, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -106,7 +108,7 @@ class Dismissal(Base):
     )
     dismissed_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("accounts.id", ondelete="CASCADE"),
+        ForeignKey(_FK_ACCOUNTS_ID, ondelete="CASCADE"),
         nullable=False,
     )
     dismiss_scope: Mapped[str] = mapped_column(String(20), nullable=False)

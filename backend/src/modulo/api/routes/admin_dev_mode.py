@@ -55,7 +55,7 @@ async def get_dev_mode(
     return {"enabled": False, "source": "default"}
 
 
-@router.put("", response_model=DevModeResponse)
+@router.put("", response_model=DevModeResponse, responses={500: {"description": "Internal Server Error"}})
 async def set_dev_mode(
     req: SetDevModeRequest,
     settings: Settings = Depends(get_settings),

@@ -117,7 +117,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
     )
 
 
-@router.get("", response_model=ProfileListResponse)
+@router.get("")
 @handle_db_errors("environment_profiles.list_profiles")
 async def list_profiles(
     page: int = Query(1, ge=1),
@@ -158,7 +158,7 @@ async def list_profiles(
     )
 
 
-@router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
 async def create_profile(
     req: ProfileCreate,
@@ -215,7 +215,7 @@ async def create_profile(
     return _to_response(profile)
 
 
-@router.get("/{profile_id}", response_model=ProfileResponse)
+@router.get("/{profile_id}")
 @handle_db_errors("environment_profiles.get_profile")
 async def get_profile(
     profile_id: uuid.UUID,
@@ -250,7 +250,7 @@ async def get_profile(
     return _to_response(profile)
 
 
-@router.put("/{profile_id}", response_model=ProfileResponse)
+@router.put("/{profile_id}")
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
 async def update_profile(
     profile_id: uuid.UUID,
@@ -333,7 +333,7 @@ async def delete_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
 
 
-@router.post("/{profile_id}/restore", response_model=ProfileResponse)
+@router.post("/{profile_id}/restore")
 @handle_db_errors("environment_profiles.restore_profile")
 async def restore_profile(
     profile_id: uuid.UUID,

@@ -179,7 +179,7 @@ class MyTeamResponse(BaseModel):
     role: str
 
 
-@router.get("/my", response_model=list[MyTeamResponse])
+@router.get("/my")
 @handle_db_errors("teams.my_teams_endpoint")
 async def my_teams_endpoint(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -235,7 +235,7 @@ async def my_teams_endpoint(
     ]
 
 
-@router.get("", response_model=TeamListResponse)
+@router.get("")
 @handle_db_errors("teams.list_teams_endpoint")
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
@@ -290,7 +290,7 @@ async def list_teams_endpoint(
     )
 
 
-@router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("teams.create_team_endpoint")
 async def create_team_endpoint(
     req: CreateTeamRequest,
@@ -373,7 +373,7 @@ async def create_team_endpoint(
     )
 
 
-@router.get("/{team_id}", response_model=TeamResponse)
+@router.get("/{team_id}")
 @handle_db_errors("teams.get_team_endpoint")
 async def get_team_endpoint(
     team_id: uuid.UUID,
@@ -428,7 +428,7 @@ async def get_team_endpoint(
     )
 
 
-@router.patch("/{team_id}", response_model=TeamResponse)
+@router.patch("/{team_id}")
 @handle_db_errors("teams.update_team_endpoint")
 async def update_team_endpoint(
     team_id: uuid.UUID,
@@ -637,7 +637,7 @@ async def delete_team_endpoint(
         )
 
 
-@router.post("/{team_id}/reassign-org", response_model=TeamReassignResponse)
+@router.post("/{team_id}/reassign-org")
 @handle_db_errors("teams.reassign_team_resources_endpoint")
 async def reassign_team_resources_endpoint(
     team_id: uuid.UUID,
@@ -704,7 +704,7 @@ async def reassign_team_resources_endpoint(
     return TeamReassignResponse(team_id=str(team_id), reassigned=total)
 
 
-@router.get("/{team_id}/members", response_model=MembershipListResponse)
+@router.get("/{team_id}/members")
 @handle_db_errors("teams.list_members_endpoint")
 async def list_members_endpoint(
     team_id: uuid.UUID,
@@ -772,7 +772,6 @@ async def list_members_endpoint(
 
 @router.post(
     "/{team_id}/members",
-    response_model=MembershipResponse,
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("teams.add_member_endpoint")
@@ -1014,7 +1013,6 @@ async def remove_member_endpoint(
 
 @router.patch(
     "/{team_id}/members/{membership_id}",
-    response_model=MembershipResponse,
 )
 @handle_db_errors("teams.change_member_role_endpoint")
 async def change_member_role_endpoint(

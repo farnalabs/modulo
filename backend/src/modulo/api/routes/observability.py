@@ -140,7 +140,7 @@ def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
     return _config_to_response(merged)
 
 
-@router.get("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
+@router.get("", dependencies=[require_feature("observability")])
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
@@ -170,7 +170,16 @@ async def get_observability_settings(
     return _build_degraded_response(str(principal.organisation_id))
 
 
-@router.put("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
+@router.put(
+    "",
+    dependencies=[require_feature("observability")],
+    responses={
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+        504: {"description": "Gateway Timeout"},
+    },
+)
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
@@ -230,7 +239,7 @@ async def update_observability_settings(
         raise HTTPException(status_code=500, detail="Internal server error.") from None
 
 
-@router.post("/test", response_model=TestSpanResult, dependencies=[require_feature("observability")])
+@router.post("/test", dependencies=[require_feature("observability")])
 async def test_otel_connection(
     req: TestOtelConfig,
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
@@ -304,7 +313,7 @@ async def test_otel_connection(
         return TestSpanResult(success=False, message=f"Connection failed: {exc}")
 
 
-@router.get("/preview", response_model=ExportPreviewResponse, dependencies=[require_feature("observability")])
+@router.get("/preview", dependencies=[require_feature("observability")])
 async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),

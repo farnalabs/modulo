@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,8 +34,8 @@ class CompleteSetupRequest(BaseModel):
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
     payload: CompleteSetupRequest,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     """Complete the setup of a model backend by providing the API key via browser."""
     settings = get_settings()

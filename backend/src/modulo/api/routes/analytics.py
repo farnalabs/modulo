@@ -320,7 +320,7 @@ def _map_service_error(exc: Exception) -> HTTPException:
     )
 
 
-@router.get("/query", response_model=AnalyticsResponse)
+@router.get("/query")
 async def analytics_query(
     group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
     auto_granularity: bool = Query(False),
@@ -376,7 +376,7 @@ async def analytics_query(
     return AnalyticsResponse(**result)
 
 
-@router.get("/concurrency", response_model=ConcurrencyResponse)
+@router.get("/concurrency")
 async def analytics_concurrency(
     group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
     auto_granularity: bool = Query(False),
@@ -431,7 +431,7 @@ async def analytics_concurrency(
     return ConcurrencyResponse(**result)
 
 
-@router.get("/guardrails", response_model=GuardrailScorecardResponse)
+@router.get("/guardrails")
 async def analytics_guardrails(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),

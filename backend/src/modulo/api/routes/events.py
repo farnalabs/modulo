@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -84,8 +84,8 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
 @handle_db_errors("events.sse_event_stream")
 async def sse_event_stream(
     request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
     principal: TenantPrincipal = require_permission("events.list"),
-    settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """SSE endpoint: streams resource-changed events for the current org.
 

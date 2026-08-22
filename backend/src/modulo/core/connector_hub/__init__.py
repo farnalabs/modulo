@@ -83,6 +83,7 @@ from modulo.db.models.connector_instance import ConnectorInstance
 logger = logging.getLogger(__name__)
 
 _SAMPLE_LIMIT: int = 200
+_OTEL_ATTR_CONNECTOR_RESOURCE = "connector.resource"
 _LOCALHOST_8080: str = "http://localhost:8080"
 _LOCALHOST_3000: str = "http://localhost:3000"
 _LOCALHOST_5678: str = "http://localhost:5678"
@@ -384,7 +385,7 @@ class _TracedConnector(ConnectorBase):
                 "query",
                 self._inner.query,
                 q,
-                extra_attrs={"connector.resource": q.resource, "connector.limit": q.limit},
+                extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: q.resource, "connector.limit": q.limit},
                 post_span=lambda span, result: (
                     span.set_attribute("connector.result_total", result.total) if result.total is not None else None
                 ),
@@ -404,7 +405,7 @@ class _TracedConnector(ConnectorBase):
                 "write",
                 self._inner.write,
                 payload,
-                extra_attrs={"connector.resource": payload.resource},
+                extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: payload.resource},
                 acl_operation="write",
             ),
         )
@@ -431,7 +432,7 @@ class _TracedConnector(ConnectorBase):
                 operation,
                 context=context,
                 error=error,
-                extra_attrs={"connector.resource": operation.resource},
+                extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: operation.resource},
                 acl_operation=None,
             ),
         )

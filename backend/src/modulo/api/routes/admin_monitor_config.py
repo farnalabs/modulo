@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator, model_validator
@@ -88,8 +88,8 @@ def _merge(entry: Any | None) -> dict[str, Any]:
 @router.get("", response_model=MonitorConfigResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("admin.monitor_config.get_monitor_config")
 async def get_monitor_config(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -121,8 +121,8 @@ async def get_monitor_config(
 @handle_db_errors("admin.monitor_config.set_monitor_config")
 async def set_monitor_config(
     req: MonitorConfigUpdate,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
