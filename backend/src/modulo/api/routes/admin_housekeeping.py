@@ -1,6 +1,7 @@
 """Admin housekeeping routes — list and delete cleanup candidates."""
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -56,7 +57,7 @@ class CleanupResponse(BaseModel):
 
 @router.get("")
 async def list_housekeeping(
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("housekeeping.manage"),
 ) -> HousekeepingScanResponse:
     try:
@@ -110,7 +111,7 @@ async def list_housekeeping(
 @router.post("/cleanup")
 async def perform_cleanup(
     req: CleanupRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("housekeeping.manage"),
 ) -> CleanupResponse:
     deleted_count = 0

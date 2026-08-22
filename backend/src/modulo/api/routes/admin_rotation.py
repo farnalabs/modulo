@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -83,9 +83,9 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @handle_db_errors("admin.rotation.rotate_key")
 async def rotate_key(
     req: RotateKeyRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
 ) -> RotateKeyResponse:
     """Start a Fernet key rotation.
 

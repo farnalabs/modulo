@@ -28,7 +28,7 @@ import hashlib
 import hmac
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -130,7 +130,7 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
 async def stripe_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> StripeWebhookResponse:
     if not settings.stripe_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
