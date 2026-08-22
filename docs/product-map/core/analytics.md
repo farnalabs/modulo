@@ -5,6 +5,7 @@ delivery-tasks: []
 bdd: []
 code:
   - backend/src/modulo/api/routes/analytics.py
+  - backend/src/modulo/api/routes/product_analytics_identity.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/core/analytics/
   - backend/src/modulo/core/mcp/scope_validator.py

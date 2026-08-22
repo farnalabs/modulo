@@ -7745,6 +7745,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/product-analytics/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Identity
+         * @description Return instance_id and whether a secret exists (never the secret itself).
+         *
+         *     System-admin only.
+         */
+        get: operations["get_identity_api_v1_product_analytics_identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/product-analytics/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Identity Secret
+         * @description Rotate the shared secret, authenticated by the old secret.
+         *
+         *     Rate-limited to 5 rotations per hour per client IP.
+         *     Distinguishes 401 (auth failure / clock skew) from 403 (permission) from 400.
+         */
+        post: operations["rotate_identity_secret_api_v1_product_analytics_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metrics/events": {
         parameters: {
             query?: never;
@@ -7765,6 +7810,23 @@ export interface paths {
          *     - ``UNIQUE(event_id)`` handles dedup — duplicate inserts are silently ignored.
          */
         post: operations["ingest_events_api_v1_metrics_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/product-analytics/transparency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Transparency */
+        get: operations["get_transparency_api_v1_product_analytics_transparency_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10662,6 +10724,19 @@ export interface components {
             categories: components["schemas"]["HousekeepingCategory"][];
             /** Total Count */
             total_count: number;
+        };
+        /** IdentityResponse */
+        IdentityResponse: {
+            /**
+             * Instance Id
+             * @description UUID of this Modulo instance
+             */
+            instance_id: string;
+            /**
+             * Secret Exists
+             * @description Whether a shared secret has been minted
+             */
+            secret_exists: boolean;
         };
         /** ImportBundleResponse */
         ImportBundleResponse: {
@@ -13589,6 +13664,37 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** RotateRequest */
+        RotateRequest: {
+            /**
+             * Old Secret
+             * @description Current secret used to authenticate the rotation
+             */
+            old_secret: string;
+            /**
+             * Timestamp
+             * @description Unix timestamp when the request was signed
+             */
+            timestamp: number;
+            /**
+             * Sequence
+             * @description Monotonic per-instance sequence number
+             */
+            sequence: number;
+            /**
+             * Hmac Digest
+             * @description HMAC-SHA256 hex digest over (payload, timestamp, sequence)
+             */
+            hmac_digest: string;
+        };
+        /** RotateResponse */
+        RotateResponse: {
+            /**
+             * New Secret
+             * @description The newly generated secret
+             */
+            new_secret: string;
+        };
         /** RotationStatusResponse */
         RotationStatusResponse: {
             /** Rotation In Progress */
@@ -14948,6 +15054,33 @@ export interface components {
         ToggleFlagRequest: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** TransparencyResponse */
+        TransparencyResponse: {
+            /** Last Successful Dump At */
+            last_successful_dump_at?: string | null;
+            /**
+             * Dump Count Total
+             * @default 0
+             */
+            dump_count_total: number;
+            /**
+             * Consent Level
+             * @default off
+             */
+            consent_level: string;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Enforcement Enabled
+             * @default false
+             */
+            enforcement_enabled: boolean;
+            /** Warning */
+            warning?: string | null;
         };
         /** TrendBucket */
         TrendBucket: {
@@ -34387,6 +34520,72 @@ export interface operations {
             };
         };
     };
+    get_identity_api_v1_product_analytics_identity_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_identity_secret_api_v1_product_analytics_rotate_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ingest_events_api_v1_metrics_events_post: {
         parameters: {
             query?: {
@@ -34408,6 +34607,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_transparency_api_v1_product_analytics_transparency_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransparencyResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
