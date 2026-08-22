@@ -1482,76 +1482,17 @@ async def _ongoing_topup(
     reason for an empty return (``{'status': 'skipped', 'reason': ...}``); when
     runs are created the caller infers ``status='fired'`` from the non-empty list.
     """
-    from sqlalchemy import update
-
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-    from modulo.db.crud.run import create_run
-    from modulo.db.models.trigger import Trigger
-
     if outcome is not None:
         outcome.clear()
 
-    key1, key2 = _uuid_to_lock_keys(trigger_id)
-    lock_result = await session.execute(
-        text(_SQL_TRY_ADVISORY_LOCK),
-        {"key1": key1, "key2": key2},
+    trigger = await _acquire_ongoing_trigger(session, trigger_id=trigger_id, org_id=org_id, now=now, outcome=outcome)
+    if trigger is None:
+        return []
+
+    to_create = await _ongoing_shortfall(
+        session, trigger, trigger_id=trigger_id, org_id=org_id, pipeline_id=pipeline_id, outcome=outcome
     )
-    if not lock_result.scalar_one():
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": "trigger_busy"})
-        return []
-
-    trigger_result = await session.execute(
-        select(Trigger).where(
-            Trigger.id == trigger_id,
-            Trigger.organisation_id == org_id,
-            Trigger.deleted_at.is_(None),
-        )
-    )
-    trigger = trigger_result.scalar_one_or_none()
-    if trigger is None or not trigger.active:
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": "trigger_inactive_or_missing"})
-        return []
-
-    # Org-wide pause (kill-switch) — race backstop before the spend gate / count
-    # (the create_run gate is the authority). Degraded on a pre-migration
-    # ProgrammingError (not-paused) inside a savepoint, matching cron/polling.
-    if await _org_is_paused_degraded(session, org_id):
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
-        return []
-
-    # Daily spend gate (mirrors fire_cron_trigger) — run BEFORE the count so an
-    # over-budget daemon stops creating runs. Skip-not-defer: last_fired_at is
-    # still stamped so the trigger's cadence is not misread as stalled.
-    spend_limit = trigger.daily_spend_limit
-    if spend_limit is not None:
-        skip = await _ongoing_spend_gate(session, trigger, org_id, trigger_id, now, spend_limit)
-        if skip is not None:
-            if outcome is not None:
-                outcome.update(skip)
-            return []
-
-    in_flight = await _count_ongoing_runs(session, trigger_id)
-
-    from modulo.db.models.pipeline import Pipeline
-
-    pipeline_result = await session.execute(select(Pipeline.max_concurrent_runs).where(Pipeline.id == pipeline_id))
-    pipeline_max = pipeline_result.scalar_one_or_none()
-    if pipeline_max is None:
-        if outcome is not None:
-            outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
-        return []
-    # Effective target = min(trigger target, pipeline cap) — handles a pipeline
-    # cap lowered after create. Multiple ongoing triggers on one pipeline each
-    # top up to their own target, so combined in-flight may exceed the cap; that
-    # is bounded downstream by capacity/claim demotion, not by this min().
-    effective_target = min(int(trigger.max_concurrent_runs), int(pipeline_max))
-    if in_flight >= effective_target:
-        # At/above target — genuine no-op. NO event, NO last_fired_at write.
-        if outcome is not None:
-            outcome.update({"status": "noop", "in_flight": in_flight, "target": effective_target})
+    if to_create <= 0:
         return []
 
     # Snapshot resolution: pinned config snapshot_id (invalid/missing -> explicit
@@ -1568,11 +1509,129 @@ async def _ongoing_topup(
     if snapshot_id is None:
         raise RuntimeError("ongoing topup: snapshot_id unresolved after skip check")
 
-    to_create = effective_target - in_flight
-    if to_create <= 0:
+    return await _create_ongoing_runs(
+        session,
+        trigger,
+        trigger_id=trigger_id,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        snapshot_id=snapshot_id,
+        config=config,
+        now=now,
+        to_create=to_create,
+        redis_client=redis_client,
+        outcome=outcome,
+    )
+
+
+async def _acquire_ongoing_trigger(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    now: datetime,
+    outcome: dict[str, Any] | None,
+) -> Any | None:
+    """Advisory-lock + fetch the ongoing trigger; ``None`` with ``outcome`` set on any skip."""
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.db.models.trigger import Trigger
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(
+        text(_SQL_TRY_ADVISORY_LOCK),
+        {"key1": key1, "key2": key2},
+    )
+    if not lock_result.scalar_one():
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "trigger_busy"})
+        return None
+
+    trigger_result = await session.execute(
+        select(Trigger).where(
+            Trigger.id == trigger_id,
+            Trigger.organisation_id == org_id,
+            Trigger.deleted_at.is_(None),
+        )
+    )
+    trigger = trigger_result.scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "trigger_inactive_or_missing"})
+        return None
+
+    # Org-wide pause (kill-switch) — race backstop before the spend gate / count
+    # (the create_run gate is the authority). Degraded on a pre-migration
+    # ProgrammingError (not-paused) inside a savepoint, matching cron/polling.
+    if await _org_is_paused_degraded(session, org_id):
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+        return None
+
+    # Daily spend gate (mirrors fire_cron_trigger) — run BEFORE the count so an
+    # over-budget daemon stops creating runs. Skip-not-defer: last_fired_at is
+    # still stamped so the trigger's cadence is not misread as stalled.
+    spend_limit = trigger.daily_spend_limit
+    if spend_limit is not None:
+        skip = await _ongoing_spend_gate(session, trigger, org_id, trigger_id, now, spend_limit)
+        if skip is not None:
+            if outcome is not None:
+                outcome.update(skip)
+            return None
+    return trigger
+
+
+async def _ongoing_shortfall(
+    session: AsyncSession,
+    trigger: Any,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    outcome: dict[str, Any] | None,
+) -> int:
+    """Return how many runs to create (0 = at/above target or pipeline missing)."""
+    from modulo.db.models.pipeline import Pipeline
+
+    in_flight = await _count_ongoing_runs(session, trigger_id)
+
+    pipeline_result = await session.execute(select(Pipeline.max_concurrent_runs).where(Pipeline.id == pipeline_id))
+    pipeline_max = pipeline_result.scalar_one_or_none()
+    if pipeline_max is None:
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
+        return 0
+    # Effective target = min(trigger target, pipeline cap) — handles a pipeline
+    # cap lowered after create. Multiple ongoing triggers on one pipeline each
+    # top up to their own target, so combined in-flight may exceed the cap; that
+    # is bounded downstream by capacity/claim demotion, not by this min().
+    effective_target = min(int(trigger.max_concurrent_runs), int(pipeline_max))
+    if in_flight >= effective_target:
+        # At/above target — genuine no-op. NO event, NO last_fired_at write.
         if outcome is not None:
             outcome.update({"status": "noop", "in_flight": in_flight, "target": effective_target})
-        return []
+        return 0
+    return effective_target - in_flight
+
+
+async def _create_ongoing_runs(
+    session: AsyncSession,
+    trigger: Any,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    config: dict[str, Any],
+    now: datetime,
+    to_create: int,
+    redis_client: AsyncRedis | None,
+    outcome: dict[str, Any] | None,
+) -> list[Run]:
+    """Create ``to_create`` runs for the ongoing trigger, stamping ``last_fired_at``."""
+    from sqlalchemy import update
+
+    from modulo.db.crud.run import create_run
+    from modulo.db.models.trigger import Trigger
 
     created: list[Run] = []
     try:
@@ -2235,36 +2294,14 @@ async def fire_due_triggers() -> dict[str, Any]:
     ``fire_polling_trigger`` treat them as ``trigger_inactive_or_missing``), so
     a soft-deleted cron/polling trigger can never keep firing (FAR-166).
     """
-    from modulo.db.models.organisation import Organisation
-    from modulo.db.models.scheduled_report import ScheduledReport
-    from modulo.db.models.trigger import Trigger
-
     settings = get_settings()
     queue_name = settings.saq_runs_queue
-    summary: dict[str, Any] = {
-        "orgs_scanned": 0,
-        "cron_due": 0,
-        "cron_enqueued": 0,
-        "cron_catchup_enqueued": 0,
-        "cron_skipped_paused": 0,
-        "polling_due": 0,
-        "polling_enqueued": 0,
-        "polling_skipped_paused": 0,
-        "report_due": 0,
-        "report_enqueued": 0,
-        "ongoing_due": 0,
-        "ongoing_enqueued": 0,
-        "ongoing_skipped_paused": 0,
-        "ongoing_enqueue_failures": 0,
-        "enqueue_failures": 0,
-    }
+    summary = _new_fire_due_summary()
 
     factory = _open_factory()
 
     # Collect all org ids first (organisations is the root table — no RLS).
-    async with factory() as session, session.begin():
-        result = await session.execute(select(Organisation.id))
-        org_ids: list[uuid.UUID] = list(result.scalars())
+    org_ids = await _collect_org_ids(factory)
 
     if not org_ids:
         return summary
@@ -2283,23 +2320,7 @@ async def fire_due_triggers() -> dict[str, Any]:
     #                          tick FAILS and the SAQ system cron retries. NEVER
     #                          fabricate "paused" for every org on a DB blip —
     #                          a pause read failure is not evidence of a pause.
-    pause_by_org: dict[uuid.UUID, bool] = {}
-    try:
-        async with factory() as session, session.begin():
-            pause_rows = (
-                await session.execute(select(Organisation.id, Organisation.triggers_paused, Organisation.status))
-            ).all()
-        for oid, triggers_paused, org_status in pause_rows:
-            pause_by_org[oid] = org_row_is_paused(org_status, triggers_paused)
-    except ProgrammingError:
-        _log.exception("fire_due_triggers: pause-column read failed — treating all orgs as not-paused (legacy schema)")
-        summary["pause_read"] = "degraded"
-        pause_by_org = {}
-    except SQLAlchemyError:
-        _log.exception(
-            "fire_due_triggers: pause read failed — re-raising so the tick fails and the SAQ system cron retries"
-        )
-        raise
+    pause_by_org = await _read_pause_by_org(factory, summary)
 
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
@@ -2312,12 +2333,7 @@ async def fire_due_triggers() -> dict[str, Any]:
         # Machine-scoped cron liveness heartbeat (plan F8): /healthz/ready
         # watches this key so Fly removes a machine whose system-worker cron
         # scheduler is silently dead (worker loop alive, cron stuck).
-        try:
-            await redis_client.set(_cron_liveness_key("fire_due_triggers"), int(time.time()))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning("cron_helpers.fire_due_triggers liveness heartbeat write failed")
+        await _write_cron_liveness(redis_client)
         for org_id in org_ids:
             summary["orgs_scanned"] += 1
             # Org-wide pause (kill-switch): fire jobs are SKIP-not-defer — the
@@ -2327,100 +2343,13 @@ async def fire_due_triggers() -> dict[str, Any]:
             async with factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
                 now = datetime.now(UTC)
-                try:
-                    # ---- cron triggers ----
-                    cron_rows = (
-                        await session.execute(
-                            select(
-                                Trigger.id,
-                                Trigger.pipeline_id,
-                                Trigger.config_json,
-                                Trigger.cron_expression,
-                                Trigger.cron_timezone,
-                                Trigger.next_fire_at,
-                            ).where(
-                                Trigger.trigger_type == "cron",
-                                Trigger.active.is_(True),
-                                Trigger.deleted_at.is_(None),
-                                Trigger.next_fire_at.isnot(None),
-                                Trigger.next_fire_at <= now,
-                                Trigger.cron_expression.isnot(None),
-                            )
-                        )
-                    ).all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("fire_due_triggers: cron read failed (org %s)", org_id)
-                    cron_rows = []
-
-                pipelines_needing_snapshots = {
-                    row.pipeline_id for row in cron_rows if not (row.config_json or {}).get("snapshot_id")
-                }
-                latest_snapshots = await _resolve_latest_snapshots(session, pipelines_needing_snapshots)
-
-                # ``advanced_this_tick`` tracks epochs THIS tick advanced AND
-                # enqueued (or SAQ-deduped as already handled). The missed-fire
-                # catch-up scan below excludes them so it can never double-fire
-                # a trigger the normal loop already fired this tick.
-                advanced_this_tick: set[uuid.UUID] = set()
-                await _process_due_cron_rows(
-                    session,
-                    q,
-                    redis_client,
-                    now,
-                    org_id,
-                    org_paused,
-                    cron_rows,
-                    latest_snapshots,
-                    advanced_this_tick,
-                    summary,
+                advanced_this_tick = await _process_due_cron_scan(
+                    session, q, redis_client, now, org_id, org_paused, summary
                 )
 
-                try:
-                    # ---- polling triggers ----
-                    polling_rows = (
-                        await session.execute(
-                            select(
-                                Trigger.id,
-                                Trigger.pipeline_id,
-                                Trigger.config_json,
-                                Trigger.next_fire_at,
-                            ).where(
-                                Trigger.trigger_type == "polling",
-                                Trigger.active.is_(True),
-                                Trigger.deleted_at.is_(None),
-                                Trigger.next_fire_at.isnot(None),
-                                Trigger.next_fire_at <= now,
-                            )
-                        )
-                    ).all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("fire_due_triggers: polling read failed (org %s)", org_id)
-                    polling_rows = []
+                await _process_due_polling_scan(session, q, now, org_id, org_paused, summary)
 
-                await _process_due_polling_rows(session, q, now, org_id, org_paused, polling_rows, summary)
-
-                try:
-                    # ---- scheduled reports ----
-                    report_rows = (
-                        await session.execute(
-                            select(ScheduledReport.id, ScheduledReport.cron_expression).where(
-                                ScheduledReport.active.is_(True),
-                                ScheduledReport.next_send_at.isnot(None),
-                                ScheduledReport.next_send_at <= now,
-                            )
-                        )
-                    ).all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("fire_due_triggers: report read failed (org %s)", org_id)
-                    report_rows = []
-
-                await _process_due_report_rows(session, q, now, org_id, report_rows, summary)
+                await _process_due_report_scan(session, q, now, org_id, summary)
 
                 # ---- missed-fire catch-up (2026-08-10 incident) ----
                 # Re-fire cron epochs consumed-but-never-fired (worker killed
@@ -2454,57 +2383,259 @@ async def fire_due_triggers() -> dict[str, Any]:
                 # fixed-order _MockSession unit tests (whose sequences end at
                 # the report/catch-up reads) hit the exhausted MagicMock and
                 # iterate empty.
-                try:
-                    ongoing_rows = (
-                        await session.execute(
-                            select(
-                                Trigger.id,
-                                Trigger.pipeline_id,
-                                Trigger.config_json,
-                                Trigger.next_fire_at,
-                            ).where(
-                                Trigger.trigger_type == "ongoing",
-                                Trigger.active.is_(True),
-                                Trigger.deleted_at.is_(None),
-                                or_(
-                                    Trigger.next_fire_at.is_(None),
-                                    Trigger.next_fire_at <= now,
-                                ),
-                            )
-                        )
-                    ).all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("fire_due_triggers: ongoing read failed (org %s)", org_id)
-                    ongoing_rows = []
-
-                # Pre-resolve latest snapshots per pipeline for ongoing rows
-                # WITHOUT a pinned snapshot_id (DISTINCT ON, mirroring cron).
-                ongoing_needing_snapshots = {
-                    row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
-                }
-                ongoing_latest_snapshots = await _resolve_latest_snapshots(session, ongoing_needing_snapshots)
-
-                ongoing_enqueued = 0
-                for row in ongoing_rows:
-                    ongoing_enqueued += await _process_one_ongoing_row(
-                        session,
-                        q,
-                        now,
-                        org_id,
-                        org_paused,
-                        row,
-                        ongoing_latest_snapshots,
-                        summary,
-                        ongoing_enqueued,
-                    )
+                await _process_due_ongoing_scan(session, q, now, org_id, org_paused, summary)
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
 
     _log.info("fire_due_triggers summary: %s", summary)
     return summary
+
+
+def _new_fire_due_summary() -> dict[str, Any]:
+    return {
+        "orgs_scanned": 0,
+        "cron_due": 0,
+        "cron_enqueued": 0,
+        "cron_catchup_enqueued": 0,
+        "cron_skipped_paused": 0,
+        "polling_due": 0,
+        "polling_enqueued": 0,
+        "polling_skipped_paused": 0,
+        "report_due": 0,
+        "report_enqueued": 0,
+        "ongoing_due": 0,
+        "ongoing_enqueued": 0,
+        "ongoing_skipped_paused": 0,
+        "ongoing_enqueue_failures": 0,
+        "enqueue_failures": 0,
+    }
+
+
+async def _collect_org_ids(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
+    from modulo.db.models.organisation import Organisation
+
+    async with factory() as session, session.begin():
+        result = await session.execute(select(Organisation.id))
+        return list(result.scalars())
+
+
+async def _read_pause_by_org(
+    factory: async_sessionmaker[AsyncSession], summary: dict[str, Any]
+) -> dict[uuid.UUID, bool]:
+    from modulo.db.models.organisation import Organisation
+
+    pause_by_org: dict[uuid.UUID, bool] = {}
+    try:
+        async with factory() as session, session.begin():
+            pause_rows = (
+                await session.execute(select(Organisation.id, Organisation.triggers_paused, Organisation.status))
+            ).all()
+        for oid, triggers_paused, org_status in pause_rows:
+            pause_by_org[oid] = org_row_is_paused(org_status, triggers_paused)
+    except ProgrammingError:
+        _log.exception("fire_due_triggers: pause-column read failed — treating all orgs as not-paused (legacy schema)")
+        summary["pause_read"] = "degraded"
+        pause_by_org = {}
+    except SQLAlchemyError:
+        _log.exception(
+            "fire_due_triggers: pause read failed — re-raising so the tick fails and the SAQ system cron retries"
+        )
+        raise
+    return pause_by_org
+
+
+async def _write_cron_liveness(redis_client: AsyncRedis) -> None:
+    try:
+        await redis_client.set(_cron_liveness_key("fire_due_triggers"), int(time.time()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.fire_due_triggers liveness heartbeat write failed")
+
+
+async def _process_due_cron_scan(
+    session: AsyncSession,
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    summary: dict[str, Any],
+) -> set[uuid.UUID]:
+    """Read + enqueue one org's due cron rows; returns ``advanced_this_tick``."""
+    from modulo.db.models.trigger import Trigger
+
+    try:
+        cron_rows = (
+            await session.execute(
+                select(
+                    Trigger.id,
+                    Trigger.pipeline_id,
+                    Trigger.config_json,
+                    Trigger.cron_expression,
+                    Trigger.cron_timezone,
+                    Trigger.next_fire_at,
+                ).where(
+                    Trigger.trigger_type == "cron",
+                    Trigger.active.is_(True),
+                    Trigger.deleted_at.is_(None),
+                    Trigger.next_fire_at.isnot(None),
+                    Trigger.next_fire_at <= now,
+                    Trigger.cron_expression.isnot(None),
+                )
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: cron read failed (org %s)", org_id)
+        cron_rows = []
+
+    pipelines_needing_snapshots = {
+        row.pipeline_id for row in cron_rows if not (row.config_json or {}).get("snapshot_id")
+    }
+    latest_snapshots = await _resolve_latest_snapshots(session, pipelines_needing_snapshots)
+
+    # ``advanced_this_tick`` tracks epochs THIS tick advanced AND enqueued (or
+    # SAQ-deduped as already handled). The missed-fire catch-up scan excludes
+    # them so it can never double-fire a trigger the normal loop already fired
+    # this tick.
+    advanced_this_tick: set[uuid.UUID] = set()
+    await _process_due_cron_rows(
+        session,
+        q,
+        redis_client,
+        now,
+        org_id,
+        org_paused,
+        cron_rows,
+        latest_snapshots,
+        advanced_this_tick,
+        summary,
+    )
+    return advanced_this_tick
+
+
+async def _process_due_polling_scan(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    summary: dict[str, Any],
+) -> None:
+    from modulo.db.models.trigger import Trigger
+
+    try:
+        polling_rows = (
+            await session.execute(
+                select(
+                    Trigger.id,
+                    Trigger.pipeline_id,
+                    Trigger.config_json,
+                    Trigger.next_fire_at,
+                ).where(
+                    Trigger.trigger_type == "polling",
+                    Trigger.active.is_(True),
+                    Trigger.deleted_at.is_(None),
+                    Trigger.next_fire_at.isnot(None),
+                    Trigger.next_fire_at <= now,
+                )
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: polling read failed (org %s)", org_id)
+        polling_rows = []
+
+    await _process_due_polling_rows(session, q, now, org_id, org_paused, polling_rows, summary)
+
+
+async def _process_due_report_scan(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    summary: dict[str, Any],
+) -> None:
+    from modulo.db.models.scheduled_report import ScheduledReport
+
+    try:
+        report_rows = (
+            await session.execute(
+                select(ScheduledReport.id, ScheduledReport.cron_expression).where(
+                    ScheduledReport.active.is_(True),
+                    ScheduledReport.next_send_at.isnot(None),
+                    ScheduledReport.next_send_at <= now,
+                )
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: report read failed (org %s)", org_id)
+        report_rows = []
+
+    await _process_due_report_rows(session, q, now, org_id, report_rows, summary)
+
+
+async def _process_due_ongoing_scan(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    summary: dict[str, Any],
+) -> None:
+    from modulo.db.models.trigger import Trigger
+
+    try:
+        ongoing_rows = (
+            await session.execute(
+                select(
+                    Trigger.id,
+                    Trigger.pipeline_id,
+                    Trigger.config_json,
+                    Trigger.next_fire_at,
+                ).where(
+                    Trigger.trigger_type == "ongoing",
+                    Trigger.active.is_(True),
+                    Trigger.deleted_at.is_(None),
+                    or_(
+                        Trigger.next_fire_at.is_(None),
+                        Trigger.next_fire_at <= now,
+                    ),
+                )
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: ongoing read failed (org %s)", org_id)
+        ongoing_rows = []
+
+    # Pre-resolve latest snapshots per pipeline for ongoing rows WITHOUT a
+    # pinned snapshot_id (DISTINCT ON, mirroring cron).
+    ongoing_needing_snapshots = {
+        row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
+    }
+    ongoing_latest_snapshots = await _resolve_latest_snapshots(session, ongoing_needing_snapshots)
+
+    ongoing_enqueued = 0
+    for row in ongoing_rows:
+        ongoing_enqueued += await _process_one_ongoing_row(
+            session,
+            q,
+            now,
+            org_id,
+            org_paused,
+            row,
+            ongoing_latest_snapshots,
+            summary,
+            ongoing_enqueued,
+        )
 
 
 async def _resolve_latest_snapshots(
@@ -3446,9 +3577,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     """
     from sqlalchemy import or_
 
-    from modulo.db.models.organisation import Organisation
-    from modulo.db.models.run import Run
-
     settings = get_settings()
     queue_name = settings.saq_runs_queue
     reenqueue_window = int(settings.saq_reenqueue_window)
@@ -3458,30 +3586,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
     factory = _open_system_factory()
-    summary: dict[str, Any] = {
-        "scanned": 0,
-        "repaired": 0,
-        "skipped": 0,
-        "redis_errors": 0,
-        "deduped": 0,
-        "nodeless_failed": 0,
-        "claim_cap_terminalized": 0,
-        "mid_graph_wedge_terminalized": 0,
-        "age_terminalized": 0,
-        "dispatch_failed_terminalized": 0,
-        "enqueue_failed_ttl_terminalized": 0,
-        "enqueue_failed_redispatched": 0,
-        "enqueue_failed_capped": 0,
-        "capacity_deferred": 0,
-        "streak_scanned": 0,
-        "streak_deactivated": 0,
-        "streak_capped": 0,
-        "streak_alerts": 0,
-        "streak_notify_failed": 0,
-        "run_api_key_scanned": 0,
-        "run_api_key_revoked": 0,
-        "run_api_key_errors": 0,
-    }
+    summary = _dispatcher_summary()
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
     # compensating daily fact must be recorded once the per-org transactions
     # commit (FAR-162, P6'): the terminalizers write raw UPDATEs and never run
@@ -3495,10 +3600,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         max_connections=settings.saq_redis_pool_size,
     )
     try:
-        async with factory() as session, session.begin():
-            result = await session.execute(select(Organisation.id))
-            org_ids: list[uuid.UUID] = list(result.scalars())
-
+        org_ids = await _collect_org_ids(factory)
         if not org_ids:
             # Still record the run so /healthz/ready sees a fresh last_run_at
             # even in an empty-org environment (the cron keeps ticking every 60s).
@@ -3524,67 +3626,21 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             _nodeless_zombie_predicate(nodeless_window),
         )
         for org_id in org_ids:
-            async with factory() as session, session.begin():
-                await _set_rls_org(session, org_id)
-                try:
-                    # B4: age-bound mid-graph wedge terminalizer (DB-only,
-                    # org-scoped). Runs stuck 'running' past the max plausible
-                    # duration are wedged — fail them BEFORE the row select so
-                    # they are excluded from re-dispatch.
-                    wedged = await _terminalize_mid_graph_wedges(session, org_id, max_age_minutes=max_age_minutes)
-                    summary["mid_graph_wedge_terminalized"] += len(wedged)
-                    summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
-                    terminalized_run_ids.extend((run_id, org_id) for run_id in wedged)
-                    # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
-                    # predicates, stale-heartbeat gated (a LIVE run on its final
-                    # claim is never killed; a capped run whose heartbeat froze
-                    # is still caught).
-                    capped = await _terminalize_claim_cap_exhausted(
-                        session, org_id, claim_cap=claim_cap, stale_seconds=stale_window
-                    )
-                    summary["claim_cap_terminalized"] += len(capped)
-                    terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
-                    rows = (
-                        await session.execute(
-                            select(
-                                Run.id,
-                                Run.pipeline_id,
-                                Run.status,
-                                Run.dispatched_at,
-                                Run.heartbeat_at,
-                                Run.node_token_usage,
-                                Run.outputs_json,
-                                Run.started_at,
-                                Run.claim_count,
-                                Run.dispatcher,
-                                text("runs.enqueue_failed_at AS enqueue_failed_at"),
-                            ).where(
-                                Run.organisation_id == org_id,
-                                Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
-                                re_dispatch_predicate,
-                                _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds),
-                            )
-                        )
-                    ).all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
-                    continue
-
-                for row in rows:
-                    summary["scanned"] += 1
-                    enqueue_failed_redispatched = await _reconcile_one_row(
-                        session,
-                        q,
-                        redis_client,
-                        org_id,
-                        row,
-                        nodeless_window,
-                        enqueue_failed_redispatched,
-                        summary,
-                        terminalized_run_ids,
-                    )
+            enqueue_failed_redispatched = await _reconcile_org(
+                factory,
+                q,
+                redis_client,
+                org_id,
+                re_dispatch_predicate,
+                nodeless_window,
+                max_age_minutes,
+                claim_cap,
+                stale_window,
+                capacity_redispatch_seconds,
+                enqueue_failed_redispatched,
+                summary,
+                terminalized_run_ids,
+            )
         # FAR-162 (P6') — record a daily fact for every run terminalised this
         # tick (executor_superseded / claim_cap_exhausted / dispatch_failed):
         # the terminalizers write raw UPDATEs and never run finalize_cost, so
@@ -3604,6 +3660,115 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
+
+
+def _dispatcher_summary() -> dict[str, Any]:
+    return {
+        "scanned": 0,
+        "repaired": 0,
+        "skipped": 0,
+        "redis_errors": 0,
+        "deduped": 0,
+        "nodeless_failed": 0,
+        "claim_cap_terminalized": 0,
+        "mid_graph_wedge_terminalized": 0,
+        "age_terminalized": 0,
+        "dispatch_failed_terminalized": 0,
+        "enqueue_failed_ttl_terminalized": 0,
+        "enqueue_failed_redispatched": 0,
+        "enqueue_failed_capped": 0,
+        "capacity_deferred": 0,
+        "streak_scanned": 0,
+        "streak_deactivated": 0,
+        "streak_capped": 0,
+        "streak_alerts": 0,
+        "streak_notify_failed": 0,
+        "run_api_key_scanned": 0,
+        "run_api_key_revoked": 0,
+        "run_api_key_errors": 0,
+    }
+
+
+async def _reconcile_org(
+    factory: async_sessionmaker[AsyncSession],
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    org_id: uuid.UUID,
+    re_dispatch_predicate: Any,
+    nodeless_window: int,
+    max_age_minutes: int,
+    claim_cap: int,
+    stale_window: int,
+    capacity_redispatch_seconds: int,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> int:
+    """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
+    from modulo.db.models.run import Run
+
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
+        try:
+            # B4: age-bound mid-graph wedge terminalizer (DB-only, org-scoped).
+            # Runs stuck 'running' past the max plausible duration are wedged —
+            # fail them BEFORE the row select so they are excluded from
+            # re-dispatch.
+            wedged = await _terminalize_mid_graph_wedges(session, org_id, max_age_minutes=max_age_minutes)
+            summary["mid_graph_wedge_terminalized"] += len(wedged)
+            summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
+            terminalized_run_ids.extend((run_id, org_id) for run_id in wedged)
+            # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
+            # predicates, stale-heartbeat gated (a LIVE run on its final claim
+            # is never killed; a capped run whose heartbeat froze is still
+            # caught).
+            capped = await _terminalize_claim_cap_exhausted(
+                session, org_id, claim_cap=claim_cap, stale_seconds=stale_window
+            )
+            summary["claim_cap_terminalized"] += len(capped)
+            terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
+            rows = (
+                await session.execute(
+                    select(
+                        Run.id,
+                        Run.pipeline_id,
+                        Run.status,
+                        Run.dispatched_at,
+                        Run.heartbeat_at,
+                        Run.node_token_usage,
+                        Run.outputs_json,
+                        Run.started_at,
+                        Run.claim_count,
+                        Run.dispatcher,
+                        text("runs.enqueue_failed_at AS enqueue_failed_at"),
+                    ).where(
+                        Run.organisation_id == org_id,
+                        Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
+                        re_dispatch_predicate,
+                        _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds),
+                    )
+                )
+            ).all()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
+            return enqueue_failed_redispatched
+
+        for row in rows:
+            summary["scanned"] += 1
+            enqueue_failed_redispatched = await _reconcile_one_row(
+                session,
+                q,
+                redis_client,
+                org_id,
+                row,
+                nodeless_window,
+                enqueue_failed_redispatched,
+                summary,
+                terminalized_run_ids,
+            )
+    return enqueue_failed_redispatched
 
 
 async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
