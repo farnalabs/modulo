@@ -76,7 +76,12 @@ async function main() {
   // Step 5: Delete pipeline
   console.log(`\nDeleting pipeline ${logSafe(pipelineId)} ...`);
   assertSafeId(pipelineId);
-  const delRes = await fetch(`${BASE_URL}/api/v1/pipelines/${pipelineId}`, {
+  const base = new URL(BASE_URL);
+  const deleteUrl = new URL(`/api/v1/pipelines/${pipelineId}`, base); // NOSONAR [jssecurity:S7044,jssecurity:S8476] -- id validated above, origin pinned below
+  if (deleteUrl.origin !== base.origin) {
+    throw new Error(`Invalid delete path: ${logSafe(pipelineId)}`);
+  }
+  const delRes = await fetch(deleteUrl, { // NOSONAR [jssecurity:S7044,jssecurity:S8476] -- url origin pinned above
     method: "DELETE",
     headers: { ...h, "Content-Type": "application/json" },
   });
