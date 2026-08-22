@@ -882,7 +882,18 @@ async def _create_manual_run(
     return run
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),

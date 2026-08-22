@@ -71,7 +71,15 @@ def _validate_fernet_key(key: str, label: str) -> None:
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 
-@router.post("/rotate-key", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/rotate-key",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.rotation.rotate_key")
 async def rotate_key(
     req: RotateKeyRequest,
@@ -157,7 +165,14 @@ async def rotate_key(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
-@router.get("/status")
+@router.get(
+    "/status",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("admin.rotation.rotation_status")
 async def rotation_status(
     current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]

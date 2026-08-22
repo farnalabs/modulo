@@ -179,6 +179,14 @@ class EvalDefinitionListResponse(BaseModel):
     "/evals",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
 )
 @handle_db_errors(_CODE_EVALS_CREATE_EVAL_DEFINITION)
 async def create_eval_definition(
@@ -344,7 +352,17 @@ async def list_eval_definitions(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
+@router.get(
+    "/evals/coverage",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_EVALS_EVAL_COVERAGE)
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
@@ -797,7 +815,17 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/evals/compare", status_code=status.HTTP_200_OK)
+@router.post(
+    "/evals/compare",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_EVALS_COMPARE_EVALS)
 async def compare_evals(
     req: CompareEvalsRequest,
@@ -991,6 +1019,14 @@ async def compare_evals(
     "/evals/from-run",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
 )
 @handle_db_errors(_CODE_EVALS_CREATE_EVAL_RUN)
 async def create_eval_from_run(

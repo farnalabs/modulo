@@ -77,7 +77,14 @@ class FromTemplateResponse(BaseModel):
     edge_count: int
 
 
-@router.get("/templates")
+@router.get(
+    "/templates",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+    },
+)
 @handle_db_errors(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),

@@ -170,7 +170,16 @@ async def get_observability_settings(
     return _build_degraded_response(str(principal.organisation_id))
 
 
-@router.put("", dependencies=[require_feature("observability")])
+@router.put(
+    "",
+    dependencies=[require_feature("observability")],
+    responses={
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+        504: {"description": "Gateway Timeout"},
+    },
+)
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),

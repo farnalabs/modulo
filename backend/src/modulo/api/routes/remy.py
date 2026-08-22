@@ -1746,7 +1746,10 @@ async def stream_chat(
 # ── UI Command endpoints ─────────────────────────────────────────────────
 
 
-@router.post("/sessions/{session_id}/permission-response")
+@router.post(
+    "/sessions/{session_id}/permission-response",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.submit_permission_response")
 async def submit_permission_response(
     session_id: uuid.UUID,
@@ -1807,7 +1810,10 @@ async def submit_permission_response(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/ui-command-results")
+@router.post(
+    "/sessions/{session_id}/ui-command-results",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.submit_ui_command_results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
@@ -1860,7 +1866,10 @@ async def submit_ui_command_results(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/reset-permissions")
+@router.post(
+    "/sessions/{session_id}/reset-permissions",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.reset_session_permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
@@ -1898,7 +1907,16 @@ async def reset_session_permissions(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/resume")
+@router.post(
+    "/sessions/{session_id}/resume",
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.resume_session")
 async def resume_session(
     session_id: uuid.UUID,
@@ -1941,7 +1959,16 @@ async def resume_session(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/stop")
+@router.post(
+    "/sessions/{session_id}/stop",
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.stop_session")
 async def stop_session(
     session_id: uuid.UUID,
@@ -1994,7 +2021,14 @@ async def stop_session(
     return {"status": "stopped"}
 
 
-@router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}/audit-trail",
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+    },
+)
 @handle_db_errors("remy.get_audit_trail")
 async def get_audit_trail(
     session_id: uuid.UUID,
@@ -2058,7 +2092,10 @@ async def get_audit_trail(
         ) from None
 
 
-@router.post("/sessions/{session_id}/undo")
+@router.post(
+    "/sessions/{session_id}/undo",
+    responses={404: {"description": "Not Found"}},
+)
 @handle_db_errors("remy.undo_last_action")
 async def undo_last_action(
     session_id: uuid.UUID,

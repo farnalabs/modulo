@@ -1160,7 +1160,16 @@ class SchemaMigrationPlanRequest(BaseModel):
     to_definition: dict[str, Any]
 
 
-@router.post("/migrate")
+@router.post(
+    "/migrate",
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("schemas.migrate_data_endpoint")
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,

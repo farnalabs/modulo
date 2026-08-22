@@ -114,7 +114,16 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
     )
 
 
-@router.get("")
+@router.get(
+    "",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        502: {"description": "Bad Gateway"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_DETERMINATION_RUN_DETERMINATION)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
@@ -189,7 +198,16 @@ async def run_determination(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
-@router.post("/draft")
+@router.post(
+    "/draft",
+    responses={
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        502: {"description": "Bad Gateway"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),

@@ -6,7 +6,7 @@ from modulo.core.manifest import get_manifest
 router = APIRouter(prefix="/api/v1", tags=["manifest"])
 
 
-@router.get("/manifest")
+@router.get("/manifest", responses={500: {"description": "Internal Server Error"}})
 @handle_db_errors("manifest.manifest_endpoint")
 async def manifest_endpoint() -> dict[str, object]:
     try:
