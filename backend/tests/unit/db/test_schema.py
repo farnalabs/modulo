@@ -26,6 +26,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "hitl_claims",
         "journeys",
         "library_primitives",
+        "library_sync_state",
         "lifecycle_maps",
         "lifecycle_map_stages",
         "mcp_setup_tokens",
@@ -98,6 +99,7 @@ def test_all_resource_tables_are_organisation_scoped() -> None:
             "tier_catalog",
             "feature_flag_catalog",
             "run_evidence",
+            "library_sync_state",
         ):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
