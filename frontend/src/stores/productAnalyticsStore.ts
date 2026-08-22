@@ -46,18 +46,10 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
     return consent.value.prompted === null
   })
 
-  function applyConsent(data: {
-    level: string
-    prompted?: string | null
-    prompted_at?: string | null
-    level_changed_at?: string | null
-    instance_enabled: boolean
-    egress_allowed: boolean
-    prompt_eligible: boolean
-  }) {
+  function applyConsent(data: ConsentData) {
     consent.value = {
       level: data.level,
-      prompted: (data.prompted as ConsentData['prompted']) ?? null,
+      prompted: data.prompted,
       prompted_at: data.prompted_at ?? null,
       level_changed_at: data.level_changed_at ?? null,
       egress_allowed: data.egress_allowed,
