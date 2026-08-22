@@ -153,7 +153,7 @@ class TestListCommunityEntries:
             return None
 
         monkeypatch.setattr(community_module, "get_cached_manifest", _none)
-        assert await list_community_entries(_FakeSession(), ORG_ID) == []
+        assert not await list_community_entries(_FakeSession(), ORG_ID)
 
     async def test_skips_revoked_entries(
         self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch

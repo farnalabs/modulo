@@ -92,8 +92,10 @@ async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> 
     finally:
         if began:
             # Read-only query that opened the txn itself (began is True only for
-            # a txn this function started); rolling back closes our own txn.
-            await session.rollback()  # nosemgrep: session-rollback-abuse
+            # a txn this function started); committing closes our own txn without
+            # clobbering a concurrent caller's pending writes. session.rollback()
+            # here would violate the no-bare-rollback architecture rule.
+            await session.commit()
 
 
 def _find_entry(entries: list[dict[str, Any]], entry_id: str) -> dict[str, Any] | None:
