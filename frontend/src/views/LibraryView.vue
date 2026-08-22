@@ -246,7 +246,6 @@ import LibraryPrimitiveCard from '../components/library/LibraryPrimitiveCard.vue
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
-import type { components } from '../lib/api/client'
 import { useI18n } from 'vue-i18n'
 import { usePlanStore } from '../stores/planStore'
 import type { LibraryPrimitive } from '../components/library/LibraryPrimitiveCard.vue'
@@ -355,7 +354,18 @@ function switchSection(next: LibrarySection) {
   }
 }
 
-type CommunityLibraryEntry = components['schemas']['CommunityLibraryEntry']
+interface CommunityLibraryEntry {
+  id: string
+  type: string
+  slug: string
+  author?: string | null
+  version?: string | null
+  license?: string | null
+  status?: string | null
+  published_at?: string | null
+  content_sha256?: string | null
+  installed: boolean
+}
 
 const hostedCommunityItems = ref<CommunityLibraryEntry[]>([])
 const hostedLoading = ref(false)
@@ -373,7 +383,8 @@ async function loadHostedCommunity(): Promise<void> {
       hostedError.value = formatApiError(err)
       return
     }
-    hostedCommunityItems.value = data?.items ?? []
+    const payload = data as { items?: CommunityLibraryEntry[] } | undefined
+    hostedCommunityItems.value = payload?.items ?? []
   } catch (e) {
     hostedError.value = formatApiError(e)
   } finally {

@@ -68,10 +68,20 @@ import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { api } from '../lib/api/client'
-import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
-type CommunityLibraryEntryDetail = components['schemas']['CommunityLibraryEntryDetail']
+interface CommunityLibraryEntryDetail {
+  id: string
+  type: string
+  slug: string
+  author?: string | null
+  version?: string | null
+  license?: string | null
+  status?: string | null
+  published_at?: string | null
+  content_sha256?: string | null
+  content?: unknown | null
+}
 
 const route = useRoute()
 const { t } = useI18n()
@@ -126,7 +136,7 @@ async function loadEntry(): Promise<void> {
       error.value = formatApiError(err)
       return
     }
-    entry.value = data
+    entry.value = data ? (data as unknown as CommunityLibraryEntryDetail) : null
   } catch (e) {
     error.value = formatApiError(e)
   } finally {
