@@ -119,6 +119,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_worker_db_pool_size": 2,
         "saq_redis_pool_size": 50,
         "saq_run_claim_cap": 20,
+        "modulo_library_sync_interval_seconds": 300,
     }
     base.update(overrides)
     return MagicMock(**base)

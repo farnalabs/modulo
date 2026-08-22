@@ -95,23 +95,39 @@
         >
           {{ $t('views.LibraryView.community_tab') }}
         </button>
+        <button
+          v-if="hostedCommunityEnabled"
+          type="button"
+          role="tab"
+          :aria-selected="section === 'hosted'"
+          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+          :class="section === 'hosted' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+          data-testid="library-section-hosted"
+          @click="switchSection('hosted')"
+        >
+          {{ $t('views.LibraryView.hosted_community_tab') }}
+        </button>
       </div>
 
       <p v-if="section === 'community'" class="text-sm text-muted-foreground" data-testid="library-community-disclaimer">
         {{ $t('views.LibraryView.community_disclaimer') }}
       </p>
 
-      <div v-if="loading" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
+      <div v-if="loading || (section === 'hosted' && hostedLoading)" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
 
       <div
-        v-else-if="error"
+        v-else-if="error || (section === 'hosted' && hostedError)"
         class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
         role="alert"
         data-testid="library-error"
       >
-        {{ error }}
+        {{ section === 'hosted' ? hostedError : error }}
       </div>
 
+      <EmptyState
+        v-else-if="section === 'hosted' && hostedCommunityItems.length === 0"
+        :title="$t('views.LibraryView.hosted_community_empty')"
+      />
       <EmptyState
         v-else-if="section === 'community' && communityPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
@@ -171,6 +187,28 @@
         />
       </div>
 
+      <div v-if="section === 'hosted' && hostedCommunityItems.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <LibraryPrimitiveCard
+          v-for="entry in hostedCommunityItems"
+          :key="entry.id"
+          :prim="toLibraryPrimitive(entry)"
+          badge="community"
+          :installed="entry.installed"
+          :installing="!!installingIds[entry.id]"
+          @install="installHostedEntry(entry)"
+          @view-details="viewHostedEntry(entry)"
+        />
+      </div>
+
+      <div
+        v-if="successMessage"
+        class="rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-emerald-600"
+        role="status"
+        data-testid="library-success-message"
+      >
+        {{ successMessage }}
+      </div>
+
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
         <button
           :disabled="page <= 1"
@@ -209,6 +247,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { useI18n } from 'vue-i18n'
+import { usePlanStore } from '../stores/planStore'
 import type { LibraryPrimitive } from '../components/library/LibraryPrimitiveCard.vue'
 
 interface ListResponse {
@@ -264,8 +303,11 @@ function removeType(value: string) {
   onFilterChange()
 }
 
-type LibrarySection = 'native' | 'community'
+type LibrarySection = 'native' | 'community' | 'hosted'
 const section = ref<LibrarySection>('native')
+
+const planStore = usePlanStore()
+const hostedCommunityEnabled = computed(() => planStore.featureEnabled('community_library'))
 
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
@@ -305,7 +347,93 @@ function switchSection(next: LibrarySection) {
   if (section.value === next) return
   section.value = next
   page.value = 1
-  loadPrimitives()
+  if (next === 'hosted') {
+    loadHostedCommunity()
+  } else {
+    loadPrimitives()
+  }
+}
+
+interface CommunityLibraryEntry {
+  id: string
+  type: string
+  slug: string
+  author?: string | null
+  version?: string | null
+  license?: string | null
+  status?: string | null
+  published_at?: string | null
+  content_sha256?: string | null
+  installed: boolean
+}
+
+const hostedCommunityItems = ref<CommunityLibraryEntry[]>([])
+const hostedLoading = ref(false)
+const hostedError = ref<string | null>(null)
+const installingIds = ref<Record<string, boolean>>({})
+const successMessage = ref<string | null>(null)
+let clearSuccessTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+async function loadHostedCommunity(): Promise<void> {
+  hostedLoading.value = true
+  hostedError.value = null
+  try {
+    const { data, error: err } = await api.GET('/api/v1/libraries/community')
+    if (err) {
+      hostedError.value = formatApiError(err)
+      return
+    }
+    const payload = data as { items?: CommunityLibraryEntry[] } | undefined
+    hostedCommunityItems.value = payload?.items ?? []
+  } catch (e) {
+    hostedError.value = formatApiError(e)
+  } finally {
+    hostedLoading.value = false
+  }
+}
+
+function toLibraryPrimitive(entry: CommunityLibraryEntry): LibraryPrimitive {
+  return {
+    id: entry.id,
+    source: 'community',
+    primitive_type: entry.type,
+    name: entry.slug,
+    description: null,
+    tags: [],
+    forked_from: null,
+    auto_update: false,
+  }
+}
+
+async function installHostedEntry(entry: CommunityLibraryEntry): Promise<void> {
+  if (installingIds.value[entry.id]) return
+  installingIds.value[entry.id] = true
+  hostedError.value = null
+  successMessage.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/libraries/community/{entry_id}/install', {
+      params: { path: { entry_id: entry.id } },
+      body: {},
+    })
+    if (err) {
+      hostedError.value = formatApiError(err)
+      return
+    }
+    if (data) {
+      entry.installed = true
+      successMessage.value = t('views.LibraryView.install_success', { name: entry.slug })
+      if (clearSuccessTimeoutId) clearTimeout(clearSuccessTimeoutId)
+      clearSuccessTimeoutId = setTimeout(() => { successMessage.value = null }, 4000)
+    }
+  } catch (e) {
+    hostedError.value = formatApiError(e)
+  } finally {
+    installingIds.value[entry.id] = false
+  }
+}
+
+function viewHostedEntry(entry: CommunityLibraryEntry) {
+  router.push({ name: 'library-community-detail', params: { id: entry.id } })
 }
 
 function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
@@ -395,6 +523,7 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onClickOutside)
+  if (clearSuccessTimeoutId) clearTimeout(clearSuccessTimeoutId)
 })
 onMounted(() => {
   const typeParam = route.query.type
@@ -402,6 +531,10 @@ onMounted(() => {
     selectedTypes.value = [typeParam]
   }
   document.addEventListener('mousedown', onClickOutside)
-  loadPrimitives()
+  if (section.value === 'hosted') {
+    loadHostedCommunity()
+  } else {
+    loadPrimitives()
+  }
 })
 </script>

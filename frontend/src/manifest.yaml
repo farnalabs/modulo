@@ -96,6 +96,20 @@ routes:
         <<: *community
         deprecated: false
 
+    /library/community/:id:
+        name: library-community-detail
+        breadcrumb: Community Entry
+        parent: /library
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        pattern: /library/community/:id
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
     /pipelines/copy:
         name: pipeline-copy
         breadcrumb: Copy Pipeline

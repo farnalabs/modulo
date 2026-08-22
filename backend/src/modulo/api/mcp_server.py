@@ -125,6 +125,11 @@ from modulo.core.library_service import (
     get_primitive_by_slug,
     list_primitives,
 )
+from modulo.core.library_service.community import (
+    get_community_entry,
+    install_community_entry,
+    list_community_entries,
+)
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
@@ -3050,7 +3055,32 @@ async def copy_library_primitive(
         try:
             result = await library_copy_to_adapt(s, org_id, pid, via_mcp=False)
         except LookupError:
-            return {"error": "not_found", "primitive_id": primitive_id}
+            # FAR-363: fall back to the hosted community catalog when the id is
+            # not a local / in-memory primitive.
+            try:
+                entry = await get_community_entry(s, primitive_id)
+            except Exception:
+                _log.exception("copy_library_primitive community lookup failed")
+                entry = None
+            if entry is None:
+                return {"error": "not_found", "primitive_id": primitive_id}
+            try:
+                installed = await install_community_entry(s, org_id, primitive_id)
+            except ValueError as exc:
+                message = str(exc)
+                if message == "already installed":
+                    return {
+                        "error": "already_installed",
+                        "primitive_id": primitive_id,
+                        "slug": entry.get("slug"),
+                    }
+                return {"error": "install_failed", "detail": message}
+            return {
+                "status": "installed",
+                "primitive_id": str(installed.id),
+                "name": installed.name,
+                "slug": installed.slug,
+            }
         except ProgrammingError:
             _log.exception("copy_library_primitive failed")
             return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -3097,8 +3127,7 @@ async def search_library(
                 include_community=True,
                 cursor=cursor,
             )
-        return {
-            "items": [
+            items = [
                 {
                     "id": str(p.id),
                     "name": p.name,
@@ -3109,7 +3138,28 @@ async def search_library(
                     "tags": list(p.tags) if p.tags else [],
                 }
                 for p in result.items
-            ],
+            ]
+            try:
+                community = await list_community_entries(s, org_id)
+            except Exception:
+                _log.exception("search_library community catalog failed")
+                community = []
+            for entry in community:
+                items.append(
+                    {
+                        "id": str(entry.get("id")),
+                        "name": entry.get("slug"),
+                        "description": None,
+                        "type": entry.get("type"),
+                        "version": entry.get("version"),
+                        "average_rating": None,
+                        "tags": [],
+                        "source": "community",
+                        "installed": entry.get("installed", False),
+                    }
+                )
+        return {
+            "items": items,
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
@@ -5879,7 +5929,12 @@ async def resource_library() -> str:
                 page_size=50,
                 include_community=True,
             )
-        if not result.items:
+            try:
+                community = await list_community_entries(s, org_id)
+            except Exception:
+                _log.exception("resource_library community catalog failed")
+                community = []
+        if not result.items and not community:
             return "Library is empty."
         lines: list[str] = []
         for p in result.items:
@@ -5890,6 +5945,13 @@ async def resource_library() -> str:
                 f"- {p.name} (id={p.id}, type={p.primitive_type}, "
                 f"v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}"
             )
+        if community:
+            lines.append("")
+            lines.append(f"Hosted community ({len(community)}):")
+            for entry in community:
+                slug = entry.get("slug")
+                version = entry.get("version")
+                lines.append(f"- {slug} (version={version})")
         header = f"Library ({result.total} primitives):"
         return header + "\n" + "\n".join(lines)
     except Exception:
