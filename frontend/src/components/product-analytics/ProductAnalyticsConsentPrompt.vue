@@ -1,6 +1,7 @@
 <template>
-    <output
+    <div
       v-if="shouldShow"
+      role="region"
       class="block rounded-lg border bg-card p-4"
       :aria-label="$t('views.ProductAnalytics.consent_prompt_title')"
       data-testid="product-analytics-consent-prompt"
@@ -31,8 +32,8 @@
           {{ t(action.labelKey) }}
         </Button>
       </div>
+      </div>
     </div>
-  </output>
 </template>
 
 <script setup lang="ts">

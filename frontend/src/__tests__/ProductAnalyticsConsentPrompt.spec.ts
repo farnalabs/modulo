@@ -42,17 +42,13 @@ function mockPut(data: unknown = { level: 'all', level_changed_at: null }) {
 
 type ConsentOverrides = {
   instanceEnabled?: boolean
-  prompted?: 'yes' | 'no' | 'dismissed' | null
-  prompted_at?: string | null
-  level?: 'off' | 'all'
+  promptEligible?: boolean
 }
 
 function setupConsentStore(overrides: ConsentOverrides = {}): ReturnType<typeof useProductAnalyticsStore> {
   const store = useProductAnalyticsStore()
   store.instanceEnabled = overrides.instanceEnabled ?? true
-  store.consent.prompted = overrides.prompted ?? null
-  store.consent.prompted_at = overrides.prompted_at ?? null
-  store.consent.level = overrides.level ?? 'off'
+  store.consent.prompt_eligible = overrides.promptEligible ?? true
   return store
 }
 
@@ -62,24 +58,16 @@ describe('ProductAnalyticsConsentPrompt', () => {
     vi.restoreAllMocks()
   })
 
+  // Eligibility is backend-driven via consent.prompt_eligible (the backend owns
+  // the dismiss-cooldown policy), so the render decision is a pure reflection of
+  // that field gated by instance enablement.
   const visibilityCases: Array<[string, ConsentOverrides, boolean]> = [
-    ['renders when prompt is eligible', {}, true],
-    ['does not render when already consented', { prompted: 'yes', level: 'all' }, false],
+    ['renders when backend reports prompt eligible', {}, true],
+    ['does not render when backend reports not eligible', { promptEligible: false }, false],
     ['does not render when instance is disabled', { instanceEnabled: false }, false],
-    ['does not render when declined permanently', { prompted: 'no' }, false],
-    [
-      'does not render when dismissed within cooldown',
-      { prompted: 'dismissed', prompted_at: new Date().toISOString() },
-      false,
-    ],
-    [
-      'renders when dismiss cooldown has expired',
-      {
-        prompted: 'dismissed',
-        prompted_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // nosemgrep: new-date-without-guard - deterministic past timestamp
-      },
-      true,
-    ],
+    ['does not render when already consented', { promptEligible: false }, false],
+    ['does not render when declined permanently', { promptEligible: false }, false],
+    ['renders when dismiss cooldown has expired (backend-driven)', { promptEligible: true }, true],
   ]
 
   it.each(visibilityCases)(

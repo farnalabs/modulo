@@ -15,6 +15,7 @@
       v-if="onDismiss && dismissLabel"
       type="button"
       class="ml-2 underline"
+      data-testid="error-alert-dismiss"
       @click="onDismiss"
     >
       {{ dismissLabel }}

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
-import { toDate } from '../lib/formatDate'
 import { formatApiError } from '../lib/api/formatError'
 
 interface ConsentData {
@@ -23,8 +23,6 @@ interface TransparencyData {
   warning: string | null
 }
 
-const PROMPT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
-
 function emptyConsent(): ConsentData {
   return {
     level: 'off',
@@ -38,6 +36,7 @@ function emptyConsent(): ConsentData {
 }
 
 export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
+  const { t } = useI18n()
   const consent = ref<ConsentData>(emptyConsent())
   const instanceEnabled = ref(false)
   const loading = ref(false)
@@ -47,16 +46,13 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
 
   const isOptedIn = computed(() => consent.value.level === 'all')
 
+  // Eligibility is owned by the backend (consent.prompt_eligible) which applies
+  // the dismiss-cooldown policy server-side; the client trusts that field rather
+  // than re-deriving it (which previously diverged from the backend in a
+  // dismissed + null prompted_at corner case).
   const isPromptEligible = computed(() => {
     if (!instanceEnabled.value) return false
-    if (consent.value.prompted === 'yes' || consent.value.prompted === 'no') return false
-    if (consent.value.prompted === 'dismissed' && consent.value.prompted_at) {
-      const dismissedAt = toDate(consent.value.prompted_at)
-      if (!dismissedAt) return false
-      const cooldownExpiry = new Date(dismissedAt.getTime() + PROMPT_COOLDOWN_MS) // nosemgrep: new-date-without-guard - arithmetic on a validated Date
-      return new Date() >= cooldownExpiry
-    }
-    return consent.value.prompted === null
+    return consent.value.prompt_eligible
   })
 
   function applyConsent(data: ConsentData) {
@@ -84,7 +80,7 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
         return false
       }
       if (!result.data) {
-        error.value = formatApiError('Empty response from product-analytics endpoint')
+        error.value = formatApiError(t('views.ProductAnalytics.empty_response'))
         return false
       }
       applyConsent(result.data as Parameters<typeof applyConsent>[0])
