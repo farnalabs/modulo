@@ -76,6 +76,7 @@ __all__ = [
     "LicenseKeyTier",  # test-support PlanContext double — used by BDD steps to fake licensed plans
     "circuit_state",  # test-consumed circuit-breaker observability API (health_check deliberately bypasses the breaker)
     "get_api_key_role_cap_count",  # test-support diagnostic getter for API-key role-cap security counter
+    "_build_messages_from_agent_and_state",  # runs.py wrapper kept for test_prompt_reveal (reveal_node_prompt uses _build_messages)
     # --- Service methods exercised by tests / framework wiring (no direct prod call site vulture can see) ---
     "get_override",
     "expire_stale",

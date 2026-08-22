@@ -689,22 +689,35 @@ class _RunDisplayContext:
     capacity: dict[str, Any] | None = None
 
 
+def _resolve_token_consumption(run: Any) -> dict[str, Any] | None:
+    """Summarise a run's total token consumption (None when untracked)."""
+    if run.total_tokens is None:
+        return None
+    return {"total_tokens": run.total_tokens}
+
+
+def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | None, str | None]:
+    """Return ``(trace_id, trace_url)`` — the OTLP deep-link pair for a run.
+
+    ``trace_url`` is only populated when the org configures an ``otlp_endpoint``;
+    both are None when the run has no langgraph_thread_id.
+    """
+    if not run.langgraph_thread_id:
+        return None, None
+    trace_id = trace_id_for_thread(run.langgraph_thread_id)
+    if otlp_endpoint:
+        return trace_id, f"{otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
+    return trace_id, None
+
+
 def _build_run_response(
     run: Any,
     ctx: _RunDisplayContext | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
     ctx = ctx or _RunDisplayContext()
-    token_consumption: dict[str, Any] | None = None
-    if run.total_tokens is not None:
-        token_consumption = {"total_tokens": run.total_tokens}
-
-    trace_id: str | None = None
-    trace_url: str | None = None
-    if run.langgraph_thread_id:
-        trace_id = trace_id_for_thread(run.langgraph_thread_id)
-        if ctx.otlp_endpoint:
-            trace_url = f"{ctx.otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
+    token_consumption = _resolve_token_consumption(run)
+    trace_id, trace_url = _resolve_trace_display(run, ctx.otlp_endpoint)
 
     pipeline_name: str | None = None
     if run.pipeline is not None:
@@ -758,6 +771,49 @@ def _build_run_response(
     )
 
 
+def _find_entry_candidates(graph_json: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the graph's entry nodes (those with no incoming edge).
+
+    Raises 422 when the graph is empty or has no entry node (a cycle
+    references every node as a target).
+    """
+    nodes = graph_json.get("nodes", [])
+    if not nodes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pipeline graph has no nodes",
+        )
+
+    target_ids: set[str] = set()
+    for edge in graph_json.get("edges", []):
+        target_id = edge.get("target_node_id")
+        if target_id is None:
+            target_id = edge.get("target")
+        if target_id is not None:
+            target_ids.add(str(target_id))
+    entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
+    if not entry_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pipeline graph has no entry node (cycle detected)",
+        )
+    return entry_candidates
+
+
+async def _require_valid_entry_agent(session: AsyncSession, entry_node: dict[str, Any]) -> None:
+    """Raise 422 when the entry node's agent id is invalid or the agent is missing."""
+    agent_id_str = entry_node.get("agent_id")
+    if agent_id_str is None:
+        return
+    agent_result = await session.execute(select(Agent).where(Agent.id == uuid.UUID(str(agent_id_str))))
+    agent = agent_result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Entry agent {agent_id_str} not found",
+        )
+
+
 async def _validate_run_input_basics(
     session: AsyncSession,
     graph_json: dict[str, Any],
@@ -770,40 +826,11 @@ async def _validate_run_input_basics(
     Full schema-definition validation is delegated to graph_validator at
     run time after snapshot creation.
     """
-    nodes = graph_json.get("nodes", [])
-    edges = graph_json.get("edges", [])
-    if not nodes:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Pipeline graph has no nodes",
-        )
-
-    target_ids: set[str] = set()
-    for edge in edges:
-        target_id = edge.get("target_node_id")
-        if target_id is None:
-            target_id = edge.get("target")
-        if target_id is not None:
-            target_ids.add(str(target_id))
-    entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
-    if not entry_candidates:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Pipeline graph has no entry node (cycle detected)",
-        )
-
+    entry_candidates = _find_entry_candidates(graph_json)
     entry_node = entry_candidates[0]
-    agent_id_str = entry_node.get("agent_id")
-    if agent_id_str is None:
+    if entry_node.get("agent_id") is None:
         return
-
-    agent_result = await session.execute(select(Agent).where(Agent.id == uuid.UUID(str(agent_id_str))))
-    agent = agent_result.scalar_one_or_none()
-    if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Entry agent {agent_id_str} not found",
-        )
+    await _require_valid_entry_agent(session, entry_node)
 
     if not isinstance(input_payload, dict):
         raise HTTPException(
@@ -1200,6 +1227,25 @@ class RunIOResponse(BaseModel):
         return _build_fixture_map(self.input_payload, self.outputs_json)
 
 
+def _is_per_node_output_shape(resolved_out: Any) -> bool:
+    """True when outputs are structured per-node (each value has ``input``/``output``)."""
+    return isinstance(resolved_out, dict) and any(
+        isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values()
+    )
+
+
+def _build_per_node_fixture(resolved_out: dict[str, Any], inp: dict[str, Any]) -> dict[str, str]:
+    """Build a fixture_map entry per node from per-node ``{input, output}`` records."""
+    fixture: dict[str, str] = {}
+    for node_io in resolved_out.values():
+        if isinstance(node_io, dict):
+            node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
+            node_output = node_io.get("output", "")
+            key = " ".join(str(node_input).split())
+            fixture[key] = str(node_output)
+    return fixture
+
+
 def _build_fixture_map(
     input_payload: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
@@ -1223,18 +1269,10 @@ def _build_fixture_map(
     if isinstance(out, dict):
         resolved_out = {node_id: node_return(out, None, node_id) for node_id in out}
 
-    if isinstance(resolved_out, dict) and any(
-        isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values()
-    ):
-        for node_io in resolved_out.values():
-            if isinstance(node_io, dict):
-                node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
-                node_output = node_io.get("output", "")
-                key = " ".join(str(node_input).split())
-                fixture[key] = str(node_output)
-    else:
-        key = " ".join(str(inp).split())
-        fixture[key] = str(resolved_out)
+    if _is_per_node_output_shape(resolved_out):
+        return _build_per_node_fixture(resolved_out, inp)
+    key = " ".join(str(inp).split())
+    fixture[key] = str(resolved_out)
 
     return fixture
 
@@ -1290,6 +1328,35 @@ class FixtureExportResponse(BaseModel):
     input_payload: dict[str, Any] | None = None
     outputs_json: dict[str, Any] | None = None
     fixture_map: dict[str, str]
+
+
+def _build_run_io_response(run: Run, node_labels: dict[str, str]) -> RunIOResponse:
+    """Normalise, mask, and package a run's IO into a RunIOResponse.
+
+    One shape for the frontend: node_return resolves the pure return (new
+    rows) or the envelope verbatim (legacy rows); node_telemetry resolves
+    the stored telemetry (new rows) or the inner output envelope (legacy).
+    """
+    outputs_json = run.outputs_json
+    telemetry_json = run.node_telemetry_json
+    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
+    normalized_telemetry = _normalize_node_telemetry(telemetry_json, outputs_json)
+
+    masked_outputs = _mask_output_value(normalized_outputs)
+    masked_telemetry = _mask_output_value(normalized_telemetry)
+    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
+
+    resp = RunIOResponse(
+        run_id=run.id,
+        run_number=run.run_number,
+        status=run.status,
+        input_payload=masked_input,
+        outputs_json=masked_outputs,
+        node_telemetry=masked_telemetry,
+        node_labels=node_labels,
+    )
+    resp.fixture_map = resp.build_fixture_map()
+    return resp
 
 
 @router.get("/{run_id}/io")
@@ -1348,31 +1415,7 @@ async def get_run_io_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
     node_labels = _build_node_labels(snapshot.graph_json if snapshot else None)
-
-    outputs_json = run.outputs_json
-    telemetry_json = run.node_telemetry_json
-
-    # One shape for the frontend: node_return resolves the pure return (new
-    # rows) or the envelope verbatim (legacy rows); node_telemetry resolves
-    # the stored telemetry (new rows) or the inner output envelope (legacy).
-    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
-    normalized_telemetry = _normalize_node_telemetry(telemetry_json, outputs_json)
-
-    masked_outputs = _mask_output_value(normalized_outputs)
-    masked_telemetry = _mask_output_value(normalized_telemetry)
-    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
-
-    resp = RunIOResponse(
-        run_id=run.id,
-        run_number=run.run_number,
-        status=run.status,
-        input_payload=masked_input,
-        outputs_json=masked_outputs,
-        node_telemetry=masked_telemetry,
-        node_labels=node_labels,
-    )
-    resp.fixture_map = resp.build_fixture_map()
-    return resp
+    return _build_run_io_response(run, node_labels)
 
 
 @router.get("/{run_id}/export-fixture")
@@ -2136,6 +2179,23 @@ class PromptRevealResponse(BaseModel):
     prompt_always_visible: bool = False
 
 
+_SENSITIVE_MASK_PATTERNS: list[tuple[str, str]] = [
+    (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact Authorization headers (Bearer tokens, Basic auth, etc.)
+    # Captures the full "Authorization: <value>" or "authorization: <value>"
+    (r'(Authorization["\']?\s*[:=]\s*["\']?)\s*(?:Bearer\s+)?[^\s"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact standalone Bearer tokens (value may contain spaces)
+    (r'(Bearer\s+)[^\n"\'}]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact JWT-like tokens (three base64 segments separated by dots)
+    (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", _MASKED_PLACEHOLDER),
+]
+
+
 def _mask_prompt_text(text: str) -> str:
     """Mask sensitive credential-like values in prompt text.
 
@@ -2146,22 +2206,7 @@ def _mask_prompt_text(text: str) -> str:
     import re
 
     masked = text
-    patterns = [
-        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        # Redact Authorization headers (Bearer tokens, Basic auth, etc.)
-        # Captures the full "Authorization: <value>" or "authorization: <value>"
-        (r'(Authorization["\']?\s*[:=]\s*["\']?)\s*(?:Bearer\s+)?[^\s"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
-        # Redact standalone Bearer tokens (value may contain spaces)
-        (r'(Bearer\s+)[^\n"\'}]+', r"\1" + _MASKED_PLACEHOLDER),
-        # Redact JWT-like tokens (three base64 segments separated by dots)
-        (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", _MASKED_PLACEHOLDER),
-    ]
-    for pattern, replacement in patterns:
+    for pattern, replacement in _SENSITIVE_MASK_PATTERNS:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)
     return masked
 
@@ -2268,13 +2313,21 @@ def _resolve_node_user_input(
     return user_input
 
 
-def _build_messages_from_agent_and_state(
-    agent: Agent | None,
-    input_payload: dict[str, Any] | None,
-    outputs_json: dict[str, Any] | None,
-    checkpoint_state: dict[str, Any] | None,
-    node_id: str,
-) -> list[dict[str, str]]:
+@dataclass(frozen=True)
+class _MessageContext:
+    """Run/node data needed to reconstruct the LLM messages for a node.
+
+    Groups the four per-run inputs so ``_build_messages`` stays a two-arg
+    helper instead of carrying five positional parameters.
+    """
+
+    input_payload: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    checkpoint_state: dict[str, Any] | None = None
+    node_id: str = ""
+
+
+def _build_messages(agent: Agent | None, ctx: _MessageContext) -> list[dict[str, str]]:
     """Reconstruct the LLM messages for a node from agent + run data.
 
     Builds system message from the agent's prompt_template, user message
@@ -2288,9 +2341,9 @@ def _build_messages_from_agent_and_state(
         if system_content:
             messages.append({"role": "system", "content": system_content})
 
-    messages.extend(_messages_from_prior_outputs(outputs_json, node_id))
+    messages.extend(_messages_from_prior_outputs(ctx.outputs_json, ctx.node_id))
 
-    user_input = _resolve_node_user_input(checkpoint_state, input_payload)
+    user_input = _resolve_node_user_input(ctx.checkpoint_state, ctx.input_payload)
     if user_input is not None:
         if isinstance(user_input, str):
             messages.append({"role": "user", "content": user_input})
@@ -2298,6 +2351,25 @@ def _build_messages_from_agent_and_state(
             messages.append({"role": "user", "content": json.dumps(user_input, default=str)})
 
     return messages
+
+
+def _build_messages_from_agent_and_state(
+    agent: Agent | None,
+    input_payload: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+    checkpoint_state: dict[str, Any] | None,
+    node_id: str,
+) -> list[dict[str, str]]:
+    """Test-facing wrapper around ``_build_messages``."""
+    return _build_messages(
+        agent,
+        _MessageContext(
+            input_payload=input_payload,
+            outputs_json=outputs_json,
+            checkpoint_state=checkpoint_state,
+            node_id=node_id,
+        ),
+    )
 
 
 def _lookup_agent_for_node(
@@ -2313,6 +2385,52 @@ def _lookup_agent_for_node(
                 return uuid.UUID(str(agent_id))
             return None
     return None
+
+
+async def _load_reveal_agent(
+    session: AsyncSession,
+    graph_json: dict[str, Any],
+    node_id: str,
+) -> tuple[Agent | None, bool]:
+    """Resolve the node's agent + prompt-visibility flag for prompt reveal.
+
+    Returns ``(None, False)`` for non-agent nodes whose id exists in the
+    graph. Raises 404 for a node absent from the graph or an agent that no
+    longer exists.
+    """
+    agent_id = _lookup_agent_for_node(graph_json, node_id)
+    if agent_id is None:
+        # Check if node exists at all (even non-agent nodes).
+        node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
+        if node_id not in node_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Node {node_id} not found in pipeline graph",
+            )
+        return None, False
+    agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
+    agent = agent_result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found for node {node_id}",
+        )
+    return agent, bool(agent.prompt_always_visible)
+
+
+def _render_prompt_response(
+    messages: list[dict[str, str]],
+    prompt_always_visible: bool,
+) -> PromptRevealResponse:
+    """Mask messages, render the full prompt text, and build the response."""
+    masked_messages = _mask_message_list(messages)
+    full_prompt = "\n\n".join(f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>" for m in masked_messages)
+    return PromptRevealResponse(
+        prompt=full_prompt,
+        messages=masked_messages,
+        token_count=_estimate_tokens(full_prompt),
+        prompt_always_visible=prompt_always_visible,
+    )
 
 
 @router.post("/{run_id}/nodes/{node_id}/prompt/reveal")
@@ -2347,61 +2465,28 @@ async def reveal_node_prompt(
                     detail=f"Snapshot {run.snapshot_id} not found for run",
                 )
 
-            graph_json: dict[str, Any] = snapshot.graph_json
-
-            # Verify node exists in the graph.
-            agent_id = _lookup_agent_for_node(graph_json, node_id)
-            if agent_id is None:
-                # Check if node exists at all (even non-agent nodes).
-                node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
-                if node_id not in node_ids:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Node {node_id} not found in pipeline graph",
-                    )
-
-            # Load agent for prompt template (if this is an agent node).
-            agent: Agent | None = None
-            prompt_always_visible = False
-            if agent_id is not None:
-                agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
-                agent = agent_result.scalar_one_or_none()
-                if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent {agent_id} not found for node {node_id}",
-                    )
-                prompt_always_visible = bool(agent.prompt_always_visible)
+            # Verify node exists and load its agent (if any) + visibility flag.
+            agent, prompt_always_visible = await _load_reveal_agent(session, snapshot.graph_json, node_id)
 
             # Try to load checkpoint state for richer prompt reconstruction.
-            thread_id = run.langgraph_thread_id
             checkpoint_state = await _get_checkpoint_state(
                 session,
-                thread_id,
+                run.langgraph_thread_id,
                 principal.organisation_id,
                 fernet_key=settings.fernet_key,
             )
 
-        messages = _build_messages_from_agent_and_state(
-            agent=agent,
-            input_payload=run.input_payload,
-            outputs_json=run.outputs_json,
-            checkpoint_state=checkpoint_state,
-            node_id=node_id,
-        )
-
-        # Apply masking to protect sensitive values.
-        masked_messages = _mask_message_list(messages)
-        full_prompt = "\n\n".join(
-            f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>" for m in masked_messages
-        )
-        token_count = _estimate_tokens(full_prompt)
-
-        return PromptRevealResponse(
-            prompt=full_prompt,
-            messages=masked_messages,
-            token_count=token_count,
-            prompt_always_visible=prompt_always_visible,
+        return _render_prompt_response(
+            _build_messages(
+                agent,
+                _MessageContext(
+                    input_payload=run.input_payload,
+                    outputs_json=run.outputs_json,
+                    checkpoint_state=checkpoint_state,
+                    node_id=node_id,
+                ),
+            ),
+            prompt_always_visible,
         )
     except asyncio.CancelledError:
         raise
@@ -2520,43 +2605,10 @@ async def diff_node_output(
             detail=f"Run {req.run_id_b} not found",
         )
 
-    outputs_a = run_a.outputs_json or {}
-    outputs_b = run_b.outputs_json or {}
+    masked_a, text_a = _node_output_for_diff(run_a, req.node_id_a, req.run_id_a)
+    masked_b, text_b = _node_output_for_diff(run_b, req.node_id_b, req.run_id_b)
 
-    node_output_a = node_return(outputs_a, None, req.node_id_a)
-    node_output_b = node_return(outputs_b, None, req.node_id_b)
-
-    if node_output_a is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node {req.node_id_a} not found in run {req.run_id_a} outputs",
-        )
-    if node_output_b is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node {req.node_id_b} not found in run {req.run_id_b} outputs",
-        )
-
-    masked_a = _mask_output_value(node_output_a)
-    masked_b = _mask_output_value(node_output_b)
-
-    text_a = json.dumps(masked_a, indent=2)
-    text_b = json.dumps(masked_b, indent=2)
-
-    lines_a = text_a.splitlines(keepends=True)
-    lines_b = text_b.splitlines(keepends=True)
-
-    diff_lines = [
-        NodeOutputDiffLine(
-            type=kind,
-            content=content,
-            line_a=line_a,
-            line_b=line_b,
-        )
-        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
-    ]
-
-    has_diff = any(d.type != "unchanged" for d in diff_lines)
+    diff_lines, has_diff = _build_diff_lines(text_a, text_b)
 
     return NodeOutputDiffResponse(
         run_id_a=req.run_id_a,
@@ -2566,3 +2618,34 @@ async def diff_node_output(
         diff_lines=diff_lines,
         has_diff=has_diff,
     )
+
+
+def _node_output_for_diff(run: Run, node_id: str, run_label: str | uuid.UUID) -> tuple[Any, str]:
+    """Return ``(masked_output, json_text)`` for one side of an output diff.
+
+    Raises 404 when the node is absent from the run's outputs.
+    """
+    node_output = node_return(run.outputs_json or {}, None, node_id)
+    if node_output is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in run {run_label} outputs",
+        )
+    masked = _mask_output_value(node_output)
+    return masked, json.dumps(masked, indent=2)
+
+
+def _build_diff_lines(text_a: str, text_b: str) -> tuple[list[NodeOutputDiffLine], bool]:
+    """Line-level diff of two JSON texts plus whether any line changed."""
+    lines_a = text_a.splitlines(keepends=True)
+    lines_b = text_b.splitlines(keepends=True)
+    diff_lines = [
+        NodeOutputDiffLine(
+            type=kind,
+            content=content,
+            line_a=line_a,
+            line_b=line_b,
+        )
+        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
+    ]
+    return diff_lines, any(d.type != "unchanged" for d in diff_lines)
