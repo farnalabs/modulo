@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from test_metrics_ingest import integration_client  # noqa: F401
 
 from modulo.auth.jwt import create_access_token
 from modulo.core.product_analytics.hmac_verify import sign_rotation_request

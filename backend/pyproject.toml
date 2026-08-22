@@ -205,6 +205,7 @@ ignore = [
 "tests/unit/test_mcp_security.py" = ["E402"]
 "tests/unit/test_multi_backend_sqlite.py" = ["E402"]
 "tests/unit/test_pipeline_node_conversion.py" = ["E402"]
+"tests/integration/test_product_analytics_identity.py" = ["F811"]
 
 [tool.mypy]
 strict = true
