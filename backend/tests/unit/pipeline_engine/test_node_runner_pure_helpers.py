@@ -68,7 +68,9 @@ class TestClaimTokenAttemptSuffix:
         assert len(suffix) == 16
         assert suffix != "token-abc"
         # Deterministic per token.
-        assert _claim_token_attempt_suffix("token-abc") == _claim_token_attempt_suffix("token-abc")
+        first = _claim_token_attempt_suffix("token-abc")
+        second = _claim_token_attempt_suffix("token-abc")
+        assert first == second
         assert _claim_token_attempt_suffix("token-abc") != _claim_token_attempt_suffix("token-abd")
 
     def test_dispatch_marker_json_embeds_attempt_key(self) -> None:

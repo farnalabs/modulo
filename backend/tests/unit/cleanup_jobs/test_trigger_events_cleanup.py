@@ -153,6 +153,7 @@ class TestCleanupSchedulerLoop:
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
                 new_callable=AsyncMock,
             ) as mock_sleep,
+            pytest.raises(asyncio.CancelledError),
         ):
             await cleanup_scheduler_loop(factory)
 
@@ -171,6 +172,7 @@ class TestCleanupSchedulerLoop:
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
                 new_callable=AsyncMock,
             ) as mock_sleep,
+            pytest.raises(asyncio.CancelledError),
         ):
             await cleanup_scheduler_loop(factory)
 
@@ -189,6 +191,7 @@ class TestCleanupSchedulerLoop:
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
                 new_callable=AsyncMock,
             ) as mock_sleep,
+            pytest.raises(asyncio.CancelledError),
         ):
             await cleanup_scheduler_loop(factory)
 
@@ -210,6 +213,7 @@ class TestCleanupSchedulerLoop:
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
                 new_callable=AsyncMock,
             ) as mock_sleep,
+            pytest.raises(asyncio.CancelledError),
         ):
             await cleanup_scheduler_loop(factory)
 

@@ -27,6 +27,9 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
+# Current chain head (tracks the latest migration; 0120 is still the
+# org-FK hardening migration the OrgFkHardening tests below inspect).
+_CHAIN_HEAD_MIGRATION = "0121_metrics_staging"
 
 
 def _source(name: str) -> str:
@@ -42,7 +45,7 @@ def _script() -> ScriptDirectory:
 class TestReconciliationChain:
     def test_single_linear_head(self) -> None:
         heads = _script().get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
 
 class TestMcpSetupTokensSurface:

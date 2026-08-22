@@ -32,6 +32,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -1061,6 +1062,90 @@ def _terminal_failure(
     return status, code, detail, node_token_usage or None
 
 
+@dataclass
+class _StreamState:
+    """Mutable per-run stream accumulators for ``_stream_graph``.
+
+    Groups the state the ``astream_events`` loop reads and mutates so the
+    per-event helper takes a single bundle instead of many loose parameters
+    (CodeScene: excess function arguments / complex method). A pure refactor —
+    no behaviour, ordering, or state-transition change.
+    """
+
+    node_token_usage: dict[str, dict[str, int]] = field(default_factory=dict)
+    segments_completed: int = 0
+    first_node_signalled: bool = False
+    # Set when a captured sandbox-agent node output carries stall_reason — a
+    # stalled node RETURNS a failed output dict instead of raising, so the run
+    # must be recorded as 'stalled', not 'complete' (FAR-98).
+    stall_reason: str | None = None
+    # Set when a captured sandbox-agent node output self-reported failure
+    # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure UX,
+    # phase 1): such a run must NEVER land 'complete'.
+    agent_failure_reason: str | None = None
+    # FAR-227: set when a captured sandbox-agent node output carries the
+    # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
+    # opencode session). Routes to retryable ``sandbox.no_output_json``.
+    session_lost_reason: str | None = None
+
+
+def _stream_terminal_reason(
+    state: _StreamState,
+    broker: RunEventBroker,
+    run_id: uuid.UUID,
+) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+    """Return the terminal 4-tuple for a captured stall / agent-failure /
+    session-lost node, or ``None`` when the run completed normally.
+
+    Extracted from ``_stream_graph``'s post-loop tail (pure refactor). A dead
+    sandbox session routes to the retryable ``sandbox.no_output_json``, a
+    self-reported agent failure elevates to ``agent.failed``, and a node that
+    stalled takes priority (existing precedence preserved). ``None`` means the
+    caller publishes ``run_completed`` and returns ``complete``.
+    """
+    usage = state.node_token_usage or None
+    if state.session_lost_reason and not state.stall_reason:
+        return _terminal_failure(
+            broker,
+            "failed",
+            "sandbox.no_output_json",
+            _sanitize_detail(state.session_lost_reason, limit=5000),
+            usage,
+        )
+    if state.agent_failure_reason and not state.stall_reason:
+        # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
+        # self-reported failure must NEVER land the run 'complete'.
+        # Fail-open — any elevation computation error logs a warning and falls
+        # back to today's path (§2.3.6). If the node also stalled, the stall
+        # terminalization below wins (existing behaviour).
+        try:
+            from modulo.settings import get_settings
+
+            if get_settings().modulo_agent_failure_elevation_enabled:
+                return _terminal_failure(
+                    broker,
+                    "failed",
+                    _ERROR_CODE_AGENT_FAILED,
+                    _sanitize_detail(state.agent_failure_reason, limit=5000),
+                    usage,
+                )
+        except Exception:
+            _log.warning(
+                "agent_failure_elevation.failed_open",
+                extra={"run_id": str(run_id), "detail": state.agent_failure_reason},
+                exc_info=True,
+            )
+    if state.stall_reason:
+        return _terminal_failure(
+            broker,
+            "stalled",
+            "executor_stalled",
+            _sanitize_detail(state.stall_reason, limit=5000),
+            usage,
+        )
+    return None
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -1203,39 +1288,12 @@ class PipelineExecutor:
                     # off — never resurrect it. Return it untouched so the
                     # caller does not resume execution.
                     return run
-                await update_run_status(
-                    session,
-                    run_id,
-                    "running",
-                    claimed_by=_WORKER_ID,
-                    clear_error_code=True,
+                return await self._claim_run_and_audit(
+                    session=session,
+                    run_id=run_id,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
                 )
-                running_run = await get_run(session, run_id)
-                if running_run is None:
-                    raise RunNotFoundError(run_id)
-                # PRD §8.12 ``run_started``: a run "starts" exactly once — the
-                # pending→running claim transition in the execute() path. The
-                # resume() path sets ``running`` directly (no _check_capacity
-                # call) so the event fires once per run, not once per resume.
-                # Failure-isolated: a broken audit append must never block run
-                # admission (the savepoint rollback undoes only the audit write).
-                try:
-                    await append_audit_event(
-                        session,
-                        org_id=org_id,
-                        event_type="run_started",
-                        resource_type="run",
-                        resource_id=run_id,
-                        payload_json={"pipeline_id": str(pipeline_id)},
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "pipeline.run_started_audit_failed",
-                        extra={"run_id": str(run_id), "org_id": str(org_id)},
-                    )
-                return running_run
 
             decline_code, decline_detail = self._capacity_decline(
                 max_concurrent=max_concurrent,
@@ -1266,6 +1324,51 @@ class PipelineExecutor:
             if pending_run is None:
                 raise RunNotFoundError(run_id)
             return pending_run
+
+    async def _claim_run_and_audit(
+        self,
+        *,
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+    ) -> Run:
+        """Claim a capacity-admitted run (pending→running) and fire ``run_started``.
+
+        Extracted from ``_check_capacity`` (pure refactor). PRD §8.12: a run
+        "starts" exactly once — the pending→running claim transition in the
+        execute() path. The resume() path sets ``running`` directly (no
+        _check_capacity call) so the event fires once per run, not once per
+        resume. Failure-isolated: a broken audit append must never block run
+        admission (the savepoint rollback undoes only the audit write).
+        """
+        await update_run_status(
+            session,
+            run_id,
+            "running",
+            claimed_by=_WORKER_ID,
+            clear_error_code=True,
+        )
+        running_run = await get_run(session, run_id)
+        if running_run is None:
+            raise RunNotFoundError(run_id)
+        try:
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="run_started",
+                resource_type="run",
+                resource_id=run_id,
+                payload_json={"pipeline_id": str(pipeline_id)},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.run_started_audit_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id)},
+            )
+        return running_run
 
     async def _org_sandbox_active_count(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> int:
         """Count the org's active sandbox runs (fail-open to 0 on read error)."""
@@ -3647,6 +3750,75 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "org_id": str(org_id), "gate_id": gate_id},
             )
 
+    async def _handle_chain_end_event(
+        self,
+        *,
+        state: _StreamState,
+        lg_event: Any,
+        node_ids: set[str],
+        guard: RunawayGuard | None,
+        completed_node_outputs: dict[str, Any] | None,
+        run_trace_id: str | None,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+        node_type_map: dict[str, str] | None,
+    ) -> None:
+        """Handle one ``on_chain_end`` event: capture + stamp the completed
+        node's output and latch its stall / agent-failure / session-lost markers.
+
+        Extracted from ``_stream_graph``'s event loop (pure refactor) so the
+        loop body stays small and single-responsibility. Also fires the
+        FAR-305 standalone post-node eval path against the node's contract
+        output. ``completed_node_outputs`` / ``state`` are mutated in place.
+        """
+        name = lg_event.get("name", "")
+        if name not in node_ids:
+            return
+        state.segments_completed += 1
+        if guard is not None:
+            guard.record_step()
+        output = _record_chain_end_output(
+            completed_node_outputs,
+            name,
+            lg_event.get("data", {}),
+            run_trace_id,
+            self._otel_bridge,
+            lg_event.get("run_id"),
+        )
+        if output is None:
+            return
+        # FAR-305: standalone post-node eval path — run any node-scoped evals
+        # for this node against its inner output dict. This is independent of
+        # HITL gates: a plain node (no gate) now gets its node-scoped evals
+        # evaluated too. If a ``block`` eval fails, ``EvalBlockedError``
+        # propagates and the existing ``except EvalBlockedError`` below
+        # transitions the run to ``eval_failed`` with ``error_code="eval_blocked"``.
+        # NOTE: if this node ALSO feeds a HITL gate with eval-before-interrupt,
+        # the evals run twice (once here post-node, once in the gate) —
+        # acceptable for now, the gate's eval is a separate node.
+        if eval_definitions_by_node:
+            await self._run_post_node_evals(
+                name,
+                output,
+                eval_definitions_by_node,
+                run_id,
+                org_id,
+                node_type_map=node_type_map,
+            )
+        stall_reason, agent_failure, session_lost = _record_node_markers(
+            output,
+            broker,
+            name,
+        )
+        if stall_reason:
+            state.stall_reason = stall_reason
+        if agent_failure:
+            state.agent_failure_reason = agent_failure
+        if session_lost:
+            state.session_lost_reason = session_lost
+
     async def _stream_graph(
         self,
         compiled: Any,
@@ -3678,24 +3850,8 @@ class PipelineExecutor:
 
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
-        node_token_usage: dict[str, dict[str, int]] = {}
-        segments_completed = 0
+        state = _StreamState()
         lg_config = {**config, "callbacks": [self._otel_bridge]}
-        _first_node_signalled = False
-        # Set when a captured sandbox-agent node output carries stall_reason —
-        # a stalled node RETURNS a failed output dict instead of raising, so
-        # the run must be recorded as 'stalled', not 'complete' (FAR-98).
-        stalled_node_reason: str | None = None
-        # Set when a captured sandbox-agent node output self-reported failure
-        # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure
-        # UX, phase 1): such a run must NEVER land 'complete'. Only published
-        # at terminalization; never twice.
-        agent_failure_reason: str | None = None
-        # FAR-227: set when a captured sandbox-agent node output carries the
-        # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
-        # opencode session). Routes to retryable ``sandbox.no_output_json`` at
-        # terminalization instead of the non-retryable ``agent.failed``.
-        sandbox_session_lost_reason: str | None = None
         # FAR-198: seed the OTel context with the run's deterministic trace id
         # so every span exported during graph execution carries the SAME
         # trace_id the API reports on RunResponse. The root span is stored on
@@ -3731,7 +3887,7 @@ class PipelineExecutor:
                         interrupts,
                         broker,
                         run_id,
-                        node_token_usage,
+                        state.node_token_usage,
                         completed_node_outputs or {},
                         pipeline_id=pipeline_id,
                         org_id=org_id,
@@ -3743,8 +3899,8 @@ class PipelineExecutor:
                     # Zombie-run protection: the first real node dispatch is the
                     # signal that pre-node setup finished — stands down the
                     # execute_run watchdog (pipeline_execution.zombie_watchdog).
-                    if not _first_node_signalled:
-                        _first_node_signalled = True
+                    if not state.first_node_signalled:
+                        state.first_node_signalled = True
                         if self.on_first_progress is not None:
                             self.on_first_progress()
                     broker.publish(event_type, payload)
@@ -3752,116 +3908,38 @@ class PipelineExecutor:
                 event_kind = lg_event.get("event", "")
                 # Capture node output for agent_signal trigger firing.
                 if event_kind == "on_chain_end":
-                    name = lg_event.get("name", "")
-                    if name in node_ids:
-                        segments_completed += 1
-                        if guard is not None:
-                            guard.record_step()
-                        output = _record_chain_end_output(
-                            completed_node_outputs,
-                            name,
-                            lg_event.get("data", {}),
-                            run_trace_id,
-                            self._otel_bridge,
-                            lg_event.get("run_id"),
-                        )
-                        if output is not None:
-                            # FAR-305: standalone post-node eval path — run any
-                            # node-scoped evals for this node against its inner
-                            # output dict. This is independent of HITL gates:
-                            # a plain node (no gate) now gets its node-scoped
-                            # evals evaluated too. If a ``block`` eval fails,
-                            # ``EvalBlockedError`` propagates and the existing
-                            # ``except EvalBlockedError`` below transitions the
-                            # run to ``eval_failed`` with ``error_code="eval_blocked"``.
-                            # NOTE: if this node ALSO feeds a HITL gate with
-                            # eval-before-interrupt, the evals run twice (once
-                            # here post-node, once in the gate) — acceptable for
-                            # now, the gate's eval is a separate node.
-                            if eval_definitions_by_node:
-                                await self._run_post_node_evals(
-                                    name,
-                                    output,
-                                    eval_definitions_by_node,
-                                    run_id,
-                                    org_id,
-                                    node_type_map=node_type_map,
-                                )
-                            stall_reason, agent_failure, session_lost = _record_node_markers(
-                                output,
-                                broker,
-                                name,
-                            )
-                            if stall_reason:
-                                stalled_node_reason = stall_reason
-                            if agent_failure:
-                                agent_failure_reason = agent_failure
-                            if session_lost:
-                                sandbox_session_lost_reason = session_lost
+                    await self._handle_chain_end_event(
+                        state=state,
+                        lg_event=lg_event,
+                        node_ids=node_ids,
+                        guard=guard,
+                        completed_node_outputs=completed_node_outputs,
+                        run_trace_id=run_trace_id,
+                        broker=broker,
+                        run_id=run_id,
+                        org_id=org_id,
+                        eval_definitions_by_node=eval_definitions_by_node,
+                        node_type_map=node_type_map,
+                    )
 
                 if event_kind == "on_chat_model_end":
-                    _accumulate_chat_model_tokens(lg_event, node_token_usage, guard, node_token_budgets)
+                    _accumulate_chat_model_tokens(lg_event, state.node_token_usage, guard, node_token_budgets)
 
                 elif event_kind == "on_llm_end":
-                    _accumulate_llm_tokens(lg_event, node_token_usage, guard, node_token_budgets)
+                    _accumulate_llm_tokens(lg_event, state.node_token_usage, guard, node_token_budgets)
 
-            if sandbox_session_lost_reason and not stalled_node_reason:
-                # FAR-227: a dead opencode session (the E2B wrapper's fallback
-                # echo) is a transient sandbox infra failure — classify as the
-                # retryable ``sandbox.no_output_json`` so the pipeline's
-                # retry_policy ("failure" event) re-dispatches it, instead of
-                # the non-retryable ``agent.failed`` verdict. The summary is
-                # preserved so the failure detail stays visible.
-                scrubbed = _sanitize_detail(sandbox_session_lost_reason, limit=5000)
-                return _terminal_failure(
-                    broker,
-                    "failed",
-                    "sandbox.no_output_json",
-                    scrubbed,
-                    node_token_usage or None,
-                )
-            if agent_failure_reason and not stalled_node_reason:
-                # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
-                # self-reported failure must NEVER land the run 'complete'.
-                # Fail-open — any elevation computation error logs a warning and
-                # falls back to today's path (§2.3.6). If the node also stalled,
-                # the stall terminalization below wins (existing behaviour).
-                try:
-                    from modulo.settings import get_settings
-
-                    if get_settings().modulo_agent_failure_elevation_enabled:
-                        scrubbed = _sanitize_detail(agent_failure_reason, limit=5000)
-                        return _terminal_failure(
-                            broker,
-                            "failed",
-                            _ERROR_CODE_AGENT_FAILED,
-                            scrubbed,
-                            node_token_usage or None,
-                        )
-                except Exception:
-                    _log.warning(
-                        "agent_failure_elevation.failed_open",
-                        extra={"run_id": str(run_id), "detail": agent_failure_reason},
-                        exc_info=True,
-                    )
-            if stalled_node_reason:
-                scrubbed = _sanitize_detail(stalled_node_reason, limit=5000)
-                return _terminal_failure(
-                    broker,
-                    "stalled",
-                    "executor_stalled",
-                    scrubbed,
-                    node_token_usage or None,
-                )
+            terminal = _stream_terminal_reason(state, broker, run_id)
+            if terminal is not None:
+                return terminal
             broker.publish("run_completed", {})
-            return "complete", None, None, node_token_usage or None
+            return "complete", None, None, state.node_token_usage or None
         except GraphInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
             return await self._handle_graph_interrupt(
                 interrupts,
                 broker,
                 run_id,
-                node_token_usage,
+                state.node_token_usage,
                 completed_node_outputs or {},
                 pipeline_id=pipeline_id,
                 org_id=org_id,
@@ -3872,7 +3950,7 @@ class PipelineExecutor:
                 "eval_failed",
                 "eval_blocked",
                 _sanitize_detail(exc, limit=5000),
-                node_token_usage or None,
+                state.node_token_usage or None,
             )
         except OutputRejectedError as exc:
             # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
@@ -3882,12 +3960,12 @@ class PipelineExecutor:
                 "failed",
                 "output_rejected",
                 _sanitize_detail(exc, limit=5000),
-                node_token_usage or None,
+                state.node_token_usage or None,
             )
         except RunCancelledError:
             broker.publish("run_cancelled", {})
-            self._log_accumulation_state(run_id, segments_completed, node_token_usage)
-            return "cancelled", None, None, node_token_usage or None
+            self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
+            return "cancelled", None, None, state.node_token_usage or None
         except RunawayRunError as exc:
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
@@ -3899,14 +3977,14 @@ class PipelineExecutor:
                     "limit": exc.limit,
                 },
             )
-            return _terminal_failure(broker, "failed", "runaway", error_detail, node_token_usage or None)
+            return _terminal_failure(broker, "failed", "runaway", error_detail, state.node_token_usage or None)
         except TimeoutError as exc:
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
                 _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
-            return _terminal_failure(broker, "failed", "node_timeout", error_detail, node_token_usage or None)
+            return _terminal_failure(broker, "failed", "node_timeout", error_detail, state.node_token_usage or None)
         except SupersededNodeError as exc:
             # A6: the sandbox dispatch marker was denied — a superseded claim
             # or a run no longer running. Terminal ``superseded`` failure; the
@@ -3922,7 +4000,7 @@ class PipelineExecutor:
                 "failed",
                 "executor_superseded",
                 scrubbed,
-                node_token_usage or None,
+                state.node_token_usage or None,
             )
         except OutputSchemaValidationError as exc:
             # Manual-node resume output (or agent output) failed validation
@@ -3938,7 +4016,7 @@ class PipelineExecutor:
                 "failed",
                 "schema_validation_failure",
                 scrubbed,
-                node_token_usage or None,
+                state.node_token_usage or None,
             )
         except asyncio.CancelledError:
             raise
@@ -3962,7 +4040,7 @@ class PipelineExecutor:
                 "failed",
                 type(exc).__name__,
                 _tb,
-                node_token_usage or None,
+                state.node_token_usage or None,
             )
         finally:
             # FAR-198: tear down the seeded OTel context + run root span on

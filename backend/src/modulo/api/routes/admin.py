@@ -5,6 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ from modulo.api.dependencies import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
@@ -83,6 +85,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
@@ -118,6 +121,159 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
+# ── Shared helpers ──────────────────────────────────────────────────────────
+
+
+def _require_admin(current_user: TenantPrincipal, action: str) -> None:
+    """Raise 403 unless the principal holds the admin role."""
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only admin users can {action}",
+        )
+
+
+def _raise_conflict() -> NoReturn:
+    """Standard IntegrityError mapping: 409 resource-already-exists."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=MSG_RESOURCE_ALREADY_EXISTS,
+    ) from None
+
+
+def _raise_feature_not_available() -> NoReturn:
+    """Standard ProgrammingError mapping: 501 feature-not-available."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_this_feature_not_available() -> NoReturn:
+    """ProgrammingError mapping using the ``This feature`` variant message."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_db_temporarily_unavailable() -> NoReturn:
+    """Standard SQLAlchemyError mapping: 503 database temporarily unavailable."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+    ) from None
+
+
+def _raise_db_error_occurred() -> NoReturn:
+    """SQLAlchemyError mapping: 503 with the generic database-error message."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+    ) from None
+
+
+def _raise_db_unavailable(detail: str) -> NoReturn:
+    """SQLAlchemyError mapping with a route-specific 503 message."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=detail,
+    ) from None
+
+
+def _raise_unexpected(detail: str) -> NoReturn:
+    """Generic catch-all mapping: 500 internal error."""
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=detail,
+    ) from None
+
+
+def _update_org_setting(org: Organisation, key: str, value: object) -> None:
+    """Merge ``value`` into ``org.settings_json`` under ``key`` without dropping other keys."""
+    settings = dict(org.settings_json) if org.settings_json else {}
+    settings[key] = value
+    org.settings_json = settings
+
+
+def _to_user_list_item(account: Account, org_role: str) -> "UserListItem":
+    return UserListItem(
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=org_role,
+        is_active=account.active,
+        auth_provider=account.auth_provider,
+        created_at=account.created_at.isoformat(),
+        last_login=account.last_login.isoformat() if account.last_login else None,
+    )
+
+
+def _to_publisher_response(publisher: Publisher) -> "PublisherResponse":
+    return PublisherResponse(
+        id=str(publisher.id),
+        name=publisher.name,
+        contact_email=publisher.contact_email,
+        public_key_hex=publisher.public_key_hex,
+        trust_tier=publisher.trust_tier,
+        verified_since=publisher.verified_since.isoformat() if publisher.verified_since else None,
+        website_url=publisher.website_url,
+        created_at=publisher.created_at.isoformat(),
+        updated_at=publisher.updated_at.isoformat(),
+    )
+
+
+class _TeamAuditSpec(NamedTuple):
+    event_type: str
+    payload: dict[str, object]
+    log_code: str
+    programming_warning: str
+    sqlalchemy_warning: str
+
+
+async def _append_team_audit_event(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    *,
+    team_id: uuid.UUID,
+    spec: _TeamAuditSpec,
+) -> None:
+    """Append a team audit event, degrading to a warning on DB failure.
+
+    An ``IntegrityError`` still surfaces as 409; ``ProgrammingError`` and
+    ``SQLAlchemyError`` are logged and swallowed so the preceding team mutation
+    is never rolled back by a failed audit write.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type=spec.event_type,
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team_id,
+                payload_json=spec.payload,
+            )
+    except IntegrityError:
+        logger.exception(spec.log_code)
+        _raise_conflict()
+    except ProgrammingError:
+        logger.exception(spec.log_code)
+        logger.warning(
+            spec.programming_warning,
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+    except SQLAlchemyError:
+        logger.exception(spec.log_code)
+        logger.warning(
+            spec.sqlalchemy_warning,
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+
+
 # ── Global Search ──────────────────────────────────────────────────────────
 
 
@@ -132,6 +288,239 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     results: list[SearchResultItem]
     total_by_type: dict[str, int]
+
+
+class _SearchParams(NamedTuple):
+    org_id: uuid.UUID
+    like: str
+    prefix: str
+    limit: int
+    offset: int
+
+
+async def _search_pipelines(
+    session: AsyncSession, params: _SearchParams
+) -> tuple[list[tuple[int, SearchResultItem]], int]:
+    rows = (
+        await session.execute(
+            text("""
+                SELECT id, name, description,
+                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
+                FROM pipelines
+                WHERE organisation_id = :org_id
+                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
+                ORDER BY relevance DESC, name ASC
+                LIMIT :lim OFFSET :off
+            """),
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "prefix": params.prefix,
+                "lim": params.limit,
+                "off": params.offset,
+            },
+        )
+    ).all()
+    count = (
+        await session.execute(
+            text("""
+                SELECT COUNT(*) FROM pipelines
+                WHERE organisation_id = :org_id
+                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
+            """),
+            {"org_id": params.org_id, "like": params.like},
+        )
+    ).scalar() or 0
+
+    items = [
+        (
+            row.relevance,
+            SearchResultItem(
+                type="pipeline",
+                id=str(row.id),
+                title=row.name,
+                subtitle=row.description,
+                url=f"/pipelines/{row.id}",
+            ),
+        )
+        for row in rows
+    ]
+    return items, count
+
+
+async def _search_runs(session: AsyncSession, params: _SearchParams) -> tuple[list[tuple[int, SearchResultItem]], int]:
+    rows = (
+        await session.execute(
+            text("""
+                SELECT r.id, r.run_number, CAST(r.id AS TEXT) AS display_id, p.name AS pipeline_name,
+                    CASE WHEN LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix) THEN 2
+                         WHEN LOWER(p.name) LIKE LOWER(:like) THEN 1 ELSE 0 END AS relevance
+                FROM runs r
+                JOIN pipelines p ON p.id = r.pipeline_id
+                WHERE r.organisation_id = :org_id
+                    AND (
+                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                        OR LOWER(p.name) LIKE LOWER(:like)
+                    )
+                ORDER BY relevance DESC, r.created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "prefix": params.prefix,
+                "lim": params.limit,
+                "off": params.offset,
+            },
+        )
+    ).all()
+    count = (
+        await session.execute(
+            text("""
+                SELECT COUNT(*) FROM runs r
+                JOIN pipelines p ON p.id = r.pipeline_id
+                WHERE r.organisation_id = :org_id
+                    AND (
+                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                        OR LOWER(p.name) LIKE LOWER(:like)
+                    )
+            """),
+            {"org_id": params.org_id, "like": params.like, "prefix": params.prefix},
+        )
+    ).scalar() or 0
+
+    items: list[tuple[int, SearchResultItem]] = []
+    for row in rows:
+        display_id = f"#{row.run_number}" if row.run_number is not None else f"#{str(row.id)[:8]}"
+        items.append(
+            (
+                row.relevance,
+                SearchResultItem(
+                    type="run",
+                    id=str(row.id),
+                    title=display_id,
+                    subtitle=row.pipeline_name,
+                    url=f"/runs/{row.id}",
+                ),
+            )
+        )
+    return items, count
+
+
+async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[list[tuple[int, SearchResultItem]], int]:
+    rows = (
+        await session.execute(
+            text("""
+                SELECT id, event_type, resource_type,
+                    CASE
+                        WHEN LOWER(event_type) LIKE LOWER(:prefix) THEN 2
+                        WHEN LOWER(event_type) LIKE LOWER(:like)
+                             OR LOWER(resource_type) LIKE LOWER(:like)
+                             OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like) THEN 1
+                        ELSE 0
+                    END AS relevance
+                FROM audit_events
+                WHERE organisation_id = :org_id
+                    AND (
+                        LOWER(event_type) LIKE LOWER(:like)
+                        OR LOWER(resource_type) LIKE LOWER(:like)
+                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                    )
+                ORDER BY relevance DESC, created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "prefix": params.prefix,
+                "lim": params.limit,
+                "off": params.offset,
+            },
+        )
+    ).all()
+    count = (
+        await session.execute(
+            text("""
+                SELECT COUNT(*) FROM audit_events
+                WHERE organisation_id = :org_id
+                    AND (
+                        LOWER(event_type) LIKE LOWER(:like)
+                        OR LOWER(resource_type) LIKE LOWER(:like)
+                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                    )
+            """),
+            {"org_id": params.org_id, "like": params.like},
+        )
+    ).scalar() or 0
+
+    items: list[tuple[int, SearchResultItem]] = []
+    for row in rows:
+        title = row.event_type
+        if row.resource_type:
+            title = f"{row.event_type} — {row.resource_type}"
+        items.append(
+            (
+                row.relevance,
+                SearchResultItem(
+                    type="audit",
+                    id=str(row.id),
+                    title=title,
+                    subtitle=None,
+                    url=f"/admin/audit?event_id={row.id}",
+                ),
+            )
+        )
+    return items, count
+
+
+async def _search_library(
+    session: AsyncSession, params: _SearchParams
+) -> tuple[list[tuple[int, SearchResultItem]], int]:
+    rows = (
+        await session.execute(
+            text("""
+                SELECT id, name, description,
+                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
+                FROM library_primitives
+                WHERE organisation_id = :org_id
+                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
+                ORDER BY relevance DESC, name ASC
+                LIMIT :lim OFFSET :off
+            """),
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "prefix": params.prefix,
+                "lim": params.limit,
+                "off": params.offset,
+            },
+        )
+    ).all()
+    count = (
+        await session.execute(
+            text("""
+                SELECT COUNT(*) FROM library_primitives
+                WHERE organisation_id = :org_id
+                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
+            """),
+            {"org_id": params.org_id, "like": params.like},
+        )
+    ).scalar() or 0
+
+    items = [
+        (
+            row.relevance,
+            SearchResultItem(
+                type="library",
+                id=str(row.id),
+                title=row.name,
+                subtitle=row.description,
+                url="/libraries",
+            ),
+        )
+        for row in rows
+    ]
+    return items, count
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -154,230 +543,35 @@ async def global_search(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
-            org_id = current_user.organisation_id
-            like = f"%{q}%"
-            prefix = f"{q}%"
+            params = _SearchParams(
+                org_id=current_user.organisation_id,
+                like=f"%{q}%",
+                prefix=f"{q}%",
+                limit=limit,
+                offset=offset,
+            )
 
             search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
 
             all_items: list[tuple[int, SearchResultItem]] = []
             total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
 
-            for st in search_types:
-                if st == "pipeline":
-                    rows = (
-                        await session.execute(
-                            text("""
-                                SELECT id, name, description,
-                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
-                                FROM pipelines
-                                WHERE organisation_id = :org_id
-                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
-                                ORDER BY relevance DESC, name ASC
-                                LIMIT :lim OFFSET :off
-                            """),
-                            {
-                                "org_id": org_id,
-                                "like": like,
-                                "prefix": prefix,
-                                "lim": limit,
-                                "off": offset,
-                            },
-                        )
-                    ).all()
-                    count = (
-                        await session.execute(
-                            text("""
-                                SELECT COUNT(*) FROM pipelines
-                                WHERE organisation_id = :org_id
-                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
-                            """),
-                            {"org_id": org_id, "like": like},
-                        )
-                    ).scalar() or 0
-
-                    all_items.extend(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="pipeline",
-                                id=str(row.id),
-                                title=row.name,
-                                subtitle=row.description,
-                                url=f"/pipelines/{row.id}",
-                            ),
-                        )
-                        for row in rows
-                    )
-                    total_by_type["pipeline"] = count
-
-                elif st == "run":
-                    rows = (
-                        await session.execute(
-                            text("""
-                                SELECT r.id, r.run_number, CAST(r.id AS TEXT) AS display_id, p.name AS pipeline_name,
-                                    CASE WHEN LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix) THEN 2
-                                         WHEN LOWER(p.name) LIKE LOWER(:like) THEN 1 ELSE 0 END AS relevance
-                                FROM runs r
-                                JOIN pipelines p ON p.id = r.pipeline_id
-                                WHERE r.organisation_id = :org_id
-                                    AND (
-                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
-                                        OR LOWER(p.name) LIKE LOWER(:like)
-                                    )
-                                ORDER BY relevance DESC, r.created_at DESC
-                                LIMIT :lim OFFSET :off
-                            """),
-                            {
-                                "org_id": org_id,
-                                "like": like,
-                                "prefix": prefix,
-                                "lim": limit,
-                                "off": offset,
-                            },
-                        )
-                    ).all()
-                    count = (
-                        await session.execute(
-                            text("""
-                                SELECT COUNT(*) FROM runs r
-                                JOIN pipelines p ON p.id = r.pipeline_id
-                                WHERE r.organisation_id = :org_id
-                                    AND (
-                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
-                                        OR LOWER(p.name) LIKE LOWER(:like)
-                                    )
-                            """),
-                            {"org_id": org_id, "like": like, "prefix": prefix},
-                        )
-                    ).scalar() or 0
-
-                    for row in rows:
-                        display_id = f"#{row.run_number}" if row.run_number is not None else f"#{str(row.id)[:8]}"
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="run",
-                                    id=str(row.id),
-                                    title=display_id,
-                                    subtitle=row.pipeline_name,
-                                    url=f"/runs/{row.id}",
-                                ),
-                            )
-                        )
-                    total_by_type["run"] = count
-
-                elif st == "audit":
-                    rows = (
-                        await session.execute(
-                            text("""
-                                SELECT id, event_type, resource_type,
-                                    CASE
-                                        WHEN LOWER(event_type) LIKE LOWER(:prefix) THEN 2
-                                        WHEN LOWER(event_type) LIKE LOWER(:like)
-                                             OR LOWER(resource_type) LIKE LOWER(:like)
-                                             OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like) THEN 1
-                                        ELSE 0
-                                    END AS relevance
-                                FROM audit_events
-                                WHERE organisation_id = :org_id
-                                    AND (
-                                        LOWER(event_type) LIKE LOWER(:like)
-                                        OR LOWER(resource_type) LIKE LOWER(:like)
-                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
-                                    )
-                                ORDER BY relevance DESC, created_at DESC
-                                LIMIT :lim OFFSET :off
-                            """),
-                            {
-                                "org_id": org_id,
-                                "like": like,
-                                "prefix": prefix,
-                                "lim": limit,
-                                "off": offset,
-                            },
-                        )
-                    ).all()
-                    count = (
-                        await session.execute(
-                            text("""
-                                SELECT COUNT(*) FROM audit_events
-                                WHERE organisation_id = :org_id
-                                    AND (
-                                        LOWER(event_type) LIKE LOWER(:like)
-                                        OR LOWER(resource_type) LIKE LOWER(:like)
-                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
-                                    )
-                            """),
-                            {"org_id": org_id, "like": like},
-                        )
-                    ).scalar() or 0
-
-                    for row in rows:
-                        title = row.event_type
-                        if row.resource_type:
-                            title = f"{row.event_type} — {row.resource_type}"
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="audit",
-                                    id=str(row.id),
-                                    title=title,
-                                    subtitle=None,
-                                    url=f"/admin/audit?event_id={row.id}",
-                                ),
-                            )
-                        )
-                    total_by_type["audit"] = count
-
-                elif st == "library":
-                    rows = (
-                        await session.execute(
-                            text("""
-                                SELECT id, name, description,
-                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
-                                FROM library_primitives
-                                WHERE organisation_id = :org_id
-                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
-                                ORDER BY relevance DESC, name ASC
-                                LIMIT :lim OFFSET :off
-                            """),
-                            {
-                                "org_id": org_id,
-                                "like": like,
-                                "prefix": prefix,
-                                "lim": limit,
-                                "off": offset,
-                            },
-                        )
-                    ).all()
-                    count = (
-                        await session.execute(
-                            text("""
-                                SELECT COUNT(*) FROM library_primitives
-                                WHERE organisation_id = :org_id
-                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
-                            """),
-                            {"org_id": org_id, "like": like},
-                        )
-                    ).scalar() or 0
-
-                    all_items.extend(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="library",
-                                id=str(row.id),
-                                title=row.name,
-                                subtitle=row.description,
-                                url="/libraries",
-                            ),
-                        )
-                        for row in rows
-                    )
-                    total_by_type["library"] = count
+            if "pipeline" in search_types:
+                items, count = await _search_pipelines(session, params)
+                all_items.extend(items)
+                total_by_type["pipeline"] = count
+            if "run" in search_types:
+                items, count = await _search_runs(session, params)
+                all_items.extend(items)
+                total_by_type["run"] = count
+            if "audit" in search_types:
+                items, count = await _search_audit(session, params)
+                all_items.extend(items)
+                total_by_type["audit"] = count
+            if "library" in search_types:
+                items, count = await _search_library(session, params)
+                all_items.extend(items)
+                total_by_type["library"] = count
 
             all_items.sort(key=lambda x: (-x[0], x[1].title))
             paginated = [item for _, item in all_items[offset : offset + limit]]
@@ -414,11 +608,7 @@ async def admin_create_user(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateUserResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create users",
-        )
+    _require_admin(current_user, "create users")
 
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
@@ -503,10 +693,7 @@ async def admin_create_user(
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_create_user: DB error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
-        ) from None
+        _raise_db_unavailable("Database error occurred. Please try again later.")
 
 
 class AdminCreateTeamRequest(BaseModel):
@@ -539,11 +726,7 @@ async def admin_create_team(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminCreateTeamResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create teams",
-        )
+    _require_admin(current_user, "create teams")
 
     try:
         async with session.begin():
@@ -572,56 +755,26 @@ async def admin_create_team(
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception("admin_create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except Exception:
         logger.exception("admin_create_team unexpected error", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while creating the team.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while creating the team.")
 
-    from modulo.core.audit_logger import append_audit_event
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="team_created",
-                actor_user_id=current_user.account_id,
-                resource_type="team",
-                resource_id=team.id,
-                payload_json={"team_id": str(team.id), "name": team.name},
-            )
-    except IntegrityError:
-        logger.exception(_CODE_ADMIN_ADMIN_CREATE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ADMIN_ADMIN_CREATE_TEAM)
-        logger.warning(
-            "admin_create_team audit event ProgrammingError — team was created",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
-        )
-    except SQLAlchemyError:
-        logger.exception(_CODE_ADMIN_ADMIN_CREATE_TEAM)
-        logger.warning(
-            "admin_create_team audit event SQLAlchemyError — team was created",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
-        )
+    await _append_team_audit_event(
+        session,
+        current_user,
+        team_id=team.id,
+        spec=_TeamAuditSpec(
+            event_type="team_created",
+            payload={"team_id": str(team.id), "name": team.name},
+            log_code=_CODE_ADMIN_ADMIN_CREATE_TEAM,
+            programming_warning="admin_create_team audit event ProgrammingError — team was created",
+            sqlalchemy_warning="admin_create_team audit event SQLAlchemyError — team was created",
+        ),
+    )
 
     return AdminCreateTeamResponse(
         id=str(team.id),
@@ -656,11 +809,7 @@ async def admin_get_org(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view org profile",
-        )
+    _require_admin(current_user, "view org profile")
 
     try:
         async with session.begin():
@@ -673,22 +822,13 @@ async def admin_get_org(
                 )
     except IntegrityError:
         logger.exception("admin_get_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin_get_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception("admin_get_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while fetching org profile.",
-        ) from None
+        _raise_db_unavailable("Database error while fetching org profile.")
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -708,11 +848,7 @@ async def admin_update_org(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update org profile",
-        )
+    _require_admin(current_user, "update org profile")
 
     try:
         async with session.begin():
@@ -740,22 +876,13 @@ async def admin_update_org(
                     org = updated
     except IntegrityError:
         logger.exception("admin_update_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while updating org profile.",
-        ) from None
+        _raise_db_unavailable("Database error while updating org profile.")
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -774,11 +901,7 @@ async def admin_regenerate_api_key(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can regenerate API key",
-        )
+    _require_admin(current_user, "regenerate API key")
 
     from modulo.auth.api_key import create_api_key
 
@@ -795,28 +918,19 @@ async def admin_regenerate_api_key(
             )
     except IntegrityError:
         logger.exception("admin_regenerate_api_key IntegrityError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(
             "admin_regenerate_api_key ProgrammingError",
             extra={"org_id": str(current_user.organisation_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(
             "admin_regenerate_api_key SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while regenerating API key.",
-        ) from None
+        _raise_db_unavailable("Database error while regenerating API key.")
 
     return {"api_key": raw_key, "lookup_prefix": raw_key[3:11]}
 
@@ -852,11 +966,7 @@ async def admin_list_users(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can list users",
-        )
+    _require_admin(current_user, "list users")
 
     try:
         async with session.begin():
@@ -873,25 +983,10 @@ async def admin_list_users(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
 
     return UserListResponse(
-        items=[
-            UserListItem(
-                id=str(a.id),
-                email=a.email,
-                display_name=a.display_name,
-                org_role=m.role,
-                is_active=a.active,
-                auth_provider=a.auth_provider,
-                created_at=a.created_at.isoformat(),
-                last_login=a.last_login.isoformat() if a.last_login else None,
-            )
-            for a, m in accounts_memberships
-        ],
+        items=[_to_user_list_item(a, m.role) for a, m in accounts_memberships],
         total=total,
         page=page,
         page_size=page_size,
@@ -946,11 +1041,7 @@ async def admin_update_user(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update users",
-        )
+    _require_admin(current_user, "update users")
 
     if req.is_active is False and user_id == current_user.account_id:
         raise HTTPException(
@@ -1032,22 +1123,10 @@ async def admin_update_user(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
-    return UserListItem(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=org_role,
-        is_active=account.active,
-        auth_provider=account.auth_provider,
-        created_at=account.created_at.isoformat(),
-        last_login=account.last_login.isoformat() if account.last_login else None,
-    )
+    return _to_user_list_item(account, org_role)
 
 
 async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
@@ -1107,11 +1186,7 @@ async def admin_deactivate_user(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can deactivate users",
-        )
+    _require_admin(current_user, "deactivate users")
 
     if current_user.account_id == user_id:
         raise HTTPException(
@@ -1192,16 +1267,10 @@ async def admin_deactivate_user(
         ) from None
     except IntegrityError:
         logger.exception(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError as exc:
         logger.exception(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
         logger.warning(
@@ -1214,10 +1283,7 @@ async def admin_deactivate_user(
             conflict_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
             not_found_status=status.HTTP_404_NOT_FOUND,
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
@@ -1225,21 +1291,9 @@ async def admin_deactivate_user(
             "admin_deactivate_user unexpected error",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while deactivating the user.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while deactivating the user.")
 
-    return UserListItem(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=org_role,
-        is_active=account.active,
-        auth_provider=account.auth_provider,
-        created_at=account.created_at.isoformat(),
-        last_login=account.last_login.isoformat() if account.last_login else None,
-    )
+    return _to_user_list_item(account, org_role)
 
 
 @router.post("/users/{user_id}/reactivate", response_model=UserListItem)
@@ -1249,11 +1303,7 @@ async def admin_reactivate_user(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can reactivate users",
-        )
+    _require_admin(current_user, "reactivate users")
 
     try:
         async with session.begin():
@@ -1307,26 +1357,17 @@ async def admin_reactivate_user(
             org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     except IntegrityError:
         logger.exception(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
         logger.warning(
             "admin_reactivate_user SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
@@ -1334,21 +1375,9 @@ async def admin_reactivate_user(
             "admin_reactivate_user unexpected error",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while reactivating the user.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while reactivating the user.")
 
-    return UserListItem(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=org_role,
-        is_active=account.active,
-        auth_provider=account.auth_provider,
-        created_at=account.created_at.isoformat(),
-        last_login=account.last_login.isoformat() if account.last_login else None,
-    )
+    return _to_user_list_item(account, org_role)
 
 
 class AdminResetPasswordResponse(BaseModel):
@@ -1362,11 +1391,7 @@ async def admin_reset_password(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminResetPasswordResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can reset passwords",
-        )
+    _require_admin(current_user, "reset passwords")
 
     try:
         async with session.begin():
@@ -1402,10 +1427,7 @@ async def admin_reset_password(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
 
@@ -1438,11 +1460,7 @@ async def admin_list_teams(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamListResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can list teams",
-        )
+    _require_admin(current_user, "list teams")
 
     try:
         async with session.begin():
@@ -1468,30 +1486,18 @@ async def admin_list_teams(
             owned_resource_counts = await count_owned_resources(session, team_ids=team_ids)
     except IntegrityError:
         logger.exception("admin_list_teams IntegrityError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin_list_teams ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception("admin_list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
         logger.exception("admin_list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while fetching teams.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while fetching teams.")
 
     return AdminTeamListResponse(
         items=[
@@ -1520,11 +1526,7 @@ async def admin_update_team(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamItem:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update teams",
-        )
+    _require_admin(current_user, "update teams")
 
     updates = req.model_dump(exclude_unset=True)
     updates.pop("expected_updated_at", None)
@@ -1562,25 +1564,16 @@ async def admin_update_team(
                 team = await crud_update_team(session, team_id, updates)
     except IntegrityError:
         logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(
             "admin_update_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
@@ -1588,47 +1581,23 @@ async def admin_update_team(
             "admin_update_team unexpected error",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while updating the team.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while updating the team.")
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
-    from modulo.core.audit_logger import append_audit_event
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="team_updated",
-                actor_user_id=current_user.account_id,
-                resource_type="team",
-                resource_id=team_id,
-                payload_json={"team_id": str(team_id), "updates": updates},
-            )
-    except IntegrityError:
-        logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
-        logger.warning(
-            "admin_update_team audit event ProgrammingError — team was updated",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
-        )
-    except SQLAlchemyError:
-        logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
-        logger.warning(
-            "admin_update_team audit event SQLAlchemyError — team was updated",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
-        )
+    await _append_team_audit_event(
+        session,
+        current_user,
+        team_id=team_id,
+        spec=_TeamAuditSpec(
+            event_type="team_updated",
+            payload={"team_id": str(team_id), "updates": updates},
+            log_code=_CODE_ADMIN_ADMIN_UPDATE_TEAM,
+            programming_warning="admin_update_team audit event ProgrammingError — team was updated",
+            sqlalchemy_warning="admin_update_team audit event SQLAlchemyError — team was updated",
+        ),
+    )
 
     return AdminTeamItem(
         id=str(team.id),
@@ -1664,11 +1633,7 @@ async def admin_reassign_all_team_resources(
     ``team_has_resources``. Idempotent: a team with no owned resources returns
     ``reassigned=0``; reassigning already-org resources succeeds.
     """
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can reassign team resources",
-        )
+    _require_admin(current_user, "reassign team resources")
 
     try:
         async with session.begin():
@@ -1686,25 +1651,16 @@ async def admin_reassign_all_team_resources(
             )
     except IntegrityError:
         logger.exception("admin.admin_reassign_all_team_resources")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_reassign_all_team_resources")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(
             "admin_reassign_all_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
@@ -1712,10 +1668,7 @@ async def admin_reassign_all_team_resources(
             "admin_reassign_all_team_resources unexpected error",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while reassigning team resources.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while reassigning team resources.")
 
     return BulkReassignResponse(reassigned=reassigned, resource_types=touched)
 
@@ -1726,11 +1679,7 @@ async def admin_delete_team(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can delete teams",
-        )
+    _require_admin(current_user, "delete teams")
 
     try:
         async with session.begin():
@@ -1764,25 +1713,16 @@ async def admin_delete_team(
             deleted = await delete_team(session, team_id)
     except IntegrityError:
         logger.exception(_CODE_ADMIN_ADMIN_DELETE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_DELETE_TEAM)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(
             "admin_delete_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
-        ) from None
+        _raise_db_temporarily_unavailable()
     except HTTPException:
         raise
     except Exception:
@@ -1790,10 +1730,7 @@ async def admin_delete_team(
             "admin_delete_team unexpected error",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while deleting the team.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while deleting the team.")
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
@@ -1912,11 +1849,7 @@ async def admin_billing_overview(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> BillingOverviewResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view billing",
-        )
+    _require_admin(current_user, "view billing")
 
     try:
         async with session.begin():
@@ -1956,10 +1889,7 @@ async def admin_billing_overview(
             ).scalar() or 0
     except Exception:
         logger.exception("billing.overview_failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing overview is temporarily unavailable.",
-        ) from None
+        _raise_db_unavailable("Billing overview is temporarily unavailable.")
 
     plan_id = org.plan_id or "community"
     plan_context = await resolve_plan_context(settings, session, org)
@@ -2029,22 +1959,13 @@ async def request_org_deletion(
             )
     except IntegrityError:
         logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while requesting org deletion.",
-        ) from None
+        _raise_db_unavailable("Database error while requesting org deletion.")
 
     export = result["export"]
     return DeletionRequestResponse(
@@ -2101,22 +2022,13 @@ async def confirm_org_deletion(
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while confirming org deletion.",
-        ) from None
+        _raise_db_unavailable("Database error while confirming org deletion.")
 
     return ConfirmDeletionResponse(
         message=(
@@ -2154,22 +2066,13 @@ async def cancel_org_deletion(
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while cancelling org deletion.",
-        ) from None
+        _raise_db_unavailable("Database error while cancelling org deletion.")
 
     return CancelDeletionResponse(**result)
 
@@ -2192,22 +2095,13 @@ async def export_org_data(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except IntegrityError:
         logger.exception(_CODE_ADMIN_EXPORT_ORG_DATA)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_EXPORT_ORG_DATA)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_EXPORT_ORG_DATA)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while exporting org data.",
-        ) from None
+        _raise_db_unavailable("Database error while exporting org data.")
 
     org_info = (bundle.get("organisation") or [{}])[0]
     return OrgExportResponse(
@@ -2264,22 +2158,13 @@ async def delete_org_immediate(
             )
     except IntegrityError:
         logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while deleting org.",
-        ) from None
+        _raise_db_unavailable("Database error while deleting org.")
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted. (FORCED — deleted despite live runs.)",
@@ -2338,194 +2223,189 @@ class EvalDashboardResponse(BaseModel):
     recent_results: list[RecentEvalResult]
 
 
+async def _eval_summary(session: AsyncSession) -> EvalDashboardSummary:
+    summary_q = select(
+        func.count(EvalResult.id).label("total_results"),
+        func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+        func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+    ).where(non_guardrail_eval_results_clause())
+    summary_row = (await session.execute(summary_q)).one()
+
+    defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
+    total_defs = (await session.execute(defs_q)).scalar() or 0
+
+    total_results = summary_row.total_results or 0
+    passed = summary_row.passed or 0
+    failed = summary_row.failed or 0
+    pass_rate = round(passed / total_results, 4) if total_results > 0 else 0.0
+
+    return EvalDashboardSummary(
+        total_results=total_results,
+        passed=passed,
+        failed=failed,
+        pass_rate=pass_rate,
+        total_definitions=total_defs,
+    )
+
+
+async def _eval_trend(session: AsyncSession, org_id: uuid.UUID) -> list[TrendBucket]:
+    trend_q = (
+        select(
+            cast(EvalResult.evaluated_at, Date).label("bucket"),
+            func.count().label("total"),
+            func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+            func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+        )
+        .where(
+            EvalResult.organisation_id == org_id,
+            non_guardrail_eval_results_clause(),
+        )
+        .group_by(
+            cast(EvalResult.evaluated_at, Date),
+        )
+        .order_by(
+            cast(EvalResult.evaluated_at, Date),
+        )
+    )
+    trend_rows = (await session.execute(trend_q)).all()
+
+    return [
+        TrendBucket(
+            bucket=str(row.bucket),
+            total=row.total,
+            passed=row.passed,
+            failed=row.failed,
+        )
+        for row in trend_rows
+    ]
+
+
+async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBreakdown]:
+    by_type_q = (
+        select(
+            EvalDefinition.eval_type,
+            func.count(EvalResult.id).label("total"),
+            func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+            func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+        )
+        .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
+        .where(
+            EvalDefinition.organisation_id == org_id,
+            EvalDefinition.eval_type != "guardrail",
+        )
+        .group_by(
+            EvalDefinition.eval_type,
+        )
+        .order_by(
+            EvalDefinition.eval_type,
+        )
+    )
+    by_type_rows = (await session.execute(by_type_q)).all()
+
+    return [
+        TypeBreakdown(
+            eval_type=row.eval_type,
+            total=row.total,
+            passed=row.passed,
+            failed=row.failed,
+        )
+        for row in by_type_rows
+    ]
+
+
+async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[CoverageGap]:
+    pipelines = (
+        await session.execute(
+            select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(Pipeline.organisation_id == org_id)
+        )
+    ).all()
+
+    covered_pairs: set[tuple[uuid.UUID, str]] = set()
+    eval_defs = (
+        await session.execute(
+            select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(EvalDefinition.organisation_id == org_id)
+        )
+    ).all()
+    for ed in eval_defs:
+        if ed.node_id is not None:
+            covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
+
+    coverage_gaps: list[CoverageGap] = []
+    for pl in pipelines:
+        for node in pl.graph_nodes_json or []:
+            node_id = node.get("id")
+            if node_id and (pl.id, str(node_id)) not in covered_pairs:
+                coverage_gaps.append(
+                    CoverageGap(
+                        pipeline_id=str(pl.id),
+                        pipeline_name=pl.name,
+                        node_id=str(node_id),
+                    )
+                )
+    return coverage_gaps
+
+
+async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list[RecentEvalResult]:
+    recent_q = text("""
+        SELECT
+            er.id,
+            er.eval_id,
+            ed.name AS eval_name,
+            ed.eval_type,
+            er.passed,
+            er.score,
+            er.detail,
+            er.evaluated_at
+        FROM eval_results er
+        JOIN eval_definitions ed ON ed.id = er.eval_id
+        WHERE er.organisation_id = :org_id
+          AND ed.eval_type != 'guardrail'
+        ORDER BY er.evaluated_at DESC
+        LIMIT 50
+    """)
+    recent_rows = (await session.execute(recent_q, {"org_id": org_id})).all()
+
+    return [
+        RecentEvalResult(
+            id=str(row.id),
+            eval_id=str(row.eval_id),
+            eval_name=row.eval_name,
+            eval_type=row.eval_type,
+            passed=row.passed,
+            score=row.score,
+            detail=row.detail,
+            evaluated_at=str(row.evaluated_at),
+        )
+        for row in recent_rows
+    ]
+
+
 @router.get("/evals/dashboard", response_model=EvalDashboardResponse)
 @handle_db_errors("admin.eval_dashboard")
 async def eval_dashboard(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> EvalDashboardResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can access the eval dashboard",
-        )
+    _require_admin(current_user, "access the eval dashboard")
 
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
-            # ── Summary ─────────────────────────────────────────────────
-            summary_q = select(
-                func.count(EvalResult.id).label("total_results"),
-                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            ).where(non_guardrail_eval_results_clause())
-            summary_row = (await session.execute(summary_q)).one()
-
-            defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
-            total_defs = (await session.execute(defs_q)).scalar() or 0
-
-            total_results = summary_row.total_results or 0
-            passed = summary_row.passed or 0
-            failed = summary_row.failed or 0
-            pass_rate = round(passed / total_results, 4) if total_results > 0 else 0.0
-
-            summary = EvalDashboardSummary(
-                total_results=total_results,
-                passed=passed,
-                failed=failed,
-                pass_rate=pass_rate,
-                total_definitions=total_defs,
-            )
-
-            # ── Trend (daily buckets) ───────────────────────────────────
-            trend_q = (
-                select(
-                    cast(EvalResult.evaluated_at, Date).label("bucket"),
-                    func.count().label("total"),
-                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-                )
-                .where(
-                    EvalResult.organisation_id == current_user.organisation_id,
-                    non_guardrail_eval_results_clause(),
-                )
-                .group_by(
-                    cast(EvalResult.evaluated_at, Date),
-                )
-                .order_by(
-                    cast(EvalResult.evaluated_at, Date),
-                )
-            )
-            trend_rows = (await session.execute(trend_q)).all()
-
-            trend = [
-                TrendBucket(
-                    bucket=str(row.bucket),
-                    total=row.total,
-                    passed=row.passed,
-                    failed=row.failed,
-                )
-                for row in trend_rows
-            ]
-
-            # ── By eval type ────────────────────────────────────────────
-            by_type_q = (
-                select(
-                    EvalDefinition.eval_type,
-                    func.count(EvalResult.id).label("total"),
-                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-                )
-                .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
-                .where(
-                    EvalDefinition.organisation_id == current_user.organisation_id,
-                    EvalDefinition.eval_type != "guardrail",
-                )
-                .group_by(
-                    EvalDefinition.eval_type,
-                )
-                .order_by(
-                    EvalDefinition.eval_type,
-                )
-            )
-            by_type_rows = (await session.execute(by_type_q)).all()
-
-            by_type = [
-                TypeBreakdown(
-                    eval_type=row.eval_type,
-                    total=row.total,
-                    passed=row.passed,
-                    failed=row.failed,
-                )
-                for row in by_type_rows
-            ]
-
-            # ── Coverage gaps ───────────────────────────────────────────
-            pipelines = (
-                await session.execute(
-                    select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(
-                        Pipeline.organisation_id == current_user.organisation_id
-                    )
-                )
-            ).all()
-
-            covered_pairs: set[tuple[uuid.UUID, str]] = set()
-            eval_defs = (
-                await session.execute(
-                    select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
-                        EvalDefinition.organisation_id == current_user.organisation_id
-                    )
-                )
-            ).all()
-            for ed in eval_defs:
-                if ed.node_id is not None:
-                    covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
-
-            coverage_gaps: list[CoverageGap] = []
-            for pl in pipelines:
-                for node in pl.graph_nodes_json or []:
-                    node_id = node.get("id")
-                    if node_id and (pl.id, str(node_id)) not in covered_pairs:
-                        coverage_gaps.append(
-                            CoverageGap(
-                                pipeline_id=str(pl.id),
-                                pipeline_name=pl.name,
-                                node_id=str(node_id),
-                            )
-                        )
-
-            # ── Recent results ──────────────────────────────────────────
-            recent_q = text("""
-                SELECT
-                    er.id,
-                    er.eval_id,
-                    ed.name AS eval_name,
-                    ed.eval_type,
-                    er.passed,
-                    er.score,
-                    er.detail,
-                    er.evaluated_at
-                FROM eval_results er
-                JOIN eval_definitions ed ON ed.id = er.eval_id
-                WHERE er.organisation_id = :org_id
-                  AND ed.eval_type != 'guardrail'
-                ORDER BY er.evaluated_at DESC
-                LIMIT 50
-            """)
-            recent_rows = (await session.execute(recent_q, {"org_id": current_user.organisation_id})).all()
-
-            recent_results = [
-                RecentEvalResult(
-                    id=str(row.id),
-                    eval_id=str(row.eval_id),
-                    eval_name=row.eval_name,
-                    eval_type=row.eval_type,
-                    passed=row.passed,
-                    score=row.score,
-                    detail=row.detail,
-                    evaluated_at=str(row.evaluated_at),
-                )
-                for row in recent_rows
-            ]
+            summary = await _eval_summary(session)
+            trend = await _eval_trend(session, current_user.organisation_id)
+            by_type = await _eval_by_type(session, current_user.organisation_id)
+            coverage_gaps = await _eval_coverage_gaps(session, current_user.organisation_id)
+            recent_results = await _eval_recent_results(session, current_user.organisation_id)
     except IntegrityError:
         logger.exception("admin.eval_dashboard")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.eval_dashboard")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.warning("Eval dashboard DB error", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
-        ) from None
+        _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
 
     return EvalDashboardResponse(
         summary=summary,
@@ -2584,11 +2464,7 @@ async def eval_regressions(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can access eval regressions",
-        )
+    _require_admin(current_user, "access eval regressions")
 
     if trend is not None and trend not in VALID_TRENDS:
         raise HTTPException(
@@ -2610,17 +2486,11 @@ async def eval_regressions(
             )
     except IntegrityError:
         logger.exception("admin.eval_regressions")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.eval_regressions")
         logger.warning("Eval regressions unavailable — DB may need migration")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except TimeoutError:
         logger.exception("Eval regressions query timed out")
         raise HTTPException(
@@ -2629,16 +2499,10 @@ async def eval_regressions(
         ) from None
     except SQLAlchemyError:
         logger.exception("Eval regressions DB error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
-        ) from None
+        _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
         logger.exception("Eval regressions unexpected error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while checking eval regressions.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred while checking eval regressions.")
 
     return RegressionAlertsResponse(
         alerts=[
@@ -2694,11 +2558,7 @@ async def okr_progress(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OkrProgressResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can access OKR progress",
-        )
+    _require_admin(current_user, "access OKR progress")
 
     try:
         async with session.begin():
@@ -2719,28 +2579,16 @@ async def okr_progress(
         ) from exc
     except IntegrityError:
         logger.exception("admin.okr_progress")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.okr_progress")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception("OKR progress DB error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
-        ) from None
+        _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
         logger.exception("Unexpected error in OKR progress endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again later.",
-        ) from None
+        _raise_unexpected("An unexpected error occurred. Please try again later.")
 
     return OkrProgressResponse(
         suite_id=progress.suite_id,
@@ -2812,11 +2660,7 @@ async def admin_list_publishers(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherListResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can list publishers",
-        )
+    _require_admin(current_user, "list publishers")
 
     try:
         async with session.begin():
@@ -2831,32 +2675,13 @@ async def admin_list_publishers(
             )
     except IntegrityError:
         logger.exception("admin.admin_list_publishers")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_list_publishers")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
 
     return PublisherListResponse(
-        items=[
-            PublisherResponse(
-                id=str(p.id),
-                name=p.name,
-                contact_email=p.contact_email,
-                public_key_hex=p.public_key_hex,
-                trust_tier=p.trust_tier,
-                verified_since=p.verified_since.isoformat() if p.verified_since else None,
-                website_url=p.website_url,
-                created_at=p.created_at.isoformat(),
-                updated_at=p.updated_at.isoformat(),
-            )
-            for p in result.items
-        ],
+        items=[_to_publisher_response(p) for p in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
@@ -2870,11 +2695,7 @@ async def admin_create_publisher(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create publishers",
-        )
+    _require_admin(current_user, "create publishers")
 
     try:
         async with session.begin():
@@ -2911,28 +2732,12 @@ async def admin_create_publisher(
                 ) from exc
     except IntegrityError:
         logger.exception("admin.admin_create_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_create_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
 
-    return PublisherResponse(
-        id=str(publisher.id),
-        name=publisher.name,
-        contact_email=publisher.contact_email,
-        public_key_hex=publisher.public_key_hex,
-        trust_tier=publisher.trust_tier,
-        verified_since=publisher.verified_since.isoformat() if publisher.verified_since else None,
-        website_url=publisher.website_url,
-        created_at=publisher.created_at.isoformat(),
-        updated_at=publisher.updated_at.isoformat(),
-    )
+    return _to_publisher_response(publisher)
 
 
 @router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
@@ -2943,11 +2748,7 @@ async def admin_update_publisher(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update publishers",
-        )
+    _require_admin(current_user, "update publishers")
 
     updates: dict[str, object] = req.model_dump(exclude_unset=True)
 
@@ -2994,16 +2795,10 @@ async def admin_update_publisher(
                 ) from exc
     except IntegrityError:
         logger.exception("admin.admin_update_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_update_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
 
     if publisher is None:
         raise HTTPException(
@@ -3011,17 +2806,7 @@ async def admin_update_publisher(
             detail="Publisher not found",
         )
 
-    return PublisherResponse(
-        id=str(publisher.id),
-        name=publisher.name,
-        contact_email=publisher.contact_email,
-        public_key_hex=publisher.public_key_hex,
-        trust_tier=publisher.trust_tier,
-        verified_since=publisher.verified_since.isoformat() if publisher.verified_since else None,
-        website_url=publisher.website_url,
-        created_at=publisher.created_at.isoformat(),
-        updated_at=publisher.updated_at.isoformat(),
-    )
+    return _to_publisher_response(publisher)
 
 
 @router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -3031,11 +2816,7 @@ async def admin_delete_publisher(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can delete publishers",
-        )
+    _require_admin(current_user, "delete publishers")
 
     try:
         async with session.begin():
@@ -3043,16 +2824,10 @@ async def admin_delete_publisher(
             deleted = await crud_delete_publisher(session, publisher_id, org_id=current_user.organisation_id)
     except IntegrityError:
         logger.exception("admin.admin_delete_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_delete_publisher")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
 
     if not deleted:
         raise HTTPException(
@@ -3074,11 +2849,7 @@ async def admin_retention_purge_runs(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can trigger run retention purge",
-        )
+    _require_admin(current_user, "trigger run retention purge")
 
     try:
         async with session.begin():
@@ -3089,31 +2860,19 @@ async def admin_retention_purge_runs(
         raise
     except IntegrityError:
         logger.exception("admin.admin_retention_purge_runs")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
+        _raise_db_error_occurred()
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+        _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
     return {"deleted_run_count": deleted}
 
@@ -3128,11 +2887,7 @@ async def admin_manual_purge(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can purge runs",
-        )
+    _require_admin(current_user, "purge runs")
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -3152,30 +2907,18 @@ async def admin_manual_purge(
         raise
     except IntegrityError:
         logger.exception("admin.admin_manual_purge")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception("admin.admin_manual_purge")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
+        _raise_db_error_occurred()
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+        _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
     return result
 
@@ -3194,11 +2937,7 @@ async def admin_purge_stale_runs(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PurgeRunsResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can purge stale runs",
-        )
+    _require_admin(current_user, "purge stale runs")
 
     cutoff = datetime.now(UTC) - timedelta(days=request.older_than_days)
     terminal_states = TERMINAL_STATUSES
@@ -3218,31 +2957,19 @@ async def admin_purge_stale_runs(
         raise
     except IntegrityError:
         logger.exception("admin.admin_purge_stale_runs")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
+        _raise_db_error_occurred()
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+        _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
 
@@ -3273,8 +3000,7 @@ async def admin_get_retention(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view retention")
+    _require_admin(current_user, "view retention")
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -3286,31 +3012,19 @@ async def admin_get_retention(
         raise
     except IntegrityError:
         logger.exception("admin.admin_get_retention")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
+        _raise_db_error_occurred()
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+        _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
     retention_days = 90
     if isinstance(row, dict):
@@ -3330,8 +3044,7 @@ async def admin_update_retention(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
+    _require_admin(current_user, "update retention")
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -3341,39 +3054,25 @@ async def admin_update_retention(
             org = result.scalar_one_or_none()
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
-            settings = dict(org.settings_json) if org.settings_json else {}
-            settings["retention_days"] = req.retention_days
-            org.settings_json = settings
+            _update_org_setting(org, "retention_days", req.retention_days)
             await session.flush()
     except asyncio.CancelledError:
         raise
     except IntegrityError:
         logger.exception("admin.admin_update_retention")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_this_feature_not_available()
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
+        _raise_db_error_occurred()
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+        _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
     logger.info(
         "run_retention.updated",

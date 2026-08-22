@@ -15,7 +15,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.models.error import (
     ErrorEventInput,
     ErrorEventListResponse,
@@ -115,6 +115,11 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
                 _log.warning("error_tracking.redis_unavailable — falling back to in-memory key store", exc_info=True)
         _key_store = SessionKeyStore(redis_client=redis_client)
     return _key_store
+
+
+# Ingestion routes are intentionally NOT gated behind require_feature("error_tracking"):
+# SDK error collection stays free on the community tier (recording is free-tier per PRD §8.25);
+# only the read/dashboard/management routes are team-gated.
 
 
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
@@ -368,7 +373,7 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
     return result.scalar_one_or_none()
 
 
-@router.get("", response_model=ErrorListResponse)
+@router.get("", response_model=ErrorListResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.list_error_groups")
 async def list_error_groups(
     status_filter: str | None = Query(None, alias="status"),
@@ -448,7 +453,7 @@ async def list_error_groups(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/{error_id}", response_model=ErrorGroupDetail)
+@router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.get_error_group_detail")
 async def get_error_group_detail(
     error_id: uuid.UUID,
@@ -501,7 +506,7 @@ async def get_error_group_detail(
     }
 
 
-@router.patch("/{error_id}", response_model=ErrorGroupDetail)
+@router.patch("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.patch_error_group")
 async def patch_error_group(
     error_id: uuid.UUID,
@@ -563,7 +568,11 @@ async def patch_error_group(
     }
 
 
-@router.get("/{error_id}/events", response_model=ErrorEventListResponse)
+@router.get(
+    "/{error_id}/events",
+    response_model=ErrorEventListResponse,
+    dependencies=[require_feature("error_tracking")],
+)
 @handle_db_errors("errors.list_error_events")
 async def list_error_events(
     error_id: uuid.UUID,

@@ -11,26 +11,12 @@
  *   node pipelines/js.js
  */
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
-const EMAIL = process.env.MODULO_EMAIL;
-const PASSWORD = process.env.MODULO_PASSWORD;
+const { api, logSafe, auth, BASE_URL, EMAIL, PASSWORD, runMain } = require("../_shared/client.js");
 
-if (!EMAIL || !PASSWORD) {
-  console.error("MODULO_EMAIL and MODULO_PASSWORD must be set");
-  process.exit(1);
-}
-
-async function api(path, options = {}) {
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+function assertSafeId(id) {
+  if (!/^[0-9a-fA-F-]{1,64}$/.test(id)) {
+    throw new Error(`Invalid identifier: ${logSafe(id)}`);
   }
-  return res.json();
 }
 
 async function login() {
@@ -41,10 +27,6 @@ async function login() {
   return data.access_token;
 }
 
-function auth(token) {
-  return { Authorization: `Bearer ${token}` };
-}
-
 async function main() {
   const token = await login();
   const h = auth(token);
@@ -52,9 +34,9 @@ async function main() {
   // Step 1: List pipelines
   console.log("Listing pipelines ...");
   const list = await api("/api/v1/pipelines?page=1&page_size=20", { headers: h });
-  console.log(`  Found ${list.total} pipeline(s)`);
+  console.log(`  Found ${logSafe(list.total)} pipeline(s)`);
   for (const p of list.items) {
-    console.log(`    - ${p.id}: ${p.name}`);
+    console.log(`    - ${logSafe(p.id)}: ${logSafe(p.name)}`);
   }
 
   // Step 2: Create a pipeline
@@ -70,14 +52,14 @@ async function main() {
     }),
   });
   const pipelineId = created.id;
-  console.log(`  Created: ${created.name} (id=${pipelineId})`);
+  console.log(`  Created: ${logSafe(created.name)} (id=${logSafe(pipelineId)})`);
 
   // Step 3: Get pipeline detail
-  console.log(`\nFetching pipeline ${pipelineId} ...`);
+  console.log(`\nFetching pipeline ${logSafe(pipelineId)} ...`);
   const detail = await api(`/api/v1/pipelines/${pipelineId}`, { headers: h });
-  console.log(`  Name:        ${detail.name}`);
-  console.log(`  Description: ${detail.description || "N/A"}`);
-  console.log(`  Visibility:  ${detail.visibility}`);
+  console.log(`  Name:        ${logSafe(detail.name)}`);
+  console.log(`  Description: ${logSafe(detail.description || "N/A")}`);
+  console.log(`  Visibility:  ${logSafe(detail.visibility)}`);
 
   // Step 4: Update pipeline
   console.log("\nUpdating pipeline ...");
@@ -89,10 +71,11 @@ async function main() {
       max_concurrent_runs: 5,
     }),
   });
-  console.log(`  New description: ${updated.description}`);
+  console.log(`  New description: ${logSafe(updated.description)}`);
 
   // Step 5: Delete pipeline
-  console.log(`\nDeleting pipeline ${pipelineId} ...`);
+  console.log(`\nDeleting pipeline ${logSafe(pipelineId)} ...`);
+  assertSafeId(pipelineId);
   const delRes = await fetch(`${BASE_URL}/api/v1/pipelines/${pipelineId}`, {
     method: "DELETE",
     headers: { ...h, "Content-Type": "application/json" },
@@ -103,7 +86,4 @@ async function main() {
   console.log("\nDone.");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err.message);
-  process.exit(1);
-});
+runMain(main);

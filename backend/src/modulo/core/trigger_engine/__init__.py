@@ -46,6 +46,7 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -287,6 +288,40 @@ def _extract_work_item_refs(payload: dict[str, Any], ref_paths: Any) -> list[dic
 
 
 # ---------------------------------------------------------------------------
+# Delivery context
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _WebhookDelivery:
+    """Immutable identity + payload state of a webhook delivery.
+
+    Carries the delivery's identity and payload across the webhook / replay
+    pipeline steps so step helpers take the context instead of long positional
+    argument lists. ``trigger`` is the row loaded under the advisory lock.
+    """
+
+    org_id: uuid.UUID
+    trigger: Trigger
+    raw_body: bytes
+    raw_payload: dict[str, Any]
+    snapshot_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class _RateLimitState:
+    """Resolved rate-limit state for a delivery.
+
+    ``key`` is ``None`` when the pipeline has no rate-limit budget configured;
+    ``max_triggers`` / ``window_seconds`` are populated only when one is set.
+    """
+
+    key: str | None
+    max_triggers: int = 0
+    window_seconds: int = 0
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -324,6 +359,13 @@ class TriggerEngine:
             raise TriggerBusyError(trigger_id)
         try:
             trigger = await self._load_trigger(session, trigger_id, org_id)
+            delivery = _WebhookDelivery(
+                org_id=org_id,
+                trigger=trigger,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                snapshot_id=snapshot_id,
+            )
             # Pre-guardrail failure events (timestamp, HMAC, event filters) are
             # about the RAW delivery — they record the raw-body hash. The DEDUP
             # hash is computed after the pre-trigger guardrail pass below
@@ -375,111 +417,28 @@ class TriggerEngine:
             # ``paused`` event. Read failures propagate (never fabricate).
             await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-            # Event type filtering - skip if payload doesn't contain any accepted event
-            accepted_events: list[str] | None = cfg.get("accepted_events")
-            if accepted_events:
-                has_accepted_event = any(isinstance(raw_payload.get(event), dict) for event in accepted_events)
-                if not has_accepted_event:
-                    _log.info(
-                        "Webhook event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",
-                        trigger_id,
-                        accepted_events,
-                        list(raw_payload.keys()),
-                    )
-                    await self._log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        payload_hash=payload_hash,
-                        result="event_type_not_accepted",
-                    )
-                    raise RuntimeError(
-                        f"Trigger {trigger_id}: none of the accepted event types {accepted_events} "
-                        f"found in webhook payload (keys: {list(raw_payload.keys())})"
-                    )
-
-            # Value-based event filtering - skip if any configured dotted path
-            # resolves to a value outside its allowlist. Evaluated AFTER the
-            # accepted_events presence check but BEFORE dedup/run creation so a
-            # non-matching payload never consumes a dedup slot or creates a run.
-            event_filters = cfg.get("event_filters")
-            if event_filters and not _matches_event_filters(raw_payload, event_filters):
-                _log.info(
-                    "Webhook event value filter not accepted for trigger %s (event_filters=%s, payload_keys=%s)",
-                    trigger_id,
-                    event_filters,
-                    list(raw_payload.keys()),
-                )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="event_type_not_accepted",
-                )
-                raise RuntimeError(
-                    f"Trigger {trigger_id}: event value filters {event_filters} "
-                    f"not satisfied by webhook payload (keys: {list(raw_payload.keys())})"
-                )
+            # Event type + value filtering — skip the delivery unless it
+            # satisfies the trigger's accepted-events presence check and any
+            # configured dotted-path value filters.
+            await self._enforce_event_acceptance(
+                session,
+                delivery,
+                payload_hash=payload_hash,
+                log_prefix="Webhook",
+                payload_subject="webhook",
+                use_dot_notation=False,
+            )
 
             # Pre-trigger guardrail pass (FAR-214) — at the trigger boundary,
             # BEFORE the dedup insert so a guardrail-blocked delivery never
             # consumes a dedup slot. Reuses the T1 run-creation seam's engine
             # and row-loading semantics; detection is never reimplemented.
-            #   * block  → reject-and-retry: guardrail_blocked TriggerEvent +
-            #              raw payload stored for replay; no run, no dedup slot.
-            #   * redact → masks applied at intake; the payload that proceeds
-            #              to dedup + run creation is POST-redaction.
-            #   * warn/observe → advisory; the delivery proceeds.
-            from modulo.core.trigger_engine.pre_guardrail import (
-                GuardrailBlockedAtIntakeError,
-                canonical_payload_hash,
-                run_pre_trigger_guardrail_pass,
-            )
-
-            guardrail_outcome = await run_pre_trigger_guardrail_pass(
+            post_guardrail_payload, dedup_hash = await self._run_pre_trigger_guardrail(
                 session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                raw_payload=raw_payload,
+                delivery,
+                payload_hash=payload_hash,
+                is_replay=False,
             )
-            if guardrail_outcome.blocked:
-                block_event = await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="guardrail_blocked",
-                    error_detail=guardrail_outcome.block_message[:2000],
-                )
-                # Store the raw payload for replay so the sender/provider can
-                # retry after fixing — the delivery is reject-and-retry, NOT
-                # acked-as-accepted.
-                await self._store_raw_payload(
-                    session,
-                    trigger_event_id=block_event.id,
-                    raw_body=raw_body,
-                    raw_payload=raw_payload,
-                    org_id=org_id,
-                )
-                raise GuardrailBlockedAtIntakeError(
-                    guardrail_outcome.block_message,
-                    guardrail_name=guardrail_outcome.blocking_eval_name,
-                )
-            post_guardrail_payload = guardrail_outcome.payload
-            _log.info(
-                "guardrails.pre_trigger evaluated=%d redactions=%d for trigger %s pipeline %s",
-                guardrail_outcome.evaluated_count,
-                len(guardrail_outcome.redactions),
-                trigger_id,
-                trigger.pipeline_id,
-            )
-            # Post-guardrail dedup hashing: the dedup key is the canonical hash
-            # of the POST-guardrail payload (after redaction). Pre-guardrail
-            # failure events keep the raw-body hash above (they describe the
-            # raw delivery); the dedup key is canonical so logically identical
-            # payloads dedup regardless of encoding.
-            dedup_hash = canonical_payload_hash(post_guardrail_payload)
 
             # Deduplication
             is_new = await self._try_insert_dedup(session, trigger_id, org_id, dedup_hash)
@@ -494,13 +453,13 @@ class TriggerEngine:
                 )
                 raise DuplicateWebhookError(dedup_hash)
 
-            # Flood / concurrency protection � accept and queue instead of rejecting.
+            # Flood / concurrency protection — accept and queue instead of rejecting.
             # The run is created as pending and the executor queues it via
             # _check_capacity / _retry_pending, so webhooks never get 429s.
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
-                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) � queuing anyway",
+                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — queuing anyway",
                     trigger_id,
                     active_count,
                     trigger.max_concurrent_runs,
@@ -519,94 +478,22 @@ class TriggerEngine:
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
 
             # Rate limit check
-            pipeline_rate_limit = cfg.get("rate_limit")
-            if pipeline_rate_limit is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe_result.scalar_one_or_none()
-                if pipeline is not None:
-                    pipeline_rate_limit = pipeline.rate_limit_config
-
-            if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
-                max_triggers = int(pipeline_rate_limit["max_triggers"])
-                window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
-                rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-                recent_count = await self._count_recent_rate_limited(
-                    session, trigger.pipeline_id, rate_limit_key, window_seconds
-                )
-                if recent_count >= max_triggers:
-                    _log.warning(
-                        "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
-                        trigger.pipeline_id,
-                        recent_count,
-                        max_triggers,
-                        rate_limit_key,
-                    )
-                    await self._log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        payload_hash=dedup_hash,
-                        result="rate_limited",
-                    )
-                    raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
-            else:
-                rate_limit_key = None
-
-            # Create run
-            refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-            try:
-                run = await create_run(
-                    session,
-                    org_id=org_id,
-                    pipeline_id=trigger.pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="webhook",
-                    input_payload=input_payload,
-                    trigger_id=trigger_id,
-                    rate_limit_key=rate_limit_key,
-                    work_item_refs=refs,
-                )
-            except RateLimitConflictError as exc:
-                _log.warning(
-                    "Rate limit conflict for pipeline %s: %s",
-                    trigger.pipeline_id,
-                    exc.rate_limit_key,
-                )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=dedup_hash,
-                    result="rate_limited",
-                )
-                raise PipelineRateLimitError(
-                    trigger.pipeline_id,
-                    exc.rate_limit_key,
-                    max_triggers,
-                    window_seconds,
-                ) from exc
-
-            # Audit log
-            trigger_event = await self._log_event(
+            rate_limit = await self._resolve_rate_limit_state(
                 session,
-                trigger=trigger,
-                org_id=org_id,
+                delivery,
+                input_payload=input_payload,
                 payload_hash=dedup_hash,
-                result="accepted",
-                run_id=run.id,
+            )
+
+            # Create run + audit + store payload for replay
+            run, trigger_event = await self._create_webhook_run(
+                session,
+                delivery,
+                input_payload=input_payload,
+                payload_hash=dedup_hash,
+                rate_limit=rate_limit,
             )
             _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
-
-            # Store raw payload for replay
-            await self._store_raw_payload(
-                session,
-                trigger_event_id=trigger_event.id,
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-                org_id=org_id,
-            )
 
             return run, trigger_event, input_payload
         finally:
@@ -685,56 +572,28 @@ class TriggerEngine:
             # guardrail pass for the downstream (post-guardrail) events.
             raw_body_hash = sha256_hex(raw_body)
 
+            delivery = _WebhookDelivery(
+                org_id=org_id,
+                trigger=trigger,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                snapshot_id=snapshot_id,
+            )
+            cfg = trigger.config_json or {}
+
             # No dedup check for replays - this is an intentional re-fire.
             # The original event already went through dedup validation.
 
-            # Event type filtering - skip if payload doesn't contain any accepted event
-            cfg = trigger.config_json or {}
-            accepted_events: list[str] | None = cfg.get("accepted_events")
-            if accepted_events:
-                has_accepted_event = any(
-                    isinstance(_extract_field(raw_payload, event), dict) for event in accepted_events
-                )
-                if not has_accepted_event:
-                    _log.info(
-                        "Replay event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",
-                        trigger.id,
-                        accepted_events,
-                        list(raw_payload.keys()),
-                    )
-                    await self._log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        payload_hash=raw_body_hash,
-                        result="event_type_not_accepted",
-                    )
-                    raise RuntimeError(
-                        f"Trigger {trigger.id}: none of the accepted event types {accepted_events} "
-                        f"found in replayed webhook payload (keys: {list(raw_payload.keys())})"
-                    )
-
-            # Value-based event filtering - mirror the handle_webhook gate so a
-            # re-fired event is held to the same filter as the original delivery.
-            event_filters = cfg.get("event_filters")
-            if event_filters and not _matches_event_filters(raw_payload, event_filters):
-                _log.info(
-                    "Replay event value filter not accepted for trigger %s (event_filters=%s, payload_keys=%s)",
-                    trigger.id,
-                    event_filters,
-                    list(raw_payload.keys()),
-                )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=raw_body_hash,
-                    result="event_type_not_accepted",
-                )
-                raise RuntimeError(
-                    f"Trigger {trigger.id}: event value filters {event_filters} "
-                    f"not satisfied by replayed webhook payload (keys: {list(raw_payload.keys())})"
-                )
+            # Event type + value filtering — mirror the handle_webhook gate so a
+            # re-fired event is held to the same filters as the original delivery.
+            await self._enforce_event_acceptance(
+                session,
+                delivery,
+                payload_hash=raw_body_hash,
+                log_prefix="Replay",
+                payload_subject="replayed webhook",
+                use_dot_notation=True,
+            )
 
             # Pre-trigger guardrail pass on replay — re-runs the pass
             # DETECTION-ONLY (consistent with the run-creation seam's
@@ -742,26 +601,12 @@ class TriggerEngine:
             # A replay bypasses dedup but must still be guardrail-checked (the
             # payload may have been fixed since the original delivery). The
             # canonical POST-guardrail hash feeds the post-guardrail events.
-            from modulo.core.trigger_engine.pre_guardrail import (
-                canonical_payload_hash,
-                run_pre_trigger_guardrail_pass,
-            )
-
-            guardrail_outcome = await run_pre_trigger_guardrail_pass(
+            post_guardrail_payload, payload_hash = await self._run_pre_trigger_guardrail(
                 session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                raw_payload=raw_payload,
-                detection_only=True,
+                delivery,
+                payload_hash=raw_body_hash,
+                is_replay=True,
             )
-            _log.info(
-                "guardrails.pre_trigger replay detection evaluated=%d for trigger %s pipeline %s",
-                guardrail_outcome.evaluated_count,
-                trigger.id,
-                trigger.pipeline_id,
-            )
-            post_guardrail_payload = guardrail_outcome.payload
-            payload_hash = canonical_payload_hash(post_guardrail_payload)
 
             # Flood protection
             active_count = await self._count_active_runs(session, trigger.id)
@@ -782,93 +627,22 @@ class TriggerEngine:
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
 
             # Rate limit check
-            pipeline_rate_limit = cfg.get("rate_limit")
-            if pipeline_rate_limit is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe_result.scalar_one_or_none()
-                if pipeline is not None:
-                    pipeline_rate_limit = pipeline.rate_limit_config
-
-            if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
-                max_triggers = int(pipeline_rate_limit["max_triggers"])
-                window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
-                rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-                recent_count = await self._count_recent_rate_limited(
-                    session, trigger.pipeline_id, rate_limit_key, window_seconds
-                )
-                if recent_count >= max_triggers:
-                    _log.warning(
-                        "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
-                        trigger.pipeline_id,
-                        recent_count,
-                        max_triggers,
-                        rate_limit_key,
-                    )
-                    await self._log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        payload_hash=payload_hash,
-                        result="rate_limited",
-                    )
-                    raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
-            else:
-                rate_limit_key = None
+            rate_limit = await self._resolve_rate_limit_state(
+                session,
+                delivery,
+                input_payload=input_payload,
+                payload_hash=payload_hash,
+            )
 
             # Create run (a replay is flagged via is_replay so downstream
             # consumers can distinguish re-fires from original deliveries).
-            refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-            try:
-                run = await create_run(
-                    session,
-                    org_id=org_id,
-                    pipeline_id=trigger.pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="webhook",
-                    input_payload=input_payload,
-                    trigger_id=trigger.id,
-                    rate_limit_key=rate_limit_key,
-                    work_item_refs=refs,
-                    is_replay=True,
-                )
-            except RateLimitConflictError as exc:
-                _log.warning(
-                    "Rate limit conflict for pipeline %s: %s",
-                    trigger.pipeline_id,
-                    exc.rate_limit_key,
-                )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="rate_limited",
-                )
-                raise PipelineRateLimitError(
-                    trigger.pipeline_id,
-                    exc.rate_limit_key,
-                    max_triggers,
-                    window_seconds,
-                ) from exc
-
-            trigger_event = await self._log_event(
+            run, trigger_event = await self._create_webhook_run(
                 session,
-                trigger=trigger,
-                org_id=org_id,
+                delivery,
+                input_payload=input_payload,
                 payload_hash=payload_hash,
-                result="accepted",
-                run_id=run.id,
-            )
-
-            # Store raw payload for the new event (re-replay support)
-            await self._store_raw_payload(
-                session,
-                trigger_event_id=trigger_event.id,
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-                org_id=org_id,
+                rate_limit=rate_limit,
+                is_replay=True,
             )
 
             return run, trigger_event, input_payload
@@ -1185,6 +959,265 @@ class TriggerEngine:
         session.add(event)
         await session.flush()
         return event
+
+    async def _enforce_event_acceptance(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        payload_hash: str,
+        log_prefix: str,
+        payload_subject: str,
+        use_dot_notation: bool,
+    ) -> None:
+        """Enforce the accepted-events and value-filter gates; reject on mismatch.
+
+        Records an ``event_type_not_accepted`` TriggerEvent and raises
+        ``RuntimeError`` when the payload does not satisfy the trigger's event
+        acceptance config. *log_prefix* / *payload_subject* adapt the log and
+        error wording between webhook and replay delivery; *use_dot_notation*
+        preserves the historical accepted-events lookup (top-level ``.get`` for
+        webhooks vs dotted-path ``_extract_field`` for replays).
+        """
+        cfg = delivery.trigger.config_json or {}
+        accepted_events: list[str] | None = cfg.get("accepted_events")
+        if accepted_events:
+            if use_dot_notation:
+                has_accepted_event = any(
+                    isinstance(_extract_field(delivery.raw_payload, event), dict) for event in accepted_events
+                )
+            else:
+                has_accepted_event = any(isinstance(delivery.raw_payload.get(event), dict) for event in accepted_events)
+            if not has_accepted_event:
+                _log.info(
+                    "%s event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",
+                    log_prefix,
+                    delivery.trigger.id,
+                    accepted_events,
+                    list(delivery.raw_payload.keys()),
+                )
+                await self._log_event(
+                    session,
+                    trigger=delivery.trigger,
+                    org_id=delivery.org_id,
+                    payload_hash=payload_hash,
+                    result="event_type_not_accepted",
+                )
+                raise RuntimeError(
+                    f"Trigger {delivery.trigger.id}: none of the accepted event types {accepted_events} "
+                    f"found in {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+                )
+
+        event_filters = cfg.get("event_filters")
+        if event_filters and not _matches_event_filters(delivery.raw_payload, event_filters):
+            _log.info(
+                "%s event value filter not accepted for trigger %s (event_filters=%s, payload_keys=%s)",
+                log_prefix,
+                delivery.trigger.id,
+                event_filters,
+                list(delivery.raw_payload.keys()),
+            )
+            await self._log_event(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                payload_hash=payload_hash,
+                result="event_type_not_accepted",
+            )
+            raise RuntimeError(
+                f"Trigger {delivery.trigger.id}: event value filters {event_filters} "
+                f"not satisfied by {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+            )
+
+    async def _run_pre_trigger_guardrail(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        payload_hash: str,
+        is_replay: bool,
+    ) -> tuple[dict[str, Any], str]:
+        """Run the pre-trigger guardrail pass; return (post-guardrail payload, canonical hash).
+
+        A block outcome (webhook path only — replays are detection-only and
+        never block) records a ``guardrail_blocked`` TriggerEvent, stores the
+        raw payload for replay, and raises ``GuardrailBlockedAtIntakeError``.
+        The canonical POST-guardrail payload hash is the dedup key (FAR-214).
+        """
+        from modulo.core.trigger_engine.pre_guardrail import (
+            GuardrailBlockedAtIntakeError,
+            canonical_payload_hash,
+            run_pre_trigger_guardrail_pass,
+        )
+
+        outcome = await run_pre_trigger_guardrail_pass(
+            session,
+            org_id=delivery.org_id,
+            pipeline_id=delivery.trigger.pipeline_id,
+            raw_payload=delivery.raw_payload,
+            detection_only=is_replay,
+        )
+        if outcome.blocked:
+            block_event = await self._log_event(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                payload_hash=payload_hash,
+                result="guardrail_blocked",
+                error_detail=outcome.block_message[:2000],
+            )
+            # Store the raw payload for replay so the sender/provider can
+            # retry after fixing — the delivery is reject-and-retry, NOT
+            # acked-as-accepted.
+            await self._store_raw_payload(
+                session,
+                trigger_event_id=block_event.id,
+                raw_body=delivery.raw_body,
+                raw_payload=delivery.raw_payload,
+                org_id=delivery.org_id,
+            )
+            raise GuardrailBlockedAtIntakeError(
+                outcome.block_message,
+                guardrail_name=outcome.blocking_eval_name,
+            )
+        if is_replay:
+            _log.info(
+                "guardrails.pre_trigger replay detection evaluated=%d for trigger %s pipeline %s",
+                outcome.evaluated_count,
+                delivery.trigger.id,
+                delivery.trigger.pipeline_id,
+            )
+        else:
+            _log.info(
+                "guardrails.pre_trigger evaluated=%d redactions=%d for trigger %s pipeline %s",
+                outcome.evaluated_count,
+                len(outcome.redactions),
+                delivery.trigger.id,
+                delivery.trigger.pipeline_id,
+            )
+        return outcome.payload, canonical_payload_hash(outcome.payload)
+
+    async def _resolve_rate_limit_state(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        input_payload: dict[str, Any],
+        payload_hash: str,
+    ) -> _RateLimitState:
+        """Resolve the pipeline rate limit and raise when the budget is exhausted.
+
+        The rate-limit config comes from the trigger's own ``rate_limit`` config
+        (falling back to the pipeline's ``rate_limit_config`` when unset). When
+        no budget is configured the returned state carries ``key=None``.
+        """
+        cfg = delivery.trigger.config_json or {}
+        pipeline_rate_limit = cfg.get("rate_limit")
+        if pipeline_rate_limit is None:
+            from modulo.db.models.pipeline import Pipeline
+
+            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id))
+            pipeline = pipe_result.scalar_one_or_none()
+            if pipeline is not None:
+                pipeline_rate_limit = pipeline.rate_limit_config
+
+        if not (pipeline_rate_limit and pipeline_rate_limit.get("max_triggers")):
+            return _RateLimitState(key=None)
+
+        max_triggers = int(pipeline_rate_limit["max_triggers"])
+        window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
+        rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+        recent_count = await self._count_recent_rate_limited(
+            session, delivery.trigger.pipeline_id, rate_limit_key, window_seconds
+        )
+        if recent_count >= max_triggers:
+            _log.warning(
+                "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+                delivery.trigger.pipeline_id,
+                recent_count,
+                max_triggers,
+                rate_limit_key,
+            )
+            await self._log_event(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                payload_hash=payload_hash,
+                result="rate_limited",
+            )
+            raise PipelineRateLimitError(delivery.trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
+        return _RateLimitState(key=rate_limit_key, max_triggers=max_triggers, window_seconds=window_seconds)
+
+    async def _create_webhook_run(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        input_payload: dict[str, Any],
+        payload_hash: str,
+        rate_limit: _RateLimitState,
+        is_replay: bool | None = None,
+    ) -> tuple[Run, TriggerEvent]:
+        """Create the run for a webhook/replay delivery and audit + store payload.
+
+        Maps a ``RateLimitConflictError`` from ``create_run`` onto
+        ``PipelineRateLimitError`` (recording a ``rate_limited`` event first),
+        then records the ``accepted`` event and stores the raw payload for
+        replay. ``is_replay`` is forwarded verbatim so downstream consumers can
+        distinguish re-fires from original deliveries.
+        """
+        cfg = delivery.trigger.config_json or {}
+        refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
+        try:
+            run = await create_run(
+                session,
+                org_id=delivery.org_id,
+                pipeline_id=delivery.trigger.pipeline_id,
+                snapshot_id=delivery.snapshot_id,
+                trigger_type="webhook",
+                input_payload=input_payload,
+                trigger_id=delivery.trigger.id,
+                rate_limit_key=rate_limit.key,
+                work_item_refs=refs,
+                is_replay=is_replay,
+            )
+        except RateLimitConflictError as exc:
+            _log.warning(
+                "Rate limit conflict for pipeline %s: %s",
+                delivery.trigger.pipeline_id,
+                exc.rate_limit_key,
+            )
+            await self._log_event(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                payload_hash=payload_hash,
+                result="rate_limited",
+            )
+            raise PipelineRateLimitError(
+                delivery.trigger.pipeline_id,
+                exc.rate_limit_key,
+                rate_limit.max_triggers,
+                rate_limit.window_seconds,
+            ) from exc
+
+        # Audit log + store raw payload for replay (re-replay support)
+        trigger_event = await self._log_event(
+            session,
+            trigger=delivery.trigger,
+            org_id=delivery.org_id,
+            payload_hash=payload_hash,
+            result="accepted",
+            run_id=run.id,
+        )
+        await self._store_raw_payload(
+            session,
+            trigger_event_id=trigger_event.id,
+            raw_body=delivery.raw_body,
+            raw_payload=delivery.raw_payload,
+            org_id=delivery.org_id,
+        )
+        return run, trigger_event
 
 
 # ---------------------------------------------------------------------------

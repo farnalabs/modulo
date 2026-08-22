@@ -10,6 +10,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
@@ -329,36 +330,19 @@ async def _allocate_run_number(session: AsyncSession, org_id: uuid.UUID) -> int:
     return int(result.scalar_one() or 1)
 
 
-async def create_run(
-    session: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    pipeline_id: uuid.UUID,
-    snapshot_id: uuid.UUID,
-    trigger_type: str,
-    input_payload: dict[str, Any],
-    account_id: uuid.UUID | None = None,
-    trigger_id: uuid.UUID | None = None,
-    owner_team_id: uuid.UUID | None = None,
-    parent_run_id: uuid.UUID | None = None,
-    rate_limit_key: str | None = None,
-    work_item_id: uuid.UUID | None = None,
-    work_item_refs: list[dict[str, Any]] | None = None,
-    is_replay: bool | None = None,
-    variant_group_id: uuid.UUID | None = None,
-    batch_id: uuid.UUID | None = None,
-    variant_config_snapshot: dict[str, Any] | None = None,
-    feedback_correction: dict[str, Any] | None = None,
-) -> Run:
-    # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
-    # must never be created in an org whose deletion flow has set status='deleted'
-    # (or in a hard-deleted org — no row). Trigger-initiated runs already fail via
-    # ``ensure_triggers_resumable`` below (a non-active status is treated as
-    # paused); this covers MANUAL runs (``trigger_id=None`` / exempt types) that
-    # bypass the pause gate. Read the status directly (never the ORM identity
-    # map) so a freshly toggled row is observed, mirroring ``org_is_paused``.
-    # Raised as ``OrgDeletedError`` (not ValueError) so routes/cron callers can
-    # map it to a structured 4xx instead of a generic 500.
+async def _ensure_org_not_deleted(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Soft-deleted-org guard (follow-up gap from the reconcile delivery).
+
+    A run must never be created in an org whose deletion flow has set
+    ``status='deleted'`` (or in a hard-deleted org — no row). Trigger-initiated
+    runs already fail via ``ensure_triggers_resumable`` (a non-active status is
+    treated as paused); this covers MANUAL runs (``trigger_id=None`` / exempt
+    types) that bypass the pause gate. Read the status directly (never the ORM
+    identity map) so a freshly toggled row is observed, mirroring
+    ``org_is_paused``. Raised as ``OrgDeletedError`` (not ValueError) so
+    routes/cron callers can map it to a structured 4xx instead of a generic
+    500.
+    """
     org_status_result = await session.execute(
         text("SELECT status FROM organisations WHERE id = :oid"),
         # ``org_id.hex`` (not ``str``) for raw text() UUID comparisons: SQLite's
@@ -371,13 +355,16 @@ async def create_run(
     if org_status is None or org_status == "deleted":
         raise OrgDeletedError(org_id=org_id, deleted=org_status == "deleted")
 
-    # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
-    # the guardrail rows, never re-read mid-run. When ON, every bound
-    # guardrail downgrades to observe (shadow-only). A read failure (column
-    # absent on an unmigrated DB during bluegreen) defaults to OFF — normal
-    # enforcement stays active, which is the fail-closed direction for a
-    # data-safety control.
-    guardrails_kill_switch = False
+
+async def _read_guardrails_kill_switch(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Guardrails kill-switch (FAR-223 item 9) — pinned at run start.
+
+    Pinned alongside the guardrail rows, never re-read mid-run. When ON, every
+    bound guardrail downgrades to observe (shadow-only). A read failure (column
+    absent on an unmigrated DB during bluegreen) defaults to OFF — normal
+    enforcement stays active, which is the fail-closed direction for a
+    data-safety control.
+    """
     try:
         ks_row = (
             await session.execute(
@@ -386,55 +373,80 @@ async def create_run(
             )
         ).scalar_one_or_none()
         if ks_row is not None:
-            guardrails_kill_switch = bool(ks_row)
+            return bool(ks_row)
     except SQLAlchemyError:
         _log.warning("guardrails.kill_switch_read_unavailable", extra={"org_id": str(org_id)})
+    return False
 
-    # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
-    # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,
-    # MCP trigger_pipeline), test_trigger (trigger_type="manual"), feedback
-    # correction, and variant runs pass (trigger_id None or an exempt type).
-    # A NEW trigger type defaults to PAUSED (fail-closed) unless explicitly added
-    # to PAUSE_EXEMPT_TRIGGER_TYPES AND it passes trigger_id — a type that creates
-    # a run WITHOUT a Trigger row (scheduled reports / variants) bypasses the gate
-    # entirely (trigger_id=None) and is intentionally NOT pause-gated.
-    #
-    # Accepted bounded TOCTOU: a run whose gate read ``not paused`` and whose
-    # INSERT commits after the toggle UPDATE lands is an "in-flight before pause"
-    # run — benign, matches GitHub disable-workflow semantics; the pause takes
-    # effect at the next statement boundary. Deliberately NO row locks (reviewed
-    # decision). Read failures from ensure_triggers_resumable PROPAGATE — a DB
-    # error is never fabricated into "paused". ``create_run`` calls
-    # ``ensure_triggers_resumable`` (modulo.db.settings_resolver), which raises
-    # ``TriggersPausedError`` (modulo.core.exceptions); that db->core edge is
-    # exempted under the ``db-does-not-import-core`` contract in ``.importlinter``.
-    if trigger_id is not None and trigger_type not in PAUSE_EXEMPT_TRIGGER_TYPES:
-        from modulo.db.settings_resolver import ensure_triggers_resumable
 
-        await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type=trigger_type)
+async def _enforce_pause_gate(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    trigger_id: uuid.UUID | None,
+    trigger_type: str,
+) -> None:
+    """Org-wide pause kill-switch — the SINGLE authority gate.
 
-    # Reserved-key strip (FAR-142 security control, ALWAYS-ON): reserved keys
-    # are system-managed and must never be forgeable via input_payload. The
-    # strip happens BEFORE _input_hash() so an injected reserved key cannot
-    # alter the run's hash, and the STRIPPED payload is what gets stored.
-    stored_payload = _strip_reserved_keys(input_payload)
+    Gate for trigger-initiated runs (webhook, replay, cron, polling,
+    agent_signal). Manual runs (POST /runs, MCP trigger_pipeline), test_trigger
+    (trigger_type="manual"), feedback correction, and variant runs pass
+    (trigger_id None or an exempt type). A NEW trigger type defaults to PAUSED
+    (fail-closed) unless explicitly added to PAUSE_EXEMPT_TRIGGER_TYPES AND it
+    passes trigger_id.
 
-    # Guardrail interception (FAR-208 item 2) — the ingestion edge. The
-    # two-phase pass runs BEFORE the run's input_payload is persisted, so
-    # persisted state is post-redaction. A block outcome creates the run as a
-    # TERMINAL eval_failed run instead of a pending/executable one. Replays
-    # (is_replay=True) are detection-only — no act, no re-block (item 10).
-    #
-    # Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
-    # redact action (item 7: warn-on-error applies to warn-action only);
-    # observe/warn-only guardrails log-and-continue on mechanism error.
-    run_id = uuid.uuid4()
-    guardrail_results: list[Any] = []
-    guardrail_redactions: list[Any] = []
-    guardrail_blocked = False
-    guardrail_block_message = ""
-    guardrail_blocking_eval_name = ""
-    guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
+    Accepted bounded TOCTOU: a run whose gate read ``not paused`` and whose
+    INSERT commits after the toggle UPDATE lands is an "in-flight before pause"
+    run — benign, matches GitHub disable-workflow semantics. Deliberately NO
+    row locks (reviewed decision). Read failures PROPAGATE — a DB error is
+    never fabricated into "paused". ``create_run`` calls
+    ``ensure_triggers_resumable`` (modulo.db.settings_resolver), which raises
+    ``TriggersPausedError`` (modulo.core.exceptions); that db->core edge is
+    exempted under the ``db-does-not-import-core`` contract in ``.importlinter``.
+    """
+    if trigger_id is None or trigger_type in PAUSE_EXEMPT_TRIGGER_TYPES:
+        return
+    from modulo.db.settings_resolver import ensure_triggers_resumable
+
+    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type=trigger_type)
+
+
+@dataclass
+class _GuardrailInterception:
+    """Carried state from the ingestion-edge guardrail interception pass."""
+
+    payload: dict[str, Any]
+    results: list[Any]
+    redactions: list[Any]
+    blocked: bool
+    block_message: str
+    blocking_eval_name: str
+    observed_by_eval: dict[uuid.UUID, bool]
+    summary_json: dict[str, int] | None
+
+
+async def _intercept_guardrails(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    run_id: uuid.UUID,
+    payload: dict[str, Any],
+    is_replay: bool | None,
+    snapshot_id: uuid.UUID,
+    guardrails_kill_switch: bool,
+) -> _GuardrailInterception:
+    """Guardrail interception (FAR-208 item 2) — the ingestion edge.
+
+    The two-phase pass runs BEFORE the run's input_payload is persisted, so
+    persisted state is post-redaction. A block outcome creates the run as a
+    TERMINAL eval_failed run instead of a pending/executable one. Replays
+    (``is_replay=True``) are detection-only — no act, no re-block (item 10).
+
+    Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
+    redact action (item 7: warn-on-error applies to warn-action only);
+    observe/warn-only guardrails log-and-continue on mechanism error.
+    """
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
         GUARDRAIL_SKIP_EXPECTED_REASONS,
@@ -459,6 +471,13 @@ async def create_run(
         pipeline_id=pipeline_id,
         organisation_id=org_id,
     )
+
+    guardrail_blocked = False
+    guardrail_block_message = ""
+    guardrail_blocking_eval_name = ""
+    guardrail_results: list[Any] = []
+    guardrail_redactions: list[Any] = []
+    guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
 
     # Item 10 — replay uses the PINNED guardrail set from the snapshot, not the
     # live rows. A pinned guardrail whose live row no longer exists
@@ -621,7 +640,7 @@ async def create_run(
                     outcome = await run_interception_pass_async(
                         EvalEngine(),
                         guardrail_defs,
-                        stored_payload,
+                        payload,
                         detection_only=bool(is_replay),
                         skipped=skipped_guardrails,
                     )
@@ -638,7 +657,7 @@ async def create_run(
                     else:
                         guardrail_blocked = False
                 else:
-                    stored_payload = outcome.payload
+                    payload = outcome.payload
                     guardrail_results = outcome.results
                     guardrail_redactions = outcome.redactions
                     guardrail_blocked = outcome.blocked
@@ -686,9 +705,9 @@ async def create_run(
         # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
         # summary-derivation failure must never break run creation (the
         # enforcement already happened); it degrades to no summary + a log.
-        guardrail_summary_dict: dict[str, int] | None = None
+        summary_json: dict[str, int] | None = None
         try:
-            guardrail_summary_dict = build_guardrail_summary(
+            summary_json = build_guardrail_summary(
                 bound=len(guardrail_defs) + len(skipped_guardrails),
                 definitions=guardrail_defs,
                 results=guardrail_results,
@@ -707,7 +726,91 @@ async def create_run(
         except Exception:
             _log.exception("guardrails.summary_derive_failed", extra={"run_id": str(run_id)})
     else:
-        guardrail_summary_dict = None
+        summary_json = None
+
+    return _GuardrailInterception(
+        payload=payload,
+        results=guardrail_results,
+        redactions=guardrail_redactions,
+        blocked=guardrail_blocked,
+        block_message=guardrail_block_message,
+        blocking_eval_name=guardrail_blocking_eval_name,
+        observed_by_eval=guardrail_observed_by_eval,
+        summary_json=summary_json,
+    )
+
+
+async def create_run(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    trigger_type: str,
+    input_payload: dict[str, Any],
+    account_id: uuid.UUID | None = None,
+    trigger_id: uuid.UUID | None = None,
+    owner_team_id: uuid.UUID | None = None,
+    parent_run_id: uuid.UUID | None = None,
+    rate_limit_key: str | None = None,
+    work_item_id: uuid.UUID | None = None,
+    work_item_refs: list[dict[str, Any]] | None = None,
+    is_replay: bool | None = None,
+    variant_group_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
+    variant_config_snapshot: dict[str, Any] | None = None,
+    feedback_correction: dict[str, Any] | None = None,
+) -> Run:
+    # Soft-deleted-org guard — a run must never be created in an org whose
+    # deletion flow has set status='deleted' (or in a hard-deleted org).
+    await _ensure_org_not_deleted(session, org_id)
+
+    # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
+    # the guardrail rows, never re-read mid-run. Defaults to OFF on read
+    # failure (the fail-closed direction for a data-safety control).
+    guardrails_kill_switch = await _read_guardrails_kill_switch(session, org_id)
+
+    # Org-wide pause kill-switch — the SINGLE authority gate for
+    # trigger-initiated runs (webhook, replay, cron, polling, agent_signal).
+    # Manual runs (POST /runs, MCP trigger_pipeline), test_trigger
+    # (trigger_type="manual"), feedback correction, and variant runs pass
+    # (trigger_id None or an exempt type).
+    await _enforce_pause_gate(
+        session,
+        org_id,
+        trigger_id=trigger_id,
+        trigger_type=trigger_type,
+    )
+
+    # Reserved-key strip (FAR-142 security control, ALWAYS-ON): reserved keys
+    # are system-managed and must never be forgeable via input_payload. The
+    # strip happens BEFORE _input_hash() so an injected reserved key cannot
+    # alter the run's hash, and the STRIPPED payload is what gets stored.
+    stored_payload = _strip_reserved_keys(input_payload)
+
+    # Guardrail interception (FAR-208 item 2) — the ingestion edge. The
+    # two-phase pass runs BEFORE the run's input_payload is persisted, so
+    # persisted state is post-redaction. A block outcome creates the run as a
+    # TERMINAL eval_failed run instead of a pending/executable one. Replays
+    # (is_replay=True) are detection-only — no act, no re-block (item 10).
+    run_id = uuid.uuid4()
+    interception = await _intercept_guardrails(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        run_id=run_id,
+        payload=stored_payload,
+        is_replay=is_replay,
+        snapshot_id=snapshot_id,
+        guardrails_kill_switch=guardrails_kill_switch,
+    )
+    stored_payload = interception.payload
+    guardrail_results = interception.results
+    guardrail_blocked = interception.blocked
+    guardrail_block_message = interception.block_message
+    guardrail_blocking_eval_name = interception.blocking_eval_name
+    guardrail_observed_by_eval = interception.observed_by_eval
+    guardrail_summary_dict = interception.summary_json
 
     # Engine-only feedback-correction context (FAR-142): the
     # ``_feedback_correction`` key is reserved and stripped above, so a user

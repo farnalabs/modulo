@@ -170,11 +170,21 @@ class BridgeClient:
         return self.notify(tool_name, args, "after", result_summary)
 
 
+def _safe_config_path(path: str) -> str:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"config path {path!r} is outside the working directory")
+    return resolved
+
+
 def _load_config(config_path: str | None) -> dict[str, Any]:
     raw = {}
     if config_path:
         try:
-            with open(config_path, encoding="utf-8") as handle:
+            safe_path = _safe_config_path(config_path)
+            with open(safe_path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
             if isinstance(loaded, dict):
                 raw = loaded
@@ -205,8 +215,10 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
         _err("error: --wrap requires a command")
         return 2
     shell_cmd = " ".join(argv)
+    # NOSONAR: deliberate — configured agent command (pipeline config, not untrusted
+    # input) needs shell features; already suppressed for bandit (B603) and ruff (S603).
     try:
-        proc = subprocess.Popen(  # noqa: S603  # nosec B603 — execs the configured agent command (fixed argv list, shell=False, no user input)
+        proc = subprocess.Popen(  # noqa: S603  # nosec B603 — execs the configured agent command (fixed argv list, shell=False, no user input)  # NOSONAR
             ["/bin/sh", "-c", shell_cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
