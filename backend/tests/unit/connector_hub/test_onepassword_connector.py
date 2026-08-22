@@ -76,8 +76,9 @@ async def test_query_vault(connector):
 
 
 async def test_query_vault_missing_id(connector):
+    query = ConnectorQuery(resource="vault")
     with pytest.raises(ValueError, match="'vault_id' in filters"):
-        await connector.query(ConnectorQuery(resource="vault"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +95,9 @@ async def test_query_items(connector):
 
 
 async def test_query_items_missing_vault_id(connector):
+    query = ConnectorQuery(resource="items")
     with pytest.raises(ValueError, match="'vault_id' in filters"):
-        await connector.query(ConnectorQuery(resource="items"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -109,8 +111,9 @@ async def test_query_item(connector):
 
 
 async def test_query_item_missing_item_id(connector):
+    query = ConnectorQuery(resource="item", filters={"vault_id": "vault1"})
     with pytest.raises(ValueError, match="'item_id' in filters"):
-        await connector.query(ConnectorQuery(resource="item", filters={"vault_id": "vault1"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -124,8 +127,9 @@ async def test_query_item_by_title(connector):
 
 
 async def test_query_item_by_title_missing_title(connector):
+    query = ConnectorQuery(resource="item_by_title", filters={"vault_id": "vault1"})
     with pytest.raises(ValueError, match="'title' in filters"):
-        await connector.query(ConnectorQuery(resource="item_by_title", filters={"vault_id": "vault1"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +164,9 @@ async def test_query_file(connector):
 
 
 async def test_query_file_missing_file_id(connector):
+    query = ConnectorQuery(resource="file", filters={"vault_id": "vault1", "item_id": "item1"})
     with pytest.raises(ValueError, match="'file_id' in filters"):
-        await connector.query(
-            ConnectorQuery(resource="file", filters={"vault_id": "vault1", "item_id": "item1"}),
-        )
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
