@@ -55,6 +55,7 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
+from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.n8n import N8NConnector
@@ -504,6 +505,8 @@ def _build_connector(
                 base_url=base_url,
                 api_version=config.get("api_version", 3),
             )
+        case "linear":
+            return LinearConnector(token=_get_cred(creds, "token", type_id))
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
         case "sharepoint":
