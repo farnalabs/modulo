@@ -37,6 +37,32 @@ _WATERMARK_KEY = "product_analytics_last_dumped_date"
 # Backfill cap (design doc section 8).
 _BACKFILL_MAX_DAYS = 14
 
+# Jitter constants — each instance picks a random offset within a 6-hour
+# window so that multiple instances don't all dump at the same minute.
+_DUMP_WINDOW_MINUTES = 360  # 6 hours
+_DUMP_EXECUTION_WINDOW_MINUTES = 10  # each instance gets 10 min to complete
+_OFFSET_KEY = "product_analytics_dump_offset_minutes"
+
+
+async def _should_dump_now(factory: Any) -> bool:
+    """Check if it's this instance's turn to dump based on stored jitter offset."""
+    import secrets as _secrets
+
+    async with factory() as session, session.begin():
+        offset = await read_system_config(session, _OFFSET_KEY)
+
+    if offset is None:
+        offset = _secrets.randbelow(_DUMP_WINDOW_MINUTES)
+        async with factory() as session, session.begin():
+            await write_system_config(session, _OFFSET_KEY, str(offset))
+        _log.info("product_analytics.jitter_offset_set", extra={"offset_minutes": offset})
+
+    offset = int(offset)
+    now = datetime.now(UTC)
+    current_minute_of_day = now.hour * 60 + now.minute
+
+    return offset <= current_minute_of_day < offset + _DUMP_EXECUTION_WINDOW_MINUTES
+
 
 async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     """SAQ system-cron job -- daily metrics dump.
@@ -49,6 +75,11 @@ async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
 
     settings = get_settings()
     factory = _make_system_session_factory()
+
+    # Jitter gate — each instance has a random offset within a 6-hour window.
+    if not await _should_dump_now(factory):
+        _log.debug("product_analytics.jitter_skip")
+        return {"skipped": "jitter_skip"}
 
     # Instance-level gate (design doc section 5).
     instance_enabled = await _check_instance_switch(factory)

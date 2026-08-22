@@ -1100,13 +1100,13 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=1,
             ttl=300,
         ),
-        # metrics_dump: daily 01:00 UTC, unique=True, system session factory.
-        # Runs after analytics_facts_maintenance (same slot, separate job).
+        # metrics_dump: hourly cron, unique=True, system session factory.
+        # Jitter offset per instance spreads execution across a 6-hour window.
         # Watermark advances only on full success; skips when no consenting
         # orgs or instance switch off.
         CronJob(
             metrics_dump,
-            cron="0 1 * * *",
+            cron="0 * * * *",
             unique=True,
             timeout=600,
             heartbeat=60,
