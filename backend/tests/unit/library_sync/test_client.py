@@ -86,24 +86,6 @@ class TestFetchManifest:
         assert await client.fetch_manifest() is None
 
 
-class TestFetchCatalog:
-    @respx.mock
-    async def test_returns_entries_on_success(self, client: LibraryClient) -> None:
-        entries = [{"id": "agent-1", "type": "agent"}, {"id": "schema-1", "type": "schema"}]
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(200, json={"entries": entries}))
-        assert await client.fetch_catalog() == entries
-
-    @respx.mock
-    async def test_returns_none_on_http_error(self, client: LibraryClient) -> None:
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(404))
-        assert await client.fetch_catalog() is None
-
-    @respx.mock
-    async def test_returns_none_when_entries_missing(self, client: LibraryClient) -> None:
-        respx.get(f"{ENDPOINT}/v1/catalog").mock(return_value=httpx.Response(200, json={"not_entries": []}))
-        assert await client.fetch_catalog() is None
-
-
 class TestFetchBlob:
     @respx.mock
     async def test_returns_content_when_hash_matches(self, client: LibraryClient) -> None:

@@ -92,15 +92,13 @@ async def sync_library(session: AsyncSession) -> SyncResult:
             await _record_failure(session, error)
             return SyncResult(success=False, error=error)
 
-        catalog_entries = await client.fetch_catalog()
-        if catalog_entries is None:
-            error = "catalog fetch failed"
-            await _record_failure(session, error)
-            return SyncResult(success=False, error=error)
-
         data = parse_manifest(manifest)
         revoked_ids = {str(entry.get("id")) for entry in data.revoked if entry.get("id") is not None}
-        applied_catalog = _apply_revocations(catalog_entries, revoked_ids)
+        # The verified manifest already carries the full entry list, so derive
+        # the persisted catalog from it instead of issuing a redundant
+        # ``/v1/catalog`` fetch. ``catalog_json`` is written only for
+        # revocation marking and is never read back over the wire.
+        applied_catalog = _apply_revocations(list(data.entries), revoked_ids)
 
         now = datetime.now(UTC)
         async with session.begin():

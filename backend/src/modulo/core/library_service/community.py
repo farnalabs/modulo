@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.library_sync import LibraryClient, get_cached_manifest, is_revoked
 from modulo.core.library_sync.manifest import parse_manifest
+from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
@@ -219,16 +220,6 @@ async def install_community_entry(
     ):
         raise ValueError("entry not found")
 
-    content = await _fetch_blob(content_sha256)
-    if content is None:
-        raise ValueError("blob fetch failed")
-
-    name = slug
-    raw_description = content.get("description")
-    description = raw_description if isinstance(raw_description, str) else None
-    settings = get_settings()
-    source_url = f"{settings.modulo_library_endpoint}/v1/entries/{entry_id}"
-
     began = await _enter_org_context(session, org_id)
     try:
         existing = await session.execute(
@@ -242,8 +233,20 @@ async def install_community_entry(
         )
         if existing.scalar_one_or_none() is not None:
             raise ValueError("already installed")
-        primitive = LibraryPrimitive(
-            organisation_id=org_id,
+
+        content = await _fetch_blob(content_sha256)
+        if content is None:
+            raise ValueError("blob fetch failed")
+
+        name = slug
+        raw_description = content.get("description")
+        description = raw_description if isinstance(raw_description, str) else None
+        settings = get_settings()
+        source_url = f"{settings.modulo_library_endpoint}/v1/entries/{entry_id}"
+
+        primitive = await create_library_primitive(
+            session,
+            org_id=org_id,
             source="registry",
             primitive_type=primitive_type,
             name=name,
@@ -267,7 +270,6 @@ async def install_community_entry(
             auto_update=False,
             tier="native",
         )
-        session.add(primitive)
         await session.flush()
     except BaseException:
         if began:

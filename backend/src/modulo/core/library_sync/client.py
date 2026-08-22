@@ -92,33 +92,6 @@ class LibraryClient:
             return None
         return manifest
 
-    async def fetch_catalog(self) -> list[dict[str, Any]] | None:
-        """GET ``/v1/catalog`` and return the ``entries`` list.
-
-        Returns ``None`` on any failure (never raises, fail-open).
-        """
-        url = self._url("/v1/catalog")
-        if not await self._validate(url):
-            return None
-        client = await self._get_client()
-        try:
-            resp = await client.get(url)
-            if not resp.is_success:
-                _log.warning("library_sync.client.catalog_http_error", extra={"status": resp.status_code})
-                return None
-            payload = resp.json()
-        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
-            _log.warning("library_sync.client.catalog_fetch_failed", extra={"reason": str(exc)})
-            return None
-        if not isinstance(payload, dict):
-            _log.warning("library_sync.client.catalog_not_object")
-            return None
-        entries = payload.get("entries")
-        if not isinstance(entries, list):
-            _log.warning("library_sync.client.catalog_no_entries")
-            return None
-        return entries
-
     async def fetch_blob(self, sha256: str) -> bytes | None:
         """GET ``/v1/blobs/{sha256}`` and verify the content hash matches.
 
