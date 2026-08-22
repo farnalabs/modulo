@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -98,6 +99,12 @@ EXECUTOR_SETUP_FAILED_ERROR_CODE = "executor_setup_failed"
 EXECUTOR_STALLED_ERROR_CODE = "executor_stalled"
 EXECUTOR_FAILED_ERROR_CODE = "executor_failed"
 EXECUTOR_HEARTBEAT_LOST_ERROR_CODE = "executor_heartbeat_lost"
+# FAR-369 (defense-in-depth): a node started executing but did not COMPLETE
+# within its configured ``timeout_seconds`` — independent of idle/activity.
+# Distinct from EXECUTOR_STALLED_ERROR_CODE (the short setup-grace,
+# claimed-but-nodeless zombie) so analytics/alerting can tell a half-alive
+# stalled node from a run that never dispatched a node at all.
+NODE_DEADLINE_EXCEEDED_ERROR_CODE = "node_deadline_exceeded"
 
 
 class ClaimSupersededError(Exception):
@@ -677,6 +684,169 @@ async def zombie_watchdog(
     )
 
 
+async def node_deadline_watchdog(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    node_timeouts: dict[str, int],
+    *,
+    exec_task: asyncio.Task[Any],
+    stall_requested: asyncio.Event | None = None,
+    node_started_event: asyncio.Event,
+    node_completed_event: asyncio.Event,
+    run_done_event: asyncio.Event,
+    node_deadlines: dict[str, tuple[float, int]],
+    default_timeout: int | None = None,
+) -> None:
+    """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
+
+    Defense-in-depth for the sandbox_agent half-alive stall (FAR-369): when
+    opencode awaits a "continue" prompt that never comes but keeps the SSE
+    connection half-alive (comment heartbeats reset ``chunkTimeout``), the
+    idle-watchdog never fires (the node is never "idle") and the run would hang
+    until the 35-min nodeless-zombie backstop (``agent.stall``). This watchdog
+    holds each node to its OWN hard deadline — measured from when the node
+    STARTED executing, independent of idle/activity — and fails the run the
+    instant the deadline passes, instead of riding to 35 min.
+
+    It complements (does NOT replace) the idle-watchdog: that one catches truly
+    idle stalls fast; this one catches half-alive stalls at the node's hard
+    deadline. It also complements the short setup-grace ``zombie_watchdog``:
+    that one bounds the pre-node window (no node dispatched); this one bounds a
+    node that DID dispatch but never finished.
+
+    Tracks EVERY in-flight node, not just the single most-recent one. LangGraph
+    runs sibling branches concurrently within a shared superstep (parallel
+    fan-out — a supported, first-class topology), so a single ``current_node``
+    pointer would let a stalled sibling hide behind a newer sibling's start:
+    when sibling B's ``on_chain_start`` lands mid-flight while stalled A is
+    still executing, the watchdog would repoint to B and abandon A's deadline,
+    leaving A to ride to the 35-min backstop. ``node_deadlines`` maps
+    ``node_id -> (absolute_deadline, timeout_seconds)`` and is populated by the
+    executor's per-node callbacks (``on_node_started`` adds an entry with its
+    deadline; ``on_node_completed`` removes it). The watchdog enforces each
+    entry's deadline independently, so a stalled A is failed even if B starts
+    and completes alongside it.
+
+    Coordination mirrors :func:`zombie_watchdog`: cancel ``exec_task`` FIRST,
+    then signal ``stall_requested`` (so the wrapper distinguishes a
+    watchdog-initiated cancellation from a worker shutdown), then terminal-fail
+    the run with ``node_deadline_exceeded``. Cancelling the executor FIRST
+    ensures a late-returning ``execute`` cannot overwrite the failure through
+    ``finalize_cost``. The wrapper awaits this task to completion before
+    cancelling it (see the ``exec_task.done()`` wait below, which lets the
+    watchdog stand down promptly without a mid-transaction cancel), so a pending
+    ``fail_run_terminal`` transaction commits.
+
+    Stands down (no-op) if: the run completes / becomes terminal before any
+    deadline, every in-flight node completes within its ``timeout_seconds``, the
+    executor task finishes, or all in-flight nodes complete — so it never fails
+    an already-finished run and never double-fails with the idle-watchdog or the
+    35-min backstop.
+    """
+    if default_timeout is None:
+        default_timeout = int(get_settings().saq_node_default_timeout_seconds)
+
+    while True:
+        # Stand down if the run is already over or the executor finished. We
+        # also wait on exec_task.done() (below) so that when the wrapper cancels
+        # exec_task (watchdog stall / supersession / heartbeat loss) this task
+        # stands down cleanly instead of blocking on node_started_event.
+        if run_done_event.is_set() or exec_task.done():
+            return
+        # If no node is currently in flight, wait for one to start executing OR
+        # the run to finish — so we never block forever after the last node
+        # completes. ``node_deadlines`` is the source of truth for in-flight
+        # nodes (populated by on_node_started / on_node_completed), so a parallel
+        # fan-out merely adds a second entry rather than replacing the first.
+        if not node_deadlines:
+            started_wait = asyncio.ensure_future(node_started_event.wait())
+            done_wait = asyncio.ensure_future(run_done_event.wait())
+            try:
+                await asyncio.wait(
+                    {started_wait, done_wait, exec_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                started_wait.cancel()
+                done_wait.cancel()
+            if run_done_event.is_set() or exec_task.done():
+                return
+            if not node_started_event.is_set():
+                # Only run_done / exec_task fired while we were waiting; loop.
+                continue
+            node_started_event.clear()
+            # A node was added to node_deadlines by on_node_started; recompute.
+            continue
+
+        # At least one node is in flight. Enforce EACH entry's own deadline —
+        # parallel fan-out means multiple siblings may be running at once, and a
+        # stalled one must be failed independently of its siblings' progress.
+        soonest_deadline = min(dl for dl, _to in node_deadlines.values())
+        remaining = soonest_deadline - time.monotonic()
+        if remaining <= 0:
+            # One or more in-flight nodes blew their deadline. Fail on the most
+            # overdue one (stable pick for logging).
+            exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
+            exceeded.sort(key=lambda nid: node_deadlines[nid][0])
+            node_id = exceeded[0]
+            _timeout = node_deadlines[node_id][1]
+            # Deadline exceeded and the node is still running and the run is not
+            # terminal — cancel and fail. Double-check to avoid racing a
+            # completion that landed in the same event-loop step.
+            if run_done_event.is_set() or exec_task.done():
+                return
+            _log.warning(
+                "node_deadline_watchdog.exceeded run=%s node=%s exceeded timeout_seconds=%ds — "
+                "cancelling executor and failing run",
+                run_id,
+                node_id,
+                _timeout,
+            )
+            exec_task.cancel()
+            if stall_requested is not None:
+                stall_requested.set()
+            await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                error_detail=(
+                    f"Node '{node_id}' did not complete within its configured timeout_seconds "
+                    f"({_timeout}s) — absolute node-deadline watchdog (half-alive stall)"
+                ),
+            )
+            return
+
+        # Wait until a node completes, a new node starts, the run finishes, the
+        # executor is cancelled, or the soonest deadline elapses — whichever
+        # comes first. Each wait() is wrapped in ensure_future: asyncio.wait on a
+        # bare coroutine is illegal on Python 3.12+, and these are single-shot
+        # waits (safe to cancel — see the shield lesson).
+        c = asyncio.ensure_future(node_completed_event.wait())
+        s = asyncio.ensure_future(node_started_event.wait())
+        d = asyncio.ensure_future(run_done_event.wait())
+        try:
+            await asyncio.wait(
+                {c, s, d, exec_task},
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=remaining,
+            )
+        finally:
+            c.cancel()
+            s.cancel()
+            d.cancel()
+        if run_done_event.is_set() or exec_task.done():
+            return
+        # A node completed (removed from node_deadlines by on_node_completed) or
+        # a new node started (added by on_node_started): the dict is already the
+        # authoritative in-flight set, so just clear the stale wake-up signals
+        # and recompute the soonest deadline on the next loop iteration.
+        node_started_event.clear()
+        node_completed_event.clear()
+        continue
+
+
 async def _read_run_status(aeng: AsyncEngine, run_id: str, org_id: str) -> str | None:
     """Read the run's current status (RLS-scoped)."""
     async with aeng.connect() as c:
@@ -763,10 +933,37 @@ async def run_executor_with_watchdog(
     first_progress = asyncio.Event()
     stall_requested = asyncio.Event()
     health_failed = asyncio.Event()
+    # FAR-369 absolute node-deadline watchdog state. ``node_started_event`` /
+    # ``node_completed_event`` are pulsed by the executor's per-node callbacks
+    # (wired below); ``node_deadlines`` maps each in-flight node_id to its
+    # (absolute_deadline, timeout_seconds) — populated per on_node_started and
+    # removed per on_node_completed — so parallel fan-out siblings are tracked
+    # independently; ``run_done_event`` is set once the run is terminal/complete
+    # so the watchdog stands down instead of failing an already-finished run.
+    node_started_event = asyncio.Event()
+    node_completed_event = asyncio.Event()
+    run_done_event = asyncio.Event()
+    node_deadlines: dict[str, tuple[float, int]] = {}
     if superseded is None:
         superseded = asyncio.Event()
     if executor is not None:
         executor.on_first_progress = first_progress.set
+
+        # FAR-369: wire the per-node start/completion callbacks that drive the
+        # absolute node-deadline watchdog. Each node gets its own deadline entry
+        # (set on start, removed on completion) so a stalled sibling in a
+        # parallel fan-out cannot hide behind a newer sibling's start.
+        def _on_node_started(nid: str) -> None:
+            to = node_timeouts.get(nid, default_timeout)
+            node_deadlines[nid] = (time.monotonic() + to, to)
+            node_started_event.set()
+
+        def _on_node_completed(nid: str) -> None:
+            node_deadlines.pop(nid, None)
+            node_completed_event.set()
+
+        executor.on_node_started = _on_node_started
+        executor.on_node_completed = _on_node_completed
         # Wire the cancellation-intent signals into the executor so its
         # NodeCancelledError retry handler can distinguish a watchdog stall
         # from a supersession and skip the pending-reset when either fired.
@@ -787,6 +984,34 @@ async def run_executor_with_watchdog(
             stall_requested=stall_requested,
         ),
         name=f"saq-zombie-watchdog-{rid}",
+    )
+    # FAR-369 absolute node-deadline watchdog: fails a node that does not
+    # COMPLETE within its configured timeout_seconds, independent of
+    # idle/activity. Complements the idle-watchdog (truly-idle stalls) and the
+    # short setup-grace zombie_watchdog (nodeless zombies). Shares exec_task /
+    # stall_requested coordination with zombie_watchdog. node_timeouts is read
+    # from the executor (populated from the graph JSON before streaming) as a
+    # shared dict reference so it is filled by the time the first node starts.
+    # Read the live dict reference (populated from the graph JSON by
+    # _prepare_and_stream before streaming). Pass the same object — NOT a copy
+    # — so the watchdog sees the per-node timeouts once they are filled in.
+    node_timeouts = executor._node_timeouts if executor is not None else {}
+    default_timeout = get_settings().saq_node_default_timeout_seconds
+    node_deadline_task = asyncio.create_task(
+        node_deadline_watchdog(
+            aeng,
+            run_id,
+            org_id,
+            node_timeouts,
+            exec_task=exec_task,
+            stall_requested=stall_requested,
+            node_started_event=node_started_event,
+            node_completed_event=node_completed_event,
+            run_done_event=run_done_event,
+            node_deadlines=node_deadlines,
+            default_timeout=default_timeout,
+        ),
+        name=f"saq-node-deadline-watchdog-{rid}",
     )
     heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
         heartbeat_loop(
@@ -812,6 +1037,8 @@ async def run_executor_with_watchdog(
             exec_task.cancel()
         if watchdog_task is not None and not watchdog_task.done():
             watchdog_task.cancel()
+        if node_deadline_task is not None and not node_deadline_task.done():
+            node_deadline_task.cancel()
 
     abort_watch_task = asyncio.create_task(_abort_watcher(), name=f"saq-abort-watch-{rid}")
 
@@ -819,6 +1046,9 @@ async def run_executor_with_watchdog(
     exec_result: Any = None
     try:
         exec_result = await exec_task
+        # The run reached a terminal/complete outcome via the executor — signal
+        # the node-deadline watchdog to stand down (never fail a finished run).
+        run_done_event.set()
     except asyncio.CancelledError:
         # Distinguish watchdog-initiated cancellation, supersession, and
         # heartbeat-loss from worker shutdown. Await the watchdog to completion
@@ -829,8 +1059,18 @@ async def run_executor_with_watchdog(
         if watchdog_task is not None and not watchdog_task.done():
             with contextlib.suppress(asyncio.CancelledError):
                 await watchdog_task
+        if node_deadline_task is not None and not node_deadline_task.done():
+            # Await the node-deadline watchdog to completion FIRST, before any
+            # cancel — its fail_run_terminal transaction must commit. The
+            # watchdog waits on exec_task.done() (see node_deadline_watchdog),
+            # so once exec_task is cancelled here it stands down promptly and
+            # this await cannot deadlock. Cancelling it mid-write would roll
+            # back the terminal-fail and leave the run ``running`` — the hung
+            # state this watchdog exists to eliminate (FAR-369).
+            with contextlib.suppress(asyncio.CancelledError):
+                await node_deadline_task
         if stall_requested.is_set():
-            _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
+            _log.warning("run_executor_with_watchdog: execution cancelled by node/executor watchdog for run %s", rid)
         elif health_failed.is_set():
             _log.error(
                 "run_executor_with_watchdog: heartbeat lost for run %s — killing sandbox and failing run",
@@ -861,6 +1101,9 @@ async def run_executor_with_watchdog(
         raise
     except Exception as exc:
         exec_exc = exc
+        # A generic executor failure will be terminal-failed below — signal the
+        # node-deadline watchdog to stand down so it does not double-fail.
+        run_done_event.set()
         _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
     finally:
         if abort_watch_task is not None:
@@ -871,6 +1114,10 @@ async def run_executor_with_watchdog(
             watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watchdog_task
+        if node_deadline_task is not None:
+            node_deadline_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await node_deadline_task
         if exec_task is not None and not exec_task.done():
             exec_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

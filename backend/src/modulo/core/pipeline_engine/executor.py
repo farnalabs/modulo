@@ -1193,6 +1193,19 @@ class PipelineExecutor:
         # distinguish "hung in pre-node setup" (no progress) from a legitimate
         # long-running node (progress already signalled → watchdog stands down).
         self.on_first_progress: Callable[[], None] | None = None
+        # Absolute node-deadline watchdog hooks (FAR-369, defense-in-depth): wired
+        # by ``pipeline_execution.run_executor_with_watchdog`` to asyncio.Events.
+        # Called when EACH node starts / completes (by node_id) so the watchdog
+        # can measure each node's execution against its own ``timeout_seconds``
+        # independently of idle/activity — catching a half-alive SSE stall that
+        # defeats the idle-watchdog. Unlike ``on_first_progress`` (fires once),
+        # these fire once per node.
+        self.on_node_started: Callable[[str], None] | None = None
+        self.on_node_completed: Callable[[str], None] | None = None
+        # Per-node configured ``timeout_seconds`` (node_id -> seconds), populated
+        # from the graph JSON before streaming so the watchdog can read it as a
+        # shared dict reference. Empty until ``_prepare_and_stream`` runs.
+        self._node_timeouts: dict[str, int] = {}
         # Fenced-lease authority (dist/runtime-core A1): the claim token
         # captured at execute/resume start. Every terminal/demotion write by
         # this executor is fenced against it so a superseded original cannot
@@ -2944,6 +2957,19 @@ class PipelineExecutor:
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
         node_ids.clear()
         node_ids.update({str(n["id"]) for n in graph_json.get("nodes", [])})
+        # FAR-369: expose each node's configured ``timeout_seconds`` so the
+        # absolute node-deadline watchdog (run_executor_with_watchdog) can hold
+        # every node to its own hard deadline. Defaults to the pipeline-level
+        # node timeout when a node omits it. Mutate in place (NOT reassign) so
+        # the dict object passed to the watchdog stays the live reference that
+        # the watchdog reads once populated.
+        self._node_timeouts.clear()
+        self._node_timeouts.update(
+            {
+                str(n["id"]): int(n.get("timeout_seconds", pipeline_node_timeout_seconds))
+                for n in graph_json.get("nodes", [])
+            }
+        )
         node_token_budgets: dict[str, int] = {
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
@@ -3903,6 +3929,15 @@ class PipelineExecutor:
                         state.first_node_signalled = True
                         if self.on_first_progress is not None:
                             self.on_first_progress()
+                    # FAR-369 absolute node-deadline watchdog: signal per-node
+                    # start/completion (by node_id) so the deadline watchdog can
+                    # hold each node to its own timeout_seconds independent of
+                    # idle/activity. ``on_node_started`` runs for BOTH the first
+                    # and every later node (unlike on_first_progress).
+                    if event_type == "node_started" and self.on_node_started is not None:
+                        self.on_node_started(str(payload.get("node_id", "")))
+                    elif event_type == "node_completed" and self.on_node_completed is not None:
+                        self.on_node_completed(str(payload.get("node_id", "")))
                     broker.publish(event_type, payload)
 
                 event_kind = lg_event.get("event", "")
