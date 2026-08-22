@@ -316,10 +316,9 @@ async def test_query_http_500(connector: OnePasswordConnector) -> None:
 @respx.mock
 async def test_write_http_403(connector: OnePasswordConnector) -> None:
     respx.post(f"{BASE_URL}/v1/vaults/v1/items").mock(return_value=httpx.Response(403, text="Forbidden"))
+    payload = ConnectorPayload(
+        resource="item",
+        data={"vault_id": "v1", "title": "New", "type": "LOGIN", "fields": []},
+    )
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(
-                resource="item",
-                data={"vault_id": "v1", "title": "New", "type": "LOGIN", "fields": []},
-            )
-        )
+        await connector.write(payload)

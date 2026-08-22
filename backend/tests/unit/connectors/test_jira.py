@@ -110,13 +110,15 @@ async def test_health_check_token_auth(connector_token):
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported Jira resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="delete", data={})
     with pytest.raises(ValueError, match="Unsupported Jira write resource"):
-        await connector.write(ConnectorPayload(resource="delete", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
@@ -131,8 +133,9 @@ def test_missing_credentials_raises():
 @respx.mock
 async def test_query_issue_http_error(connector):
     respx.get(f"{_BASE}/issue/NONEXISTENT").mock(return_value=httpx.Response(404))
+    query = ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"})
     with pytest.raises(ValueError, match="Jira API HTTP 404"):
-        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -140,8 +143,9 @@ async def test_query_search_http_error(connector):
     respx.post(f"{_BASE}/search").mock(
         return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]})
     )
+    query = ConnectorQuery(resource="search", filters={"jql": "invalid jql"})
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
-        await connector.query(ConnectorQuery(resource="search", filters={"jql": "invalid jql"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -149,13 +153,12 @@ async def test_write_create_issue_http_error(connector):
     respx.post(f"{_BASE}/issue").mock(
         return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}})
     )
+    payload = ConnectorPayload(
+        resource="issue",
+        data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
+    )
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue",
-                data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
