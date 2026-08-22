@@ -10,8 +10,18 @@ bdd:
   - backend/tests/bdd/features/library/auto_update.feature
 code:
   - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
+  - backend/src/modulo/db/migrations/versions/0122_library_sync_state.py
+  - backend/src/modulo/db/migrations/versions/0123_relax_registry_signature_check.py
   - backend/src/modulo/core/library_service/__init__.py
+  - backend/src/modulo/core/library_service/community.py
+  - backend/src/modulo/core/library_sync/__init__.py
+  - backend/src/modulo/core/library_sync/client.py
+  - backend/src/modulo/core/library_sync/manifest.py
+  - backend/src/modulo/core/library_sync/models.py
+  - backend/src/modulo/core/library_sync/sync.py
+  - backend/src/modulo/db/models/library_sync_state.py
   - backend/src/modulo/api/routes/library.py
+  - backend/src/modulo/api/routes/community_library.py
   - frontend/src/views/LibraryView.vue
 unit-tests:
   - backend/tests/unit/library_service/test_library_service.py

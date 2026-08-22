@@ -118,6 +118,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_worker_db_pool_size": 2,
         "saq_redis_pool_size": 50,
         "saq_run_claim_cap": 20,
+        "modulo_library_sync_interval_seconds": 300,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -1287,6 +1288,7 @@ def _saq_settings(**overrides: object) -> MagicMock:
         "saq_auth_username": "modulo-saq",
         "saq_redis_pool_size": 50,
         "saq_worker_concurrency": 5,
+        "modulo_library_sync_interval_seconds": 300,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -1335,6 +1337,7 @@ class TestSaqWorkerSettings:
             "check_missed_fire_alerts_cron",
             "journey_reconcile",
             "metrics_dump",
+            "library_sync",
         }
         assert settings["after_process"] is not None
 

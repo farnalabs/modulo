@@ -15,6 +15,8 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import select
@@ -48,30 +50,30 @@ _VALID_PRIMITIVE_TYPES = {
 }
 
 
-async def _enter_org_context(session: AsyncSession, org_id: uuid.UUID) -> bool:
-    """Set RLS org context on *session*, beginning a transaction when none is active.
+@asynccontextmanager
+async def _org_context(session: AsyncSession, org_id: uuid.UUID) -> AsyncIterator[None]:
+    """Set the RLS org context for the duration of the block.
 
-    ``set_rls_org`` requires an active transaction (sessions use
-    ``autobegin=False``), so when the caller has not opened one we begin it
-    here. Returns True when this call began the transaction (the caller owns
-    rollback on failure); False when reusing the caller's transaction.
+    Uses a savepoint (``session.begin_nested``) so a failure rolls back only
+    this scope's work and leaves any concurrent uncommitted writes on the
+    shared session intact (the ``session-rollback-abuse`` semgrep rule forbids
+    a full ``session.rollback()``). ``set_rls_org`` uses a transaction-local
+    ``set_config(..., true)``, so the savepoint rollback also reverts the RLS
+    context. When the caller already owns an active transaction we set RLS
+    directly and let the caller manage commit/rollback.
     """
     if session.in_transaction():
         await set_rls_org(session, org_id)
-        return False
-    await session.begin()
-    try:
+        yield
+        return
+    async with session.begin_nested():
         await set_rls_org(session, org_id)
-    except BaseException:
-        await session.rollback()
-        raise
-    return True
+        yield
 
 
 async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> set[tuple[str, str]]:
     """Return the set of (slug, version) registry rows already installed for *org_id*."""
-    began = await _enter_org_context(session, org_id)
-    try:
+    async with _org_context(session, org_id):
         result = await session.execute(
             select(LibraryPrimitive.slug, LibraryPrimitive.version).where(
                 LibraryPrimitive.organisation_id == org_id,
@@ -86,9 +88,6 @@ async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> 
             if isinstance(slug, str) and isinstance(version, str):
                 keys.add((slug, version))
         return keys
-    finally:
-        if began:
-            await session.rollback()
 
 
 def _find_entry(entries: list[dict[str, Any]], entry_id: str) -> dict[str, Any] | None:
@@ -222,8 +221,7 @@ async def install_community_entry(
     settings = get_settings()
     source_url = f"{settings.modulo_library_endpoint}/v1/entries/{entry_id}"
 
-    began = await _enter_org_context(session, org_id)
-    try:
+    async with _org_context(session, org_id):
         existing = await session.execute(
             select(LibraryPrimitive.id).where(
                 LibraryPrimitive.organisation_id == org_id,
@@ -262,8 +260,4 @@ async def install_community_entry(
         )
         session.add(primitive)
         await session.flush()
-    except BaseException:
-        if began:
-            await session.rollback()
-        raise
-    return primitive
+        return primitive
