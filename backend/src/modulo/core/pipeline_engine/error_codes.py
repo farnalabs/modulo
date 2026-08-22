@@ -66,7 +66,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="agent",
         retryable=False,
         alert_severity="warning",
-        guidance="Agent went silent.",
+        guidance="Run claimed by a worker but never dispatched a node (wedged worker); recovered by re-dispatch.",
     ),
     # --- contract (output) codes ----------------------------------------
     _CODE_CONTRACT_SCHEMA: ErrorCodeSpec(
