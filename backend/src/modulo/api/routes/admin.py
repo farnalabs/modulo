@@ -1854,6 +1854,7 @@ async def admin_billing_overview(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
                 raise HTTPException(
@@ -2390,6 +2391,7 @@ async def eval_dashboard(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             summary = await _eval_summary(session)
             trend = await _eval_trend(session, current_user.organisation_id)

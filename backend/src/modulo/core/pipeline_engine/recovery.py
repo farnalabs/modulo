@@ -21,7 +21,6 @@ from modulo.db.crud.run import _input_hash, get_run
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_execution_context
 
 _log = logging.getLogger(__name__)
 
@@ -145,10 +144,6 @@ async def recover_node(
     if run is None:
         raise RecoveryNotAllowedError(run_id, "not_found")
 
-    # The caller set org context only (no user principal) — mark this as
-    # internal execution so the team-scoped policy lets us read the pipeline
-    # row of a team-private pipeline for the FOR UPDATE serialisation lock.
-    await set_rls_execution_context(session)
     await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
 
     # Re-fetch the run after the lock to get the latest status.
@@ -289,9 +284,6 @@ async def guardrail_override(
     if run is None:
         raise GuardrailOverrideError(run_id, "run not found")
 
-    # Same as recover_node — org-only context needs the execution hatch to
-    # read the team-private pipeline row for the FOR UPDATE serialisation lock.
-    await set_rls_execution_context(session)
     await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
 
     run = await get_run(session, run_id)
