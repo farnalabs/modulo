@@ -63,7 +63,10 @@ async def _enter_org_context(session: AsyncSession, org_id: uuid.UUID) -> bool:
     try:
         await set_rls_org(session, org_id)
     except BaseException:
-        await session.rollback()
+        # Rollback undoes only the transaction this function opened via
+        # session.begin() above; the caller-owned path returns False at L61 and
+        # is never clobbered here.
+        await session.rollback()  # nosemgrep: session-rollback-abuse
         raise
     return True
 
@@ -88,7 +91,9 @@ async def _installed_registry_keys(session: AsyncSession, org_id: uuid.UUID) -> 
         return keys
     finally:
         if began:
-            await session.rollback()
+            # Read-only query that opened the txn itself (began is True only for
+            # a txn this function started); rolling back closes our own txn.
+            await session.rollback()  # nosemgrep: session-rollback-abuse
 
 
 def _find_entry(entries: list[dict[str, Any]], entry_id: str) -> dict[str, Any] | None:
@@ -264,6 +269,9 @@ async def install_community_entry(
         await session.flush()
     except BaseException:
         if began:
-            await session.rollback()
+            # Error path for a txn this function opened (began True only when
+            # _enter_org_context started it); the rollback undoes our own
+            # uncommitted primitive, never a concurrent caller's pending writes.
+            await session.rollback()  # nosemgrep: session-rollback-abuse
         raise
     return primitive
