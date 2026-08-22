@@ -226,6 +226,7 @@ async def get_onboarding_status(
 ) -> OnboardingStatusResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         progress = await _get_or_create_progress(session, principal.organisation_id)
         auto_completed = await _check_auto_completion(session, principal.organisation_id)
 
