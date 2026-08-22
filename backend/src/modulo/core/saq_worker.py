@@ -1141,13 +1141,16 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=1,
             ttl=300,
         ),
-        # metrics_dump: daily 01:00 UTC, unique=True, system session factory.
-        # Runs after analytics_facts_maintenance (same slot, separate job).
-        # Watermark advances only on full success; skips when no consenting
-        # orgs or instance switch off.
+        # metrics_dump: ticks every 10 minutes (*/10 * * * *).  The per-instance
+        # jitter gate (metrics_dump._should_dump_now) opens a 10-minute execution
+        # window aligned to this grid, so each instance performs its daily dump on
+        # exactly one tick, spread across a 6-hour window (36 grid slots).  The
+        # cron must run on the SAME grid the gate is aligned to, or the dump may
+        # never fire (FAR-356 review).  unique=True, long timeout (full org scan),
+        # single retry, generous ttl.  Watermark advances only on full success.
         CronJob(
             metrics_dump,
-            cron="0 1 * * *",
+            cron="*/10 * * * *",
             unique=True,
             timeout=600,
             heartbeat=60,
