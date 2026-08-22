@@ -141,8 +141,11 @@ async def list_community_entries(session: AsyncSession, org_id: uuid.UUID) -> li
         return []
     data = parse_manifest(manifest)
     installed = await _installed_registry_keys(session, org_id)
+    revoked_ids = {str(item.get("id")) for item in data.revoked if isinstance(item.get("id"), str)}
     entries: list[dict[str, Any]] = []
     for entry in data.entries:
+        if str(entry.get("id")) in revoked_ids:
+            continue
         item = dict(entry)
         item["installed"] = (entry.get("slug"), entry.get("version")) in installed
         entries.append(item)
@@ -175,9 +178,11 @@ async def install_community_entry(
 
     Raises ValueError("entry not found") for unknown or revoked entries,
     ValueError("blob fetch failed") when the blob cannot be fetched, fails its
-    content hash, or is not valid JSON, and ValueError("already installed")
-    when the org already has a row for this slug+version. Flushes but does not
-    commit — the caller owns the commit.
+    content hash, or is not valid JSON, ValueError("already installed")
+    when the org already has a row for this slug+version, and
+    ValueError("registry entries are org-owned") when ``target_team_id`` is
+    provided (registry rows must keep ``owner_team_id`` NULL). Flushes but
+    does not commit — the caller owns the commit.
     """
     manifest = await get_cached_manifest(session)
     if not manifest:
@@ -186,6 +191,9 @@ async def install_community_entry(
     entry = _find_entry(data.entries, entry_id)
     if entry is None or await is_revoked(session, entry_id):
         raise ValueError("entry not found")
+
+    if target_team_id is not None:
+        raise ValueError("registry entries are org-owned")
 
     primitive_type = entry.get("type")
     if primitive_type not in _VALID_PRIMITIVE_TYPES:
@@ -244,8 +252,8 @@ async def install_community_entry(
             ed25519_signature=None,
             verified=True,
             download_count=0,
-            average_rating=0,
-            review_count=0,
+            average_rating=None,
+            review_count=None,
             owner_team_id=target_team_id,
             visibility="org",
             account_id=created_by,

@@ -155,6 +155,28 @@ class TestListCommunityEntries:
         monkeypatch.setattr(community_module, "get_cached_manifest", _none)
         assert await list_community_entries(_FakeSession(), ORG_ID) == []
 
+    async def test_skips_revoked_entries(
+        self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manifest = dict(MANIFEST)
+        manifest["revoked"] = [
+            {
+                "id": "entry-2",
+                "type": "schema",
+                "slug": "invoice",
+                "version": "2.1.0",
+                "reason": "deprecated",
+                "revoked_at": "2026-08-22T00:00:00Z",
+            }
+        ]
+
+        async def _manifest(_session: Any) -> dict | None:
+            return manifest
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        entries = await list_community_entries(_FakeSession(), ORG_ID)
+        assert [e["id"] for e in entries] == ["entry-1"]
+
 
 class TestGetCommunityEntry:
     async def test_returns_entry(self, fake_manifest: None, fake_settings: None) -> None:
@@ -186,8 +208,8 @@ class TestInstallCommunityEntry:
         assert prim.verified is True
         assert prim.checksum == "a" * 64
         assert prim.download_count == 0
-        assert prim.average_rating == 0
-        assert prim.review_count == 0
+        assert prim.average_rating is None
+        assert prim.review_count is None
         assert prim.visibility == "org"
         assert prim.organisation_id == ORG_ID
         assert prim.content_json == {"description": "A test agent", "name": "code-reviewer"}
@@ -201,6 +223,12 @@ class TestInstallCommunityEntry:
     async def test_raises_entry_not_found(self, fake_manifest: None, fake_settings: None) -> None:
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "nope")
+
+    async def test_rejects_team_targeted_install(
+        self, fake_manifest: None, fake_blob: None, fake_settings: None
+    ) -> None:
+        with pytest.raises(ValueError, match="registry entries are org-owned"):
+            await install_community_entry(_FakeSession(), ORG_ID, "entry-1", target_team_id=uuid.uuid4())
 
     async def test_raises_blob_fetch_failed(
         self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch
