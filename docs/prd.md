@@ -2732,7 +2732,6 @@ MONITOR (default expanded)
   Output Diff          /runs/diff
   Notification Log     /admin/notification-delivery
   Browser Monitoring   /settings/monitoring
-  AB Test Models       /variants/compare/:batchId
   Costs                /admin/costs
   HITL Review          /settings/hitl-review
   Analytics            /analytics
@@ -2767,7 +2766,6 @@ ADMIN (default collapsed)
   Saved Views          /admin/views
   Environments         /admin/environments
   Feedback Inbox       /feedback/inbox
-  Error Detail         /admin/errors/:id
 
 SYSTEM (default collapsed)
   License              /settings/license
@@ -2785,7 +2783,7 @@ Key structural points:
 - Six flat groups — BUILD, MONITOR, IMPROVE, CONFIGURE, ADMIN, SYSTEM — with no subgroups (`SidebarSubgroup.vue` removed). BUILD and MONITOR default expanded; IMPROVE, CONFIGURE, ADMIN and SYSTEM default collapsed.
 - IMPROVE holds the experiment/eval surface: Evals, Eval Proposals, Variants, AB Test Models.
 - CONFIGURE holds product/workspace config (Schemas, Model Backends, MCP, Guardrails, Triggers, Connectors, Environment Profiles, Sandbox Concurrency) plus Remy (Remy Config `/admin/remy` and Remy Skills `/settings/remy`, both `private_preview` — dev mode only).
-- ADMIN holds people/org/plugin surface (Users, Teams, Org Settings, Plugins, SSO, Audit Log, Node Categories, Saved Views, Environments, Feedback Inbox, Error Detail).
+- ADMIN holds people/org/plugin surface (Users, Teams, Org Settings, Plugins, SSO, Audit Log, Node Categories, Saved Views, Environments, Feedback Inbox).
 - SYSTEM holds org/system-admin-only surface (License, Error Forwarders, Email, Feature Flags, Run Retention, Housekeeping, Runtime Config, Rate Limits, Observability).
 - Detail and editor pages (e.g. `/runs/:id`, `/admin/errors/:id`, `/lifecycle-maps/:id`, schema editor/infer) are not sidebar items.
 - The sidebar is driven by `frontend/src/manifest.yaml` as the single source of truth (§8.28): group membership, ordering, tiers, permissions, and dev-mode visibility all come from the manifest.
