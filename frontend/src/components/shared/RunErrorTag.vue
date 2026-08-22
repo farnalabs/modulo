@@ -37,7 +37,7 @@ const pillClass = computed(() => {
 // nodeless-zombie cause). Screen readers announce this when the badge is
 // focused, and it doubles as the hover tooltip via :title.
 const ariaLabel = computed(() =>
-  detail ? `${label.value}. ${detail}` : label.value,
+  props.detail ? `${label.value}. ${props.detail}` : label.value,
 )
 </script>
 
