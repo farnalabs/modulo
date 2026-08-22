@@ -8,6 +8,8 @@ REAL CRUD functions against an autobegin-aware fake session.
 import uuid
 from unittest.mock import MagicMock
 
+from sqlalchemy.sql import Insert
+
 from modulo.api.routes.admin_system_config import (
     SetConfigRequest,
     admin_delete_config,
@@ -38,6 +40,7 @@ class _AutobeginAwareSession:
         self._in_tx = False
         self._scalar_one_or_none = scalar_one_or_none
         self._scalars_all = scalars_all if scalars_all is not None else []
+        self._stored: SystemConfig | None = None
 
     def begin(self) -> "_BeginCtx":
         return _BeginCtx(self)
@@ -47,6 +50,16 @@ class _AutobeginAwareSession:
         result = MagicMock()
         result.scalar_one_or_none.return_value = self._scalar_one_or_none
         result.scalars.return_value.all.return_value = self._scalars_all
+        # set_config's first-write path issues INSERT … ON CONFLICT DO NOTHING
+        # then re-SELECTs the stored row. Capture the inserted key/value so the
+        # re-SELECT round-trips through a real SystemConfig object.
+        if isinstance(stmt, Insert):
+            try:
+                params = stmt.compile().params
+                self._stored = SystemConfig(key=params.get("key"), value=params.get("value"))
+            except Exception:
+                self._stored = None
+        result.scalar_one.return_value = self._stored
         return result
 
     def add(self, entity: object) -> None:

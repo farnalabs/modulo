@@ -1,11 +1,10 @@
 """CRUD for SystemConfig key-value settings."""
 
-import contextlib
 import uuid
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError, InvalidRequestError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_config import SystemConfig
@@ -25,11 +24,12 @@ async def set_config(
     """Insert-or-update a SystemConfig row (upsert).
 
     Reads the existing row with ``SELECT … FOR UPDATE`` so concurrent updates to
-    the same key serialize on a row lock. When the key does not yet exist there
-    is nothing to lock, so two concurrent first-writes can both clear the SELECT
-    and race on the INSERT. That race surfaces as an ``IntegrityError`` on the
-    unique ``key`` constraint — we roll back to a savepoint, re-select the
-    winning row, and **adopt the winner's value** (first-write-wins).
+    the same key serialize on a row lock. When the key does not yet exist there is
+    nothing to lock, so two concurrent first-writes can both clear the SELECT and
+    race on the INSERT. The first write uses ``INSERT … ON CONFLICT DO NOTHING``:
+    the winning caller's INSERT commits and the losing caller's INSERT is silently
+    skipped, after which both callers ``SELECT`` the single stored row back and
+    **adopt the same value** (first-write-wins).
 
     This first-write-wins guarantee is load-bearing for Trust-On-First-Use minting
     (see ``instance_identity.py``): under a concurrent first-mint of a key, the
@@ -48,42 +48,26 @@ async def set_config(
         existing_row.updated_by = updated_by
         entity = existing_row
     else:
-        # Begin the nested savepoint BEFORE the entity is queued. SQLAlchemy's
-        # ``begin_nested`` takes a snapshot that auto-flushes anything already
-        # pending, so adding the entity first would emit its INSERT into the
-        # OUTER transaction — where the concurrent unique-key violation escapes
-        # before the ``except IntegrityError`` below can catch it (observed as
-        # an uncaught IntegrityError in the TOFU convergence integration test).
-        # ``begin_nested`` requires an active transaction; under autocommit-style
-        # usage (or a mock session in unit tests) there is no transaction to
-        # nest, so fall back to a plain flush — there is no real concurrency to
-        # guard against in that context.
-        savepoint = None
-        try:
-            savepoint = await session.begin_nested()
-        except (TypeError, AttributeError, InvalidRequestError):
-            savepoint = None
-        entity = SystemConfig(key=key, value=value, updated_by=updated_by)
-        session.add(entity)
-        try:
-            await session.flush()
-        except IntegrityError:
-            if savepoint is not None:
-                await savepoint.rollback()
-            # The savepoint rollback may already have expunged the losing
-            # caller's rolled-back ``entity``; if it is still pending it must be
-            # removed here, otherwise the trailing flush re-emits its INSERT and
-            # re-raises the same unique-constraint violation (a dead/no-op
-            # recovery that never converges). The only row the session should
-            # still know about is the winner's.
-            with contextlib.suppress(InvalidRequestError):
-                session.expunge(entity)
-            existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
-            entity = existing.scalar_one()
-            # First-write-wins: the winning caller's row is authoritative. Do NOT
-            # overwrite ``entity.value`` / ``entity.updated_by`` — the losing
-            # caller adopts the already-stored (winner's) value so concurrent
-            # callers converge to a single stored value.
+        # First write: the key is not present yet. Two concurrent first-writes
+        # race the unique ``key`` INSERT. Issue the INSERT with ``ON CONFLICT
+        # DO NOTHING`` so the loser's INSERT is *silently skipped* (no exception
+        # to recover from, no fragile savepoint/identity-map dance) and then
+        # SELECT the single stored row back. Both callers — winner and loser —
+        # therefore observe the SAME stored value: the first-write-wins / TOFU
+        # invariant that load-bearing Trust-On-First-Use minting depends on (see
+        # ``instance_identity.py``). Under a concurrent first-mint, every caller
+        # must see the value the *winning* caller stored, not its own pending
+        # INSERT, otherwise two concurrent callers return different values for
+        # the same key (last-write-wins), which is exactly the instability TOFU
+        # is meant to prevent.
+        insert_stmt = (
+            pg_insert(SystemConfig)
+            .values(key=key, value=value, updated_by=updated_by)
+            .on_conflict_do_nothing(index_elements=["key"])
+        )
+        await session.execute(insert_stmt)
+        stored = (await session.execute(select(SystemConfig).where(SystemConfig.key == key))).scalar_one()
+        entity = stored
     await session.flush()
     return entity
 

@@ -139,7 +139,14 @@ class TestAdminListConfig:
 class TestAdminSetConfig:
     @pytest.mark.anyio
     async def test_system_admin_can_set(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        # New set_config first-write path: SELECT … FOR UPDATE (None → first
+        # write), INSERT … ON CONFLICT DO NOTHING, then re-SELECT the stored row
+        # via scalar_one(). Mirror that re-SELECT with a real SystemConfig so the
+        # response round-trips.
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = SystemConfig(key="my_key", value="my_value")
         resp = await client_sys_admin.put(
             "/api/v1/system-admin/config/my_key",
             json={"value": "my_value"},
