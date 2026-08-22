@@ -64,8 +64,10 @@ function onBooleanChange(event: Event) {
     </template>
 
     <input
+      id="parameterportform-field-3"
       v-else-if="port.type === 'string'"
       :value="localValue as string"
+      :aria-label="port.label"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
       :placeholder="(port.default_value as string) ?? ''"
       @change="onStringChange"

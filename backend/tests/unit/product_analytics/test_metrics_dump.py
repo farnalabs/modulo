@@ -21,21 +21,21 @@ from modulo.core.product_analytics.vendor_client import (
     MAX_ATTEMPTS,
     RETRY_DELAYS,
     VendorClient,
-    compute_hmac,
+    sign_outbound_batch,
 )
 
 # --- HMAC signing ---
 
 
-class TestComputeHmac:
+class TestSignOutboundBatch:
     def test_deterministic(self) -> None:
         payload = b'{"test": true}'
         ts = 1700000000.0
         seq = 20260821
         secret = "test-secret-key-at-least-32-bytes!!"
 
-        sig1 = compute_hmac(secret, payload, ts, seq)
-        sig2 = compute_hmac(secret, payload, ts, seq)
+        sig1 = sign_outbound_batch(secret, payload, ts, seq)
+        sig2 = sign_outbound_batch(secret, payload, ts, seq)
         assert sig1 == sig2
 
     def test_different_secret_produces_different_sig(self) -> None:
@@ -43,8 +43,8 @@ class TestComputeHmac:
         ts = 1700000000.0
         seq = 20260821
 
-        sig1 = compute_hmac("secret-one-at-least-32-bytes-long!!", payload, ts, seq)
-        sig2 = compute_hmac("secret-two-at-least-32-bytes-long!!", payload, ts, seq)
+        sig1 = sign_outbound_batch("secret-one-at-least-32-bytes-long!!", payload, ts, seq)
+        sig2 = sign_outbound_batch("secret-two-at-least-32-bytes-long!!", payload, ts, seq)
         assert sig1 != sig2
 
     def test_different_payload_produces_different_sig(self) -> None:
@@ -52,8 +52,8 @@ class TestComputeHmac:
         ts = 1700000000.0
         seq = 20260821
 
-        sig1 = compute_hmac(secret, b'{"a":1}', ts, seq)
-        sig2 = compute_hmac(secret, b'{"b":2}', ts, seq)
+        sig1 = sign_outbound_batch(secret, b'{"a":1}', ts, seq)
+        sig2 = sign_outbound_batch(secret, b'{"b":2}', ts, seq)
         assert sig1 != sig2
 
     def test_matches_manual_hmac(self) -> None:
@@ -63,7 +63,7 @@ class TestComputeHmac:
         seq = 1
         message = payload + f"{ts}:{seq}".encode()
         expected = hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
-        assert compute_hmac(secret, payload, ts, seq) == expected
+        assert sign_outbound_batch(secret, payload, ts, seq) == expected
 
 
 # --- Schema version ---

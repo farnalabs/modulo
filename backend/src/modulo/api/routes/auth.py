@@ -5,6 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -43,6 +44,8 @@ from modulo.db.crud.token_family import (
     create_family,
 )
 from modulo.db.models.account import Account
+from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.token_family import TokenFamily
 from modulo.settings import Settings, get_settings
 
 _MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"  # nosec B105 — error message, not a real credential
@@ -95,6 +98,25 @@ class MeResponse(BaseModel):
     active: bool
     created_at: str
     is_system_admin: bool = False
+
+
+class _LoginContext(NamedTuple):
+    account: Account
+    org_id: uuid.UUID | None
+    org_role: str | None
+    memberships: list[OrgMembership]
+    family: TokenFamily
+
+
+class _RefreshClaims(NamedTuple):
+    family_id: str
+    family_uuid: uuid.UUID
+    account_uuid: uuid.UUID
+    sequence: int
+    sub: str
+    org_id: str
+    org_role: object | None
+    account_id: str
 
 
 def get_clock() -> datetime:
@@ -199,6 +221,122 @@ async def _consume_break_glass_credential(
         )
 
 
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+
+
+async def _authenticate_credentials(
+    session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> Account:
+    """Resolve and verify an account, recording a rate-limit failure on denial."""
+    account = await get_account_by_email(session, email)
+    if not account or not authenticate_db_user(password, account):
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+        )
+    return account
+
+
+def _resolve_login_org_context(
+    memberships: list[OrgMembership], account: Account
+) -> tuple[uuid.UUID | None, str | None]:
+    """Pick the primary org + role for a login, denying accounts with none."""
+    if not memberships and not account.is_system_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has no org memberships",
+        )
+    if memberships:
+        membership = memberships[0]
+        return membership.organisation_id, membership.role
+    return None, None
+
+
+async def _run_login_transaction(
+    session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> _LoginContext:
+    """Authenticate, record login, resolve org context, and mint a family."""
+    async with session.begin():
+        account = await _authenticate_credentials(session, email, password, limiter=limiter, ip=ip)
+
+        must_consume = await _enforce_break_glass(
+            account,
+            now=get_clock(),
+            limiter=limiter,
+            ip=ip,
+        )
+
+        if limiter is not None:
+            await limiter.record_success(ip)
+        await update_last_login(session, account.id)
+
+        memberships = await list_memberships_for_account(session, account.id)
+        org_id, org_role = _resolve_login_org_context(memberships, account)
+
+        family = await create_family(session, account.id, org_id)
+
+        if must_consume:
+            await _consume_break_glass_credential(
+                session,
+                account=account,
+                limiter=limiter,
+                ip=ip,
+            )
+
+        return _LoginContext(
+            account=account,
+            org_id=org_id,
+            org_role=org_role,
+            memberships=memberships,
+            family=family,
+        )
+
+
+def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse:
+    """Build the access+refresh token pair and auth cookies for a login."""
+    access_token = create_access_token(
+        ctx.account.email,
+        settings.secret_key,
+        organisation_id=str(ctx.org_id) if ctx.org_id else "",
+        account_id=str(ctx.account.id),
+        org_role=ctx.org_role or "",
+        is_system_admin=ctx.account.is_system_admin,
+    )
+    refresh_token = create_refresh_token(
+        ctx.account.email,
+        settings.secret_key,
+        organisation_id=str(ctx.org_id) if ctx.org_id else "",
+        account_id=str(ctx.account.id),
+        org_role=ctx.org_role or "",
+        is_system_admin=ctx.account.is_system_admin,
+        token_family=str(ctx.family.family_id),
+        token_sequence=0,
+    )
+    requires_bootstrap = not ctx.memberships and ctx.account.is_system_admin
+    content = LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        requires_bootstrap=requires_bootstrap,
+    ).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, access_token, settings)
+    return response
+
+
 @router.post("/login")
 @handle_db_errors("auth.login")
 async def login(
@@ -211,51 +349,7 @@ async def login(
     limiter = get_auth_rate_limiter(settings)
 
     try:
-        async with session.begin():
-            account = await get_account_by_email(session, req.email)
-            if not account or not authenticate_db_user(req.password, account):
-                if limiter is not None:
-                    await limiter.record_failure(ip)
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=_MSG_INCORRECT_EMAIL_PASSWORD,
-                )
-
-            must_consume = await _enforce_break_glass(
-                account,
-                now=get_clock(),
-                limiter=limiter,
-                ip=ip,
-            )
-
-            if limiter is not None:
-                await limiter.record_success(ip)
-            await update_last_login(session, account.id)
-
-            memberships = await list_memberships_for_account(session, account.id)
-            if not memberships and not account.is_system_admin:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Account has no org memberships",
-                )
-
-            if memberships:
-                membership = memberships[0]
-                org_id = membership.organisation_id
-                org_role = membership.role
-            else:
-                org_id = None
-                org_role = None
-
-            family = await create_family(session, account.id, org_id)
-
-            if must_consume:
-                await _consume_break_glass_credential(
-                    session,
-                    account=account,
-                    limiter=limiter,
-                    ip=ip,
-                )
+        ctx = await _run_login_transaction(session, req.email, req.password, limiter=limiter, ip=ip)
     except IntegrityError:
         _log.exception("auth.login")
         _log.warning("login.integrity_error")
@@ -287,42 +381,16 @@ async def login(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    access_token = create_access_token(
-        account.email,
-        settings.secret_key,
-        organisation_id=str(org_id) if org_id else "",
-        account_id=str(account.id),
-        org_role=org_role or "",
-        is_system_admin=account.is_system_admin,
-    )
-    refresh_token = create_refresh_token(
-        account.email,
-        settings.secret_key,
-        organisation_id=str(org_id) if org_id else "",
-        account_id=str(account.id),
-        org_role=org_role or "",
-        is_system_admin=account.is_system_admin,
-        token_family=str(family.family_id),
-        token_sequence=0,
-    )
-    requires_bootstrap = not memberships and account.is_system_admin
-    content = LoginResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        requires_bootstrap=requires_bootstrap,
-    ).model_dump()
-    response = JSONResponse(content=content)
-    _set_auth_cookies(response, access_token, settings)
-    return response
+    return _mint_login_response(ctx, settings)
 
 
-@router.post("/refresh")
-@handle_db_errors(_CODE_AUTH_REFRESH)
-async def refresh(
-    req: RefreshRequest,
-    settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
-) -> JSONResponse:
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
+
+
+def _parse_refresh_token(req: RefreshRequest, settings: Settings) -> _RefreshClaims:
+    """Decode and structurally validate a refresh token into typed claims."""
     try:
         claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
     except JWTError as exc:
@@ -338,11 +406,8 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token claims",
         )
-    family_id_str: str = family_id_val
-    sequence: int = sequence_val
-
     try:
-        family_uuid = uuid.UUID(family_id_str)
+        family_uuid = uuid.UUID(family_id_val)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -365,40 +430,96 @@ async def refresh(
 
     sub_val = claims.get("sub")
     org_id_val = claims.get("org_id")
-    account_id_val = account_id_claim
     org_role_val = claims.get("org_role")
-    if any(not isinstance(value, str) for value in (sub_val, org_id_val, account_id_val)) or (
-        org_id_val is not None and not isinstance(org_id_val, str)
-    ):
+    if not isinstance(sub_val, str) or not isinstance(org_id_val, str):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token payload",
         )
 
-    # ADR 017 live-role re-read: mint from the LIVE org role, not the claim.
-    # A removed/deactivated member loses refresh access immediately (401).
+    return _RefreshClaims(
+        family_id=family_id_val,
+        family_uuid=family_uuid,
+        account_uuid=account_uuid,
+        sequence=sequence_val,
+        sub=sub_val,
+        org_id=org_id_val,
+        org_role=org_role_val,
+        account_id=account_id_claim,
+    )
+
+
+async def _advance_refresh_sequence(
+    session: AsyncSession,
+    claims: _RefreshClaims,
+) -> tuple[str | None, int, bool]:
+    """Re-read the LIVE org role (ADR 017) then advance the family sequence."""
     live_org_role: str | None = None
+    async with session.begin():
+        # ADR 017: check live membership BEFORE advancing the token-family
+        # sequence - a removed member's repeated refresh attempts must not
+        # keep advancing sequences needlessly.
+        if claims.org_id:
+            live_org_role = await resolve_role_from_membership(
+                session,
+                claims.account_id,
+                claims.org_id,
+            )
+        if claims.org_id and live_org_role is None:
+            _log.warning(
+                "auth.refresh_membership_not_found",
+                extra={"account_id": claims.account_id, "org_id": claims.org_id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account no longer has access to this organisation",
+            )
+        new_sequence, theft_detected = await advance_sequence(
+            session, claims.family_uuid, claims.sequence, claims.account_uuid
+        )
+    return live_org_role, new_sequence, theft_detected
+
+
+def _mint_refresh_response(
+    claims: _RefreshClaims,
+    minted_org_role: object,
+    new_sequence: int,
+    settings: Settings,
+) -> JSONResponse:
+    """Build the rotated access+refresh token pair and auth cookies."""
+    new_access = create_access_token(
+        claims.sub,
+        settings.secret_key,
+        organisation_id=claims.org_id,
+        account_id=claims.account_id,
+        org_role=str(minted_org_role),
+    )
+    new_refresh = create_refresh_token(
+        claims.sub,
+        settings.secret_key,
+        organisation_id=claims.org_id,
+        account_id=claims.account_id,
+        org_role=str(minted_org_role),
+        token_family=claims.family_id,
+        token_sequence=new_sequence,
+    )
+    content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, new_access, settings)
+    return response
+
+
+@router.post("/refresh")
+@handle_db_errors(_CODE_AUTH_REFRESH)
+async def refresh(
+    req: RefreshRequest,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    claims = _parse_refresh_token(req, settings)
+
     try:
-        async with session.begin():
-            # ADR 017: check live membership BEFORE advancing the token-family
-            # sequence - a removed member's repeated refresh attempts must not
-            # keep advancing sequences needlessly.
-            if org_id_val:
-                live_org_role = await resolve_role_from_membership(
-                    session,
-                    str(account_id_val),
-                    str(org_id_val),
-                )
-            if org_id_val and live_org_role is None:
-                _log.warning(
-                    "auth.refresh_membership_not_found",
-                    extra={"account_id": str(account_id_val), "org_id": str(org_id_val)},
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Account no longer has access to this organisation",
-                )
-            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
+        live_org_role, new_sequence, theft_detected = await _advance_refresh_sequence(session, claims)
     except IntegrityError:
         _log.exception(_CODE_AUTH_REFRESH)
         raise HTTPException(
@@ -429,33 +550,74 @@ async def refresh(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
+
     if theft_detected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked due to suspected theft",
         )
-    minted_org_role = live_org_role if live_org_role is not None else org_role_val
+    minted_org_role = live_org_role if live_org_role is not None else claims.org_role
+    return _mint_refresh_response(claims, minted_org_role, new_sequence, settings)
 
-    new_access = create_access_token(
-        str(sub_val),
-        settings.secret_key,
-        organisation_id=str(org_id_val),
-        account_id=str(account_id_val),
-        org_role=str(minted_org_role),
-    )
-    new_refresh = create_refresh_token(
-        str(sub_val),
-        settings.secret_key,
-        organisation_id=str(org_id_val),
-        account_id=str(account_id_val),
-        org_role=str(minted_org_role),
-        token_family=family_id_str,
-        token_sequence=new_sequence,
-    )
-    content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
-    response = JSONResponse(content=content)
-    _set_auth_cookies(response, new_access, settings)
-    return response
+
+# ---------------------------------------------------------------------------
+# Logout
+# ---------------------------------------------------------------------------
+
+
+async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, object]) -> None:
+    """Blacklist the refresh token's family if the claims carry one."""
+    family_id_val = claims.get("token_family")
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if not isinstance(family_id_val, str) or not isinstance(account_id_val, str):
+        return
+    try:
+        family_uuid = uuid.UUID(family_id_val)
+        account_uuid = uuid.UUID(account_id_val)
+        try:
+            async with session.begin():
+                blacklisted = await blacklist_family(session, family_uuid, account_uuid)
+                if not blacklisted:
+                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+        except IntegrityError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A resource with this value already exists",
+            ) from None
+        except ProgrammingError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            _log.warning("logout.programming_error")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=MSG_FEATURE_NOT_AVAILABLE,
+            ) from None
+        except SQLAlchemyError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            _log.warning("logout.sqlalchemy_error")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Logout is temporarily unavailable. Please try again.",
+            ) from None
+        except asyncio.CancelledError:
+            raise
+        except HTTPException as exc:
+            raise exc
+        except Exception:
+            _log.exception("Unexpected error in logout (inner)")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=MSG_INTERNAL_SERVER_ERROR,
+            ) from None
+    except ValueError:
+        _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
+
+
+def _clear_account_session_approvals(claims: dict[str, object]) -> None:
+    """Scope the approval clear to the caller's account only (FAR-1470)."""
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if isinstance(account_id_val, str):
+        clear_session_approvals_for_account(account_id_val)
 
 
 @router.post("/logout")
@@ -473,60 +635,48 @@ async def logout(
             detail="Invalid or expired refresh token",
         ) from exc
 
-    family_id_val = claims.get("token_family")
-    account_id_val = claims.get("account_id") or claims.get("user_id")
-    if isinstance(family_id_val, str) and isinstance(account_id_val, str):
-        try:
-            family_uuid = uuid.UUID(family_id_val)
-            account_uuid = uuid.UUID(account_id_val)
-            try:
-                async with session.begin():
-                    blacklisted = await blacklist_family(session, family_uuid, account_uuid)
-                    if not blacklisted:
-                        _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
-            except IntegrityError:
-                _log.exception(_CODE_AUTH_LOGOUT)
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A resource with this value already exists",
-                ) from None
-            except ProgrammingError:
-                _log.exception(_CODE_AUTH_LOGOUT)
-                _log.warning("logout.programming_error")
-                raise HTTPException(
-                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail=MSG_FEATURE_NOT_AVAILABLE,
-                ) from None
-            except SQLAlchemyError:
-                _log.exception(_CODE_AUTH_LOGOUT)
-                _log.warning("logout.sqlalchemy_error")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Logout is temporarily unavailable. Please try again.",
-                ) from None
-            except asyncio.CancelledError:
-                raise
-            except HTTPException as exc:
-                raise exc
-            except Exception:
-                _log.exception("Unexpected error in logout (inner)")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=MSG_INTERNAL_SERVER_ERROR,
-                ) from None
-        except ValueError:
-            _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
-
-    # Scope the approval clear to the caller's account only (FAR-1470).
-    # Previously this cleared EVERY user's in-memory approvals.
-    account_id_val = claims.get("account_id") or claims.get("user_id")
-    if isinstance(account_id_val, str):
-        clear_session_approvals_for_account(account_id_val)
+    await _blacklist_refresh_family(session, claims)
+    _clear_account_session_approvals(claims)
 
     content = LogoutResponse(detail="Logged out").model_dump()
     response = JSONResponse(content=content)
     _clear_auth_cookies(response, settings)
     return response
+
+
+# ---------------------------------------------------------------------------
+# WS token / me (ADR 017 live-role resolution)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_live_org_role(
+    session: AsyncSession,
+    *,
+    account_id: str,
+    org_id: str | None,
+    username: str,
+) -> str | None:
+    """ADR 017: re-read the LIVE org role; deny removed/deactivated members."""
+    if org_id is None:
+        return None
+    try:
+        async with session.begin():
+            live_org_role = await resolve_role_from_membership(session, account_id, org_id)
+    except SQLAlchemyError:
+        _log.warning("permission.live_role_read_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Role verification temporarily unavailable. Please try again.",
+        ) from None
+    if live_org_role is None:
+        # ADR 017: missing/deactivated membership → deny. A removed user must
+        # not mint a WS token or keep the claimed role.
+        _log.warning(
+            "permission.membership_not_found",
+            extra={"account_id": account_id, "org_id": org_id, "username": username},
+        )
+        raise OrganisationMembershipNotFound()
+    return live_org_role
 
 
 @router.post("/ws-token", response_model=WsTokenResponse)
@@ -539,34 +689,12 @@ async def ws_token(
     try:
         # ADR 017: embed the LIVE org role (not the claim) so a demoted admin's
         # WS token carries the reduced role.
-        live_org_role: str | None = None
-        if current_user.organisation_id is not None:
-            try:
-                async with session.begin():
-                    live_org_role = await resolve_role_from_membership(
-                        session,
-                        str(current_user.account_id),
-                        str(current_user.organisation_id),
-                    )
-            except SQLAlchemyError:
-                _log.warning("permission.live_role_read_failed", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Role verification temporarily unavailable. Please try again.",
-                ) from None
-            else:
-                if live_org_role is None:
-                    # ADR 017: missing/deactivated membership → deny. A removed
-                    # admin must not mint a WS token carrying the stale claim.
-                    _log.warning(
-                        "permission.membership_not_found",
-                        extra={
-                            "account_id": str(current_user.account_id),
-                            "org_id": str(current_user.organisation_id),
-                            "username": current_user.username,
-                        },
-                    )
-                    raise OrganisationMembershipNotFound()
+        live_org_role = await _resolve_live_org_role(
+            session,
+            account_id=str(current_user.account_id),
+            org_id=str(current_user.organisation_id),
+            username=current_user.username,
+        )
 
         principal_json = {
             "sub": current_user.username,
@@ -641,34 +769,12 @@ async def me(
 
     # ADR 017: return the LIVE org role (not the claim) so the frontend stops
     # rendering admin controls for demoted/removed users.
-    live_org_role: str | None = None
-    if current_user.organisation_id is not None:
-        try:
-            async with session.begin():
-                live_org_role = await resolve_role_from_membership(
-                    session,
-                    str(current_user.account_id),
-                    str(current_user.organisation_id),
-                )
-        except SQLAlchemyError:
-            _log.warning("permission.live_role_read_failed", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Role verification temporarily unavailable. Please try again.",
-            ) from None
-        else:
-            if live_org_role is None:
-                # ADR 017: missing/deactivated membership → deny. A removed
-                # user must not keep the claimed admin role.
-                _log.warning(
-                    "permission.membership_not_found",
-                    extra={
-                        "account_id": str(current_user.account_id),
-                        "org_id": str(current_user.organisation_id),
-                        "username": current_user.username,
-                    },
-                )
-                raise OrganisationMembershipNotFound()
+    live_org_role = await _resolve_live_org_role(
+        session,
+        account_id=str(current_user.account_id),
+        org_id=str(current_user.organisation_id) if current_user.organisation_id is not None else None,
+        username=current_user.username,
+    )
 
     return MeResponse(
         id=str(account.id),
