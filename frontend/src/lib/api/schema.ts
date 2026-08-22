@@ -8747,6 +8747,77 @@ export interface components {
             /** Page Size */
             page_size: number;
         };
+        /**
+         * CommunityLibraryEntry
+         * @description A community entry as listed in the hosted catalog.
+         */
+        CommunityLibraryEntry: {
+            /** Id */
+            id: string;
+            /** Type */
+            type: string;
+            /** Slug */
+            slug: string;
+            /** Author */
+            author?: string | null;
+            /** Version */
+            version?: string | null;
+            /** License */
+            license?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Content Sha256 */
+            content_sha256?: string | null;
+            /**
+             * Installed
+             * @default false
+             */
+            installed: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CommunityLibraryEntryDetail
+         * @description A single community entry, including its parsed blob ``content``.
+         */
+        CommunityLibraryEntryDetail: {
+            /** Id */
+            id: string;
+            /** Type */
+            type: string;
+            /** Slug */
+            slug: string;
+            /** Author */
+            author?: string | null;
+            /** Version */
+            version?: string | null;
+            /** License */
+            license?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Content Sha256 */
+            content_sha256?: string | null;
+            /** Content */
+            content?: unknown | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CommunityLibraryListResponse
+         * @description Paginated-agnostic list envelope for hosted community entries.
+         */
+        CommunityLibraryListResponse: {
+            /** Items */
+            items: components["schemas"]["CommunityLibraryEntry"][];
+            /** Total */
+            total: number;
+            /** Synced At */
+            synced_at?: string | null;
+        };
         /** CompareEvalsRequest */
         CompareEvalsRequest: {
             /**
@@ -27385,9 +27456,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CommunityLibraryListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -27420,9 +27489,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CommunityLibraryEntryDetail"];
                 };
             };
             /** @description Validation Error */

@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,11 +36,53 @@ router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-librar
 _log = logging.getLogger(__name__)
 
 
+class CommunityLibraryEntryBase(BaseModel):
+    """Shared fields of a community-library catalog entry.
+
+    Mirrors the shape produced by
+    ``modulo.core.library_service.community.list_community_entries`` /
+    ``get_community_entry`` from the verified manifest. ``extra="allow"`` keeps
+    any forward-compatible manifest fields that the frontend ignores.
+    """
+
+    id: str
+    type: str
+    slug: str
+    author: str | None = None
+    version: str | None = None
+    license: str | None = None
+    status: str | None = None
+    published_at: str | None = None
+    content_sha256: str | None = None
+
+    model_config = ConfigDict(extra="allow")
+
+
+class CommunityLibraryEntry(CommunityLibraryEntryBase):
+    """A community entry as listed in the hosted catalog."""
+
+    installed: bool = False
+
+
+class CommunityLibraryEntryDetail(CommunityLibraryEntryBase):
+    """A single community entry, including its parsed blob ``content``."""
+
+    content: Any | None = None
+
+
+class CommunityLibraryListResponse(BaseModel):
+    """Paginated-agnostic list envelope for hosted community entries."""
+
+    items: list[CommunityLibraryEntry]
+    total: int
+    synced_at: str | None = None
+
+
 class InstallRequest(BaseModel):
     target_team_id: UUID | None = None
 
 
-@router.get("")
+@router.get("", response_model=CommunityLibraryListResponse)
 async def list_community(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("library.search"),
@@ -62,7 +104,7 @@ async def list_community(
     return {"items": items, "total": len(items), "synced_at": synced_at}
 
 
-@router.get("/{entry_id}")
+@router.get("/{entry_id}", response_model=CommunityLibraryEntryDetail)
 async def get_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_db_session),
