@@ -308,6 +308,25 @@ export default {
       "previous": "Previous",
       "next": "Next"
     },
+    "AdminProductAnalyticsView": {
+      "title": "Product Analytics",
+      "subtitle": "Transparency into how product analytics data is collected and shared",
+      "warning_not_reaching": "Analytics data is not reaching Farnalabs. Check your network or consent settings.",
+      "delivery_status": "Delivery Status",
+      "last_successful_dump": "Last Successful Dump",
+      "total_dumps": "Total Dumps",
+      "consent_and_enforcement": "Consent & Enforcement",
+      "consent_level": "Consent Level",
+      "level_all": "All",
+      "level_off": "Off",
+      "level_unknown": "Unknown",
+      "instance_switch": "Instance Switch",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enforcement": "Enforcement",
+      "active": "Active",
+      "inactive": "Inactive"
+    },
     "AdminCostControlsView": {
       "failed_to_save_currency": "Failed to save currency",
       "failed_to_save_billing_period": "Failed to save billing period: {detail}",
