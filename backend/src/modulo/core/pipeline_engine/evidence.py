@@ -413,7 +413,7 @@ async def _e2b_run_command(sandbox_id: str, command: str) -> CommandResult:
     connect/run are fresh coroutines safe to cancel. Raises on failure — the
     caller maps any raised error to unverifiable.
     """
-    from e2b import AsyncSandbox  # type: ignore[import-untyped]
+    from e2b import AsyncSandbox
 
     sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=_SANDBOX_IO_TIMEOUT_SECONDS)
     try:
