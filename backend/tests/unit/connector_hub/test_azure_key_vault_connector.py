@@ -92,8 +92,9 @@ async def test_query_secret(connector):
 
 
 async def test_query_secret_missing_name(connector):
+    query = ConnectorQuery(resource="secret")
     with pytest.raises(ValueError, match="'name' in filters"):
-        await connector.query(ConnectorQuery(resource="secret"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +111,9 @@ async def test_query_secret_versions(connector):
 
 
 async def test_query_secret_versions_missing_name(connector):
+    query = ConnectorQuery(resource="secret_versions")
     with pytest.raises(ValueError, match="'name' in filters"):
-        await connector.query(ConnectorQuery(resource="secret_versions"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -125,8 +127,9 @@ async def test_query_secret_by_version(connector):
 
 
 async def test_query_secret_by_version_missing_version(connector):
+    query = ConnectorQuery(resource="secret_by_version", filters={"name": "db-pw"})
     with pytest.raises(ValueError, match="'version' in filters"):
-        await connector.query(ConnectorQuery(resource="secret_by_version", filters={"name": "db-pw"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +154,9 @@ async def test_query_key(connector):
 
 
 async def test_query_key_missing_name(connector):
+    query = ConnectorQuery(resource="key")
     with pytest.raises(ValueError, match="'name' in filters"):
-        await connector.query(ConnectorQuery(resource="key"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +181,9 @@ async def test_query_certificate(connector):
 
 
 async def test_query_certificate_missing_name(connector):
+    query = ConnectorQuery(resource="certificate")
     with pytest.raises(ValueError, match="'name' in filters"):
-        await connector.query(ConnectorQuery(resource="certificate"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------

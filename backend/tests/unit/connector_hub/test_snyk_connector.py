@@ -98,8 +98,9 @@ async def test_query_projects_with_cursor(connector):
 
 
 async def test_query_projects_missing_org(connector):
+    query = ConnectorQuery(resource="projects", limit=10)
     with pytest.raises(ValueError, match="'org_id' in filters"):
-        await connector.query(ConnectorQuery(resource="projects", limit=10))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +119,12 @@ async def test_query_project(connector):
 
 
 async def test_query_project_missing_filters(connector):
+    query = ConnectorQuery(resource="project", filters={"project_id": PROJECT})
     with pytest.raises(ValueError, match="'org_id' in filters"):
-        await connector.query(ConnectorQuery(resource="project", filters={"project_id": PROJECT}))
+        await connector.query(query)
+    query = ConnectorQuery(resource="project", filters={"org_id": ORG})
     with pytest.raises(ValueError, match="'project_id' in filters"):
-        await connector.query(ConnectorQuery(resource="project", filters={"org_id": ORG}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +152,12 @@ async def test_query_issues(connector):
 
 
 async def test_query_issues_missing_filters(connector):
+    query = ConnectorQuery(resource="issues", filters={"project_id": PROJECT})
     with pytest.raises(ValueError, match="'org_id' in filters"):
-        await connector.query(ConnectorQuery(resource="issues", filters={"project_id": PROJECT}))
+        await connector.query(query)
+    query = ConnectorQuery(resource="issues", filters={"org_id": ORG})
     with pytest.raises(ValueError, match="'project_id' in filters"):
-        await connector.query(ConnectorQuery(resource="issues", filters={"org_id": ORG}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------

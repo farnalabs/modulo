@@ -111,8 +111,9 @@ async def test_query_project_analyses(connector):
 
 
 async def test_query_project_analyses_missing_project(connector):
+    query = ConnectorQuery(resource="project_analyses")
     with pytest.raises(ValueError, match="'project' filter"):
-        await connector.query(ConnectorQuery(resource="project_analyses"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -135,10 +136,12 @@ async def test_query_measures(connector):
 
 
 async def test_query_measures_missing_filters(connector):
+    query = ConnectorQuery(resource="measures", filters={"metricKeys": "coverage"})
     with pytest.raises(ValueError, match="'component' filter"):
-        await connector.query(ConnectorQuery(resource="measures", filters={"metricKeys": "coverage"}))
+        await connector.query(query)
+    query = ConnectorQuery(resource="measures", filters={"component": "my-project"})
     with pytest.raises(ValueError, match="'metricKeys' filter"):
-        await connector.query(ConnectorQuery(resource="measures", filters={"component": "my-project"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +182,9 @@ async def test_query_quality_gate(connector):
 
 
 async def test_query_quality_gate_missing_id(connector):
+    query = ConnectorQuery(resource="quality_gate")
     with pytest.raises(ValueError, match="'id' filter"):
-        await connector.query(ConnectorQuery(resource="quality_gate"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +224,9 @@ async def test_query_hotspots(connector):
 
 
 async def test_query_hotspots_missing_project(connector):
+    query = ConnectorQuery(resource="hotspots")
     with pytest.raises(ValueError, match="'project' filter"):
-        await connector.query(ConnectorQuery(resource="hotspots"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
