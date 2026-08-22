@@ -16,9 +16,9 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_ADMIN_TRIGGERS_LIST_TRIGGER = "admin_triggers.list_trigger_events"
-
 
 _log = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ async def list_trigger_events(
                         | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                     )
                 except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", cursor, exc_info=True)
+                    _log.warning("Malformed cursor ignored: %s", _sanitise_log_value(cursor), exc_info=True)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()

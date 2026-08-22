@@ -337,3 +337,9 @@ dev = [
     "pytest-recording>=0.13.0",
     "pip-audit>=2.9.0",
 ]
+
+[tool.uv]
+# PYSEC-2026-3721: pip < 26.2 vulnerable. Constrain to a fixed minimum so
+# pip-audit (run in CI Lint (Backend)) passes on the transitively-installed pip
+# (pulled in via pip-api -> pip-audit).
+constraint-dependencies = ["pip>=26.2"]

@@ -83,6 +83,14 @@ class TestErrorNotificationRuleCreate:
         with pytest.raises(ValidationError, match="webhook_url must start with"):
             ErrorNotificationRuleCreate(name="R", action_type="webhook", webhook_url="ftp://hooks.example.com")
 
+    @pytest.mark.parametrize(
+        "url",
+        ["https:hooks.example.com", "https://"],
+    )
+    def test_webhook_url_malformed_rejected(self, url: str) -> None:
+        with pytest.raises(ValidationError, match="webhook_url must start with"):
+            ErrorNotificationRuleCreate(name="R", action_type="webhook", webhook_url=url)
+
 
 class TestErrorNotificationRuleUpdate:
     def test_empty_update_is_all_none(self) -> None:

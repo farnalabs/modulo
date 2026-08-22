@@ -16,7 +16,7 @@ routes:
         breadcrumb: Dashboard
         parent:
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 1
         type: page
         <<: *community
@@ -78,7 +78,7 @@ routes:
         breadcrumb: Pipelines
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 2
         type: list_page
         exact: true
@@ -90,7 +90,7 @@ routes:
         breadcrumb: Library
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 3
         type: list_page
         <<: *community
@@ -126,7 +126,7 @@ routes:
         breadcrumb: Runs
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 4
         type: list_page
         <<: *community
@@ -162,7 +162,7 @@ routes:
         breadcrumb: Run Detail
         parent: /runs
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 8
         type: detail_page
         pattern: /runs/:id
@@ -190,7 +190,7 @@ routes:
         breadcrumb: Evals
         parent: /
         product_map:
-        sidebar_group: monitor
+        sidebar_group: improve
         sidebar_order: 1
         type: form_page
         <<: *community
@@ -201,7 +201,7 @@ routes:
         breadcrumb: Eval Proposals
         parent: /
         product_map:
-        sidebar_group: monitor
+        sidebar_group: improve
         sidebar_order: 2
         type: list_page
         <<: *community
@@ -212,7 +212,7 @@ routes:
         breadcrumb: Variants
         parent: /
         product_map:
-        sidebar_group: monitor
+        sidebar_group: improve
         sidebar_order: 3
         type: page
         <<: *community
@@ -238,7 +238,7 @@ routes:
         breadcrumb: AB Test Models
         parent: /
         product_map:
-        sidebar_group: monitor
+        sidebar_group: improve
         sidebar_order: 4
         type: page
         <<: *community
@@ -332,7 +332,7 @@ routes:
         breadcrumb: License
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 1
         type: form_page
         <<: *team
@@ -375,7 +375,7 @@ routes:
         breadcrumb: Runtime Config
         parent: /
         product_map:
-        sidebar_group: configure
+        sidebar_group: system
         sidebar_order: 7
         type: form_page
         deprecated: false
@@ -386,7 +386,7 @@ routes:
         breadcrumb: Rate Limits
         parent: /
         product_map:
-        sidebar_group: configure
+        sidebar_group: system
         sidebar_order: 8
         type: form_page
         deprecated: false
@@ -409,7 +409,7 @@ routes:
         breadcrumb: Observability
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 9
         type: form_page
         visibility: private_preview
@@ -421,7 +421,7 @@ routes:
         breadcrumb: Error Forwarders
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 2
         type: form_page
         deprecated: false
@@ -432,7 +432,7 @@ routes:
         breadcrumb: Email
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 3
         type: form_page
         deprecated: false
@@ -564,7 +564,7 @@ routes:
         breadcrumb: Feature Flags
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 4
         type: list_page
         deprecated: false
@@ -575,7 +575,7 @@ routes:
         breadcrumb: Housekeeping
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 6
         type: page
         <<: *community
@@ -608,7 +608,7 @@ routes:
         breadcrumb: Run Retention
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: system
         sidebar_order: 5
         type: form_page
         deprecated: false
@@ -688,7 +688,7 @@ routes:
         breadcrumb: Lifecycle Maps
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group: build
         sidebar_order: 5
         type: list_page
         <<: *community
@@ -833,7 +833,7 @@ elements:
         dynamic_testid: false
 
 sidebar_groups:
-    core:
+    build:
         label: BUILD
         order: 1
         default_expanded: true
@@ -843,13 +843,23 @@ sidebar_groups:
         order: 2
         default_expanded: true
         labelKey: components.SidebarNav.group_monitor
+    improve:
+        label: IMPROVE
+        order: 3
+        default_expanded: false
+        labelKey: components.SidebarNav.group_improve
     configure:
         label: CONFIGURE
-        order: 3
+        order: 4
         default_expanded: false
         labelKey: components.SidebarNav.group_configure
     admin:
         label: ADMIN
-        order: 4
+        order: 5
         default_expanded: false
         labelKey: components.SidebarNav.group_admin
+    system:
+        label: SYSTEM
+        order: 6
+        default_expanded: false
+        labelKey: components.SidebarNav.group_system

@@ -9,6 +9,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -19,6 +20,15 @@ from modulo.api.dependencies import get_or_create_engine, get_or_create_session_
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.settings import Settings
+
+
+def _safe_output_dir(path: str) -> Path:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"output directory {path!r} resolves outside the working directory")
+    return Path(resolved)
 
 
 def build_fixture_map(
@@ -99,7 +109,7 @@ def main() -> None:
 
     fixture = asyncio.run(fetch_run_fixture_data(args.run_id))
 
-    output_dir = Path(args.output)
+    output_dir = _safe_output_dir(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{fixture['run_id']}.json"
     data = json.dumps(fixture, indent=2, default=str, ensure_ascii=False) + "\n"

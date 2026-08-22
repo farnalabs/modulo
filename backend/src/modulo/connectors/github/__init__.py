@@ -7,7 +7,8 @@ import json
 import random
 import re
 import time
-from typing import Any, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, NoReturn, cast
 
 import httpx
 
@@ -637,37 +638,47 @@ class GitHubConnector(ConnectorBase):
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                status_code = exc.response.status_code
-                # A 4xx never counts toward the breaker from the closed state,
-                # but a client error on a half-open recovery probe means the
-                # probe did not confirm recovery — re-trip so a fresh probe is
-                # admitted after the next cooldown instead of wedging half-open.
-                if status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open:
-                    self._record_failure()
-                detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
-                if status_code == 429:
-                    quota = _rate_limit_detail(exc.response)
-                    if quota:
-                        detail = f"{detail} (quota: {quota})"
-                raise _error_for_status(status_code, detail) from exc
+                self._raise_status_error(exc)
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(self._jitter(delay))
+                    await asyncio.sleep(self._jitter(self._backoff_delay(attempt)))
                     continue
                 self._record_failure()
                 raise GitHubNetworkError("GitHub API timeout", error_code="network_timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(self._jitter(delay))
+                    await asyncio.sleep(self._jitter(self._backoff_delay(attempt)))
                     continue
                 self._record_failure()
                 raise GitHubNetworkError("GitHub API connection error", error_code="network_connection") from exc
         self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
+
+    def _raise_status_error(self, exc: httpx.HTTPStatusError) -> NoReturn:
+        """Raise a structured GitHub error for a terminal (non-retryable) HTTP status.
+
+        Also re-trips the circuit breaker for service-level failures. A 4xx
+        never counts toward the breaker from the closed state, but a client
+        error on a half-open recovery probe means the probe did not confirm
+        recovery — re-trip so a fresh probe is admitted after the next
+        cooldown instead of wedging half-open.
+        """
+        status_code = exc.response.status_code
+        if status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open:
+            self._record_failure()
+        detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
+        if status_code == 429:
+            quota = _rate_limit_detail(exc.response)
+            if quota:
+                detail = f"{detail} (quota: {quota})"
+        raise _error_for_status(status_code, detail) from exc
+
+    @staticmethod
+    def _backoff_delay(attempt: int) -> float:
+        """Compute the exponential backoff delay for a retry attempt (capped)."""
+        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as a typed API error."""
@@ -783,28 +794,26 @@ class GitHubConnector(ConnectorBase):
         if is_fine_grained_pat(self._token):
             missing = self._fine_grained_missing_permissions(r)
             if missing:
-                missing_codes = ", ".join(f"missing_scope:{perm}" for perm in sorted(missing))
-                return HealthResult(
-                    ok=False,
-                    detail=(
-                        f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
-                        f"Required: {', '.join(sorted(REQUIRED_FINE_GRAINED_PERMISSIONS))}"
-                    ),
-                )
+                return self._missing_scopes_result(missing, REQUIRED_FINE_GRAINED_PERMISSIONS)
             return HealthResult(ok=True, detail=user_login)
 
         missing_classic = REQUIRED_SCOPES - token_scopes
         if missing_classic:
-            missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing_classic))
-            return HealthResult(
-                ok=False,
-                detail=(
-                    f"Missing scopes: {missing_codes} ({', '.join(sorted(missing_classic))}). "
-                    f"Required: {', '.join(sorted(REQUIRED_SCOPES))}"
-                ),
-            )
+            return self._missing_scopes_result(missing_classic, REQUIRED_SCOPES)
 
         return HealthResult(ok=True, detail=user_login)
+
+    @staticmethod
+    def _missing_scopes_result(missing: set[str] | frozenset[str], required: frozenset[str]) -> HealthResult:
+        """Build a failing HealthResult describing missing scopes/permissions."""
+        missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing))
+        return HealthResult(
+            ok=False,
+            detail=(
+                f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
+                f"Required: {', '.join(sorted(required))}"
+            ),
+        )
 
     async def compensate(
         self,
@@ -883,171 +892,208 @@ class GitHubConnector(ConnectorBase):
         )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        match q.resource:
-            case "repos":
-                r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
-                data: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(data, r, total=len(data), next_cursor=links.get("next"))
-            case "file":
-                owner_repo = self._require_filter(q.filters, "repo", "file")
-                path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
-                ref = q.filters.get("ref", "main")
-                r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-                info = await self._parse_json_object(r)
-                _decode_read_content(info)
-                return self._result([info], r)
-            case "tree":
-                owner_repo = self._require_filter(q.filters, "repo", "tree")
-                path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
-                ref = q.filters.get("ref", "main")
-                tree_sha = await self._resolve_commit_sha(owner_repo, ref, "tree")
-                tree_params: dict[str, Any] = {}
-                if q.filters.get("recursive", True):
-                    tree_params["recursive"] = "1"
-                tree_r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/git/trees/{tree_sha}",
-                    params=tree_params,
-                )
-                body = await self._parse_json_object(tree_r)
-                entries: list[dict[str, Any]] = cast("list[dict[str, Any]]", body.get("tree", []))
-                if path_filter is not None:
-                    path_prefix = path_filter.rstrip("/") + "/"
-                    entries = [e for e in entries if e.get("path", "").startswith(path_prefix)]
-                return self._result(entries, tree_r, total=len(entries))
-            case "pulls":
-                owner_repo = self._require_filter(q.filters, "repo", "pulls")
-                state = q.filters.get("state", "open")
-                params: dict[str, Any] = {"state": state, "per_page": q.limit}
-                if "sort" in q.filters:
-                    params["sort"] = q.filters["sort"]
-                if "direction" in q.filters:
-                    params["direction"] = q.filters["direction"]
-                r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
-                prs: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(prs, r, total=len(prs), next_cursor=links.get("next"))
-            case "pr_commits":
-                owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
-                pull_number = self._require_filter(q.filters, "pull_number", "pr_commits")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/pulls/{pull_number}/commits",
-                    params={"per_page": q.limit},
-                )
-                commits: list[dict[str, Any]] = await self._parse_json(r)
-                return self._result(commits, r, total=len(commits))
-            case "pr_files":
-                owner_repo = self._require_filter(q.filters, "repo", "pr_files")
-                pull_number = self._require_filter(q.filters, "pull_number", "pr_files")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/pulls/{pull_number}/files",
-                    params={"per_page": q.limit},
-                )
-                files: list[dict[str, Any]] = await self._parse_json(r)
-                return self._result(files, r, total=len(files))
-            case "issues":
-                owner_repo = self._require_filter(q.filters, "repo", "issues")
-                params = {"per_page": q.limit}
-                for key in ("state", "labels", "sort", "direction", "milestone", "assignee", "since"):
-                    if key in q.filters:
-                        params[key] = q.filters[key]
-                r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
-                issues: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(issues, r, total=len(issues), next_cursor=links.get("next"))
-            case "issue":
-                owner_repo = self._require_filter(q.filters, "repo", "issue")
-                issue_number = self._require_filter(q.filters, "issue_number", "issue")
-                r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
-                return self._result([await self._parse_json(r)], r)
-            case "labels":
-                owner_repo = self._require_filter(q.filters, "repo", "labels")
-                r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
-                labels: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(labels, r, total=len(labels), next_cursor=links.get("next"))
-            case "milestones":
-                owner_repo = self._require_filter(q.filters, "repo", "milestones")
-                params = {"per_page": q.limit}
-                if "state" in q.filters:
-                    params["state"] = q.filters["state"]
-                if "sort" in q.filters:
-                    params["sort"] = q.filters["sort"]
-                if "direction" in q.filters:
-                    params["direction"] = q.filters["direction"]
-                r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
-                milestones: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(milestones, r, total=len(milestones), next_cursor=links.get("next"))
-            case "issue_comments":
-                owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
-                issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
-                    params={"per_page": q.limit},
-                )
-                comments: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(comments, r, total=len(comments), next_cursor=links.get("next"))
-            case "issue_events":
-                owner_repo = self._require_filter(q.filters, "repo", "issue_events")
-                issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/issues/{issue_number}/events",
-                    params={"per_page": q.limit},
-                )
-                events: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(events, r, total=len(events), next_cursor=links.get("next"))
-            case "assignees":
-                owner_repo = self._require_filter(q.filters, "repo", "assignees")
-                r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
-                assignees: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(assignees, r, total=len(assignees), next_cursor=links.get("next"))
-            case "timeline":
-                owner_repo = self._require_filter(q.filters, "repo", "timeline")
-                issue_number = self._require_filter(q.filters, "issue_number", "timeline")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/issues/{issue_number}/timeline",
-                    params={"per_page": q.limit},
-                )
-                timeline: list[dict[str, Any]] = await self._parse_json(r)
-                links = _parse_link_header(r)
-                return self._result(timeline, r, total=len(timeline), next_cursor=links.get("next"))
-            case "pr_diff":
-                owner_repo = self._require_filter(q.filters, "repo", "pr_diff")
-                pull_number = self._require_filter(q.filters, "pull_number", "pr_diff")
-                r = await self._call_api(
-                    "GET",
-                    f"/repos/{owner_repo}/pulls/{pull_number}",
-                    headers={"Accept": "application/vnd.github.v3.diff"},
-                )
-                return self._result([{"diff": r.text}], r, total=1)
-            case "search_issues":
-                search_query = self._require_filter(q.filters, "q", "search_issues")
-                params = {"q": search_query, "per_page": q.limit}
-                for key in ("sort", "order", "state", "labels", "assignee", "created", "updated"):
-                    if key in q.filters:
-                        params[key] = q.filters[key]
-                r = await self._call_api("GET", "/search/issues", params=params)
-                body = await self._parse_json_object(r)
-                items = cast("list[dict[str, Any]]", body.get("items", []))
-                links = _parse_link_header(r)
-                return self._result(items, r, total=_search_total(body), next_cursor=links.get("next"))
-            case "rate_limit":
-                r = await self._call_api("GET", "/rate_limit")
-                body = await self._parse_json_object(r)
-                resources = cast("dict[str, Any]", body.get("resources", {}))
-                return self._result([resources], r, total=1)
-            case _:
-                raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
+        handlers: dict[str, Callable[[ConnectorQuery], Awaitable[ConnectorResult]]] = {
+            "repos": self._query_repos,
+            "file": self._query_file,
+            "tree": self._query_tree,
+            "pulls": self._query_pulls,
+            "pr_commits": self._query_pr_commits,
+            "pr_files": self._query_pr_files,
+            "issues": self._query_issues,
+            "issue": self._query_issue,
+            "labels": self._query_labels,
+            "milestones": self._query_milestones,
+            "issue_comments": self._query_issue_comments,
+            "issue_events": self._query_issue_events,
+            "assignees": self._query_assignees,
+            "timeline": self._query_timeline,
+            "pr_diff": self._query_pr_diff,
+            "search_issues": self._query_search_issues,
+            "rate_limit": self._query_rate_limit,
+        }
+        handler = handlers.get(q.resource)
+        if handler is None:
+            raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
+        return await handler(q)
+
+    async def _query_repos(self, q: ConnectorQuery) -> ConnectorResult:
+        r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
+        data: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(data, r, total=len(data), next_cursor=links.get("next"))
+
+    async def _query_file(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "file")
+        path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
+        ref = q.filters.get("ref", "main")
+        r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
+        info = await self._parse_json_object(r)
+        _decode_read_content(info)
+        return self._result([info], r)
+
+    async def _query_tree(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "tree")
+        path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
+        ref = q.filters.get("ref", "main")
+        tree_sha = await self._resolve_commit_sha(owner_repo, ref, "tree")
+        tree_params: dict[str, Any] = {}
+        if q.filters.get("recursive", True):
+            tree_params["recursive"] = "1"
+        tree_r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/git/trees/{tree_sha}",
+            params=tree_params,
+        )
+        body = await self._parse_json_object(tree_r)
+        entries: list[dict[str, Any]] = cast("list[dict[str, Any]]", body.get("tree", []))
+        if path_filter is not None:
+            path_prefix = path_filter.rstrip("/") + "/"
+            entries = [e for e in entries if e.get("path", "").startswith(path_prefix)]
+        return self._result(entries, tree_r, total=len(entries))
+
+    async def _query_pulls(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "pulls")
+        state = q.filters.get("state", "open")
+        params: dict[str, Any] = {"state": state, "per_page": q.limit}
+        if "sort" in q.filters:
+            params["sort"] = q.filters["sort"]
+        if "direction" in q.filters:
+            params["direction"] = q.filters["direction"]
+        r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
+        prs: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(prs, r, total=len(prs), next_cursor=links.get("next"))
+
+    async def _query_pr_commits(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
+        pull_number = self._require_filter(q.filters, "pull_number", "pr_commits")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/pulls/{pull_number}/commits",
+            params={"per_page": q.limit},
+        )
+        commits: list[dict[str, Any]] = await self._parse_json(r)
+        return self._result(commits, r, total=len(commits))
+
+    async def _query_pr_files(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "pr_files")
+        pull_number = self._require_filter(q.filters, "pull_number", "pr_files")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/pulls/{pull_number}/files",
+            params={"per_page": q.limit},
+        )
+        files: list[dict[str, Any]] = await self._parse_json(r)
+        return self._result(files, r, total=len(files))
+
+    async def _query_issues(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "issues")
+        params = {"per_page": q.limit}
+        for key in ("state", "labels", "sort", "direction", "milestone", "assignee", "since"):
+            if key in q.filters:
+                params[key] = q.filters[key]
+        r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
+        issues: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(issues, r, total=len(issues), next_cursor=links.get("next"))
+
+    async def _query_issue(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "issue")
+        issue_number = self._require_filter(q.filters, "issue_number", "issue")
+        r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
+        return self._result([await self._parse_json(r)], r)
+
+    async def _query_labels(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "labels")
+        r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
+        labels: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(labels, r, total=len(labels), next_cursor=links.get("next"))
+
+    async def _query_milestones(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "milestones")
+        params = {"per_page": q.limit}
+        if "state" in q.filters:
+            params["state"] = q.filters["state"]
+        if "sort" in q.filters:
+            params["sort"] = q.filters["sort"]
+        if "direction" in q.filters:
+            params["direction"] = q.filters["direction"]
+        r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
+        milestones: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(milestones, r, total=len(milestones), next_cursor=links.get("next"))
+
+    async def _query_issue_comments(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
+        issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/issues/{issue_number}/comments",
+            params={"per_page": q.limit},
+        )
+        comments: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(comments, r, total=len(comments), next_cursor=links.get("next"))
+
+    async def _query_issue_events(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "issue_events")
+        issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/issues/{issue_number}/events",
+            params={"per_page": q.limit},
+        )
+        events: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(events, r, total=len(events), next_cursor=links.get("next"))
+
+    async def _query_assignees(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "assignees")
+        r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
+        assignees: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(assignees, r, total=len(assignees), next_cursor=links.get("next"))
+
+    async def _query_timeline(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "timeline")
+        issue_number = self._require_filter(q.filters, "issue_number", "timeline")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/issues/{issue_number}/timeline",
+            params={"per_page": q.limit},
+        )
+        timeline: list[dict[str, Any]] = await self._parse_json(r)
+        links = _parse_link_header(r)
+        return self._result(timeline, r, total=len(timeline), next_cursor=links.get("next"))
+
+    async def _query_pr_diff(self, q: ConnectorQuery) -> ConnectorResult:
+        owner_repo = self._require_filter(q.filters, "repo", "pr_diff")
+        pull_number = self._require_filter(q.filters, "pull_number", "pr_diff")
+        r = await self._call_api(
+            "GET",
+            f"/repos/{owner_repo}/pulls/{pull_number}",
+            headers={"Accept": "application/vnd.github.v3.diff"},
+        )
+        return self._result([{"diff": r.text}], r, total=1)
+
+    async def _query_search_issues(self, q: ConnectorQuery) -> ConnectorResult:
+        search_query = self._require_filter(q.filters, "q", "search_issues")
+        params = {"q": search_query, "per_page": q.limit}
+        for key in ("sort", "order", "state", "labels", "assignee", "created", "updated"):
+            if key in q.filters:
+                params[key] = q.filters[key]
+        r = await self._call_api("GET", "/search/issues", params=params)
+        body = await self._parse_json_object(r)
+        items = cast("list[dict[str, Any]]", body.get("items", []))
+        links = _parse_link_header(r)
+        return self._result(items, r, total=_search_total(body), next_cursor=links.get("next"))
+
+    async def _query_rate_limit(self, q: ConnectorQuery) -> ConnectorResult:
+        r = await self._call_api("GET", "/rate_limit")
+        body = await self._parse_json_object(r)
+        resources = cast("dict[str, Any]", body.get("resources", {}))
+        return self._result([resources], r, total=1)
 
     def _require_write_filter(self, data: dict[str, Any], key: str, resource: str) -> str:
         """Get a required write field or raise a descriptive ValueError."""
@@ -1068,260 +1114,303 @@ class GitHubConnector(ConnectorBase):
         return value
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        match payload.resource:
-            case "commit" | "files":
-                owner_repo = self._require_write_filter(payload.data, "repo", payload.resource)
-                actions = payload.data.get("actions")
-                if not isinstance(actions, list) or not actions:
-                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'actions' list")
-                ref = payload.data.get("ref", payload.data.get("branch", "main"))
-                if not isinstance(ref, str) or not ref:
-                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'ref' or 'branch'")
-                message = payload.data.get("message", "Update via Modulo")
-                if not isinstance(message, str) or not message:
-                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'message'")
-                targeted_paths: set[str] = set()
-                for action in actions:
-                    if not isinstance(action, dict):
-                        raise ValueError(f"GitHub resource {payload.resource!r}: each action must be an object")
-                    action_type = action.get("action")
-                    if action_type not in _COMMIT_ACTIONS:
-                        raise ValueError(
-                            f"GitHub resource {payload.resource!r}: action {action_type!r} must be one of "
-                            f"{sorted(_COMMIT_ACTIONS)}",
-                        )
-                    path = action.get("path")
-                    if not isinstance(path, str) or not path:
-                        raise ValueError(f"GitHub resource {payload.resource!r}: each action requires 'path'")
-                    _validate_path(path, payload.resource)
-                    targets: tuple[str, ...]
-                    if action_type == "move":
-                        previous_path = action.get("previous_path")
-                        if not isinstance(previous_path, str) or not previous_path:
-                            raise ValueError(
-                                f"GitHub resource {payload.resource!r}: move action requires 'previous_path'"
-                            )
-                        _validate_path(previous_path, payload.resource)
-                        targets = (previous_path, path)
-                    else:
-                        targets = (path,)
-                    for targeted in targets:
-                        if targeted in targeted_paths:
-                            raise ValueError(
-                                f"GitHub resource {payload.resource!r}: path {targeted!r} is targeted "
-                                "more than once by the batch",
-                            )
-                        targeted_paths.add(targeted)
-                    if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
-                        raise ValueError(
-                            f"GitHub resource {payload.resource!r}: action {action_type!r} requires string 'content'",
-                        )
-                base_sha = await self._resolve_commit_sha(owner_repo, ref, payload.resource)
-                tree_entries: list[dict[str, Any]] = []
-                for action in actions:
-                    action_type = action["action"]
-                    path = action["path"]
-                    if action_type == "delete":
-                        tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
-                        continue
-                    if action_type == "move":
-                        previous_path = action["previous_path"]
-                        tree_entries.append({"path": previous_path, "mode": "100644", "type": "blob", "sha": None})
-                        content = await self._read_file_text(owner_repo, previous_path, ref)
-                    else:
-                        content = action["content"]
-                    blob_sha = await self._create_blob(owner_repo, content)
-                    tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
-                tree_sha = await self._create_tree(owner_repo, base_sha, tree_entries)
-                commit_sha = await self._create_commit(owner_repo, message, tree_sha, base_sha)
-                ref_response = await self._update_ref(owner_repo, ref, commit_sha)
-                return await self._parse_json_object(ref_response)
-            case "file":
-                owner_repo = self._require_write_filter(payload.data, "repo", "file")
-                path = _validate_path(self._require_write_filter(payload.data, "path", "file"), "file")
-                body: dict[str, Any] = {
-                    "message": payload.data.get("message", "Update via Modulo"),
-                    "content": _encode_write_content(payload.data, "file"),
-                }
-                if "sha" in payload.data:
-                    body["sha"] = payload.data["sha"]
-                r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
-                return await self._parse_json_object(r)
-            case "issue":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue")
-                issue_body: dict[str, Any] = {
-                    "title": self._require_write_filter(payload.data, "title", "issue"),
-                }
-                if "body" in payload.data:
-                    issue_body["body"] = payload.data["body"]
-                if "labels" in payload.data:
-                    issue_body["labels"] = payload.data["labels"]
-                if "assignees" in payload.data:
-                    issue_body["assignees"] = payload.data["assignees"]
-                if "milestone" in payload.data:
-                    issue_body["milestone"] = payload.data["milestone"]
-                r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
-                return await self._parse_json_object(r)
-            case "issue_update":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
-                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_update")
-                update_body: dict[str, Any] = {}
-                for key in ("state", "title", "body", "labels", "milestone"):
-                    if key in payload.data:
-                        update_body[key] = payload.data[key]
-                r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
-                return await self._parse_json_object(r)
-            case "issue_comment":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
-                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
-                    json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
+        handlers: dict[str, Callable[[ConnectorPayload], Awaitable[dict[str, Any]]]] = {
+            "commit": self._write_commit,
+            "files": self._write_commit,
+            "file": self._write_file,
+            "issue": self._write_issue,
+            "issue_update": self._write_issue_update,
+            "issue_comment": self._write_issue_comment,
+            "issue_label": self._write_issue_label,
+            "issue_reaction": self._write_issue_reaction,
+            "label": self._write_label,
+            "milestone": self._write_milestone,
+            "pr": self._write_pr,
+            "pr_review": self._write_pr_review,
+            "pr_comment": self._write_pr_comment,
+            "pr_update": self._write_pr_update,
+            "pr_merge": self._write_pr_merge,
+            "pr_review_request": self._write_pr_review_request,
+            "pr_label": self._write_pr_label,
+            "issue_assign": self._write_issue_assign,
+        }
+        handler = handlers.get(payload.resource)
+        if handler is None:
+            raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
+        return await handler(payload)
+
+    async def _write_commit(self, payload: ConnectorPayload) -> dict[str, Any]:
+        resource = payload.resource
+        owner_repo = self._require_write_filter(payload.data, "repo", resource)
+        actions = payload.data.get("actions")
+        if not isinstance(actions, list) or not actions:
+            raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'actions' list")
+        ref = payload.data.get("ref", payload.data.get("branch", "main"))
+        if not isinstance(ref, str) or not ref:
+            raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'ref' or 'branch'")
+        message = payload.data.get("message", "Update via Modulo")
+        if not isinstance(message, str) or not message:
+            raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'message'")
+        targeted_paths: set[str] = set()
+        for action in actions:
+            if not isinstance(action, dict):
+                raise ValueError(f"GitHub resource {resource!r}: each action must be an object")
+            action_type = action.get("action")
+            if action_type not in _COMMIT_ACTIONS:
+                raise ValueError(
+                    f"GitHub resource {resource!r}: action {action_type!r} must be one of {sorted(_COMMIT_ACTIONS)}",
                 )
-                return await self._parse_json_object(r)
-            case "issue_label":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
-                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/issues/{issue_number}/labels",
-                    json={"labels": self._require_string_list(payload.data, "labels", "issue_label")},
-                )
-                return await self._parse_json_object(r)
-            case "issue_reaction":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
-                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/issues/{issue_number}/reactions",
-                    json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
-                    headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
-                )
-                return await self._parse_json_object(r)
-            case "label":
-                owner_repo = self._require_write_filter(payload.data, "repo", "label")
-                label_body: dict[str, Any] = {
-                    "name": self._require_write_filter(payload.data, "name", "label"),
-                    "color": self._require_write_filter(payload.data, "color", "label"),
-                }
-                if "description" in payload.data:
-                    label_body["description"] = payload.data["description"]
-                r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
-                return await self._parse_json_object(r)
-            case "milestone":
-                owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
-                milestone_body: dict[str, Any] = {
-                    "title": self._require_write_filter(payload.data, "title", "milestone"),
-                }
-                if "description" in payload.data:
-                    milestone_body["description"] = payload.data["description"]
-                if "due_on" in payload.data:
-                    milestone_body["due_on"] = payload.data["due_on"]
-                r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
-                return await self._parse_json_object(r)
-            case "pr":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr")
-                pr_body: dict[str, Any] = {
-                    "title": self._require_write_filter(payload.data, "title", "pr"),
-                    "head": self._require_write_filter(payload.data, "head", "pr"),
-                    "base": self._require_write_filter(payload.data, "base", "pr"),
-                }
-                if "body" in payload.data:
-                    pr_body["body"] = payload.data["body"]
-                if "draft" in payload.data:
-                    pr_body["draft"] = payload.data["draft"]
-                if "maintainer_can_modify" in payload.data:
-                    pr_body["maintainer_can_modify"] = payload.data["maintainer_can_modify"]
-                r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
-                return await self._parse_json_object(r)
-            case "pr_review":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
-                event = self._require_write_filter(payload.data, "event", "pr_review")
-                if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+            path = action.get("path")
+            if not isinstance(path, str) or not path:
+                raise ValueError(f"GitHub resource {resource!r}: each action requires 'path'")
+            _validate_path(path, resource)
+            targets: tuple[str, ...]
+            if action_type == "move":
+                previous_path = action.get("previous_path")
+                if not isinstance(previous_path, str) or not previous_path:
+                    raise ValueError(f"GitHub resource {resource!r}: move action requires 'previous_path'")
+                _validate_path(previous_path, resource)
+                targets = (previous_path, path)
+            else:
+                targets = (path,)
+            for targeted in targets:
+                if targeted in targeted_paths:
                     raise ValueError(
-                        f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
+                        f"GitHub resource {resource!r}: path {targeted!r} is targeted more than once by the batch",
                     )
-                review_body: dict[str, Any] = {
-                    "event": event,
-                    "body": payload.data.get("body", ""),
-                }
-                if "comments" in payload.data:
-                    review_body["comments"] = payload.data["comments"]
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/pulls/{pull_number}/reviews",
-                    json=review_body,
+                targeted_paths.add(targeted)
+            if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
+                raise ValueError(
+                    f"GitHub resource {resource!r}: action {action_type!r} requires string 'content'",
                 )
-                return await self._parse_json_object(r)
-            case "pr_comment":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_comment")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_comment")
-                body_value = self._require_write_filter(payload.data, "body", "pr_comment")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/pulls/{pull_number}/comments",
-                    json={"body": body_value},
-                )
-                return await self._parse_json_object(r)
-            case "pr_update":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_update")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_update")
-                update: dict[str, Any] = {}
-                for key in ("title", "body", "state", "base"):
-                    if key in payload.data:
-                        update[key] = payload.data[key]
-                r = await self._call_api("PATCH", f"/repos/{owner_repo}/pulls/{pull_number}", json=update)
-                return await self._parse_json_object(r)
-            case "pr_merge":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_merge")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_merge")
-                merge_body: dict[str, Any] = {}
-                for key in ("commit_title", "commit_message", "merge_method", "sha"):
-                    if key in payload.data:
-                        merge_body[key] = payload.data[key]
-                r = await self._call_api("PUT", f"/repos/{owner_repo}/pulls/{pull_number}/merge", json=merge_body)
-                return await self._parse_json_object(r)
-            case "pr_review_request":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_review_request")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review_request")
-                reviewers = payload.data.get("reviewers")
-                team_reviewers = payload.data.get("team_reviewers")
-                if not reviewers and not team_reviewers:
-                    raise ValueError("GitHub pr_review_request write requires 'reviewers' or 'team_reviewers' in data")
-                request_body: dict[str, Any] = {}
-                if reviewers:
-                    request_body["reviewers"] = self._require_string_list(
-                        payload.data, "reviewers", "pr_review_request"
-                    )
-                if team_reviewers:
-                    request_body["team_reviewers"] = self._require_string_list(
-                        payload.data, "team_reviewers", "pr_review_request"
-                    )
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/pulls/{pull_number}/requested_reviewers",
-                    json=request_body,
-                )
-                return await self._parse_json_object(r)
-            case "pr_label":
-                owner_repo = self._require_write_filter(payload.data, "repo", "pr_label")
-                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_label")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/issues/{pull_number}/labels",
-                    json={"labels": self._require_string_list(payload.data, "labels", "pr_label")},
-                )
-                return await self._parse_json_object(r)
-            case "issue_assign":
-                owner_repo = self._require_write_filter(payload.data, "repo", "issue_assign")
-                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_assign")
-                r = await self._call_api(
-                    "POST",
-                    f"/repos/{owner_repo}/issues/{issue_number}/assignees",
-                    json={"assignees": self._require_string_list(payload.data, "assignees", "issue_assign")},
-                )
-                return await self._parse_json_object(r)
-            case _:
-                raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
+        base_sha = await self._resolve_commit_sha(owner_repo, ref, resource)
+        tree_entries = await self._build_tree_entries(actions, owner_repo, ref)
+        tree_sha = await self._create_tree(owner_repo, base_sha, tree_entries)
+        commit_sha = await self._create_commit(owner_repo, message, tree_sha, base_sha)
+        ref_response = await self._update_ref(owner_repo, ref, commit_sha)
+        return await self._parse_json_object(ref_response)
+
+    async def _build_tree_entries(
+        self,
+        actions: list[Any],
+        owner_repo: str,
+        ref: str,
+    ) -> list[dict[str, Any]]:
+        """Turn batch actions into Git tree entries, creating blobs as needed."""
+        tree_entries: list[dict[str, Any]] = []
+        for action in actions:
+            action_type = action["action"]
+            path = action["path"]
+            if action_type == "delete":
+                tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+                continue
+            if action_type == "move":
+                previous_path = action["previous_path"]
+                tree_entries.append({"path": previous_path, "mode": "100644", "type": "blob", "sha": None})
+                content = await self._read_file_text(owner_repo, previous_path, ref)
+            else:
+                content = action["content"]
+            blob_sha = await self._create_blob(owner_repo, content)
+            tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
+        return tree_entries
+
+    async def _write_file(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "file")
+        path = _validate_path(self._require_write_filter(payload.data, "path", "file"), "file")
+        body: dict[str, Any] = {
+            "message": payload.data.get("message", "Update via Modulo"),
+            "content": _encode_write_content(payload.data, "file"),
+        }
+        if "sha" in payload.data:
+            body["sha"] = payload.data["sha"]
+        r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
+        return await self._parse_json_object(r)
+
+    async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue")
+        issue_body: dict[str, Any] = {
+            "title": self._require_write_filter(payload.data, "title", "issue"),
+        }
+        if "body" in payload.data:
+            issue_body["body"] = payload.data["body"]
+        if "labels" in payload.data:
+            issue_body["labels"] = payload.data["labels"]
+        if "assignees" in payload.data:
+            issue_body["assignees"] = payload.data["assignees"]
+        if "milestone" in payload.data:
+            issue_body["milestone"] = payload.data["milestone"]
+        r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
+        return await self._parse_json_object(r)
+
+    async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
+        issue_number = self._require_write_filter(payload.data, "issue_number", "issue_update")
+        update_body: dict[str, Any] = {}
+        for key in ("state", "title", "body", "labels", "milestone"):
+            if key in payload.data:
+                update_body[key] = payload.data[key]
+        r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
+        return await self._parse_json_object(r)
+
+    async def _write_issue_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
+        issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/issues/{issue_number}/comments",
+            json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_issue_label(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
+        issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/issues/{issue_number}/labels",
+            json={"labels": self._require_string_list(payload.data, "labels", "issue_label")},
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_issue_reaction(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
+        issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/issues/{issue_number}/reactions",
+            json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
+            headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_label(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "label")
+        label_body: dict[str, Any] = {
+            "name": self._require_write_filter(payload.data, "name", "label"),
+            "color": self._require_write_filter(payload.data, "color", "label"),
+        }
+        if "description" in payload.data:
+            label_body["description"] = payload.data["description"]
+        r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
+        return await self._parse_json_object(r)
+
+    async def _write_milestone(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
+        milestone_body: dict[str, Any] = {
+            "title": self._require_write_filter(payload.data, "title", "milestone"),
+        }
+        if "description" in payload.data:
+            milestone_body["description"] = payload.data["description"]
+        if "due_on" in payload.data:
+            milestone_body["due_on"] = payload.data["due_on"]
+        r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
+        return await self._parse_json_object(r)
+
+    async def _write_pr(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr")
+        pr_body: dict[str, Any] = {
+            "title": self._require_write_filter(payload.data, "title", "pr"),
+            "head": self._require_write_filter(payload.data, "head", "pr"),
+            "base": self._require_write_filter(payload.data, "base", "pr"),
+        }
+        if "body" in payload.data:
+            pr_body["body"] = payload.data["body"]
+        if "draft" in payload.data:
+            pr_body["draft"] = payload.data["draft"]
+        if "maintainer_can_modify" in payload.data:
+            pr_body["maintainer_can_modify"] = payload.data["maintainer_can_modify"]
+        r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
+        return await self._parse_json_object(r)
+
+    async def _write_pr_review(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
+        event = self._require_write_filter(payload.data, "event", "pr_review")
+        if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+            raise ValueError(
+                f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
+            )
+        review_body: dict[str, Any] = {
+            "event": event,
+            "body": payload.data.get("body", ""),
+        }
+        if "comments" in payload.data:
+            review_body["comments"] = payload.data["comments"]
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/pulls/{pull_number}/reviews",
+            json=review_body,
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_pr_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_comment")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_comment")
+        body_value = self._require_write_filter(payload.data, "body", "pr_comment")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/pulls/{pull_number}/comments",
+            json={"body": body_value},
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_pr_update(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_update")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_update")
+        update: dict[str, Any] = {}
+        for key in ("title", "body", "state", "base"):
+            if key in payload.data:
+                update[key] = payload.data[key]
+        r = await self._call_api("PATCH", f"/repos/{owner_repo}/pulls/{pull_number}", json=update)
+        return await self._parse_json_object(r)
+
+    async def _write_pr_merge(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_merge")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_merge")
+        merge_body: dict[str, Any] = {}
+        for key in ("commit_title", "commit_message", "merge_method", "sha"):
+            if key in payload.data:
+                merge_body[key] = payload.data[key]
+        r = await self._call_api("PUT", f"/repos/{owner_repo}/pulls/{pull_number}/merge", json=merge_body)
+        return await self._parse_json_object(r)
+
+    async def _write_pr_review_request(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_review_request")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review_request")
+        reviewers = payload.data.get("reviewers")
+        team_reviewers = payload.data.get("team_reviewers")
+        if not reviewers and not team_reviewers:
+            raise ValueError("GitHub pr_review_request write requires 'reviewers' or 'team_reviewers' in data")
+        request_body: dict[str, Any] = {}
+        if reviewers:
+            request_body["reviewers"] = self._require_string_list(payload.data, "reviewers", "pr_review_request")
+        if team_reviewers:
+            request_body["team_reviewers"] = self._require_string_list(
+                payload.data, "team_reviewers", "pr_review_request"
+            )
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/pulls/{pull_number}/requested_reviewers",
+            json=request_body,
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_pr_label(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "pr_label")
+        pull_number = self._require_write_filter(payload.data, "pull_number", "pr_label")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/issues/{pull_number}/labels",
+            json={"labels": self._require_string_list(payload.data, "labels", "pr_label")},
+        )
+        return await self._parse_json_object(r)
+
+    async def _write_issue_assign(self, payload: ConnectorPayload) -> dict[str, Any]:
+        owner_repo = self._require_write_filter(payload.data, "repo", "issue_assign")
+        issue_number = self._require_write_filter(payload.data, "issue_number", "issue_assign")
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/issues/{issue_number}/assignees",
+            json={"assignees": self._require_string_list(payload.data, "assignees", "issue_assign")},
+        )
+        return await self._parse_json_object(r)

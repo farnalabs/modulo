@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from modulo.api.dependencies import require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin_registry
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ async def plugin_health_endpoint(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Failed to check plugin health for %s", plugin_id)
+        logger.exception("Failed to check plugin health for %s", _sanitise_log_value(plugin_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to check plugin health",

@@ -12,6 +12,12 @@
         </Button>
       </div>
 
+      <div v-else-if="!token" class="space-y-4">
+        <div class="rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.
+        </div>
+      </div>
+
       <form v-else @submit.prevent="() => submit()" class="space-y-4">
         <div>
           <span class="mb-1 block text-sm font-medium">API Key</span>
@@ -47,8 +53,16 @@ const route = useRoute()
 const router = useRouter()
 const { post } = useApi()
 
+// The one-time setup token is delivered in the URL FRAGMENT (#token=...) — never
+// the query string — so it is not sent to the server nor leaked via Referer/access
+// logs. Read it from the hash, then strip it from the address bar / browser history
+// so it does not linger after the handoff is consumed.
+const token = parseFragmentToken(window.location.hash)
+if (token) {
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+}
+
 const backendId = route.params.id as string
-const token = route.query.token as string
 const apiKey = ref('')
 const success = ref(false)
 const backendName = ref('')
@@ -73,4 +87,10 @@ const { loading, error, mutate: submit } = useMutation(async () => {
     throw new Error('Setup failed. Please try again.')
   }
 })
+
+function parseFragmentToken(hash: string): string | null {
+  if (!hash || hash.length < 2) return null
+  const t = new URLSearchParams(hash.slice(1)).get('token')
+  return t ? t : null
+}
 </script>

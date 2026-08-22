@@ -5307,6 +5307,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/org/product-analytics/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Consent
+         * @description Accept, decline, or dismiss the product analytics consent prompt.
+         */
+        post: operations["post_consent_api_v1_org_product_analytics_consent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/org/product-analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Product Analytics
+         * @description Read the current product analytics consent state and instance switch.
+         */
+        get: operations["get_product_analytics_api_v1_org_product_analytics_get"];
+        /**
+         * Update Product Analytics Level
+         * @description Update the analytics level (admin toggle).
+         *
+         *     Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+         */
+        put: operations["update_product_analytics_level_api_v1_org_product_analytics_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/primitives": {
         parameters: {
             query?: never;
@@ -5965,7 +6011,7 @@ export interface paths {
          * @description Set the org's guardrails kill-switch (admin only).
          *
          *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
-         *     start — never a full disable. Enabling fires an audit event AND a
+         *     start -- never a full disable. Enabling fires an audit event AND a
          *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
          *     silent. Disabling restores full enforcement.
          */
@@ -7759,6 +7805,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/product-analytics/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Identity
+         * @description Return instance_id and whether a secret exists (never the secret itself).
+         *
+         *     System-admin only.
+         */
+        get: operations["get_identity_api_v1_product_analytics_identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/product-analytics/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Identity Secret
+         * @description Rotate the shared secret, authenticated by the old secret.
+         *
+         *     Rate-limited to 5 rotations per hour per client IP.
+         *     Distinguishes 401 (auth failure / clock skew) from 403 (permission) from 400.
+         */
+        post: operations["rotate_identity_secret_api_v1_product_analytics_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metrics/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Events
+         * @description Ingest a batch of curated product analytics events.
+         *
+         *     - Consent gate: 204 when the org's ``product_analytics.level`` is not ``all``.
+         *     - Best-effort insert: individual row failures are logged and skipped so the
+         *       client always receives a 2xx.
+         *     - ``api_error`` events are capped at ``API_ERROR_DAILY_CAP`` per org per day.
+         *     - ``UNIQUE(event_id)`` handles dedup — duplicate inserts are silently ignored.
+         */
+        post: operations["ingest_events_api_v1_metrics_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/product-analytics/transparency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Transparency */
+        get: operations["get_transparency_api_v1_product_analytics_transparency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -9035,6 +9169,43 @@ export interface components {
             /** Redirect Url */
             redirect_url: string;
         };
+        /** ConsentRequest */
+        ConsentRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "accept" | "decline" | "dismiss";
+        };
+        /** ConsentResponse */
+        ConsentResponse: {
+            /**
+             * Level
+             * @default off
+             */
+            level: string;
+            /** Prompted */
+            prompted?: string | null;
+            /** Prompted At */
+            prompted_at?: string | null;
+            /** Level Changed At */
+            level_changed_at?: string | null;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Egress Allowed
+             * @default false
+             */
+            egress_allowed: boolean;
+            /**
+             * Prompt Eligible
+             * @default false
+             */
+            prompt_eligible: boolean;
+        };
         /** ContextSourceModeUpdate */
         ContextSourceModeUpdate: {
             /** Source Mode */
@@ -9262,6 +9433,8 @@ export interface components {
             legacy_total?: string | null;
             /** Org Total */
             org_total?: string | null;
+            /** Org Run Count */
+            org_run_count?: number | null;
             /**
              * Has More
              * @default false
@@ -10674,6 +10847,19 @@ export interface components {
             /** Total Count */
             total_count: number;
         };
+        /** IdentityResponse */
+        IdentityResponse: {
+            /**
+             * Instance Id
+             * @description UUID of this Modulo instance
+             */
+            instance_id: string;
+            /**
+             * Secret Exists
+             * @description Whether a shared secret has been minted
+             */
+            secret_exists: boolean;
+        };
         /** ImportBundleResponse */
         ImportBundleResponse: {
             /** Warnings */
@@ -10884,6 +11070,21 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** LevelUpdateRequest */
+        LevelUpdateRequest: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "off" | "all";
+        };
+        /** LevelUpdateResponse */
+        LevelUpdateResponse: {
+            /** Level */
+            level: string;
+            /** Level Changed At */
+            level_changed_at?: string | null;
         };
         /** LibraryPrimitiveCreate */
         LibraryPrimitiveCreate: {
@@ -11480,6 +11681,24 @@ export interface components {
             role: string;
             /** Created At */
             created_at: string;
+        };
+        /** MetricsEventBatchRequest */
+        MetricsEventBatchRequest: {
+            /** Events */
+            events: components["schemas"]["MetricsEventItem"][];
+        };
+        /** MetricsEventItem */
+        MetricsEventItem: {
+            /** Event Id */
+            event_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
         };
         /** ModelBackendCreate */
         ModelBackendCreate: {
@@ -13567,6 +13786,37 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** RotateRequest */
+        RotateRequest: {
+            /**
+             * Old Secret
+             * @description Current secret used to authenticate the rotation
+             */
+            old_secret: string;
+            /**
+             * Timestamp
+             * @description Unix timestamp when the request was signed
+             */
+            timestamp: number;
+            /**
+             * Sequence
+             * @description Monotonic per-instance sequence number
+             */
+            sequence: number;
+            /**
+             * Hmac Digest
+             * @description HMAC-SHA256 hex digest over (payload, timestamp, sequence)
+             */
+            hmac_digest: string;
+        };
+        /** RotateResponse */
+        RotateResponse: {
+            /**
+             * New Secret
+             * @description The newly generated secret
+             */
+            new_secret: string;
+        };
         /** RotationStatusResponse */
         RotationStatusResponse: {
             /** Rotation In Progress */
@@ -14926,6 +15176,33 @@ export interface components {
         ToggleFlagRequest: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** TransparencyResponse */
+        TransparencyResponse: {
+            /** Last Successful Dump At */
+            last_successful_dump_at?: string | null;
+            /**
+             * Dump Count Total
+             * @default 0
+             */
+            dump_count_total: number;
+            /**
+             * Consent Level
+             * @default off
+             */
+            consent_level: string;
+            /**
+             * Instance Enabled
+             * @default false
+             */
+            instance_enabled: boolean;
+            /**
+             * Enforcement Enabled
+             * @default false
+             */
+            enforcement_enabled: boolean;
+            /** Warning */
+            warning?: string | null;
         };
         /** TrendBucket */
         TrendBucket: {
@@ -28382,6 +28659,107 @@ export interface operations {
             };
         };
     };
+    post_consent_api_v1_org_product_analytics_consent_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_analytics_api_v1_org_product_analytics_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_analytics_level_api_v1_org_product_analytics_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LevelUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LevelUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_registry_primitives_endpoint_api_v1_registry_primitives_get: {
         parameters: {
             query?: {
@@ -34352,6 +34730,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WebVitalTimeSeriesPoint"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_identity_api_v1_product_analytics_identity_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_identity_secret_api_v1_product_analytics_rotate_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_events_api_v1_metrics_events_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricsEventBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_transparency_api_v1_product_analytics_transparency_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransparencyResponse"];
                 };
             };
             /** @description Validation Error */

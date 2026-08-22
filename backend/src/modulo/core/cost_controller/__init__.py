@@ -766,6 +766,16 @@ async def build_cost_report_buckets(
             "clamped_total_usd": clamped if clamped > 0 else None,
         }
 
+    org_run_count_result = await session.execute(
+        select(func.sum(OrgDailyRunCount.run_count)).where(
+            OrgDailyRunCount.organisation_id == org_id,
+            OrgDailyRunCount.run_date >= since,
+            OrgDailyRunCount.team_id.is_(None),
+        )
+    )
+    org_run_count_value = org_run_count_result.scalar_one_or_none()
+    org_run_count = int(org_run_count_value) if org_run_count_value is not None else 0
+
     org_unassigned = Decimal(0)
     team_sum = Decimal(0)
     for team_id, bucket in team_components.items():
@@ -781,5 +791,6 @@ async def build_cost_report_buckets(
         "legacy_total": _report_amount(legacy_total),
         "org_unassigned_components": _report_amount(org_unassigned),
         "org_total": _report_amount(team_sum + org_unassigned + legacy_total),
+        "org_run_count": org_run_count,
         "has_more": has_more,
     }

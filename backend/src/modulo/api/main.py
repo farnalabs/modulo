@@ -85,6 +85,7 @@ from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.metrics import router as metrics_router
+from modulo.api.routes.metrics_ingest import router as metrics_ingest_router
 from modulo.api.routes.model_backends import router as model_backends_router
 from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
@@ -95,6 +96,9 @@ from modulo.api.routes.parameter_schemas import router as parameter_schemas_rout
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
+from modulo.api.routes.product_analytics import router as product_analytics_router
+from modulo.api.routes.product_analytics_identity import router as product_analytics_identity_router
+from modulo.api.routes.product_analytics_transparency import router as product_analytics_transparency_router
 from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
@@ -1181,6 +1185,7 @@ app.include_router(mcp_oauth_router)
 app.include_router(mcp_setup_router)
 app.include_router(me_router)
 app.include_router(org_settings_router)
+app.include_router(product_analytics_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
@@ -1209,6 +1214,9 @@ app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)
+app.include_router(product_analytics_identity_router)
+app.include_router(metrics_ingest_router)
+app.include_router(product_analytics_transparency_router)
 
 # Strip router lifespan contexts -- none of the 68+ routers register
 # on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.

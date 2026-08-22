@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -83,6 +84,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
@@ -135,6 +137,79 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     if principal.org_role is None:
         return False
     return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+
+
+@dataclass(frozen=True)
+class GraphEdgeData:
+    """Serialised edge payload shared by every graph-write call site.
+
+    ``hitl_gate_config_present`` records whether the caller explicitly supplied a
+    ``hitl_gate_config`` so the service layer can distinguish "gate removed" from
+    "gate not mentioned".
+    """
+
+    id: uuid.UUID
+    source_node_id: uuid.UUID
+    target_node_id: uuid.UUID
+    edge_type: str
+    condition_expression: str | None
+    hitl_gate_config: dict[str, Any] | None
+    hitl_gate_config_present: bool
+
+
+def _edge_to_data(edge: PipelineGraphEdge) -> GraphEdgeData:
+    """Serialize a request edge into the persisted graph-write payload shape."""
+    return GraphEdgeData(
+        id=edge.id,
+        source_node_id=edge.source_node_id,
+        target_node_id=edge.target_node_id,
+        edge_type=edge.edge_type,
+        condition_expression=edge.condition_expression,
+        hitl_gate_config=(edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None),
+        hitl_gate_config_present="hitl_gate_config" in edge.model_fields_set,
+    )
+
+
+def _edge_data_to_dict(edge: GraphEdgeData) -> dict[str, Any]:
+    return {
+        "id": edge.id,
+        "source_node_id": edge.source_node_id,
+        "target_node_id": edge.target_node_id,
+        "edge_type": edge.edge_type,
+        "condition_expression": edge.condition_expression,
+        "hitl_gate_config": edge.hitl_gate_config,
+        "hitl_gate_config_present": edge.hitl_gate_config_present,
+    }
+
+
+def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
+    """Build the GraphValidator's reduced edge representation."""
+    return {
+        "source": str(edge.source_node_id),
+        "target": str(edge.target_node_id),
+        "type": edge.edge_type,
+        "condition_expression": edge.condition_expression,
+        "hitl_gate_config": edge.hitl_gate_config,
+    }
+
+
+def _reject_graph_validation_issues(issues: list[Any]) -> None:
+    """Raise 422 for graph-save issues that must block authoring."""
+    for issue in issues:
+        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=issue.message,
+            )
+
+
+def _graph_validation_issue(severity: str, code: str, message: str, node_id: str | None = None) -> GraphValidationIssue:
+    return GraphValidationIssue(
+        severity=severity,
+        code=code,
+        message=message,
+        node_id=node_id,
+    )
 
 
 async def _deny_hitl_gate(
@@ -1076,34 +1151,10 @@ async def replace_pipeline_graph_endpoint(
     # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
     # admin-only gate would only block the operator's primary graph-edit path.
     node_data = [node.model_dump(mode="json") for node in req.nodes]
-    edge_data = [
-        {
-            "id": edge.id,
-            "source_node_id": edge.source_node_id,
-            "target_node_id": edge.target_node_id,
-            "edge_type": edge.edge_type,
-            "condition_expression": edge.condition_expression,
-            "hitl_gate_config": (
-                edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
-            ),
-            "hitl_gate_config_present": "hitl_gate_config" in edge.model_fields_set,
-        }
-        for edge in req.edges
-    ]
+    edge_data = [_edge_to_data(edge) for edge in req.edges]
     validator_graph = {
         "nodes": node_data,
-        "edges": [
-            {
-                "source": str(edge.source_node_id),
-                "target": str(edge.target_node_id),
-                "type": edge.edge_type,
-                "condition_expression": edge.condition_expression,
-                "hitl_gate_config": (
-                    edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
-                ),
-            }
-            for edge in req.edges
-        ],
+        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
     }
     connector_bindings = extract_connector_bindings(node_data)
 
@@ -1137,7 +1188,7 @@ async def replace_pipeline_graph_endpoint(
                 pipeline_id=pipeline_id,
                 org_id=principal.organisation_id,
                 nodes=node_data,
-                edges=edge_data,
+                edges=[_edge_data_to_dict(edge) for edge in edge_data],
                 is_privileged=_is_privileged(principal.org_role),
                 caller_type="rest",
                 account_id=principal.account_id,
@@ -1160,17 +1211,7 @@ async def replace_pipeline_graph_endpoint(
                     model_backend_pins=model_backend_pins,
                     guardrail_definitions=list(guardrail_rows),
                 )
-                for issue in validation.issues:
-                    if issue.code == "GUARDRAIL_CAP_EXCEEDED":
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail=issue.message,
-                        )
-                    if issue.code == "REDACT_CORRECT_BLOCKED":
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail=issue.message,
-                        )
+                _reject_graph_validation_issues(validation.issues)
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
             session,
@@ -1197,7 +1238,7 @@ async def replace_pipeline_graph_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     issues = [
-        GraphValidationIssue(
+        _graph_validation_issue(
             severity=issue.severity,
             code=issue.code,
             message=issue.message,
@@ -1311,20 +1352,7 @@ async def update_pipeline_endpoint(
                     )
             if has_graph and req.graph_json is not None:
                 node_data = [node.model_dump(mode="json") for node in req.graph_json.nodes]
-                edge_data = [
-                    {
-                        "id": edge.id,
-                        "source_node_id": edge.source_node_id,
-                        "target_node_id": edge.target_node_id,
-                        "edge_type": edge.edge_type,
-                        "condition_expression": edge.condition_expression,
-                        "hitl_gate_config": (
-                            edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
-                        ),
-                        "hitl_gate_config_present": "hitl_gate_config" in edge.model_fields_set,
-                    }
-                    for edge in req.graph_json.edges
-                ]
+                edge_data = [_edge_to_data(edge) for edge in req.graph_json.edges]
                 graph_bindings = extract_connector_bindings(node_data)
                 existing = await get_pipeline(session, pipeline_id)
                 if existing is None:
@@ -1347,7 +1375,7 @@ async def update_pipeline_endpoint(
                     pipeline_id=pipeline_id,
                     org_id=principal.organisation_id,
                     nodes=node_data,
-                    edges=edge_data,
+                    edges=[_edge_data_to_dict(edge) for edge in edge_data],
                     is_privileged=_is_privileged(principal.org_role),
                     caller_type="rest",
                     account_id=principal.account_id,
@@ -1507,6 +1535,70 @@ class PipelineCloneRequest(BaseModel):
     )
 
 
+async def _clone_pipeline_into_org(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    org_role: str | None,
+    requested_name: str | None,
+) -> tuple[Any, str]:
+    """Clone a pipeline within an org, validating the source and target name.
+
+    Returns ``(cloned_row, target_name)``. Raises ``HTTPException`` for a missing
+    source or an already-used name.
+    """
+    source = await get_pipeline(session, pipeline_id)
+    if source is None:
+        logger.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
+        )
+
+    target_name = requested_name or f"Copy of {source.name}"
+    if not await check_pipeline_name_available(session, org_id, target_name):
+        logger.warning(
+            "Copy aborted: name '%s' already exists in org %s",
+            _sanitise_log_value(target_name),
+            org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"),
+        )
+
+    cloned = await clone_pipeline(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        account_id=account_id,
+        org_role=org_role,
+        new_name=requested_name,
+    )
+    if cloned is None:
+        logger.warning("Copy aborted: source pipeline %s disappeared during copy", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]"),
+        )
+
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type="pipeline.cloned",
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "cloned_pipeline_id": str(cloned.id),
+            "target_name": target_name,
+        },
+    )
+    return cloned, target_name
+
+
 @router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.clone")
 async def clone_pipeline_endpoint(
@@ -1537,65 +1629,13 @@ async def clone_pipeline_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-
-            # Step 1 -- validate source exists
-            logger.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
-            source = await get_pipeline(session, pipeline_id)
-            if source is None:
-                logger.warning("Copy aborted: source pipeline %s not found", pipeline_id)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
-                )
-
-            # Step 2 -- validate name availability
-            target_name = req.name or f"Copy of {source.name}"
-            logger.info("Step 2/4: checking name '%s' is available", target_name)
-            if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
-                logger.warning(
-                    "Copy aborted: name '%s' already exists in org %s",
-                    target_name,
-                    principal.organisation_id,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"
-                    ),
-                )
-
-            # Step 3 -- execute copy
-            logger.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
-            cloned = await clone_pipeline(
+            cloned, target_name = await _clone_pipeline_into_org(
                 session,
-                org_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
                 account_id=principal.account_id,
                 org_role=principal.org_role,
-                new_name=req.name,
-            )
-            if cloned is None:
-                logger.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=(
-                        f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]"
-                    ),
-                )
-
-            # Step 4 -- audit event
-            logger.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="pipeline.cloned",
-                actor_user_id=principal.account_id,
-                resource_type="pipeline",
-                resource_id=pipeline_id,
-                payload_json={
-                    "cloned_pipeline_id": str(cloned.id),
-                    "target_name": target_name,
-                },
+                requested_name=req.name,
             )
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
@@ -1605,7 +1645,7 @@ async def clone_pipeline_endpoint(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
-    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
+    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
     return PipelineResponse.model_validate(cloned)
 
 
@@ -1621,6 +1661,46 @@ class SaveAsCompositeRequest(BaseModel):
 
 
 _PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
+
+
+async def _detect_parameter_ports(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    agent_ids: set[Any],
+) -> list[dict[str, Any]]:
+    """Auto-detect ``{{parameter.<name>}}`` placeholders in the selected agents' prompts.
+
+    Returns one parameter port dict per unique placeholder name, ordered by the
+    first agent that references it.
+    """
+    detected_ports: list[dict[str, Any]] = []
+    if not agent_ids:
+        return detected_ports
+    agents_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == org_id))
+    for agent in agents_result.scalars().all():
+        matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
+        for param_name in matches:
+            if any(p.get("name") == param_name for p in detected_ports):
+                continue
+            detected_ports.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": param_name,
+                    "label": param_name.replace("_", " ").title(),
+                    "description": None,
+                    "type": "string",
+                    "required": False,
+                    "default_value": None,
+                    "options": None,
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": str(agent.id),
+                        "injection_point": "prompt_template",
+                    },
+                }
+            )
+    return detected_ports
 
 
 @router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
@@ -1653,33 +1733,11 @@ async def save_as_composite_endpoint(
 
             # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
             agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
-            detected_ports: list[dict[str, Any]] = []
-            if agent_ids:
-                agents_result = await session.execute(
-                    select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
-                )
-                for agent in agents_result.scalars().all():
-                    matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
-                    for param_name in matches:
-                        # Avoid duplicates
-                        if not any(p.get("name") == param_name for p in detected_ports):
-                            detected_ports.append(
-                                {
-                                    "id": str(uuid.uuid4()),
-                                    "name": param_name,
-                                    "label": param_name.replace("_", " ").title(),
-                                    "description": None,
-                                    "type": "string",
-                                    "required": False,
-                                    "default_value": None,
-                                    "options": None,
-                                    "target_injection": {
-                                        "mode": "prompt_replace",
-                                        "node_id": str(agent.id),
-                                        "injection_point": "prompt_template",
-                                    },
-                                }
-                            )
+            detected_ports = await _detect_parameter_ports(
+                session,
+                org_id=principal.organisation_id,
+                agent_ids=agent_ids,
+            )
 
             # Extract edges that connect selected nodes
             all_edges_raw = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
@@ -1738,6 +1796,38 @@ class QualityReportResponse(BaseModel):
     deliveries: list[dict[str, Any]]
 
 
+async def _quality_report_recipient_urls(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> list[str]:
+    """Collect webhook URLs subscribed to the ``quality_report`` event.
+
+    ``events`` may be stored as a JSON list or a raw list; both shapes are
+    normalised before the membership check.
+    """
+    endpoints = (
+        await session.execute(
+            select(NotificationEndpoint).where(
+                NotificationEndpoint.organisation_id == org_id,
+            )
+        )
+    ).scalars()
+
+    recipient_urls: list[str] = []
+    for ep in endpoints:
+        raw_events: object = ep.events
+        events = raw_events if isinstance(raw_events, list) else []
+        if isinstance(raw_events, str):
+            try:
+                parsed = json.loads(raw_events)
+                events = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                events = []
+        if "quality_report" in events:
+            recipient_urls.append(ep.url)
+    return recipient_urls
+
+
 @router.post(
     "/{pipeline_id}/quality-report",
     response_model=QualityReportResponse,
@@ -1759,26 +1849,7 @@ async def trigger_quality_report(
 
             report = await generate_quality_report(session, principal.organisation_id)
 
-            endpoints = (
-                await session.execute(
-                    select(NotificationEndpoint).where(
-                        NotificationEndpoint.organisation_id == principal.organisation_id,
-                    )
-                )
-            ).scalars()
-
-            recipient_urls: list[str] = []
-            for ep in endpoints:
-                raw_events: object = ep.events
-                events = raw_events if isinstance(raw_events, list) else []
-                if isinstance(raw_events, str):
-                    try:
-                        parsed = json.loads(raw_events)
-                        events = parsed if isinstance(parsed, list) else []
-                    except (json.JSONDecodeError, TypeError):
-                        events = []
-                if "quality_report" in events:
-                    recipient_urls.append(ep.url)
+            recipient_urls = await _quality_report_recipient_urls(session, principal.organisation_id)
 
             deliveries: list[dict[str, Any]] = []
             if recipient_urls:
@@ -2157,6 +2228,86 @@ class ConvertToAgentRequest(BaseModel):
     model_backend_id: uuid.UUID
 
 
+async def _load_locked_pipeline_graph(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], list[Any]]:
+    """Load and row-lock a pipeline, returning its graph nodes + edge rows.
+
+    Raises 404 when the pipeline does not exist.
+    """
+    pipeline_row = (
+        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
+    ).scalar_one_or_none()
+    if pipeline_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+    nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+    edges = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
+    return nodes, edges
+
+
+async def _save_locked_graph(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+    nodes: list[dict[str, Any]],
+    edges: list[Any],
+) -> tuple[list[dict[str, Any]], list[Any]] | None:
+    """Persist a locked node-conversion graph via the shared save path."""
+    return await _save_graph(
+        session,
+        pipeline_id,
+        org_id,
+        nodes,
+        edges,
+        is_privileged=_is_privileged(principal.org_role),
+        caller_type="rest",
+        account_id=principal.account_id,
+        is_guardrail_admin=_is_guardrail_admin(principal),
+    )
+
+
+async def _finalize_locked_graph_save(
+    exc: Exception,
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+) -> None:
+    """Translate a locked-graph save error into the correct HTTP response.
+
+    ``HitlGateWeakeningDenied`` is recorded (the guarded write already rolled
+    back) and control returns to the caller, which then raises the 404
+    saved-graph response. The other two errors are translated directly into an
+    ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
+    endpoints, which only differ in how they prepare ``nodes``/``edges``.
+    """
+    if isinstance(exc, HitlGateWeakeningDenied):
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
+        return
+    if isinstance(exc, GuardrailBindingStripDenied):
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from exc
+    if isinstance(exc, ProgrammingError):
+        logger.exception(_CODE_ROUTES_PIPELINES)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    raise exc
+
+
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
     response_model=PipelineGraphResponse,
@@ -2174,15 +2325,7 @@ async def convert_node_to_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            pipeline_row = (
-                await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-            ).scalar_one_or_none()
-            if pipeline_row is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-            edges = list(
-                (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
-            )
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -2252,38 +2395,16 @@ async def convert_node_to_agent_endpoint(
                 },
             )
 
-            saved = await _save_graph(
+            saved = await _save_locked_graph(
                 session,
-                pipeline_id,
-                principal.organisation_id,
-                nodes,
-                edges,
-                is_privileged=_is_privileged(principal.org_role),
-                caller_type="rest",
-                account_id=principal.account_id,
-                is_guardrail_admin=_is_guardrail_admin(principal),
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                nodes=nodes,
+                edges=edges,
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            pipeline_id=pipeline_id,
-            exc=exc,
-            request_id=getattr(principal, "request_id", None),
-        )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -2308,15 +2429,7 @@ async def revert_node_to_manual_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            pipeline_row = (
-                await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-            ).scalar_one_or_none()
-            if pipeline_row is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-            edges = list(
-                (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
-            )
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -2377,38 +2490,16 @@ async def revert_node_to_manual_endpoint(
                 },
             )
 
-            saved = await _save_graph(
+            saved = await _save_locked_graph(
                 session,
-                pipeline_id,
-                principal.organisation_id,
-                nodes,
-                edges,
-                is_privileged=_is_privileged(principal.org_role),
-                caller_type="rest",
-                account_id=principal.account_id,
-                is_guardrail_admin=_is_guardrail_admin(principal),
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                nodes=nodes,
+                edges=edges,
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            pipeline_id=pipeline_id,
-            exc=exc,
-            request_id=getattr(principal, "request_id", None),
-        )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)

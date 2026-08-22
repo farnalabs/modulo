@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.routes.errors import router as errors_router
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -70,11 +71,12 @@ def _make_app():
         session.execute = AsyncMock(return_value=exec_result)
         return session
 
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_plan_context] = lambda: all_features()
     return app
 
 

@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_config import SystemConfig
@@ -20,6 +21,25 @@ async def set_config(
     value: Any,
     updated_by: uuid.UUID | None = None,
 ) -> SystemConfig:
+    """Insert-or-update a SystemConfig row (upsert).
+
+    Reads the existing row with ``SELECT … FOR UPDATE`` so concurrent updates to
+    the same key serialize on a row lock. When the key does not yet exist there
+    is nothing to lock, so two concurrent first-writes can both clear the SELECT
+    and race on the INSERT. That race surfaces as an ``IntegrityError`` on the
+    unique ``key`` constraint — we roll back to a savepoint, re-select the
+    winning row, and **adopt the winner's value** (first-write-wins).
+
+    This first-write-wins guarantee is load-bearing for Trust-On-First-Use minting
+    (see ``instance_identity.py``): under a concurrent first-mint of a key, the
+    losing caller must observe the value the *winning* caller stored, not its own
+    — otherwise two concurrent callers return different values for the same key
+    and every reader sees whichever id was written last (last-write-wins), which
+    is exactly the instability TOFU is meant to prevent.
+
+    When the row already exists (a deliberate update, e.g. secret rotation) the
+    caller's value still wins, as expected for an upsert.
+    """
     existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
     existing_row = existing.scalar_one_or_none()
     if existing_row is not None:
@@ -29,6 +49,33 @@ async def set_config(
     else:
         entity = SystemConfig(key=key, value=value, updated_by=updated_by)
         session.add(entity)
+        # Wrap the INSERT in a savepoint so a concurrent first-write's unique
+        # violation rolls back only this scope. ``begin_nested`` requires an
+        # active transaction; under autocommit-style usage (or a mock session in
+        # unit tests) there is no transaction to nest, so fall back to a plain
+        # flush — there is no real concurrency to guard against in that context.
+        savepoint = None
+        try:
+            savepoint = await session.begin_nested()
+        except (TypeError, AttributeError, InvalidRequestError):
+            savepoint = None
+        try:
+            await session.flush()
+        except IntegrityError:
+            if savepoint is not None:
+                await savepoint.rollback()
+            # The losing caller's ``entity`` is still pending in the session after
+            # the savepoint rollback — it is NOT expunged, so the trailing flush
+            # would re-emit its INSERT and re-raise the same unique-constraint
+            # violation (a dead/no-op recovery that never converges). Expunge it
+            # now so the only row the session knows about is the winner's.
+            session.expunge(entity)
+            existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
+            entity = existing.scalar_one()
+            # First-write-wins: the winning caller's row is authoritative. Do NOT
+            # overwrite ``entity.value`` / ``entity.updated_by`` — the losing
+            # caller adopts the already-stored (winner's) value so concurrent
+            # callers converge to a single stored value.
     await session.flush()
     return entity
 

@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -21,6 +22,15 @@ try:
     import tomllib
 except ImportError:
     import tomli as tomllib  # type: ignore[no-redef]
+
+
+def _safe_output_path(path: Path) -> Path:
+    """Resolve *path* and require it to stay within the working directory."""
+    resolved = os.path.realpath(str(path))
+    base = os.path.realpath(os.getcwd())
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"output path {str(path)!r} resolves outside the working directory")
+    return Path(resolved)
 
 
 def parse_uv_lock(lock_path: Path) -> list[dict]:
@@ -107,7 +117,7 @@ def generate_sbom(components: list[dict], version: str, timestamp: str, supplier
     serial = str(uuid.uuid4())
 
     return {
-        "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+        "$schema": "https://cyclonedx.org/schema/bom-1.5.schema.json",
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "serialNumber": f"urn:uuid:{serial}",
@@ -171,7 +181,7 @@ def main():
     output = json.dumps(bom, indent=2, ensure_ascii=False)
 
     if args.output:
-        output_path = Path(args.output)
+        output_path = _safe_output_path(Path(args.output))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output + "\n", encoding="utf-8")
     else:

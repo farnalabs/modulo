@@ -44,7 +44,9 @@ _PIN_B = {
 
 
 def test_fingerprint_is_deterministic() -> None:
-    assert fingerprint_guardrail_pins([_PIN_A, _PIN_B]) == fingerprint_guardrail_pins([_PIN_A, _PIN_B])
+    first = fingerprint_guardrail_pins([_PIN_A, _PIN_B])
+    second = fingerprint_guardrail_pins([_PIN_A, _PIN_B])
+    assert first == second
 
 
 def test_fingerprint_is_order_independent() -> None:

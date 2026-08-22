@@ -11,30 +11,7 @@
  *   node auth-login/js.js
  */
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
-const EMAIL = process.env.MODULO_EMAIL;
-const PASSWORD = process.env.MODULO_PASSWORD;
-
-if (!EMAIL || !PASSWORD) {
-  console.error("MODULO_EMAIL and MODULO_PASSWORD must be set");
-  process.exit(1);
-}
-
-async function api(path, options = {}) {
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
-  }
-  return res.json();
-}
+const { api, logSafe, EMAIL, PASSWORD, runMain } = require("../_shared/client.js");
 
 async function main() {
   // Step 1: Login
@@ -44,18 +21,18 @@ async function main() {
     body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
   });
   const { access_token, refresh_token, token_type } = login;
-  console.log(`  access_token:  ${access_token.slice(0, 20)}...`);
-  console.log(`  refresh_token: ${refresh_token.slice(0, 20)}...`);
-  console.log(`  token_type:    ${token_type}`);
+  console.log(`  access_token:  ${logSafe(access_token.slice(0, 20))}...`);
+  console.log(`  refresh_token: ${logSafe(refresh_token.slice(0, 20))}...`);
+  console.log(`  token_type:    ${logSafe(token_type)}`);
 
   const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
   // Step 2: Get current user
   console.log("\nFetching current user ...");
   const me = await api("/api/v1/auth/me", { headers: auth(access_token) });
-  console.log(`  ${me.display_name} <${me.email}>`);
-  console.log(`  role:    ${me.org_role}`);
-  console.log(`  user_id: ${me.id}`);
+  console.log(`  ${logSafe(me.display_name)} <${logSafe(me.email)}>`);
+  console.log(`  role:    ${logSafe(me.org_role)}`);
+  console.log(`  user_id: ${logSafe(me.id)}`);
 
   // Step 3: Refresh tokens
   console.log("\nRefreshing token ...");
@@ -65,8 +42,8 @@ async function main() {
   });
   const newAccess = refreshResp.access_token;
   const newRefresh = refreshResp.refresh_token;
-  console.log(`  new access_token:  ${newAccess.slice(0, 20)}...`);
-  console.log(`  new refresh_token: ${newRefresh.slice(0, 20)}...`);
+  console.log(`  new access_token:  ${logSafe(newAccess.slice(0, 20))}...`);
+  console.log(`  new refresh_token: ${logSafe(newRefresh.slice(0, 20))}...`);
 
   // Step 4: Logout
   console.log("\nLogging out ...");
@@ -75,12 +52,9 @@ async function main() {
     headers: auth(newAccess),
     body: JSON.stringify({ refresh_token: newRefresh }),
   });
-  console.log(`  ${logout.detail}`);
+  console.log(`  ${logSafe(logout.detail)}`);
 
   console.log("\nDone.");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err.message);
-  process.exit(1);
-});
+runMain(main);

@@ -229,6 +229,15 @@ def make_loop_counter_fn(loop_key: str) -> Any:
     return _counter_node
 
 
+def _hit_max_iterations(state: dict[str, Any], loop_key: str, max_iterations: int) -> bool:
+    """Return True when the loop counter for *loop_key* has reached *max_iterations*."""
+    if max_iterations <= 0:
+        return False
+    counts = state.get("_iteration_counts")
+    count = int(counts.get(loop_key, 0)) if isinstance(counts, dict) else 0
+    return count >= max_iterations
+
+
 def _make_loop_counter_router(
     loop_key: str,
     target: str,
@@ -252,10 +261,7 @@ def _make_loop_counter_router(
     compiled_expr = jmespath.compile(condition_expression) if condition_expression else None
 
     def _router(state: dict[str, Any]) -> str:
-        counts = state.get("_iteration_counts")
-        count = int(counts.get(loop_key, 0)) if isinstance(counts, dict) else 0
-
-        if max_iterations > 0 and count >= max_iterations:
+        if _hit_max_iterations(state, loop_key, max_iterations):
             return default_target
         if compiled_expr is not None:
             result = compiled_expr.search(state)
@@ -280,6 +286,16 @@ def _make_loop_counter_router(
 # (none today; `_iteration_counts` is dict-valued but written by loop counters)
 # fall through to whole-key replacement. See `_pipeline_state_reducer`.
 _CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log", "_iteration_counts"})
+
+
+def _should_concat_list(current: dict[str, Any], key: str, value: Any) -> bool:
+    """True when *value* should be appended to the existing list for *key*."""
+    return key in _CONCAT_KEYS and key in current and isinstance(current[key], list) and isinstance(value, list)
+
+
+def _should_merge_run_context(current: dict[str, Any], key: str, value: Any) -> bool:
+    """True when *value* is a run_context dict to merge per-key over the current one."""
+    return key == "run_context" and isinstance(value, dict) and isinstance(current.get(key), dict)
 
 
 def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
@@ -316,13 +332,303 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
     """
     result = dict(current)
     for k, v in update.items():
-        if k in _CONCAT_KEYS and k in result and isinstance(result[k], list) and isinstance(v, list):
+        if _should_concat_list(result, k, v):
             result[k] = result[k] + v
-        elif k == "run_context" and isinstance(v, dict) and isinstance(result.get(k), dict):
+        elif _should_merge_run_context(result, k, v):
             result[k] = {**result[k], **v}
         else:
             result[k] = v
     return result
+
+
+def _count_sandbox_nodes(nodes: list[dict[str, Any]]) -> bool:
+    """Return True when the graph has exactly one sandbox_agent node (FAR-228)."""
+    return sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
+
+
+def _add_node_to_graph(
+    graph: StateGraph[Any],
+    node_def: dict[str, Any],
+    *,
+    timeout: int,
+    session_factory: Callable[..., Any] | None,
+    single_sandbox_node: bool,
+) -> None:
+    """Add a single node to the graph based on its type and config."""
+    node_id: str = str(node_def["id"])
+    role: str | None = node_def.get("role")
+    node_type: str = node_def.get("node_type", "agent")
+    max_input_length: int | None = node_def.get("max_input_length")
+    token_budget: int | None = node_def.get("token_budget")
+
+    if node_type not in ("agent", "manual", "connector", "sandbox_agent"):
+        raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
+
+    connector_binding = node_def.get("connector_binding")
+
+    if node_type == "sandbox_agent":
+        graph.add_node(
+            node_id,
+            make_sandbox_agent_fn(
+                node_def,
+                timeout=timeout,
+                session_factory=session_factory,
+                single_sandbox_node=single_sandbox_node,
+            ),
+        )
+    elif node_type == "agent" and node_def.get("agent_id"):
+        graph.add_node(
+            node_id,
+            make_node_fn(
+                node_def,
+                role=role,
+                timeout=timeout,
+                max_input_length=max_input_length,
+                token_budget=token_budget,
+            ),
+        )
+    elif connector_binding:
+        graph.add_node(
+            node_id,
+            make_connector_fn(node_def, timeout=timeout),
+        )
+    elif node_type == "manual":
+        graph.add_node(
+            node_id,
+            make_manual_node_fn(node_def, timeout=timeout),
+        )
+    else:
+        graph.add_node(
+            node_id,
+            make_node_fn(
+                node_def,
+                role=role,
+                timeout=timeout,
+                max_input_length=max_input_length,
+                token_budget=token_budget,
+            ),
+        )
+
+
+def _build_reject_targets(edges: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each source that has a reject edge to that edge's target."""
+    return {
+        _get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id")
+        for edge_def in edges
+        if _get_edge_type(edge_def) == "reject"
+    }
+
+
+def _group_forwarding_edges(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group non-reject edges by their source node id."""
+    source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for edge_def in edges:
+        if _get_edge_type(edge_def) == "reject":
+            continue
+        source = _get_edge_val(edge_def, "source", "source_node_id")
+        source_edges[source].append(edge_def)
+    return source_edges
+
+
+def _normal_targets_for(edges: list[dict[str, Any]], target_ids: set[str]) -> list[str]:
+    """Collect a node's normal edge targets, registering each as a graph target."""
+    normal_targets = []
+    for edge_def in edges:
+        tgt = _get_edge_val(edge_def, "target", "target_node_id")
+        normal_targets.append(tgt)
+        target_ids.add(tgt)
+    return normal_targets
+
+
+def _resolve_loop_default_target(loop_edge: dict[str, Any], normal_targets: list[str], source: str) -> str:
+    """Resolve a loop edge's exit target: explicit, first normal target, or error."""
+    default_target_raw = loop_edge.get("default_target")
+    if default_target_raw:
+        return str(default_target_raw)
+    if normal_targets:
+        return normal_targets[0]
+    msg = f"loop edge from '{source}' requires default_target (no normal targets available)"
+    raise ValueError(msg)
+
+
+def _add_loop_edges(
+    graph: StateGraph[Any],
+    source: str,
+    loop_edges: list[dict[str, Any]],
+    normal: list[dict[str, Any]],
+    target_ids: set[str],
+) -> None:
+    """Compile loop edges via synthetic counter nodes and read-only routers.
+
+    The counter lives on a synthetic NODE, not the router: LangGraph discards
+    router-side in-place state mutations across supersteps, so max_iterations
+    would never trip and the run would hang until GraphRecursionError. The
+    counter node returns the incremented count as a real state update, and a
+    read-only router on it picks the next hop.
+    """
+    normal_targets = [_get_edge_val(edge_def, "target", "target_node_id") for edge_def in normal]
+    target_ids.update(normal_targets)
+
+    for loop_edge in loop_edges:
+        target = _get_edge_val(loop_edge, "target", "target_node_id")
+        max_iterations = int(loop_edge.get("max_iterations", 0))
+        condition_expression = loop_edge.get("condition_expression")
+        default_target_str = _resolve_loop_default_target(loop_edge, normal_targets, source)
+
+        loop_key = f"{source}->{target}"
+        counter_id = _make_loop_counter_id(source, target)
+        graph.add_node(counter_id, make_loop_counter_fn(loop_key))
+        graph.add_edge(source, counter_id)
+
+        counter_router = _make_loop_counter_router(
+            loop_key,
+            target,
+            default_target_str,
+            max_iterations,
+            condition_expression,
+        )
+        graph.add_conditional_edges(counter_id, counter_router)
+        target_ids.add(target)
+        target_ids.add(default_target_str)
+
+
+def _find_conditional_default(conditional_edges: list[dict[str, Any]]) -> str | None:
+    """Return the last explicit default_target declared on any conditional edge."""
+    default_target: str | None = None
+    for edge_def in conditional_edges:
+        dft = edge_def.get("default_target")
+        if dft:
+            default_target = str(dft)
+    return default_target
+
+
+def _add_llm_routing(
+    graph: StateGraph[Any],
+    source: str,
+    source_node_def: dict[str, Any],
+    conditional: list[dict[str, Any]],
+    normal: list[dict[str, Any]],
+    target_ids: set[str],
+) -> None:
+    """Compile LLM-driven conditional routing for a source node.
+
+    All outgoing edges from this node are handled by the LLM router.
+    """
+    llm_edges = conditional or normal
+    normal_targets = _normal_targets_for(normal, target_ids)
+    default_target: str | None = source_node_def.get("default_target")
+
+    router = _make_llm_router(llm_edges, normal_targets, default_target)
+    graph.add_conditional_edges(source, router)
+
+
+def _add_conditional_routing(
+    graph: StateGraph[Any],
+    source: str,
+    conditional: list[dict[str, Any]],
+    normal: list[dict[str, Any]],
+    target_ids: set[str],
+) -> None:
+    """Compile JMESPath conditional routing for a source node.
+
+    All outgoing edges from this source are handled by the router.
+    """
+    normal_targets = _normal_targets_for(normal, target_ids)
+    default_target = _find_conditional_default(conditional)
+
+    router = _make_conditional_router(conditional, normal_targets, default_target)
+    graph.add_conditional_edges(source, router)
+
+
+def _add_hitl_gate_edge(
+    graph: StateGraph[Any],
+    source: str,
+    target: str,
+    hitl_config: dict[str, Any],
+    *,
+    target_ids: set[str],
+    gate_node_ids: set[str],
+    reject_targets_by_source: dict[str, str],
+    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    node_type_map: dict[str, str],
+) -> None:
+    """Insert a HITL gate node between *source* and *target*.
+
+    Kick-back target priority: gate config ``reject_target`` first, then the
+    source's reject edge target.
+    """
+    gate_id = _make_gate_id(source, target)
+    hitl_config["gate_id"] = gate_id
+    node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
+    graph.add_node(
+        gate_id,
+        make_hitl_gate_fn(
+            hitl_config,
+            eval_definitions=node_evals,
+            session_factory=session_factory,
+            org_id=org_id,
+            node_type_map=node_type_map,
+        ),
+    )
+    graph.add_edge(source, gate_id)
+
+    # Determine kick-back target for HITL rejection routing.
+    # Priority: gate config reject_target > reject edge target.
+    reject_target: str | None = hitl_config.get("reject_target")
+    if reject_target is None:
+        reject_target = reject_targets_by_source.get(source)
+
+    if reject_target:
+        reject_target_str = str(reject_target)
+        gate_router = _make_gate_kickback_router(
+            target,
+            reject_target_str,
+        )
+        graph.add_conditional_edges(gate_id, gate_router)
+        target_ids.add(reject_target_str)
+    else:
+        graph.add_edge(gate_id, target)
+
+    gate_node_ids.add(gate_id)
+    target_ids.add(gate_id)
+
+
+def _add_normal_edges(
+    graph: StateGraph[Any],
+    source: str,
+    normal: list[dict[str, Any]],
+    *,
+    target_ids: set[str],
+    gate_node_ids: set[str],
+    reject_targets_by_source: dict[str, str],
+    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    node_type_map: dict[str, str],
+) -> None:
+    """Add direct edges (or HITL-gated edges) for a source's normal edges."""
+    for edge_def in normal:
+        target = _get_edge_val(edge_def, "target", "target_node_id")
+        hitl_config = edge_def.get("hitl_gate_config")
+        if hitl_config:
+            _add_hitl_gate_edge(
+                graph,
+                source,
+                target,
+                hitl_config,
+                target_ids=target_ids,
+                gate_node_ids=gate_node_ids,
+                reject_targets_by_source=reject_targets_by_source,
+                eval_definitions_by_node=eval_definitions_by_node,
+                session_factory=session_factory,
+                org_id=org_id,
+                node_type_map=node_type_map,
+            )
+        else:
+            target_ids.add(target)
+            graph.add_edge(source, target)
 
 
 def build_graph_from_json(
@@ -388,80 +694,25 @@ def build_graph_from_json(
     # FAR-228: the idempotency gate is inert on multi-node graphs. Computed ONCE
     # here and threaded into the sandbox node builder so guard A (early skip)
     # can require it without re-deriving from the node's own def.
-    single_sandbox_node: bool = sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
+    single_sandbox_node = _count_sandbox_nodes(nodes)
 
     for node_def in nodes:
-        node_id: str = str(node_def["id"])
-        role: str | None = node_def.get("role")
         timeout: int | None = node_def.get("timeout_seconds")
         if timeout is None:
             timeout = pipeline_node_timeout_seconds
-        node_type: str = node_def.get("node_type", "agent")
-        max_input_length: int | None = node_def.get("max_input_length")
-        token_budget: int | None = node_def.get("token_budget")
-
-        if node_type not in ("agent", "manual", "connector", "sandbox_agent"):
-            raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
-
-        connector_binding = node_def.get("connector_binding")
-
-        if node_type == "sandbox_agent":
-            graph.add_node(
-                node_id,
-                make_sandbox_agent_fn(
-                    node_def,
-                    timeout=timeout,
-                    session_factory=session_factory,
-                    single_sandbox_node=single_sandbox_node,
-                ),
-            )
-        elif node_type == "agent" and node_def.get("agent_id"):
-            graph.add_node(
-                node_id,
-                make_node_fn(
-                    node_def,
-                    role=role,
-                    timeout=timeout,
-                    max_input_length=max_input_length,
-                    token_budget=token_budget,
-                ),
-            )
-        elif connector_binding:
-            graph.add_node(
-                node_id,
-                make_connector_fn(node_def, timeout=timeout),
-            )
-        elif node_type == "manual":
-            graph.add_node(
-                node_id,
-                make_manual_node_fn(node_def, timeout=timeout),
-            )
-        else:
-            graph.add_node(
-                node_id,
-                make_node_fn(
-                    node_def,
-                    role=role,
-                    timeout=timeout,
-                    max_input_length=max_input_length,
-                    token_budget=token_budget,
-                ),
-            )
+        _add_node_to_graph(
+            graph,
+            node_def,
+            timeout=timeout,
+            session_factory=session_factory,
+            single_sandbox_node=single_sandbox_node,
+        )
 
     # Build reject-edge lookup for kick-back routing.
-    reject_targets_by_source = {
-        _get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id")
-        for edge_def in edges
-        if _get_edge_type(edge_def) == "reject"
-    }
+    reject_targets_by_source = _build_reject_targets(edges)
 
     # Group forwarding edges by source (skip reject).
-    source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for edge_def in edges:
-        if _get_edge_type(edge_def) == "reject":
-            continue
-        source = _get_edge_val(edge_def, "source", "source_node_id")
-        source_edges[source].append(edge_def)
+    source_edges = _group_forwarding_edges(edges)
 
     target_ids: set[str] = set()
     gate_node_ids: set[str] = set()
@@ -478,118 +729,24 @@ def build_graph_from_json(
         normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
 
         if loop_edges:
-            normal_targets = [_get_edge_val(edge_def, "target", "target_node_id") for edge_def in normal]
-            target_ids.update(normal_targets)
-
-            for loop_edge in loop_edges:
-                target = _get_edge_val(loop_edge, "target", "target_node_id")
-                max_iterations = int(loop_edge.get("max_iterations", 0))
-                condition_expression = loop_edge.get("condition_expression")
-                default_target_raw = loop_edge.get("default_target")
-                if default_target_raw:
-                    default_target_str = str(default_target_raw)
-                elif normal_targets:
-                    default_target_str = normal_targets[0]
-                else:
-                    msg = f"loop edge from '{source}' requires default_target (no normal targets available)"
-                    raise ValueError(msg)
-
-                # The counter lives on a synthetic NODE, not the router:
-                # LangGraph discards router-side in-place state mutations across
-                # supersteps, so max_iterations would never trip and the run
-                # would hang until GraphRecursionError. The counter node returns
-                # the incremented count as a real state update, and a read-only
-                # router on it picks the next hop.
-                loop_key = f"{source}->{target}"
-                counter_id = _make_loop_counter_id(source, target)
-                graph.add_node(counter_id, make_loop_counter_fn(loop_key))
-                graph.add_edge(source, counter_id)
-
-                counter_router = _make_loop_counter_router(
-                    loop_key,
-                    target,
-                    default_target_str,
-                    max_iterations,
-                    condition_expression,
-                )
-                graph.add_conditional_edges(counter_id, counter_router)
-                target_ids.add(target)
-                target_ids.add(default_target_str)
-
-            continue
-
-        if routing_mode == "llm":
-            # All outgoing edges from this node are handled by the LLM router.
-            llm_edges = conditional or normal
-            normal_targets = []
-            for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target", "target_node_id")
-                normal_targets.append(tgt)
-                target_ids.add(tgt)
-
-            default_target: str | None = source_node_def.get("default_target")
-
-            router = _make_llm_router(llm_edges, normal_targets, default_target)
-            graph.add_conditional_edges(source, router)
+            _add_loop_edges(graph, source, loop_edges, normal, target_ids)
+        elif routing_mode == "llm":
+            _add_llm_routing(graph, source, source_node_def, conditional, normal, target_ids)
         elif conditional:
-            # All outgoing edges from this source are handled by the router.
-            normal_targets = []
-            for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target", "target_node_id")
-                normal_targets.append(tgt)
-                target_ids.add(tgt)
-
-            default_target = None
-            # Check for an explicit default on any conditional edge.
-            for edge_def in conditional:
-                dft = edge_def.get("default_target")
-                if dft:
-                    default_target = str(dft)
-
-            router = _make_conditional_router(conditional, normal_targets, default_target)
-            graph.add_conditional_edges(source, router)
+            _add_conditional_routing(graph, source, conditional, normal, target_ids)
         else:
-            for edge_def in normal:
-                target = _get_edge_val(edge_def, "target", "target_node_id")
-                hitl_config = edge_def.get("hitl_gate_config")
-                if hitl_config:
-                    gate_id = _make_gate_id(source, target)
-                    hitl_config["gate_id"] = gate_id
-                    node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
-                    graph.add_node(
-                        gate_id,
-                        make_hitl_gate_fn(
-                            hitl_config,
-                            eval_definitions=node_evals,
-                            session_factory=session_factory,
-                            org_id=org_id,
-                            node_type_map=node_type_map,
-                        ),
-                    )
-                    graph.add_edge(source, gate_id)
-
-                    # Determine kick-back target for HITL rejection routing.
-                    # Priority: gate config reject_target > reject edge target.
-                    reject_target: str | None = hitl_config.get("reject_target")
-                    if reject_target is None:
-                        reject_target = reject_targets_by_source.get(source)
-
-                    if reject_target:
-                        reject_target_str = str(reject_target)
-                        gate_router = _make_gate_kickback_router(
-                            target,
-                            reject_target_str,
-                        )
-                        graph.add_conditional_edges(gate_id, gate_router)
-                        target_ids.add(reject_target_str)
-                    else:
-                        graph.add_edge(gate_id, target)
-
-                    gate_node_ids.add(gate_id)
-                    target_ids.add(gate_id)
-                else:
-                    target_ids.add(target)
-                    graph.add_edge(source, target)
+            _add_normal_edges(
+                graph,
+                source,
+                normal,
+                target_ids=target_ids,
+                gate_node_ids=gate_node_ids,
+                reject_targets_by_source=reject_targets_by_source,
+                eval_definitions_by_node=eval_definitions_by_node,
+                session_factory=session_factory,
+                org_id=org_id,
+                node_type_map=node_type_map,
+            )
 
     entry_candidates = [str(n["id"]) for n in nodes if str(n["id"]) not in target_ids]
     if not entry_candidates:

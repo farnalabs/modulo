@@ -23,6 +23,23 @@ from typing import NamedTuple
 BACKUP_RE = re.compile(r"modulo-backup-(?P<org>[a-f0-9]+)-(?P<ts>\d{8})T.*\.tar\.gz\.enc$")
 
 
+def _safe_dir(path: str) -> str:
+    """Resolve *path* and require it to be an existing directory."""
+    resolved = os.path.realpath(path)
+    if not os.path.isdir(resolved):
+        raise ValueError(f"backup directory is not a real directory: {path!r}")
+    return resolved
+
+
+def _path_within(base: str, path: str) -> str:
+    """Resolve *path* and require it to stay within *base*."""
+    base_resolved = os.path.realpath(base)
+    resolved = os.path.realpath(path)
+    if resolved != base_resolved and not resolved.startswith(base_resolved + os.sep):
+        raise ValueError(f"path {resolved!r} is outside the allowed directory {base!r}")
+    return resolved
+
+
 class BackupFile(NamedTuple):
     path: str
     date: date
@@ -41,7 +58,8 @@ def parse_args() -> argparse.Namespace:
 
 def collect_backups(backup_dir: str) -> list[BackupFile]:
     backups: list[BackupFile] = []
-    pattern = os.path.join(backup_dir, "modulo-backup-*.tar.gz.enc")
+    safe_dir = _safe_dir(backup_dir)
+    pattern = os.path.join(safe_dir, "modulo-backup-*.tar.gz.enc")
     for path in glob.glob(pattern):
         basename = os.path.basename(path)
         m = BACKUP_RE.match(basename)
@@ -103,8 +121,9 @@ def classify_backups(
 
 
 def prune_backups(backup_dir: str, keep: set[str], dry_run: bool) -> None:
-    for entry in os.listdir(backup_dir):
-        path = os.path.join(backup_dir, entry)
+    safe_dir = _safe_dir(backup_dir)
+    for entry in os.listdir(safe_dir):
+        path = _path_within(safe_dir, os.path.join(safe_dir, entry))
         if os.path.isfile(path) and BACKUP_RE.match(entry) and path not in keep:
             if dry_run:
                 print(f"Would delete: {entry}")

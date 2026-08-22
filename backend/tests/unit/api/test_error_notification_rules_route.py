@@ -15,11 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session
+from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.plan_stubs import PlanStub, all_features, community_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -54,9 +55,29 @@ def _make_session(*, flush_raises: bool) -> AsyncMock:
     return session
 
 
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    session = _make_session(flush_raises=True)
+class _MockFactory:
+    """Reusable async-context session factory double."""
+
+    def __init__(self, session: AsyncMock) -> None:
+        self._session = session
+
+    def __call__(self) -> "_MockFactory":
+        return self
+
+    async def __aenter__(self) -> AsyncMock:
+        return self._session
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+
+def _build_client(*, flush_raises: bool, plan: PlanStub) -> Generator[TestClient, None, None]:
+    """Build a TestClient with the error-route dependencies overridden.
+
+    ``flush_raises`` controls whether the session flush simulates a unique
+    violation; ``plan`` selects the feature-gate plan context.
+    """
+    session = _make_session(flush_raises=flush_raises)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -64,30 +85,33 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-
-    class _MockFactory:
-        def __init__(self, s: AsyncMock) -> None:
-            self._session = s
-
-        def __call__(self) -> "_MockFactory":
-            return self
-
-        async def __aenter__(self) -> AsyncMock:
-            return self._session
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
     app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_plan_context] = lambda: plan
 
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    yield from _build_client(flush_raises=True, plan=all_features())
+
+
+@pytest.fixture
+def community_client() -> Generator[TestClient, None, None]:
+    yield from _build_client(flush_raises=False, plan=community_features())
 
 
 def test_create_rule_maps_unique_violation_to_422(client: TestClient) -> None:
@@ -98,3 +122,24 @@ def test_create_rule_maps_unique_violation_to_422(client: TestClient) -> None:
     )
 
     assert resp.status_code == 422
+
+
+def test_community_plan_webhook_rule_returns_402(community_client: TestClient) -> None:
+    """Community tier has no webhook action — a webhook rule must be 402."""
+    resp = community_client.post(
+        "/api/v1/errors/notification-rules",
+        json={"name": "webhook-rule", "action_type": "webhook", "webhook_url": "https://example.com/hook"},
+    )
+
+    assert resp.status_code == 402
+    assert "Team tier" in resp.text
+
+
+def test_community_plan_in_app_rule_passes_tier_check(community_client: TestClient) -> None:
+    """Community tier may create in_app rules (3 max) — the tier check must pass."""
+    resp = community_client.post(
+        "/api/v1/errors/notification-rules",
+        json={"name": "in-app-rule", "action_type": "in_app"},
+    )
+
+    assert resp.status_code != 402
