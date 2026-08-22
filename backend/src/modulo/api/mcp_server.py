@@ -154,6 +154,7 @@ _MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"  
 _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade head`."
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+_MSG_UUID_PARSE_FAILED = "UUID parse failed"
 _MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
 _MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
 _MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
@@ -846,7 +847,7 @@ async def _authenticate_api_key(
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
         )
-    except (SQLAlchemyError, OperationalError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError):
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return False, Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -923,7 +924,7 @@ async def _authenticate_oauth_jwt(
                     str(principal.account_id),
                     str(principal.organisation_id),
                 )
-        except (SQLAlchemyError, OperationalError, TimeoutError):
+        except (SQLAlchemyError, TimeoutError):
             _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
             return (
                 False,
@@ -961,10 +962,8 @@ async def _authenticate_oauth_jwt(
 
 
 async def _verify_oauth_token_family(
-    request: Request,
     token: str,
     claims: Any,
-    settings: Any,
 ) -> Response | None:
     """Return an error response if the OAuth token family is blacklisted.
 
@@ -985,7 +984,7 @@ async def _verify_oauth_token_family(
                     status_code=401,
                     media_type=_CT_APPLICATION_JSON,
                 )
-    except (SQLAlchemyError, OperationalError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError):
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -1025,7 +1024,6 @@ async def _finalize_oauth_principal(
     request: Request,
     token: str,
     claims: Any,
-    settings: Any,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     """Resolve the OAuth principal role, set request context, and continue.
@@ -1046,7 +1044,7 @@ async def _finalize_oauth_principal(
                 str(claims.account_id),
                 str(claims.organisation_id),
             )
-    except (SQLAlchemyError, OperationalError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError):
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -1121,11 +1119,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Verify token family is not blacklisted.
-        family_err = await _verify_oauth_token_family(request, token, claims, settings)
+        family_err = await _verify_oauth_token_family(token, claims)
         if family_err is not None:
             return family_err
 
-        return await _finalize_oauth_principal(request, token, claims, settings, call_next)
+        return await _finalize_oauth_principal(request, token, claims, call_next)
 
 
 # ---------------------------------------------------------------------------
@@ -1886,7 +1884,7 @@ async def get_pipeline_graph_tool(
         if pid_err:
             return pid_err
         if pid is None:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": "UUID parse failed"}
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": _MSG_UUID_PARSE_FAILED}
 
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -2184,7 +2182,7 @@ async def bind_connector_to_node(
         if cid_err:
             return cid_err
         if pid is None or nid is None or cid is None:
-            return {"error": "invalid_id", "detail": "UUID parse failed"}
+            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
 
         async with _session(org_id) as s:
             # Verify connector exists in org
@@ -2349,7 +2347,7 @@ async def trigger_pipeline(
         return _tool_error("Failed to trigger pipeline")
 
 
-async def _load_run_for_status(s: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, run_id: str) -> Any | None:
+async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
     run = await get_run(s, rid)
     if run is None:
         return None
@@ -2446,7 +2444,7 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_run_for_status(s, org_id, rid, run_id)
+        run = await _load_run_for_status(s, rid)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -2816,10 +2814,7 @@ def _parse_hitl_action(
 
 async def _load_hitl_run(
     s: AsyncSession,
-    org_id: uuid.UUID,
     rid: uuid.UUID,
-    run_id: str,
-    gate_id: str,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
 
@@ -2971,7 +2966,7 @@ async def _review_hitl_impl(
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+        run = await _load_hitl_run(s, rid)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -2986,19 +2981,15 @@ async def _review_hitl_impl(
             return await _dispatch_hitl_action(
                 mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
             )
-        except GateNotFoundError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except NotTeamMemberError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except AlreadyClaimedError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except ClaimTokenInvalidError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except ClaimTokenExpiredError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except GateAlreadyDecidedError as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
-        except ProgrammingError as exc:
+        except (
+            GateNotFoundError,
+            NotTeamMemberError,
+            AlreadyClaimedError,
+            ClaimTokenInvalidError,
+            ClaimTokenExpiredError,
+            GateAlreadyDecidedError,
+            ProgrammingError,
+        ) as exc:
             return _hitl_error_response(exc, run_id, gate_id)
         except Exception as exc:
             return _hitl_error_response(exc, run_id, gate_id)
@@ -3747,7 +3738,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         if tid_err:
             return tid_err
         if tid is None:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": "UUID parse failed"}
+            return {"error": "invalid_id", "field": "trigger_id", "detail": _MSG_UUID_PARSE_FAILED}
 
         from modulo.core.cron_helpers import _count_ongoing_runs
 
@@ -3827,15 +3818,16 @@ async def _validate_ongoing_config_change(
         return None
     pipeline = await s.get(Pipeline, trigger.pipeline_id)
     pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+    resolved_daily_spend_limit = (
+        Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else trigger.daily_spend_limit
+    )
     try:
         validate_ongoing_config(
             trigger.trigger_type,
             max_concurrent_runs=(
                 max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
             ),
-            daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
-            if daily_spend_limit is not None
-            else trigger.daily_spend_limit,
+            daily_spend_limit=resolved_daily_spend_limit,
             config_json=(config_json if config_json is not None else trigger.config_json),
             pipeline_max_concurrent_runs=pipeline_cap,
         )
@@ -4000,7 +3992,8 @@ async def update_trigger(
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
-            if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
+            cron_config_requested = cron_expression is not None or cron_timezone is not None
+            if cron_config_requested and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
             ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
@@ -4408,35 +4401,26 @@ async def _deny_break_glass_mint(session: AsyncSession, account_id: uuid.UUID) -
 
     Break-glass accounts can never mint or revoke credentials (plan v17,
     API-key + long-lived deny). Mirrors the FastAPI dependency of the same
-    name: load the account by primary key and deny when the shared
-    ``is_break_glass_denied`` / ``is_break_glass_live`` decision fires. A
-    missing account or a DB read failure raises (fail-closed) rather than
-    silently allowing a mint.
+    name: load the account by primary key and deny outright when
+    ``account.is_break_glass`` is True — for a break-glass account the shared
+    ``is_break_glass_denied`` / ``is_break_glass_live`` decisions are ALWAYS
+    true (live OR denied), so the predicate call is redundant. A missing
+    account or a DB read failure raises (fail-closed) rather than silently
+    allowing a mint.
     """
-    from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
     from modulo.db.models.account import Account
 
     account = await session.get(Account, account_id)
+    # The guard below means `account.is_break_glass is True`: the union of the
+    # shared `is_break_glass_denied` / `is_break_glass_live` decisions is then
+    # ALWAYS true (plan v17 — break-glass can never mint, live OR denied), so
+    # any break-glass account is denied outright.
     if account is not None and account.is_break_glass is True:
-        now = datetime.now(UTC)
-        if is_break_glass_denied(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        ) or is_break_glass_live(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        ):
-            _log.warning(
-                "permission.break_glass_mint_denied",
-                extra={"account_id": str(account_id)},
-            )
-            raise MCPAuthorizationError("Break-glass accounts cannot create or modify secrets/credentials")
+        _log.warning(
+            "permission.break_glass_mint_denied",
+            extra={"account_id": str(account_id)},
+        )
+        raise MCPAuthorizationError("Break-glass accounts cannot create or modify secrets/credentials")
 
 
 async def _enforce_api_key_mint_cap(
@@ -5954,7 +5938,7 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _mcp_healthz(request: Request) -> JSONResponse:
+def _mcp_healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
@@ -6546,7 +6530,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-async def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log unhandled MCP exceptions and return a structured JSON error.
 
     Starlette's ``ServerErrorMiddleware`` (outermost in the middleware stack)
