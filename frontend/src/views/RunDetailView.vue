@@ -21,6 +21,7 @@
           <p class="text-xs text-muted-foreground">
             Run ID: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
             <button
+              type="button"
               :aria-label="$t('views.RunDetailView.copy_run_id')"
               class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
               @click="copyRunId"
@@ -34,6 +35,7 @@
             Total: {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
           </div>
           <button
+            type="button"
             data-testid="run-detail-share-summary"
             class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
             @click="copyShareSummary"
@@ -44,23 +46,23 @@
       </header>
 
       <!-- Queue position banner (pending + waiting on sandbox capacity) -->
-      <div
+      <output
         v-if="run.status === 'pending' && run.capacity?.waiting"
         data-testid="run-detail-queue-banner"
-        role="status"
         aria-live="polite"
-        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
+        :aria-label="$t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' })"
+        class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
       >
         {{ $t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' }) }}
-      </div>
-      <p
+      </output>
+      <output
         v-else-if="run.status === 'pending'"
         data-testid="run-detail-queued-starting"
-        role="status"
-        class="mb-4 text-xs text-muted-foreground"
+        :aria-label="$t('views.RunDetailView.queued_starting_soon')"
+        class="mb-4 block text-xs text-muted-foreground"
       >
         {{ $t('views.RunDetailView.queued_starting_soon') }}
-      </p>
+      </output>
 
       <!-- HITL Gate -->
       <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
@@ -73,6 +75,7 @@
               class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
             >{{ gate.label || shortId(gate.gate_id) }}</code>
             <button
+              type="button"
               data-testid="run-detail-copy-gate-id"
               :aria-label="$t('views.RunDetailView.copy_gate_id')"
               class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
