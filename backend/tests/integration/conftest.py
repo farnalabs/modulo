@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -595,3 +596,70 @@ async def test_trigger(
             },
         )
     return trigger_id
+
+
+# ---------------------------------------------------------------------------
+# Shared ASGI client fixture
+# ---------------------------------------------------------------------------
+# ``integration_client`` was previously copy-pasted into every integration test
+# module, which SonarCloud flagged as duplicated new code. It is now defined
+# once here and inherited by all integration tests (pytest resolves fixtures
+# from parent conftest files). The variant below wires the app's dependency
+# overrides against ``app_engine`` with an all-features plan context.
+
+
+_VALID_32 = "a" * 32
+
+
+class _AllFeatures:
+    """Plan-context stub that reports every feature as enabled (enterprise tier)."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "enterprise"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+@pytest_asyncio.fixture
+async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClient:
+    """ASGI ``AsyncClient`` wired with the app's dependency overrides."""
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.main import app
+    from modulo.core.feature_flags import PlanContext
+    from modulo.settings import Settings, get_settings
+
+    settings = Settings(
+        database_url=db_url,
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_csrf_enabled=False,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+        modulo_admin_password="",
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with factory() as session:
+            yield session
+
+    async def _all_features_ctx() -> PlanContext:
+        return _AllFeatures()
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[_get_engine] = lambda: app_engine
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_plan_context] = _all_features_ctx
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
+        yield client
+
+    app.dependency_overrides.clear()

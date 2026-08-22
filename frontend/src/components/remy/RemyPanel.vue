@@ -20,8 +20,10 @@
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
           <input
+            id="remypanel-name-input"
             ref="nameInputRef"
             v-model="editNameValue"
+            :aria-label="$t('components.remy.RemyPanel.session_label')"
             class="remy-name-input text-sm font-semibold"
             @keydown.enter="saveName"
             @keydown.escape="cancelEditName"

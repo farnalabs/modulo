@@ -22,6 +22,7 @@ from modulo.db.models.library_sync_state import LibrarySyncState
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.mcp_setup_token import McpSetupToken
+from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.node import Node
 from modulo.db.models.node_category import NodeCategory
@@ -100,6 +101,7 @@ __all__ = [
     "LifecycleMap",
     "LifecycleMapStage",
     "McpSetupToken",
+    "MetricsStaging",
     "ModelBackend",
     "Node",
     "NodeCategory",

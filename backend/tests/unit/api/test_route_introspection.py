@@ -82,6 +82,12 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/mcp/oauth/clients"): "OAuth A1b flow",
     ("DELETE", "/api/v1/mcp/oauth/clients/{client_id}"): "OAuth A1b flow",
     ("POST", "/api/v1/mcp/oauth/consent/approve"): "OAuth A1b consent (get_current_tenant_user)",
+    # Product analytics: self-service consent (accept/decline/dismiss) for the
+    # current user's own org — get_current_tenant_user is the correct gate.
+    (
+        "POST",
+        "/api/v1/org/product-analytics/consent",
+    ): "product analytics self-service consent (get_current_tenant_user)",
     # Model backend setup flow.
     ("POST", "/api/v1/model-backends/{backend_id}/complete-setup"): "setup flow",
     # Pipeline from template: creation-only.

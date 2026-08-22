@@ -42,6 +42,7 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT
 from modulo.settings import Settings, get_settings
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_MODEL_BACKENDS_LIST_MODEL = "model_backends.list_model_backends_endpoint"
 _MSG_MODEL_BACKENDS_NOT_AVAILABLE = "Model backends are not available. Run database migrations to enable this feature."
@@ -55,7 +56,6 @@ _CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoin
 
 
 logger = logging.getLogger(__name__)
-
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
@@ -479,7 +479,7 @@ def _validate_provider(provider: str) -> None:
             return
     except Exception as exc:
         logger.exception("model_backends._validate_provider")
-        logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
+        logger.warning("Plugin registry check failed for provider %r: %s", _sanitise_log_value(provider), exc)
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=[

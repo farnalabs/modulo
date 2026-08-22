@@ -152,6 +152,7 @@ interface CostReportResponse {
   org_unassigned_components?: string | null
   legacy_total?: string | null
   org_total?: string | null
+  org_run_count?: number | null
   has_more?: boolean
 }
 
@@ -185,8 +186,16 @@ const anomaliesLoading = ref(true)
 const anomaliesError = ref<string | null>(null)
 const anomalies = ref<AnomalyResponse[]>([])
 
-const totalSpend = computed(() => items.value.reduce((sum, i) => sum + i.total_spend_usd, 0))
-const totalRuns = computed(() => items.value.reduce((sum, i) => sum + i.total_runs, 0))
+const totalSpend = computed(() => {
+  const ot = (data.value as CostReportResponse)?.org_total
+  if (ot != null) return parseFloat(ot)
+  return items.value.reduce((sum, i) => sum + i.total_spend_usd, 0)
+})
+const totalRuns = computed(() => {
+  const orc = (data.value as CostReportResponse)?.org_run_count
+  if (orc != null) return orc
+  return items.value.reduce((sum, i) => sum + i.total_runs, 0)
+})
 const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / totalRuns.value : 0)
 
 const activeAnomalies = computed(() => anomalies.value.filter((a) => !a.dismissed))

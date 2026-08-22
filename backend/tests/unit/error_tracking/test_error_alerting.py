@@ -19,6 +19,7 @@ from modulo.core.email_service import EmailSendingError
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
 from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert, _CooldownKey
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
+from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -167,11 +168,12 @@ def _make_rules_app_with_count(rule_count: int) -> FastAPI:
             org_role="admin",
         )
 
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_plan_context] = lambda: all_features()
     return app
 
 

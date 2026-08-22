@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_target_org_role
+from modulo.api.dependencies import get_db_session, require_feature, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.secret_storage import decode_stored_secret, encrypt_stored_secret
 from modulo.core.email_service import (
@@ -62,7 +62,11 @@ class TestEmailRequest(BaseModel):
     to: str = Field(min_length=1, max_length=320)
 
 
-@router.get("/{org_id}/email-settings", response_model=EmailSettingsResponse)
+@router.get(
+    "/{org_id}/email-settings",
+    response_model=EmailSettingsResponse,
+    dependencies=[require_feature("email_config")],
+)
 @handle_db_errors("admin.email.admin_get_email_settings")
 async def admin_get_email_settings(
     org_id: uuid.UUID,
@@ -112,7 +116,11 @@ async def admin_get_email_settings(
     )
 
 
-@router.put("/{org_id}/email-settings", response_model=EmailSettingsResponse)
+@router.put(
+    "/{org_id}/email-settings",
+    response_model=EmailSettingsResponse,
+    dependencies=[require_feature("email_config")],
+)
 @handle_db_errors("admin.email.admin_update_email_settings")
 async def admin_update_email_settings(
     org_id: uuid.UUID,
@@ -200,7 +208,11 @@ async def admin_update_email_settings(
     )
 
 
-@router.post("/{org_id}/email-settings/test", status_code=status.HTTP_200_OK)
+@router.post(
+    "/{org_id}/email-settings/test",
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_feature("email_config")],
+)
 @handle_db_errors("admin.email.admin_test_email_settings")
 async def admin_test_email_settings(
     org_id: uuid.UUID,

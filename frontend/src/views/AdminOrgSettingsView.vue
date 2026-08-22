@@ -112,10 +112,11 @@
         <span class="font-semibold text-destructive">{{ $t('views.AdminOrgSettingsView.this_action_cannot_be_undone') }}</span>
       </p>
       <div class="space-y-3">
-        <p class="text-sm text-muted-foreground">
+        <label for="org-delete-confirm-input" class="text-sm text-muted-foreground">
           Type <strong class="text-foreground">{{ orgInfo.name }}</strong> to confirm:
-        </p>
+        </label>
         <input
+          id="org-delete-confirm-input"
           v-model="confirmName"
           :placeholder="orgInfo.name"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-destructive/50"

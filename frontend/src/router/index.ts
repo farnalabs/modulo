@@ -99,6 +99,7 @@ const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
 const AdminEnvironmentProfilesView = () => import('../views/AdminEnvironmentProfilesView.vue')
 const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
 const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
+const AdminProductAnalyticsView = () => import('../views/AdminProductAnalyticsView.vue')
 const AdminRemyView = () => import('../views/AdminRemyView.vue')
 const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
@@ -433,6 +434,12 @@ const router = createRouter({
       name: 'admin-system-config',
       component: AdminSystemConfigView,
       meta: { breadcrumb: 'System Config', parent: 'dashboard', requiresSystemAdmin: true },
+    },
+    {
+      path: '/admin/product-analytics',
+      name: 'admin-product-analytics',
+      component: AdminProductAnalyticsView,
+      meta: { breadcrumb: 'Product Analytics', parent: 'dashboard', requiresSystemAdmin: true },
     },
     {
       path: '/admin/errors',

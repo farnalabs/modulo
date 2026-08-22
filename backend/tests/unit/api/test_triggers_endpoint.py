@@ -603,8 +603,8 @@ def test_test_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.create_run", new_callable=AsyncMock),
+        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
+        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))

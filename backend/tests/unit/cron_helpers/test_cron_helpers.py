@@ -2749,3 +2749,37 @@ class TestCatchupReviewFindings:
         assert result["reason"] == "pipeline_not_found"
         updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
         assert updates, "pipeline-missing skip must record last_fired_at (attempted state)"
+
+
+class TestGetSystemEngine:
+    def test_creates_system_engine_with_ssl_disabled(self) -> None:
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                result = ch._get_system_engine()
+
+            assert result is create_engine.return_value
+            create_engine.assert_called_once()
+            _, kwargs = create_engine.call_args
+            assert kwargs["connect_args"] == {"ssl": False, "statement_cache_size": 0}
+        finally:
+            ch._SYSTEM_ENGINE = None
+
+    def test_falls_back_to_regular_engine_when_url_empty(self) -> None:
+        regular_engine = MagicMock()
+        mock_settings = _settings(modulo_system_database_url="")
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch.object(ch, "_get_engine", return_value=regular_engine),
+            ):
+                result = ch._get_system_engine()
+
+            assert result is regular_engine
+        finally:
+            ch._SYSTEM_ENGINE = None

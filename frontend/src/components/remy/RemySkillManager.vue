@@ -24,19 +24,13 @@
 
     <div v-if="showForm" class="remy-skill-form p-3 space-y-3 border-b">
       <input
-        v-model="form.name"
+        v-for="field in skillFields"
+        :key="field.id"
+        :id="field.id"
+        v-model="form[field.model]"
         class="remy-skill-input"
-        :placeholder="$t('components.remy.RemySkillDialog.skill_name')"
-      />
-      <input
-        v-model="form.description"
-        class="remy-skill-input"
-        placeholder="Description"
-      />
-      <input
-        v-model="form.triggersText"
-        class="remy-skill-input"
-        :placeholder="$t('components.remy.RemySkillManager.triggers_commaseparated')"
+        :aria-label="$t(field.labelKey)"
+        :placeholder="$t(field.labelKey)"
       />
       <textarea
         v-model="form.body"
@@ -153,6 +147,13 @@ const editingId = ref<string | null>(null);
 const form = ref({ name: "", description: "", triggersText: "", body: "", active: true });
 const skillError = ref<string | null>(null);
 const saving = ref(false);
+
+type SkillFieldModel = "name" | "description" | "triggersText";
+const skillFields: { id: string; model: SkillFieldModel; labelKey: string }[] = [
+  { id: "remyskill-name-input", model: "name", labelKey: "components.remy.RemySkillDialog.skill_name" },
+  { id: "remyskill-description-input", model: "description", labelKey: "views.AdminRemyView.skill_description" },
+  { id: "remyskill-triggers-input", model: "triggersText", labelKey: "components.remy.RemySkillManager.triggers_commaseparated" },
+];
 
 async function fetchSkills() {
   skillError.value = null;

@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.system_config import delete_config, get_config, list_config, set_config
@@ -16,6 +17,7 @@ def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     session.flush = AsyncMock()
     session.delete = AsyncMock()
+    session.begin_nested = AsyncMock()
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = None
     execute_result.scalars.return_value.all.return_value = []
@@ -98,6 +100,60 @@ class TestSystemConfigCRUD:
 
         entity = await set_config(mock_session, "key", "val", updated_by=account_id)
         assert entity.updated_by == account_id
+
+    async def test_set_config_retries_on_integrity_error_and_converges(self) -> None:
+        """Concurrent first-write race: a loser's INSERT raises IntegrityError.
+
+        ``set_config`` must roll back to a savepoint, re-select the winner's row,
+        and adopt the winner's value unchanged (first-write-wins) — so every
+        caller observes the same stored value (regression guard for the TOFU
+        convergence guarantee: concurrent first-mint of a SystemConfig key must
+        converge to a single value instead of flipping to whichever caller wrote
+        last).
+        """
+        session = AsyncMock(spec=AsyncSession)
+        session.begin_nested = AsyncMock()
+        savepoint = MagicMock()
+        savepoint.rollback = AsyncMock()
+        session.begin_nested.return_value = savepoint
+
+        # First SELECT (FOR UPDATE) sees no row → take the INSERT branch.
+        # After the IntegrityError, the re-SELECT returns the winning row, which
+        # holds the *other* caller's value. set_config must adopt it unchanged.
+        winner_row = SystemConfig(key="race_key", value="concurrent-winner-value")
+        first_execute = MagicMock()
+        first_execute.scalar_one_or_none.return_value = None
+        second_execute = MagicMock()
+        second_execute.scalar_one.return_value = winner_row
+
+        execute_calls = {"n": 0}
+
+        def _execute(stmt):
+            execute_calls["n"] += 1
+            return first_execute if execute_calls["n"] == 1 else second_execute
+
+        session.execute = AsyncMock(side_effect=_execute)
+        session.add = MagicMock()
+
+        integrity = IntegrityError("INSERT", {}, None)
+        flush_calls = {"n": 0}
+
+        async def _flush():
+            flush_calls["n"] += 1
+            if flush_calls["n"] == 1:
+                raise integrity
+
+        session.flush = AsyncMock(side_effect=_flush)
+
+        entity = await set_config(session, "race_key", "my-intended-value")
+
+        # The race loser must converge to the winner's stored value, NOT overwrite
+        # it with its own. Both callers observe the same value (key invariant).
+        assert winner_row.value == "concurrent-winner-value"
+        assert entity is winner_row
+        assert entity.value != "my-intended-value"
+        savepoint.rollback.assert_awaited()
+        session.begin_nested.assert_awaited()
 
     async def test_list_config(self, mock_session: AsyncMock) -> None:
         entries = [
