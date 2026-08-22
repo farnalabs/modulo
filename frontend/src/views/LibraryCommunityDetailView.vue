@@ -64,6 +64,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { api } from '../lib/api/client'
@@ -73,6 +74,7 @@ import { formatApiError } from '../lib/api/formatError'
 type CommunityLibraryEntryDetail = components['schemas']['CommunityLibraryEntryDetail']
 
 const route = useRoute()
+const { t } = useI18n()
 
 const entry = ref<CommunityLibraryEntryDetail | null>(null)
 const loading = ref(false)
@@ -111,7 +113,7 @@ function typeBadgeClass(type: string): string {
 async function loadEntry(): Promise<void> {
   const id = typeof route.params.id === 'string' ? route.params.id : null
   if (!id) {
-    error.value = 'Missing entry id'
+    error.value = t('views.LibraryCommunityDetail.missing_entry_id')
     return
   }
   loading.value = true

@@ -60,6 +60,7 @@ export default {
       "status": "Status",
       "published_at": "Published",
       "content": "Content",
+      "missing_entry_id": "Missing entry id",
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
