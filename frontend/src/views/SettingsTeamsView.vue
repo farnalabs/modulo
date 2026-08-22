@@ -55,17 +55,23 @@
 
       <div class="space-y-3">
         <div v-for="team in teams" :key="team.id" class="card">
-          <div class="flex cursor-pointer items-center justify-between p-4" :class="{ 'border-b': expandedTeamId === team.id }" role="button" tabindex="0" @click="toggleExpand(team.id)" @keydown.enter="toggleExpand(team.id)" @keydown.space.prevent="toggleExpand(team.id)">
-            <div class="flex items-center gap-3">
-              <svg class="h-4 w-4 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <div class="flex items-center p-4" :class="{ 'border-b': expandedTeamId === team.id }">
+            <button
+              type="button"
+              :data-testid="'settings-teams-toggle-' + team.id"
+              class="flex flex-1 items-center gap-3 border-none bg-transparent p-0 text-left"
+              :aria-expanded="expandedTeamId === team.id"
+              @click="toggleExpand(team.id)"
+            >
+              <svg class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="m9 18 6-6-6-6" />
               </svg>
               <div>
                 <p class="font-medium">{{ team.name }}</p>
                 <p v-if="team.description" class="text-sm text-muted-foreground">{{ team.description }}</p>
               </div>
-            </div>
-            <div class="flex items-center gap-3">
+            </button>
+            <div class="flex shrink-0 items-center gap-3">
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
               <span class="text-sm text-muted-foreground" data-testid="settings-teams-owned-resource-count">
                 {{ $t('views.SettingsTeamsView.owned_resource_count', { count: team.owned_resource_count ?? 0 }) }}
