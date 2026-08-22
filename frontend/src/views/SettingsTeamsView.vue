@@ -59,8 +59,9 @@
             <button
               type="button"
               :data-testid="'settings-teams-toggle-' + team.id"
-              class="flex flex-1 items-center gap-3 border-none bg-transparent p-0 text-left"
+              class="flex flex-1 cursor-pointer items-center gap-3 border-none bg-transparent p-0 text-left"
               :aria-expanded="expandedTeamId === team.id"
+              :aria-controls="'settings-teams-panel-' + team.id"
               @click="toggleExpand(team.id)"
             >
               <svg class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -80,7 +81,7 @@
             </div>
           </div>
 
-          <div v-if="expandedTeamId === team.id" class="p-4">
+          <div v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" role="region" :aria-label="team.name + ' details'">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
               <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
               <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
