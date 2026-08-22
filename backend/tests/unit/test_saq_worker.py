@@ -171,10 +171,12 @@ class TestFunctionsWiring:
         assert ls.ttl == 300
         assert ls.unique is True
 
-        # metrics_dump: daily 01:00 UTC, unique=True, long timeout (full
-        # organisation scan), single retry, generous ttl.
+        # metrics_dump: hourly cron (0 * * * *), unique=True, long timeout
+        # (full organisation scan), single retry, generous ttl. Per-instance
+        # jitter (FAR-356) spreads real execution across a 6-hour window via
+        # an in-job gate, so the cron merely ticks hourly.
         md = jobs["metrics_dump"]
-        assert md.cron == "0 1 * * *"
+        assert md.cron == "0 * * * *"
         assert md.timeout == 600
         assert md.heartbeat == 60
         assert md.retries == 1
