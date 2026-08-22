@@ -124,8 +124,18 @@ def _get_async_engine() -> AsyncEngine:
 
         settings = get_settings()
         if settings.modulo_db.lower() == "postgres":
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
             _ASYNC_ENGINE = get_shared_engine(
-                pool_size=settings.saq_worker_db_pool_size,
+                pool_size=effective_pool,
                 max_overflow=0,
             )
         else:
@@ -168,6 +178,27 @@ def _effective_redis_pool_size(pool_size: int, concurrency: int) -> int:
 
     Enforce ``pool >= concurrency + reserve`` where reserve covers the upkeep
     ops (a minimum of 5, matching the historical non-dequeue margin).
+    """
+    reserve = 5
+    return max(pool_size, concurrency + reserve)
+
+
+def _effective_db_pool_size(pool_size: int, concurrency: int) -> int:
+    """Guarantee the worker async DB pool is large enough for concurrent runs.
+
+    Every concurrent run holds one DB connection through pre-node setup
+    (``claim_run_async`` / ``load_and_setup`` / ``executor.execute``), and the
+    zombie watchdog's terminalize write (``fail_run_terminal``) needs a
+    connection to fail a run that wedges in that window. With
+    ``SAQ_WORKER_CONCURRENCY=20`` and a pool smaller than ``concurrency + 5``,
+    the worker can exhaust its pool in setup and the watchdog cannot get a slot
+    to terminalize — the run rides to the 35-min ``dispatcher_reconcile``
+    backstop as a nodeless zombie (the agent.stall symptom).
+
+    Mirror :func:`_effective_redis_pool_size`: enforce
+    ``pool >= concurrency + 5`` where the reserve covers the watchdog
+    terminalize writes plus any system-cron connections sharing the same
+    engine.
     """
     reserve = 5
     return max(pool_size, concurrency + reserve)
@@ -883,10 +914,20 @@ def _get_system_async_engine() -> AsyncEngine:
         if settings.modulo_system_database_url:
             from sqlalchemy.ext.asyncio import create_async_engine
 
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
             _SYSTEM_ASYNC_ENGINE = create_async_engine(
                 settings.modulo_system_database_url,
                 pool_pre_ping=True,
-                pool_size=settings.saq_worker_db_pool_size,
+                pool_size=effective_pool,
                 max_overflow=0,
                 connect_args={"ssl": False, "statement_cache_size": 0},
             )
