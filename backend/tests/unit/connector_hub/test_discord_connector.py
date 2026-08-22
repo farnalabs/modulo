@@ -89,8 +89,9 @@ async def test_query_channels(connector):
 
 
 async def test_query_channels_missing_guild_id(connector):
+    query = ConnectorQuery(resource="channels")
     with pytest.raises(ValueError, match="'guild_id' in filters"):
-        await connector.query(ConnectorQuery(resource="channels"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +111,9 @@ async def test_query_messages(connector):
 
 
 async def test_query_messages_missing_channel_id(connector):
+    query = ConnectorQuery(resource="messages")
     with pytest.raises(ValueError, match="'channel_id' in filters"):
-        await connector.query(ConnectorQuery(resource="messages"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +130,9 @@ async def test_query_guild_members(connector):
 
 
 async def test_query_guild_members_missing_guild_id(connector):
+    query = ConnectorQuery(resource="guild_members")
     with pytest.raises(ValueError, match="'guild_id' in filters"):
-        await connector.query(ConnectorQuery(resource="guild_members"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -141,8 +144,9 @@ async def test_query_roles(connector):
 
 
 async def test_query_roles_missing_guild_id(connector):
+    query = ConnectorQuery(resource="roles")
     with pytest.raises(ValueError, match="'guild_id' in filters"):
-        await connector.query(ConnectorQuery(resource="roles"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -155,8 +159,9 @@ async def test_query_guild(connector):
 
 
 async def test_query_guild_missing_guild_id(connector):
+    query = ConnectorQuery(resource="guild")
     with pytest.raises(ValueError, match="'guild_id' in filters"):
-        await connector.query(ConnectorQuery(resource="guild"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
