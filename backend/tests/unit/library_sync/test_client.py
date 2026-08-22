@@ -12,29 +12,12 @@ import hashlib
 import httpx
 import pytest
 import respx
+from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
 from modulo.core.library_sync.client import LibraryClient
-from modulo.core.library_sync.manifest import canonical_manifest_bytes
-from modulo.registry.crypto import generate_keypair, sign
+from modulo.registry.crypto import generate_keypair
 
 ENDPOINT = "https://library.modulo.run"
-
-
-def _signed_manifest(private_key_pem: str, **overrides: object) -> dict:
-    body: dict[str, object] = {
-        "schema_version": "1",
-        "generated_at": "2026-08-22T00:00:00Z",
-        "entries": [],
-        "revoked": [],
-    }
-    body.update(overrides)
-    canonical = canonical_manifest_bytes(body)
-    return {**body, "signature": {"algorithm": "ed25519", "value": sign(private_key_pem, canonical)}}
-
-
-@pytest.fixture
-def keys() -> tuple[str, str]:
-    return generate_keypair()
 
 
 @pytest.fixture

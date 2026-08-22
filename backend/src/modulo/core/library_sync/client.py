@@ -66,23 +66,35 @@ class LibraryClient:
             return False
         return True
 
-    async def fetch_manifest(self) -> dict[str, Any] | None:
-        """GET ``/v1/manifest``, verify the Ed25519 signature, return the manifest.
-
-        Returns ``None`` on any failure (never raises, fail-open).
-        """
-        url = self._url("/v1/manifest")
+    async def _get_validated(self, path: str) -> httpx.Response | None:
+        """GET ``path`` after an SSRF check, returning ``None`` on any transport
+        or HTTP error (never raises, fail-open)."""
+        url = self._url(path)
         if not await self._validate(url):
             return None
         client = await self._get_client()
         try:
             resp = await client.get(url)
-            if not resp.is_success:
-                _log.warning("library_sync.client.manifest_http_error", extra={"status": resp.status_code})
-                return None
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            _log.warning("library_sync.client.fetch_failed", extra={"url": url, "reason": str(exc)})
+            return None
+        if not resp.is_success:
+            _log.warning("library_sync.client.http_error", extra={"url": url, "status": resp.status_code})
+            return None
+        return resp
+
+    async def fetch_manifest(self) -> dict[str, Any] | None:
+        """GET ``/v1/manifest``, verify the Ed25519 signature, return the manifest.
+
+        Returns ``None`` on any failure (never raises, fail-open).
+        """
+        resp = await self._get_validated("/v1/manifest")
+        if resp is None:
+            return None
+        try:
             manifest = resp.json()
-        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
-            _log.warning("library_sync.client.manifest_fetch_failed", extra={"reason": str(exc)})
+        except ValueError as exc:
+            _log.warning("library_sync.client.manifest_parse_failed", extra={"reason": str(exc)})
             return None
         if not isinstance(manifest, dict):
             _log.warning("library_sync.client.manifest_not_object")
@@ -97,19 +109,10 @@ class LibraryClient:
 
         Returns ``None`` on any failure or hash mismatch (never raises).
         """
-        url = self._url(f"/v1/blobs/{sha256}")
-        if not await self._validate(url):
+        resp = await self._get_validated(f"/v1/blobs/{sha256}")
+        if resp is None:
             return None
-        client = await self._get_client()
-        try:
-            resp = await client.get(url)
-            if not resp.is_success:
-                _log.warning("library_sync.client.blob_http_error", extra={"status": resp.status_code})
-                return None
-            content = resp.content
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            _log.warning("library_sync.client.blob_fetch_failed", extra={"reason": str(exc)})
-            return None
+        content = resp.content
         actual = hashlib.sha256(content).hexdigest()
         if actual != sha256.lower():
             _log.warning(
