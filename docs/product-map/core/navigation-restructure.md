@@ -30,13 +30,13 @@ The frontend navigation system with sidebar groups, collapsible sections, and co
 
 ## Architecture Decision
 
-The sidebar was restructured from 11 groups into 4 (BUILD, MONITOR, CONFIGURE, ADMIN) with collapsible groups whose state persists to `localStorage`. Expandable sub-menus were removed in #373 — all routes render as top-level items within their group, sorted by `sidebar_order`. Groups and items are gated by role, tier, permission, visibility, and dev-mode.
+The sidebar was restructured from 11 groups into 6 (BUILD, MONITOR, IMPROVE, CONFIGURE, ADMIN, SYSTEM) with collapsible groups whose state persists to `localStorage`. Expandable sub-menus were removed in #373 — all routes render as top-level items within their group, sorted by `sidebar_order`. Groups and items are gated by role, tier, permission, visibility, and dev-mode. The 6-group IA is the codified FAR-333 restructure: IMPROVE was promoted to a first-class group and the former ADMIN surface was split into CONFIGURE (product/workspace config) and SYSTEM (org/system-admin-only surface), alongside the original BUILD and MONITOR groups.
 
 ## Behaviours
 
-- [x] Sidebar with 4 groups (BUILD, MONITOR, CONFIGURE, ADMIN)
+- [x] Sidebar with 6 groups (BUILD, MONITOR, IMPROVE, CONFIGURE, ADMIN, SYSTEM)
 - [x] BUILD and MONITOR expanded by default (daily drivers)
-- [x] CONFIGURE and ADMIN collapsed by default (set-and-forget pages)
+- [x] IMPROVE, CONFIGURE, ADMIN and SYSTEM collapsed by default (set-and-forget pages)
 - [x] Expand/collapse per group with chevron indicators, persisted to localStorage
 - [x] Groups render a flat list of top-level items (expandable sub-menus removed in #373; children are top-level items)
 - [x] Items navigate directly on click (one-click destinations)
