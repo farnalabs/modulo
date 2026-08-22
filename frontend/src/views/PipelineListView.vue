@@ -232,7 +232,7 @@
     </div>
 
       <!-- Move to Folder dialog -->
-      <button type="button"
+      <div
         v-if="showMoveToFolder"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showMoveToFolder = false"
@@ -271,10 +271,10 @@
             </Button>
           </div>
         </div>
-      </button>
+      </div>
 
       <!-- Rename dialog -->
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+      <div
         v-if="showRenameDialog"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showRenameDialog = false"
@@ -310,7 +310,7 @@
       </div>
 
       <!-- Delete confirmation dialog -->
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+      <div
         v-if="showDeleteConfirm"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showDeleteConfirm = false"

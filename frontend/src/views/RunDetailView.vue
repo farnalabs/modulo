@@ -50,7 +50,7 @@
         v-if="run.status === 'pending' && run.capacity?.waiting"
         data-testid="run-detail-queue-banner"
         aria-live="polite"
-        :aria-label="$t('views.RunDetailView.queued_waiting_slot')"
+        :aria-label="$t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' })"
         class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
       >
         {{ $t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' }) }}
