@@ -102,23 +102,15 @@ export const useProductAnalyticsStore = defineStore('productAnalytics', () => {
   }
 
   async function updateLevel(level: 'off' | 'all'): Promise<boolean> {
-    // PUT returns LevelUpdateResponse (level + level_changed_at only), so we
-    // re-fetch the full consent state rather than apply the partial payload.
-    loading.value = true
-    error.value = null
-    try {
+    // The PUT returns only level + level_changed_at, so we re-GET the full
+    // consent state and let runRequest apply it. This reuses runRequest's
+    // loading/error/finally handling rather than duplicating it here.
+    return runRequest(async () => {
       const res = await api.PUT('/api/v1/org/product-analytics', { body: { level } })
-      if (res.error) {
-        error.value = formatApiError(res.error)
-        return false
-      }
-      return await fetchConsent()
-    } catch (e: unknown) {
-      error.value = formatApiError(e)
-      return false
-    } finally {
-      loading.value = false
-    }
+      if (res.error) return { error: res.error }
+      const getRes = await api.GET('/api/v1/org/product-analytics')
+      return { data: getRes.data, error: getRes.error }
+    })
   }
 
   return {
