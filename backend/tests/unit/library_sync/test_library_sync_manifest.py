@@ -86,7 +86,9 @@ class TestCanonicalManifestBytes:
 
     def test_is_deterministic(self) -> None:
         manifest = {"revoked": [{"id": "x"}], "entries": [{"id": "a"}], "schema_version": "1"}
-        assert canonical_manifest_bytes(manifest) == canonical_manifest_bytes(manifest)
+        first = canonical_manifest_bytes(manifest)
+        second = canonical_manifest_bytes(manifest)
+        assert first == second
 
 
 class TestParseManifest:
