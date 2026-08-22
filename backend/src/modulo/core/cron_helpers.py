@@ -434,14 +434,22 @@ def compute_next_send(cron_expression: str, after: datetime | None = None) -> da
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Set org-scoped RLS context for a cron/background transaction.
+
+    Also marks the transaction as internal execution so the team-scoped
+    ``rls_team_isolation`` policy (which ORs in ``app.execution_context``)
+    lets cron reads see all org rows — cron has no user principal.
+    """
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         await session.execute(
             text("SELECT set_config('app.organisation_id', :val, true)"),
             {"val": str(org_id)},
         )
+        await session.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
     else:
         session.info["organisation_id"] = org_id
+        session.info["execution_context"] = True
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:

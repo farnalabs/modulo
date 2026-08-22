@@ -118,7 +118,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -621,10 +621,11 @@ async def _script_lease_probe_ok(
     try:
         from sqlalchemy import text as _sql_text
 
-        from modulo.db.rls import set_rls_org
+        from modulo.db.rls import set_rls_execution_context, set_rls_org
 
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
             row = (
                 await session.execute(
                     _sql_text(
@@ -1355,6 +1356,7 @@ class PipelineExecutor:
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -1527,6 +1529,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 return await get_sandbox_concurrency_limit(session, org_id)
         except asyncio.CancelledError:
             raise
@@ -1548,6 +1551,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 return await get_org_run_concurrency_limit(session, org_id)
         except asyncio.CancelledError:
             raise
@@ -1706,6 +1710,7 @@ class PipelineExecutor:
             try:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     for eval_def in eval_defs:
                         eval_result = results[eval_def.name]
                         node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
@@ -1736,6 +1741,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 backend_rows = (
                     (
                         await session.execute(
@@ -1781,6 +1787,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 from sqlalchemy import select
 
                 from modulo.db.models.connector_instance import ConnectorInstance
@@ -1859,6 +1866,7 @@ class PipelineExecutor:
             # teardown must never lose an already-committed compensation.
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 run = await get_run(session, run_id)
                 if run is None:
                     _log.warning("guardrails.compensation.run_not_found run=%s", run_id)
@@ -1912,6 +1920,7 @@ class PipelineExecutor:
         """Execute the DB cancellation check query."""
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             return run is not None and run.cancellation_requested
 
@@ -1958,6 +1967,7 @@ class PipelineExecutor:
         """Append the ``context_write_by_non_setter`` audit event for a run."""
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await append_audit_event(
                 session,
                 org_id=org_id,
@@ -2173,6 +2183,7 @@ class PipelineExecutor:
         self._claim_token = claim_token
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -2217,6 +2228,7 @@ class PipelineExecutor:
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             # Load pipeline for runaway protection limits.
             pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
@@ -2373,6 +2385,7 @@ class PipelineExecutor:
         if final_status == "eval_failed" and error_code == "eval_blocked":
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 try:
                     await append_audit_event(
                         session,
@@ -2395,6 +2408,7 @@ class PipelineExecutor:
         work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await finalize_cost(
                 session,
                 run_id=run_id,
@@ -2442,6 +2456,7 @@ class PipelineExecutor:
         # path (the run row was re-terminalized there).
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             final_run = await get_run(session, run_id)
 
         if final_run is None:
@@ -2481,6 +2496,7 @@ class PipelineExecutor:
 
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 await revoke_run_api_key(session, run_id=run_id, org_id=org_id)
         except asyncio.CancelledError:
             raise
@@ -2528,6 +2544,7 @@ class PipelineExecutor:
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
@@ -2927,6 +2944,7 @@ class PipelineExecutor:
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -3120,6 +3138,7 @@ class PipelineExecutor:
         # (postmortem FAR-121).
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await session.execute(
                 text("UPDATE runs SET node_attempt_count = node_attempt_count + 1 WHERE id = :rid"),
                 {"rid": str(run_id)},
@@ -3181,6 +3200,7 @@ class PipelineExecutor:
         cancellation_requested = False
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
@@ -3254,6 +3274,7 @@ class PipelineExecutor:
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await session.execute(
                 text(
                     "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
@@ -3377,6 +3398,7 @@ class PipelineExecutor:
         current_claim_token: str | None = None
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
@@ -3495,6 +3517,7 @@ class PipelineExecutor:
             if final_status == "complete" and error_code != _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     final_status, error_code, error_detail = await self._check_eval_suites_for_run(
                         session=session,
                         run_id=run_id,
@@ -3508,6 +3531,7 @@ class PipelineExecutor:
                 # Fire agent_signal triggers for each completed node.
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     await self._fire_agent_signals(
                         session=session,
                         org_id=org_id,
@@ -3814,6 +3838,7 @@ class PipelineExecutor:
             pipeline_name: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 await mgr.create_gate(
                     session,
                     run_id=run_id,

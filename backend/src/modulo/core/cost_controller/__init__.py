@@ -35,6 +35,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.models.trigger import Trigger
+from modulo.db.rls import set_rls_execution_context
 
 _log = logging.getLogger(__name__)
 
@@ -384,6 +385,10 @@ async def check_pipeline_circuit_breaker(
     if cost_usd < 0:
         return False, "cost_must_be_non_negative"
 
+    # Cost control runs inside the executor's org-only context (no user
+    # principal) — the execution hatch lets it read a team-private pipeline's
+    # breaker state.
+    await set_rls_execution_context(session)
     pipeline = (
         await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
     ).scalar_one_or_none()
@@ -435,6 +440,7 @@ async def trip_pipeline_circuit_breaker(
     pipeline existed and was (re)marked tripped.
     """
     if pipeline is None:
+        await set_rls_execution_context(session)
         pipeline = (
             await session.execute(
                 select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
@@ -471,6 +477,9 @@ async def reset_pipeline_circuit_breaker(
     Returns ``True`` when the pipeline exists and the breaker was reset
     (triggers re-activated); ``False`` when no such pipeline exists in the org.
     """
+    # Cost control runs inside the executor's org-only context (no user
+    # principal) — the execution hatch lets it read a team-private pipeline.
+    await set_rls_execution_context(session)
     pipeline = (
         await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
     ).scalar_one_or_none()

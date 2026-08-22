@@ -474,6 +474,7 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
         patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
@@ -536,6 +537,7 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
         patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
@@ -588,6 +590,7 @@ def _enter_execute_patches(
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()))
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock))
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_org"))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"))
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled))
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry))
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()))

@@ -33,7 +33,7 @@ from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0123_relax_registry_signature_check"
+_HEAD_MIGRATION = "0124_fix_team_rls_policies"
 
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"

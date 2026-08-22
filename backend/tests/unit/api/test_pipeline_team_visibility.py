@@ -3,7 +3,7 @@
 A user who is a member of Team B must NOT be able to read Team A's
 team-private pipeline (``visibility='team'``, ``owner_team_id=Team A``) via
 GET /pipelines/{id}. The DB root cause (an OR'd org-only RLS policy that made
-the team policy dead weight) is fixed by migration ``0122_fix_team_rls_policies``;
+the team policy dead weight) is fixed by migration ``0124_fix_team_rls_policies``;
 post-migration the resolver SELECT runs under RLS, so a non-member's row is
 invisible at the DB layer and GET returns 404. The app-layer defense-in-depth
 is the ``require_team_membership_or_admin`` gate on the GET route; these tests
@@ -175,7 +175,7 @@ class TestCrossTeamPipelineVisibility:
     ) -> None:
         """Post-migration, a non-member gets 404, not 403.
 
-        After migration ``0122_fix_team_rls_policies`` drops the org-only
+        After migration ``0124_fix_team_rls_policies`` drops the org-only
         ``rls_org_isolation`` policy on team-scoped tables, the
         ``require_team_membership_or_admin`` dependency's resolver SELECT
         (``SELECT owner_team_id, visibility FROM pipelines WHERE id = ...``)
