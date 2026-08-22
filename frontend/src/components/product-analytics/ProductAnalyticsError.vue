@@ -2,6 +2,7 @@
   <ErrorAlert
     v-if="store.error"
     :message="store.error ?? undefined"
+    :on-retry="retry"
     :on-dismiss="dismissError"
     :dismiss-label="$t('views.ProductAnalytics.dismiss_error')"
   />
@@ -15,5 +16,9 @@ const store = useProductAnalyticsStore()
 
 function dismissError() {
   store.error = null
+}
+
+function retry() {
+  store.fetchConsent()
 }
 </script>

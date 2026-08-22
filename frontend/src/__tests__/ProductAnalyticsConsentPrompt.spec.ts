@@ -3,6 +3,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { mount } from '@vue/test-utils'
 import ProductAnalyticsConsentPrompt from '../components/product-analytics/ProductAnalyticsConsentPrompt.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
+import { api } from '../lib/api/client'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -18,9 +19,29 @@ vi.mock('primevue/button', () => ({
   },
 }))
 
+// Real flat wire shape returned by the backend (ConsentResponse).
+const flatConsent = {
+  level: 'off',
+  prompted: null,
+  prompted_at: null,
+  level_changed_at: null,
+  instance_enabled: true,
+  egress_allowed: false,
+  prompt_eligible: true,
+}
+
+function mockGet(data: unknown = flatConsent) {
+  return vi.spyOn(api as any, 'GET').mockResolvedValue({ data, error: undefined } as never)
+}
+function mockPost(data: unknown = flatConsent) {
+  return vi.spyOn(api as any, 'POST').mockResolvedValue({ data, error: undefined } as never)
+}
+function mockPut(data: unknown = { level: 'all', level_changed_at: null }) {
+  return vi.spyOn(api as any, 'PUT').mockResolvedValue({ data, error: undefined } as never)
+}
+
 type ConsentOverrides = {
   instanceEnabled?: boolean
-  isPartnerLicence?: boolean
   prompted?: 'yes' | 'no' | 'dismissed' | null
   prompted_at?: string | null
   level?: 'off' | 'all'
@@ -29,7 +50,6 @@ type ConsentOverrides = {
 function setupConsentStore(overrides: ConsentOverrides = {}): ReturnType<typeof useProductAnalyticsStore> {
   const store = useProductAnalyticsStore()
   store.instanceEnabled = overrides.instanceEnabled ?? true
-  store.isPartnerLicence = overrides.isPartnerLicence ?? false
   store.consent.prompted = overrides.prompted ?? null
   store.consent.prompted_at = overrides.prompted_at ?? null
   store.consent.level = overrides.level ?? 'off'
@@ -39,6 +59,7 @@ function setupConsentStore(overrides: ConsentOverrides = {}): ReturnType<typeof 
 describe('ProductAnalyticsConsentPrompt', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.restoreAllMocks()
   })
 
   const visibilityCases: Array<[string, ConsentOverrides, boolean]> = [
@@ -78,7 +99,7 @@ describe('ProductAnalyticsConsentPrompt', () => {
     ['decline', 'product-analytics-decline'],
     ['dismiss', 'product-analytics-dismiss'],
   ])('calls submitConsent with %s on %s button click', async (action, testid) => {
-    const store = setupConsentStore({ isPartnerLicence: false })
+    const store = setupConsentStore()
     const submitSpy = vi.spyOn(store, 'submitConsent').mockResolvedValue(true)
 
     const wrapper = mount(ProductAnalyticsConsentPrompt)
@@ -87,12 +108,48 @@ describe('ProductAnalyticsConsentPrompt', () => {
     expect(submitSpy).toHaveBeenCalledWith(action)
   })
 
-  it('renders partner carve-out variant with enable and stay-community buttons', () => {
-    setupConsentStore({ isPartnerLicence: true })
+  describe('contract round-trip (real flat payloads)', () => {
+    it('maps GET /api/v1/org/product-analytics into store state', async () => {
+      mockGet(flatConsent)
+      const store = useProductAnalyticsStore()
+      const ok = await store.fetchConsent()
+      expect(ok).toBe(true)
+      expect(store.consent.level).toBe('off')
+      expect(store.consent.prompted).toBeNull()
+      expect(store.instanceEnabled).toBe(true)
+      expect(store.isOptedIn).toBe(false)
+      expect(store.error).toBeNull()
+    })
 
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-partner-enable"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="product-analytics-partner-stay-community"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="product-analytics-accept"]').exists()).toBe(false)
+    it('maps POST /consent response and reflects opted-in state', async () => {
+      mockPost({ ...flatConsent, level: 'all', prompted: 'yes' })
+      const store = useProductAnalyticsStore()
+      const ok = await store.submitConsent('accept')
+      expect(ok).toBe(true)
+      expect(store.isOptedIn).toBe(true)
+      expect(store.consent.prompted).toBe('yes')
+    })
+
+    it('updateLevel PUTs and re-fetches the full consent state', async () => {
+      const getSpy = mockGet({ ...flatConsent, level: 'all' })
+      mockPut({ level: 'all', level_changed_at: '2026-08-22T00:00:00Z' })
+      const store = useProductAnalyticsStore()
+      const ok = await store.updateLevel('all')
+      expect(ok).toBe(true)
+      expect(getSpy).toHaveBeenCalledWith('/api/v1/org/product-analytics')
+      expect(store.isOptedIn).toBe(true)
+      expect(store.error).toBeNull()
+    })
+
+    it('surfaces an API error from GET as store.error', async () => {
+      vi.spyOn(api as any, 'GET').mockResolvedValue({
+        data: undefined,
+        error: { detail: 'boom' },
+      } as never)
+      const store = useProductAnalyticsStore()
+      const ok = await store.fetchConsent()
+      expect(ok).toBe(false)
+      expect(store.error).toBe('boom')
+    })
   })
 })

@@ -47,12 +47,7 @@ const { t } = useI18n()
 
 const shouldShow = computed(() => store.isPromptEligible)
 
-const promptDescription = computed(() => {
-  if (store.isPartnerCarveOut) {
-    return t('views.ProductAnalytics.partner_description')
-  }
-  return t('views.ProductAnalytics.consent_prompt_description')
-})
+const promptDescription = computed(() => t('views.ProductAnalytics.consent_prompt_description'))
 
 type PromptAction = {
   key: string
@@ -76,17 +71,10 @@ const standardActions: PromptActionDef[] = [
   ['dismiss', 'views.ProductAnalytics.dismiss', 'product-analytics-dismiss', 'text', 'dismiss'],
 ]
 
-const partnerActions: PromptActionDef[] = [
-  ['partner-enable', 'views.ProductAnalytics.partner_enable', 'product-analytics-partner-enable', 'button', 'accept'],
-  ['partner-stay-community', 'views.ProductAnalytics.partner_stay_community', 'product-analytics-partner-stay-community', 'text', 'decline'],
-]
-
 const buildPromptActions = (defs: PromptActionDef[]): PromptAction[] =>
   defs.map(([key, labelKey, testid, variant, action]) => ({ key, labelKey, testid, variant, action }))
 
-const promptActions = computed<PromptAction[]>(() =>
-  buildPromptActions(store.isPartnerCarveOut ? partnerActions : standardActions),
-)
+const promptActions = computed<PromptAction[]>(() => buildPromptActions(standardActions))
 
 onMounted(() => {
   if (!store.consent.prompted) {

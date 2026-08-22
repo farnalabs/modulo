@@ -4,6 +4,7 @@
     role="switch"
     :aria-checked="checked"
     :aria-label="label"
+    :aria-disabled="disabled || undefined"
     :tabindex="disabled ? -1 : 0"
     :disabled="disabled"
     :data-testid="dataTestid"
@@ -33,6 +34,7 @@ const emit = defineEmits<{
 }>()
 
 function onToggle() {
+  if (props.disabled) return
   emit('toggle', !props.checked)
 }
 </script>
