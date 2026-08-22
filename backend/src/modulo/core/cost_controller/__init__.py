@@ -477,9 +477,6 @@ async def reset_pipeline_circuit_breaker(
     Returns ``True`` when the pipeline exists and the breaker was reset
     (triggers re-activated); ``False`` when no such pipeline exists in the org.
     """
-    # Cost control runs inside the executor's org-only context (no user
-    # principal) — the execution hatch lets it read a team-private pipeline.
-    await set_rls_execution_context(session)
     pipeline = (
         await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
     ).scalar_one_or_none()
