@@ -16,6 +16,17 @@
   <a href="https://app.modulo.run"><img src="https://img.shields.io/badge/app-app.modulo.run-blue" alt="App"/></a>
 </p>
 
+<p align="center">
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=alert_status" alt="Quality Gate"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=coverage" alt="Coverage"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=bugs" alt="Bugs"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=vulnerabilities" alt="Vulnerabilities"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=code_smells" alt="Code Smells"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=sqale_rating" alt="Maintainability"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=reliability_rating" alt="Reliability"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=security_rating" alt="Security"/></a>
+</p>
+
 > [!WARNING]
 > **Alpha software.** Modulo is under active development. Interfaces, database
 > migrations, configuration, and deployment procedures may change. Evaluate it
