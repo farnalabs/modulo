@@ -24,16 +24,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from modulo.core.library_service import community as community_module
 from modulo.core.library_sync.models import SINGLETON_ID, LibrarySyncState
 
-# Reuse the auth/seed helpers and the ASGI client fixture already defined in an
-# existing integration module instead of duplicating them here — the duplicated
-# copies tripped SonarCloud's new-code duplication gate (83 new dup lines).
+# Reuse the auth/seed helpers defined in an existing integration module instead
+# of duplicating them here — the duplicated copies tripped SonarCloud's
+# new-code duplication gate (83 new dup lines). The shared ``integration_client``
+# ASGI fixture is inherited from ``tests/integration/conftest.py`` (the same
+# one every other integration module resolves), so no local copy is needed
+# here — pytest fixtures are created automatically when tests request them and
+# must never be invoked directly.
 from tests.integration.test_guardrail_config_api import (
     _auth_headers,
     _seed_org,
     _seed_user,
-)
-from tests.integration.test_guardrail_config_api import (
-    integration_client as _integration_client,
 )
 
 pytestmark = pytest.mark.integration
@@ -78,13 +79,6 @@ async def _seed_sync_state(db_engine: AsyncEngine) -> None:
             )
         )
         await session.commit()
-
-
-@pytest_asyncio.fixture
-async def integration_client(db_url: str, db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    """Reuse the shared ASGI client fixture from ``test_guardrail_config_api``."""
-    async for client in _integration_client(db_url, db_engine):
-        yield client
 
 
 @pytest_asyncio.fixture
