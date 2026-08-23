@@ -255,7 +255,7 @@ class TestOrgIdResolution:
     async def test_falls_back_to_session_info_on_non_postgres(self):
         """current_setting() is unavailable on non-Postgres backends; session.info is used."""
         session = MagicMock()
-        session.info = {"organisation_id": str(_ORG_ID)}
+        session.info = {"org_id": str(_ORG_ID)}
         session.execute = AsyncMock()
         session.add = MagicMock()
         session.flush = AsyncMock()

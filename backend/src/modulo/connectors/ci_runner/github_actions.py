@@ -206,10 +206,11 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 text = r.text
                 lines = text.splitlines()
+                start_line = int(cursor) if cursor and cursor.isdigit() else 0
                 return CIRunLog(
                     run_id=run_id,
                     lines=lines,
-                    next_cursor=str(len(lines)) if cursor is not None else None,
+                    next_cursor=str(start_line + len(lines)) if cursor is not None else None,
                 )
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc

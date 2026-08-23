@@ -218,6 +218,17 @@ async def test_gh_get_run_logs(gh_runner):
     assert logs.lines[0] == "line1"
 
 
+@respx.mock
+async def test_gh_get_run_logs_cursor_accumulates_offset(gh_runner):
+    """next_cursor must keep the cumulative start_line offset, not reset it."""
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(
+        return_value=httpx.Response(200, text="line5\nline6\n")
+    )
+    logs = await gh_runner.get_run_logs("owner/repo/12345", cursor="4")
+    assert logs.lines == ["line5", "line6"]
+    assert logs.next_cursor == "6"
+
+
 # ---------------------------------------------------------------------------
 # GitHub Actions — list_runs (respx)
 # ---------------------------------------------------------------------------
@@ -393,6 +404,19 @@ async def test_gl_get_run_logs(gl_runner):
     assert len(logs.lines) >= 6
     assert any("build" in line.lower() for line in logs.lines)
     assert any("Build log line 1" in line for line in logs.lines)
+
+
+@respx.mock
+async def test_gl_get_run_logs_cursor_accumulates_offset(gl_runner):
+    """next_cursor must add the previous cumulative offset, not reset it."""
+    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines/67890/jobs").mock(
+        return_value=httpx.Response(200, json=[{"id": 111, "name": "build"}])
+    )
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(
+        return_value=httpx.Response(200, text="line7\nline8\n")
+    )
+    logs = await gl_runner.get_run_logs("12345/67890", cursor="5")
+    assert logs.next_cursor == "9"
 
 
 # ---------------------------------------------------------------------------

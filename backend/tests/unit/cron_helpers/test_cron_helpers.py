@@ -1667,7 +1667,7 @@ class TestSetRlsOrg:
 
         await ch._set_rls_org(session, org_id)
 
-        assert session.info["organisation_id"] == org_id
+        assert session.info["org_id"] == org_id
 
 
 class TestCountActiveRuns:

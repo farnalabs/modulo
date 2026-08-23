@@ -1038,7 +1038,7 @@ class TestSetRlsOrg:
 
         await _set_rls_org(session, _ORG_ID)
 
-        assert session.info["organisation_id"] == _ORG_ID
+        assert session.info["org_id"] == _ORG_ID
 
     async def test_postgres_dialect_sets_config(self, mock_db_components) -> None:
         """On Postgres, RLS context is applied via SET LOCAL set_config."""
