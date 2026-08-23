@@ -36,7 +36,9 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"))
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
@@ -73,7 +75,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         Integer, nullable=False, default=30, server_default=text("'30'")
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     organisation: Mapped["Organisation"] = relationship()
     creator: Mapped["Account"] = relationship()

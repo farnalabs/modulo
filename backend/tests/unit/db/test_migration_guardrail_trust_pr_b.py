@@ -38,7 +38,7 @@ def _script() -> ScriptDirectory:
 class TestGuardrailTrustMigration:
     def test_head_is_single_chain(self) -> None:
         heads = _script().get_heads()
-        assert heads == ["0126_human_set_eval_type"], f"expected a single head, got {heads}"
+        assert heads == ["0128_add_fk_lookup_indexes"], f"expected a single head, got {heads}"
 
     def test_0116_down_revision_is_0115_notification_preferences(self) -> None:
         source = _source()

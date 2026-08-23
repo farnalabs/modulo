@@ -7,11 +7,12 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
-    UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,7 +64,15 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "tier IN ('native', 'preview', 'in_dev')",
             name="ck_library_primitives_tier",
         ),
-        UniqueConstraint("organisation_id", "source", "slug", "version", name="uq_library_primitive_version"),
+        Index(
+            "uq_library_primitive_version",
+            "organisation_id",
+            "source",
+            "slug",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     source: Mapped[str] = mapped_column(String(20), nullable=False)

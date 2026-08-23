@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -10,7 +10,15 @@ from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 class NodeCategory(SoftDeleteMixin, OrgScoped):
     __tablename__ = "node_categories"
-    __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_node_categories_org_name"),)
+    __table_args__ = (
+        Index(
+            "uq_node_categories_org_name",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

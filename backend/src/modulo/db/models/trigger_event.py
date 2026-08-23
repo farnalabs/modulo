@@ -61,5 +61,5 @@ class TriggerEvent(OrgScoped):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     validation_result: Mapped[str] = mapped_column(String(50), nullable=False)
-    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="SET NULL"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), index=True)
     error_detail: Mapped[str | None] = mapped_column(String(2000))

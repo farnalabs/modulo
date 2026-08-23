@@ -80,7 +80,14 @@ def test_parameter_sets_has_required_columns() -> None:
 def test_parameter_sets_has_unique_constraint() -> None:
     table = Base.metadata.tables["parameter_sets"]
     constraint_names = {c.name for c in table.constraints if c.name is not None}
-    assert "uq_parameter_sets_schema_name" in constraint_names
+    index_names = {i.name for i in table.indexes if i.name is not None}
+    # Soft-delete-safe uniqueness is enforced by a partial unique index
+    # (WHERE deleted_at IS NULL) rather than a full UNIQUE constraint, so that a
+    # soft-deleted row no longer blocks re-creating an active row with the same
+    # (parameter_schema_id, name) key. The name is therefore now an index, not a
+    # constraint.
+    assert "uq_parameter_sets_schema_name" in index_names
+    assert "uq_parameter_sets_schema_name" not in constraint_names
 
 
 # ---------------------------------------------------------------------------
