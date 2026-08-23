@@ -171,7 +171,7 @@ class TestRemyConfigServiceUpdateConfig:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        with patch("modulo.core.remy.config_service.set_config", new_callable=AsyncMock) as mock_set:
+        with patch("modulo.core.remy.config_service.update_config", new_callable=AsyncMock) as mock_set:
             config = RemyConfig(
                 system_prompt="New system prompt",
                 default_provider="deepseek",
@@ -192,7 +192,7 @@ class TestRemyConfigServiceUpdateConfig:
     ) -> None:
         with (
             patch(
-                "modulo.core.remy.config_service.set_config",
+                "modulo.core.remy.config_service.update_config",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("write failed"),
             ),

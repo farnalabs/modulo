@@ -129,7 +129,7 @@ def _bdd_put_monitor_config(client: TestClient, request, backends: str) -> None:
 
     parsed = json.loads(f"[{backends}]")
     with patch(
-        "modulo.api.routes.admin_monitor_config.set_config",
+        "modulo.api.routes.admin_monitor_config.update_config",
         new_callable=AsyncMock,
         side_effect=_fake_set_config,
     ):
@@ -147,7 +147,7 @@ def _bdd_put_monitor_config_with_token(client: TestClient, request, backends: st
     if "datadog_rum" in parsed:
         payload["datadog_rum"] = {"clientToken": "pub123456", "site": "datadoghq.com"}
     with patch(
-        "modulo.api.routes.admin_monitor_config.set_config",
+        "modulo.api.routes.admin_monitor_config.update_config",
         new_callable=AsyncMock,
         side_effect=_fake_set_config,
     ):

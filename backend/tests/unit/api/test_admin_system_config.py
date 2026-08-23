@@ -170,6 +170,9 @@ class TestAdminSetConfig:
 
         existing = SystemConfig(key="my_key", value="old")
         mock_session.execute.return_value.scalar_one_or_none.return_value = existing
+        # admin_set_config now routes through update_config (ON CONFLICT DO
+        # UPDATE); the re-SELECT returns the post-update row.
+        mock_session.execute.return_value.scalar_one.return_value = SystemConfig(key="my_key", value="updated")
         resp = await client_sys_admin.put(
             "/api/v1/system-admin/config/my_key",
             json={"value": "updated"},

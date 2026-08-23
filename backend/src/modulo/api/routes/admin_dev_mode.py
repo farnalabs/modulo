@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.system_config import get_config, set_config
+from modulo.db.crud.system_config import get_config, update_config
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ async def set_dev_mode(
     """Enable or disable dev mode. Persisted in SystemConfig."""
     try:
         async with session.begin():
-            await set_config(session, "dev_mode", req.enabled)
+            await update_config(session, "dev_mode", req.enabled)
         return {"enabled": req.enabled, "source": "db"}
     except Exception:
         logger.exception("Failed to set dev_mode")
