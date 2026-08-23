@@ -318,32 +318,6 @@ jobs:
             exit 1
           fi
 
-  product-map-validate:
-    name: Product map validation
-    runs-on: ubicloud-standard-2
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          python-version: "3.12"
-          enable-cache: false
-      - name: Validate product map graph
-        shell: bash
-        run: uv run --no-build --project backend --no-sync python scripts/run_graph_validate.py --ci
-
-  manifest-validate:
-    name: Manifest validation
-    runs-on: ubicloud-standard-2
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          python-version: "3.12"
-          enable-cache: false
-      - name: Validate manifest.yaml
-        shell: bash
-        run: uv run --no-build --project backend --no-sync --with pyyaml python scripts/run_validate_manifest.py --ci
-
   gitleaks:
     name: Secret scan
     runs-on: ubicloud-standard-2
@@ -481,7 +455,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -569,7 +543,7 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read

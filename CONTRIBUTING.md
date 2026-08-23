@@ -429,7 +429,7 @@ in `.github/workflows/`:
 | `merge-queue.yml` | Cron every 15 min, manual | Merge queue: squash-merges approved PRs to main after CI + approval re-verification; closes Linear tickets; dispatches CI/deploy on main |
 | `pr-review.yml` | Manual dispatch | Automated PR review |
 | `branch-fixer.yml` | Manual/webhook dispatch | Fixes failing or review-blocked PRs in sandboxes |
-| `alpha-exit-report.yml` | Manual dispatch | Verifies alpha-exit criteria with evidence |
+| `alpha-handover-report.yml` | Manual dispatch | Verifies alpha handover criteria with evidence |
 | `schemathesis-nightly.yml` | Cron nightly, manual | Nightly API contract fuzzing against main |
 
 Jobs run in parallel where possible. Stale jobs are cancelled via
@@ -440,7 +440,7 @@ concurrency groups keyed on `${{ github.ref }}`.
 Modulo uses PR-based delivery. Push your branch, open a pull request, and CI
 (`ci.yml`) validates it automatically; merging is handled by the
 `merge-queue.yml` workflow once checks pass and review approves. For
-farnalabs-internal delivery the `create-pr.ps1` / `wait-for-pr.ps1` helpers
+farnalabs-internal delivery the `<push-and-create-PR>` / `<poll-PR-until-merged>` helpers
 exist in the devtools tooling repo.
 
 ---
@@ -453,7 +453,7 @@ exist in the devtools tooling repo.
 2. Run the test suites and lint checks relevant to your change (see
    [Testing](#testing) and [Coding Standards](#coding-standards))
 3. Verify coverage thresholds are met
-4. Update the product map entry for any feature changes (see `docs/product-map/`)
+4. Update the product map entry for any feature changes (see the product map)
 5. Update the PRD if your change introduces new behaviour
 
 ### Review requirements
@@ -494,13 +494,13 @@ alpha phase (`0.x`), breaking changes may occur in minor releases.
 
 Modulo does not run a manual release workflow. Version bumps happen at publish
 time (via `publish.ps1` verify step / CI) — never per merge — and a changelog
-is maintained in `docs/prd.md`. Before a release tag is created, maintainers
+is maintained in the product roadmap. Before a release tag is created, maintainers
 update both application version files together and set the `LICENSE` Change
 Date to three years after the release date.
 
 ### Changelog
 
-A changelog is maintained in `docs/prd.md` — each release adds an entry under
+A changelog is maintained in the product roadmap — each release adds an entry under
 the version heading with notable additions, changes, and fixes.
 
 ---

@@ -45,7 +45,7 @@ a visual pipeline where every run is audited and budgeted, and can be gated on
 human approval — so AI-assisted delivery is repeatable and auditable, not a
 one-off experiment.
 
-The detailed product intent and delivery status live in [the PRD](docs/prd.md).
+The detailed product intent and delivery status live in the product roadmap.
 Items described there may be planned or partially delivered; check the relevant
 documentation and tests before relying on a capability.
 

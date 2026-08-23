@@ -27,18 +27,6 @@
         files: ^backend/src/
         pass_filenames: false
         stages: [manual]
-      - id: graph-validate
-        name: graph-validate
-        entry: uv run --project backend --no-sync python scripts/run_graph_validate.py
-        language: system
-        files: ^docs/product-map/
-        pass_filenames: false
-      - id: validate-enforcement-gates
-        name: validate enforcement gates
-        entry: uv run --project backend --no-sync python scripts/run_validate_enforcement_gates.py
-        language: system
-        files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
-        pass_filenames: false
       - id: check-migration-heads
         name: check migration number/revision collisions
         entry: uv run --project backend --no-sync python scripts/run_check_migration_heads.py

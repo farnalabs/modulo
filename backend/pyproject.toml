@@ -15,7 +15,7 @@ version = "0.3.323"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
 authors = [
-    { name = "Duncan Tait", email = "duncan@farnalabs.com" },
+    { name = "Duncan Tait", email = "admin@modulo.run" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
