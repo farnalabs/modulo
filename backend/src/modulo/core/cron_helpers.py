@@ -4289,6 +4289,123 @@ async def _re_dispatch_reconciled_run(
     return enqueue_failed_redispatched
 
 
+async def _reconcile_nodeless_repair(
+    session: AsyncSession,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    row: Any,
+    nodeless_window: int,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> int | None:
+    """Repair a claimed-but-nodeless zombie; ``None`` when the row continues.
+
+    A nodeless zombie executed ZERO nodes (no checkpoint, no
+    ``node_token_usage``, no ``outputs_json``), so re-dispatch is SAFE (no
+    double-execution; these pipelines only create PRs after a node runs).
+    Re-dispatch it back to the queue (a fresh worker picks it up) instead of
+    terminal-failing, bounded by ``retry_policy`` / ``claim_count``. Only
+    terminal-fail when re-dispatch is NOT warranted (retry budget exhausted)
+    or the re-dispatch itself fails (fall back so the run is never left
+    dangling). Returns the (possibly updated) enqueue-failed counter when the
+    branch fully handled the row, ``None`` when the caller must proceed with
+    the normal repairs. Extracted from ``_reconcile_one_row`` (complexity
+    bound).
+    """
+    if not _is_nodeless_zombie_row(row, nodeless_window):
+        return None
+    if _should_redispatch_nodeless(row):
+        job_type = _reconcile_job_type(row.status)
+        key_suffix = uuid.uuid4().hex
+        return await _redispatch_nodeless(
+            session,
+            q,
+            org_id,
+            row,
+            job_type,
+            key_suffix,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+        )
+    # Re-dispatch not warranted (retry budget exhausted / policy excludes
+    # 'stall'): terminal-fail exactly as before.
+    summary["nodeless_failed"] += 1
+    await _fail_nodeless_run(session, row.id, org_id)
+    # FAR-162 (P6'): the nodeless terminalizer writes a raw
+    # ORM UPDATE (never finalize_cost) — add the run so its
+    # compensating daily fact is recorded once the per-org
+    # transaction commits, like the other terminalizers.
+    terminalized_run_ids.append((row.id, org_id))
+    return enqueue_failed_redispatched
+
+
+async def _redispatch_nodeless(
+    session: AsyncSession,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    row: Any,
+    job_type: str,
+    key_suffix: str,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> int:
+    """Re-dispatch ONE nodeless zombie; terminal-fail when the enqueue fails.
+
+    A failed re-enqueue terminal-fails the run so it is never left dangling
+    (the fallback). A deferred/deduped/enqueue_failed outcome is counted as
+    skipped — not an error, not a terminal failure — so a later tick retries.
+    Returns the (possibly updated) enqueue-failed counter. Extracted from
+    ``_reconcile_one_row`` (complexity bound).
+    """
+    try:
+        outcome, _ = await _re_enqueue_run(
+            q.name,
+            str(row.id),
+            str(org_id),
+            job_type,
+            key_suffix=key_suffix,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["redis_errors"] += 1
+        _log.exception("dispatcher_reconcile: nodeless re-enqueue failed for run %s", row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="dispatcher_reconcile",
+            message=f"dispatcher_reconcile: nodeless re-enqueue failed for run {row.id}",
+            context={"run_id": str(row.id)},
+        )
+        # Fallback: terminal-fail so the run is never left dangling
+        # when re-dispatch is impossible.
+        await _fail_nodeless_run(session, row.id, org_id)
+        summary["nodeless_failed"] += 1
+        terminalized_run_ids.append((row.id, org_id))
+        return enqueue_failed_redispatched
+    if outcome == "enqueued":
+        summary["nodeless_redispatched"] += 1
+        _log.info(
+            "dispatcher_reconcile.nodeless_redispatched run=%s org=%s",
+            row.id,
+            org_id,
+        )
+    else:
+        # deferred / deduped / enqueue_failed -> not an error, not a
+        # terminal failure: let a later tick retry. Count as skipped
+        # (the run stays 'running' / pending undispatched).
+        summary["skipped"] += 1
+        _log.warning(
+            "dispatcher_reconcile: nodeless re-enqueue outcome=%s for run %s (deferring to later tick)",
+            outcome,
+            row.id,
+        )
+    return enqueue_failed_redispatched
+
+
 async def _reconcile_one_row(
     session: AsyncSession,
     q: RedisQueue,
@@ -4302,74 +4419,25 @@ async def _reconcile_one_row(
 ) -> int:
     """Reconcile ONE matched run row; returns the updated enqueue-failed counter.
 
-    Handles the nodeless zombie, B3 enqueue-failed branch, F6a resume guard,
-    capacity check, the job re-check, and the re-dispatch decision for a single
-    row. ``summary`` and ``terminalized_run_ids`` are mutated in place.
+    Handles the nodeless zombie (via ``_reconcile_nodeless_repair``), B3
+    enqueue-failed branch, F6a resume guard, capacity check, the job
+    re-check, and the re-dispatch decision for a single row. ``summary`` and
+    ``terminalized_run_ids`` are mutated in place.
     """
-    if _is_nodeless_zombie_row(row, nodeless_window):
-        # Claimed-but-never-executed zombie. A nodeless zombie ran ZERO nodes,
-        # so re-dispatch is SAFE (no double-execution; these pipelines only
-        # create PRs after a node runs). Re-dispatch it back to the queue
-        # (a fresh worker picks it up) instead of terminal-failing, bounded by
-        # retry_policy / claim_count. Only terminal-fail when re-dispatch is
-        # NOT warranted (retry budget exhausted) or the re-dispatch itself
-        # fails (fall back so the run is never left dangling).
-        if _should_redispatch_nodeless(row):
-            job_type = _reconcile_job_type(row.status)
-            key_suffix = uuid.uuid4().hex
-            try:
-                outcome, _ = await _re_enqueue_run(
-                    q.name,
-                    str(row.id),
-                    str(org_id),
-                    job_type,
-                    key_suffix=key_suffix,
-                )
-                if outcome == "enqueued":
-                    summary["nodeless_redispatched"] += 1
-                    _log.info(
-                        "dispatcher_reconcile.nodeless_redispatched run=%s org=%s",
-                        row.id,
-                        org_id,
-                    )
-                else:
-                    # deferred / deduped / enqueue_failed -> not an error, not a
-                    # terminal failure: let a later tick retry. Count as skipped
-                    # (the run stays 'running' / pending undispatched).
-                    summary["skipped"] += 1
-                    _log.warning(
-                        "dispatcher_reconcile: nodeless re-enqueue outcome=%s for run %s (deferring to later tick)",
-                        outcome,
-                        row.id,
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                summary["redis_errors"] += 1
-                _log.exception("dispatcher_reconcile: nodeless re-enqueue failed for run %s", row.id)
-                await _ingest_saq_error(
-                    session,
-                    org_id,
-                    function="dispatcher_reconcile",
-                    message=f"dispatcher_reconcile: nodeless re-enqueue failed for run {row.id}",
-                    context={"run_id": str(row.id)},
-                )
-                # Fallback: terminal-fail so the run is never left dangling
-                # when re-dispatch is impossible.
-                await _fail_nodeless_run(session, row.id, org_id)
-                summary["nodeless_failed"] += 1
-                terminalized_run_ids.append((row.id, org_id))
-            return enqueue_failed_redispatched
-        # Re-dispatch not warranted (retry budget exhausted / policy excludes
-        # 'stall'): terminal-fail exactly as before.
-        summary["nodeless_failed"] += 1
-        await _fail_nodeless_run(session, row.id, org_id)
-        # FAR-162 (P6'): the nodeless terminalizer writes a raw
-        # ORM UPDATE (never finalize_cost) — add the run so its
-        # compensating daily fact is recorded once the per-org
-        # transaction commits, like the other terminalizers.
-        terminalized_run_ids.append((row.id, org_id))
-        return enqueue_failed_redispatched
+    # Claimed-but-never-executed zombie repair — see
+    # ``_reconcile_nodeless_repair`` / ``_redispatch_nodeless``.
+    handled = await _reconcile_nodeless_repair(
+        session,
+        q,
+        org_id,
+        row,
+        nodeless_window,
+        enqueue_failed_redispatched,
+        summary,
+        terminalized_run_ids,
+    )
+    if handled is not None:
+        return handled
 
     # B3 enqueue-failed branch: pending + dispatched + dispatcher
     # NULL + enqueue_failed_at set.
