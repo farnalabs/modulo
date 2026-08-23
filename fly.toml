@@ -95,6 +95,9 @@ primary_region = 'lhr'
 
 [env]
   MODULO_DB = "postgres"
+  # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
+  # derives it from DATABASE_URL with the modulo_system role (LOGIN, BYPASSRLS)
+  # and entrypoint.sh exports it. It contains a password, so no literal value.
   MODULO_PUBLIC_URL = "https://app.modulo.run"
   # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"

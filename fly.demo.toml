@@ -37,6 +37,9 @@ primary_region = 'lhr'
   MODULO_AUTO_LOGIN_USERNAME = "demo"
   MODULO_AUTO_LOGIN_PASSWORD = "demo"
   MODULO_DB = "postgres"
+  # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
+  # derives it from DATABASE_URL with the modulo_system role (LOGIN, BYPASSRLS)
+  # and entrypoint.sh exports it. It contains a password, so no literal value.
   MODULO_PUBLIC_URL = "https://demo.modulo.run"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
