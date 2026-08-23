@@ -5,6 +5,7 @@
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button
+          type="button"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
           @click="goBack"
         >
@@ -52,6 +53,7 @@
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.actions') }}</h2>
         <div class="flex flex-wrap items-center gap-3">
           <button
+            type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'acknowledged'"
             @click="updateStatus('acknowledged')"
@@ -59,6 +61,7 @@
             {{ $t('views.AdminErrorDetailView.acknowledge') }}
           </button>
           <button
+            type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'resolved'"
             @click="updateStatus('resolved')"
@@ -66,6 +69,7 @@
             {{ $t('views.AdminErrorDetailView.resolve') }}
           </button>
           <button
+            type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'archived'"
             @click="updateStatus('archived')"
@@ -98,6 +102,7 @@
 
         <div v-if="sampleEvent.stacktrace" class="mt-4">
           <button
+            type="button"
             class="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
             @click="showStacktrace = !showStacktrace"
           >
@@ -119,6 +124,7 @@
 
         <div v-if="sampleEvent.context_json && Object.keys(sampleEvent.context_json).length > 0" class="mt-4">
           <button
+            type="button"
             class="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
             @click="showContext = !showContext"
           >
@@ -189,6 +195,7 @@
             </span>
             <div class="flex gap-2">
               <button
+                type="button"
                 :disabled="eventsOffset <= 0"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
                 @click="loadEvents(eventsOffset - eventsLimit)"
@@ -196,6 +203,7 @@
                 {{ $t('views.AdminErrorDetailView.previous') }}
               </button>
               <button
+                type="button"
                 :disabled="eventsOffset + eventsLimit >= eventsTotal"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
                 @click="loadEvents(eventsOffset + eventsLimit)"

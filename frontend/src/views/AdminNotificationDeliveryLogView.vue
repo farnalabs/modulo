@@ -62,6 +62,7 @@
             Apply
           </Button>
           <button
+            type="button"
             data-testid="admin-notification-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
@@ -70,6 +71,7 @@
           </button>
           <button
             v-if="hasRetryableItems"
+            type="button"
             :disabled="retryingAll"
             data-testid="admin-notification-log-retry-all"
             class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
@@ -121,29 +123,34 @@
             <tr
               v-for="entry in items"
               :key="entry.id"
-              role="button"
-              tabindex="0"
               class="transition-colors hover:bg-muted/30 cursor-pointer"
               @click="toggleRow(entry.id)"
-              @keydown.enter="toggleRow(entry.id)"
-              @keydown.space.prevent="toggleRow(entry.id)"
             >
               <td class="table-cell text-muted-foreground">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  :class="expandedId === entry.id ? 'rotate-90' : ''"
-                  class="transition-transform"
+                <button
+                  type="button"
+                  class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :aria-label="'Expand delivery ' + entry.id"
+                  :data-testid="'admin-notification-log-expand-' + entry.id"
+                  @click.stop="toggleRow(entry.id)"
                 >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    :class="expandedId === entry.id ? 'rotate-90' : ''"
+                    class="transition-transform"
+                    aria-hidden="true"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
               </td>
               <td class="table-cell whitespace-nowrap text-muted-foreground">
                 {{ formatTimestamp(entry.created_at) }}
@@ -167,6 +174,7 @@
                 </div>
                 <button
                   v-else-if="entry.status === 'failed' || entry.status === 'dead_lettered'"
+                  type="button"
                   :disabled="retryingId === entry.id"
                   data-testid="admin-notification-log-retry"
                   class="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
@@ -205,6 +213,7 @@
 
       <div class="flex items-center justify-between">
         <button
+          type="button"
           :disabled="!prevCursor"
           data-testid="admin-notification-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
@@ -216,6 +225,7 @@
           {{ items.length }} of {{ total }} deliveries
         </span>
         <button
+          type="button"
           :disabled="!nextCursor"
           data-testid="admin-notification-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
@@ -234,6 +244,7 @@
             </p>
           </div>
           <button
+            type="button"
             data-testid="admin-notification-log-dlq-filter"
             class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent"
             @click="showDeadLettered"
