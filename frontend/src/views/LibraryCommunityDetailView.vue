@@ -99,10 +99,10 @@ const detailFields = computed(() => {
   const e = entry.value;
   if (!e) return [] as { labelKey: string; value: string }[];
   const fields: { labelKey: string; value: string }[] = [
-    { labelKey: "views.LibraryCommunityDetail.author", value: e.author },
-    { labelKey: "views.LibraryCommunityDetail.version", value: e.version },
-    { labelKey: "views.LibraryCommunityDetail.license", value: e.license },
-    { labelKey: "views.LibraryCommunityDetail.status", value: e.status },
+    { labelKey: "views.LibraryCommunityDetail.author", value: e.author ?? "" },
+    { labelKey: "views.LibraryCommunityDetail.version", value: e.version ?? "" },
+    { labelKey: "views.LibraryCommunityDetail.license", value: e.license ?? "" },
+    { labelKey: "views.LibraryCommunityDetail.status", value: e.status ?? "" },
   ];
   if (e.published_at) {
     fields.push({
