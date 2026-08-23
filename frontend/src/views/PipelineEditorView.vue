@@ -219,12 +219,18 @@
           </button>
         </div>
         <!-- Run dialog modal -->
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        <div
           v-if="showRunDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           @click.self="closeRunDialog"
         >
-          <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
+          <dialog
+            open
+            aria-modal="true"
+            :aria-label="$t('views.PipelineEditorView.run_dialog_title')"
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4"
+            style="position: static"
+          >
             <div class="flex items-center justify-between">
               <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineEditorView.run_dialog_title') }}</h2>
               <button
@@ -280,7 +286,7 @@
                 {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
               </Button>
             </div>
-          </div>
+          </dialog>
         </div>
         <VueFlow
           :key="pipelineId"
@@ -1233,8 +1239,8 @@ const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgent
 const eligibleConnectors = computed(() => {
   if (!selectedAgent.value) return []
   const refs: Array<{ connector_type: string }> = selectedAgent.value.connector_type_refs || []
-  const allowedTypes = refs.map(r => r.connector_type)
-  return connectors.value.filter(c => allowedTypes.includes(c.connector_type_id))
+  const allowedTypes = new Set(refs.map(r => r.connector_type))
+  return connectors.value.filter(c => allowedTypes.has(c.connector_type_id))
 })
 
 const modelBackendName = computed(() => {
@@ -1336,7 +1342,7 @@ function onParamSetChange() {
     return
   }
   const set = paramSets.value.find((ps: any) => ps.id === selectedNodeParamSetId.value)
-  selectedNodeOverrides.value = { ...(set?.values || {}) }
+  selectedNodeOverrides.value = { ...(set?.values ?? {}) }
   // Also update the backend node data
   if (selectedNodeData.value) {
     selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value
@@ -1397,17 +1403,21 @@ function convertBackendNode(n: any): any {
 function convertBackendEdge(e: any, i: number): any {
   const isLoop = e.edge_type === 'loop'
   const isLlm = e.edge_type === 'llm'
+  let style: Record<string, string>
+  if (isLoop) {
+    style = { stroke: '#3b82f6', strokeDasharray: '5,5' }
+  } else if (isLlm) {
+    style = { stroke: '#8b5cf6' }
+  } else {
+    style = { stroke: '#888' }
+  }
   return {
     id: e.id || `edge-${i}`,
     source: e.source_node_id,
     target: e.target_node_id,
     type: 'smoothstep',
     animated: isLoop,
-    style: isLoop
-      ? { stroke: '#3b82f6', strokeDasharray: '5,5' }
-      : isLlm
-        ? { stroke: '#8b5cf6' }
-        : { stroke: '#888' },
+    style,
     data: {
       hitl_gate_config: e.hitl_gate_config || null,
       edge_type: e.edge_type || 'normal',
@@ -1480,7 +1490,7 @@ function onNodeClick(event: any) {
   // Populate parameter set + overrides
   if (backendNode?.parameter_set_id) {
     selectedNodeParamSetId.value = backendNode.parameter_set_id
-    selectedNodeOverrides.value = { ...(backendNode.parameter_overrides || {}) }
+    selectedNodeOverrides.value = { ...(backendNode.parameter_overrides ?? {}) }
     loadParamSets()
   } else {
     selectedNodeParamSetId.value = undefined

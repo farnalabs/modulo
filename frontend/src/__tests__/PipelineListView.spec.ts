@@ -341,14 +341,16 @@ describe('PipelineListView', () => {
     vm.openRename(pipeline)
     await nextTick()
 
-    const dialog = wrapper.find('[role="dialog"]')
+    const dialog = wrapper.find('dialog')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('aria-modal')).toBe('true')
     expect(dialog.attributes('aria-label')).toBeTruthy()
-    // The wrapping container must NOT be a button (the old ARIA violation),
-    // and the separate backdrop must be hidden from assistive tech.
+    // The wrapping container must NOT be a button (the old ARIA violation).
+    // The dialog is now a native <dialog> element (implicit role="dialog"),
+    // so the old separate aria-hidden backdrop sibling no longer exists —
+    // the backdrop is provided by the native ::backdrop pseudo-element.
     expect(dialog.element.parentElement?.getAttribute('role')).not.toBe('button')
-    expect(dialog.element.previousElementSibling?.getAttribute('aria-hidden')).toBe('true')
+    expect(dialog.element.tagName).toBe('DIALOG')
 
     // Tab focus is trapped: from the last control, Tab wraps to the first.
     const dialogEl = dialog.element as HTMLElement
@@ -365,7 +367,7 @@ describe('PipelineListView', () => {
     // Escape closes the dialog.
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await nextTick()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.find('dialog').exists()).toBe(false)
     wrapper.unmount()
   })
 })

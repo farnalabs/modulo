@@ -67,15 +67,12 @@
         :key="gate.gate_id + gate.run_id"
         class="rounded-lg border bg-card shadow-sm"
       >
-        <div
+        <button
+          type="button"
           data-testid="hitl-review-toggle-expand"
-          class="flex cursor-pointer items-center gap-4 p-4"
+          class="flex w-full cursor-pointer items-center gap-4 p-4 text-left"
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
-          role="button"
-          tabindex="0"
           @click="toggleExpand(gate)"
-          @keydown.enter="toggleExpand(gate)"
-          @keydown.space.prevent="toggleExpand(gate)"
         >
           <svg
             class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
@@ -107,7 +104,7 @@
           <span class="flex-shrink-0 text-xs text-muted-foreground">
             {{ formatDate(gate.claimed_at || gate.created_at || '') }}
           </span>
-        </div>
+        </button>
         <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
           <div v-if="actionLoading[expandKey(gate)]" class="flex items-center justify-center py-8">
             <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -178,6 +175,7 @@
                       />
                       <div class="flex gap-2">
                         <button
+                          type="button"
                           :disabled="Boolean(actioning[expandKey(gate)])"
                           data-testid="hitl-review-approve"
                           class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
@@ -186,6 +184,7 @@
                           {{ actioning[expandKey(gate)] === 'approve' ? $t('views.SettingsHitlReviewView.approving') : $t('views.SettingsHitlReviewView.approve') }}
                         </button>
                         <button
+                          type="button"
                           :disabled="Boolean(actioning[expandKey(gate)])"
                           data-testid="hitl-review-reject"
                           class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
@@ -329,7 +328,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '-'
+  if (Number.isNaN(d.getTime())) return '-'
   return formatDateShortWithTime(d)
 }
 
@@ -338,32 +337,41 @@ function pipelineName(pipelineId: string): string {
   return p ? p.name : ''
 }
 
+function matchesStatus(gate: GateItem): boolean {
+  if (!statusFilter.value) return true
+  return gateStatus(gate) === statusFilter.value
+}
+
+function matchesPipeline(gate: GateItem): boolean {
+  if (!pipelineFilter.value) return true
+  return gate.pipeline_id === pipelineFilter.value
+}
+
+function matchesSearch(gate: GateItem): boolean {
+  if (!searchQuery.value) return true
+  const q = searchQuery.value.toLowerCase()
+  const pName = pipelineName(gate.pipeline_id).toLowerCase()
+  return pName.includes(q) || gate.gate_id.toLowerCase().includes(q)
+}
+
+function matchesDate(gate: GateItem): boolean {
+  if (!dateFrom.value && !dateTo.value) return true
+  const ts = gate.created_at || gate.claimed_at
+  if (!ts) return false
+  const created = new Date(ts)
+  if (Number.isNaN(created.getTime())) return false
+  if (dateFrom.value && created < new Date(dateFrom.value)) return false
+  if (dateTo.value) {
+    const to = new Date(dateTo.value)
+    to.setHours(23, 59, 59, 999)
+    if (created > to) return false
+  }
+  return true
+}
+
 const filteredGates = computed(() => {
-  return gates.value.filter(gate => {
-    if (statusFilter.value && gateStatus(gate) !== statusFilter.value) return false
-    if (pipelineFilter.value && gate.pipeline_id !== pipelineFilter.value) return false
-    if (searchQuery.value) {
-      const q = searchQuery.value.toLowerCase()
-      const pName = pipelineName(gate.pipeline_id).toLowerCase()
-      if (!pName.includes(q) && !gate.gate_id.toLowerCase().includes(q)) return false
-    }
-    if (dateFrom.value) {
-      const from = new Date(dateFrom.value)
-      const ts = gate.created_at || gate.claimed_at
-      if (!ts) return false
-      const created = new Date(ts)
-      if (isNaN(created.getTime()) || created < from) return false
-    }
-    if (dateTo.value) {
-      const to = new Date(dateTo.value)
-      to.setHours(23, 59, 59, 999)
-      const ts = gate.created_at || gate.claimed_at
-      if (!ts) return false
-      const created = new Date(ts)
-      if (isNaN(created.getTime()) || created > to) return false
-    }
-    return true
-  })
+  return gates.value.filter(gate =>
+    matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
 async function claimGate(gate: GateItem) {

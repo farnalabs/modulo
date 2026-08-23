@@ -46,6 +46,7 @@
             <button
               v-for="f in visibilityFilters"
               :key="f.value"
+              type="button"
               class="px-3 py-1.5 text-xs font-medium rounded-full border transition-colors"
               :class="visibilityFilter === f.value ? 'bg-primary text-primary-foreground border-primary' : 'border-input text-muted-foreground hover:bg-accent'"
               @click="visibilityFilter = f.value"
@@ -70,6 +71,7 @@
             <button
               v-for="p in filteredPipelines"
               :key="p.id"
+              type="button"
               class="w-full text-left p-3 rounded-lg border transition-colors"
               :class="selectedPipeline?.id === p.id ? 'border-primary bg-primary/5' : 'border-input hover:bg-accent'"
               @click="selectedPipeline = p"
@@ -189,6 +191,7 @@
 
         <div class="flex items-center justify-between">
           <button
+            type="button"
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="step = 1"
             data-testid="copy-wizard-back-step2"
@@ -260,6 +263,7 @@
 
         <div class="flex items-center justify-between">
           <button
+            type="button"
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="step = 2"
             data-testid="copy-wizard-back-step3"
@@ -308,6 +312,7 @@
                 Open in Editor
               </Button>
               <button
+                type="button"
                 class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="reset"
                 data-testid="copy-wizard-copy-another"
