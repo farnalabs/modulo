@@ -132,7 +132,10 @@ class TokenBucketRegistry:
             if bucket is None:
                 bucket = TokenBucket(rate=self.rate, burst=self.burst)
                 self._buckets[key] = bucket
-            return await bucket.consume()
+        # Consume OUTSIDE the registry-wide lock: each bucket serialises its own
+        # consumers, so holding the registry lock across the await would stall
+        # every other key behind this key's refill.
+        return await bucket.consume()
 
     def reset(self) -> None:
         """Drop all buckets (used by tests and on reconfiguration)."""

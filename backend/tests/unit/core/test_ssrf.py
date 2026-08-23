@@ -116,3 +116,46 @@ async def test_validate_outbound_url_async_accepts_public_hostname() -> None:
         await ssrf.validate_outbound_url_async("https://api.example.com/")
     finally:
         ssrf._resolve_all_async = original
+
+
+def test_allowlist_allows_matching_private_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
+    # 10.1.2.3 is private but explicitly allowlisted.
+    assert ssrf.validate_outbound_url("http://10.1.2.3/") is None
+
+
+def test_allowlist_multiple_cidrs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "192.168.0.0/16,10.0.0.0/8")
+    assert ssrf.validate_outbound_url("http://192.168.1.1/") is None
+    assert ssrf.validate_outbound_url("http://10.0.0.9/") is None
+
+
+def test_allowlist_metadata_range_still_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the allowlisted 10.0.0.0/8 is permitted; cloud metadata stays blocked.
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.validate_outbound_url("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.validate_outbound_url("http://127.0.0.1/")
+
+
+def test_allowlist_invalid_entry_logged_and_other_cidrs_apply(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "not-a-cidr,10.0.0.0/8")
+    assert ssrf.validate_outbound_url("http://10.1.2.3/") is None
+    assert any("ssrf.invalid_allowlist_entry" in r.message for r in caplog.records)
+
+
+def test_allowlist_honours_runtime_env_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The allowlist is parsed lazily and cached on the env value, so a
+    mid-process env change takes effect without a restart."""
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "")
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.validate_outbound_url("http://10.1.2.3/")
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
+    assert ssrf.validate_outbound_url("http://10.1.2.3/") is None
+    # And switching back off re-blocks.
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "")
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.validate_outbound_url("http://10.1.2.3/")

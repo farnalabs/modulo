@@ -26,24 +26,31 @@ _EXCLUDED_NETWORKS = [
 ]
 
 # Configurable allowlist for self-hosted deployments on private networks.
-# Comma-separated CIDR list in SSRF_ALLOW_PRIVATE_RANGES env var.
-_allow_private_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+# Comma-separated CIDR list in SSRF_ALLOW_PRIVATE_RANGES env var. Parsed
+# lazily and cached keyed on the raw env value: a stable value parses once for
+# the process lifetime, while a mid-process change to the env var is honoured
+# immediately (no import-time side effect, no mutable module global). Returns
+# an immutable tuple so readers never race a mutation.
+_allowlist_cache_key: str | None = None
+_allowlist_parsed: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
 
 
-def _check_allowlist() -> None:
+def _get_allowlist() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    global _allowlist_cache_key, _allowlist_parsed
     raw = os.environ.get("SSRF_ALLOW_PRIVATE_RANGES", "")
-    if not raw:
-        return
+    if raw == _allowlist_cache_key:
+        return _allowlist_parsed
+    parsed: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for cidr in raw.split(","):
         cidr = cidr.strip()
         if cidr:
             try:
-                _allow_private_networks.append(ipaddress.ip_network(cidr, strict=False))
+                parsed.append(ipaddress.ip_network(cidr, strict=False))
             except ValueError:
                 _log.warning("ssrf.invalid_allowlist_entry", extra={"cidr": cidr})
-
-
-_check_allowlist()
+    _allowlist_cache_key = raw
+    _allowlist_parsed = tuple(parsed)
+    return _allowlist_parsed
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
@@ -54,7 +61,7 @@ def _is_blocked_ip(ip_str: str) -> bool:
         return True  # fail-closed on unparseable
 
     # Check configurable allowlist first
-    for net in _allow_private_networks:
+    for net in _get_allowlist():
         if addr in net:
             return False
 
