@@ -178,6 +178,10 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             continue
+        # Local names bound to the org_membership module (e.g. the
+        # `from modulo.db.crud import org_membership as crud_org_membership`
+        # alias used to keep crud attributes patchable in unit tests).
+        org_membership_aliases: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module in _IMPORT_MODULES:
                 names = {alias.name for alias in node.names}
@@ -185,6 +189,22 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
                     role_sites.add(rel)
                 if "get_membership_by_account_and_org" in names:
                     lookup_sites.add(rel)
+            elif isinstance(node, ast.ImportFrom) and node.module == "modulo.db.crud":
+                for alias in node.names:
+                    if alias.name == "org_membership":
+                        org_membership_aliases.add(alias.asname or alias.name)
+        # Attribute-access form: crud_org_membership.get_membership_by_account_and_org(...)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in org_membership_aliases
+                and node.attr in ("get_membership_by_account_and_org", "resolve_role_from_membership")
+            ):
+                if node.attr == "get_membership_by_account_and_org":
+                    lookup_sites.add(rel)
+                else:
+                    role_sites.add(rel)
     return role_sites, lookup_sites
 
 
