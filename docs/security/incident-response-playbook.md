@@ -4,11 +4,11 @@
 for Modulo production deployments.
 
 **Prerequisite reading:**
-- `docs/deployment-security.md` — deployment hardening, audit log, rate limiting
-- `docs/security/secret-management.md` — key rotation, credential leak response
-- `docs/security/dependency-policy.md` — CVE response SLAs
-- `docs/security/input-validation-guide.md` — prompt injection & validation
-- `docs/operations/backup.md` — backup/restore procedures
+- `docs/deployment-security.md` – deployment hardening, audit log, rate limiting
+- `docs/security/secret-management.md` – key rotation, credential leak response
+- `docs/security/dependency-policy.md` – CVE response SLAs
+- `docs/security/input-validation-guide.md` – prompt injection & validation
+- `docs/operations/backup.md` – backup/restore procedures
 
 ---
 
@@ -38,11 +38,11 @@ for Modulo production deployments.
 
 When assessing severity, consider:
 
-1. **Data sensitivity** — Does the incident expose checkpoint data, credentials, PII, or agent logs?
-2. **Multi-tenant impact** — Is the blast radius contained to one org or crosses tenant boundaries?
-3. **Exploit complexity** — Is there a known PoC? Is authentication required?
-4. **Detection source** — Internal monitoring, user report, or external disclosure (e.g., HackerOne)?
-5. **Persistence** — Is the compromise active (ongoing data egress) or historical (logs found after the fact)?
+1. **Data sensitivity** – Does the incident expose checkpoint data, credentials, PII, or agent logs?
+2. **Multi-tenant impact** – Is the blast radius contained to one org or crosses tenant boundaries?
+3. **Exploit complexity** – Is there a known PoC? Is authentication required?
+4. **Detection source** – Internal monitoring, user report, or external disclosure (e.g., HackerOne)?
+5. **Persistence** – Is the compromise active (ongoing data egress) or historical (logs found after the fact)?
 
 ---
 
@@ -104,7 +104,7 @@ Medium / Low incident detected
   Rotation: weekly, Mon 09:00 UTC.
 - **Secondary on-call:** Backup if primary does not ack within 10 min. Same
   rotation, offset by 1 week.
-- **Security lead:** Tier 2 escalation. Not on pager rotation — available
+- **Security lead:** Tier 2 escalation. Not on pager rotation – available
   during business hours + call-out for Critical.
 - **CTO / head of engineering:** Tier 3 escalation. Authorises public
   disclosure, legal notifications, and business-continuity decisions.
@@ -126,12 +126,12 @@ Medium / Low incident detected
 
 **Always-in-place readiness:**
 
-- [ ] On-call rota published and current (see `docs/operations/on-call.md`)
+- [ ] On-call rota published and current
 - [ ] PagerDuty integration tested monthly (simulated Critical alert)
 - [ ] Monitoring dashboards cover all alert signals from `docs/deployment-security.md` §6.4
-- [ ] Audit log chain integrity verified weekly: `uv run modulo audit verify`
+- [ ] Audit log chain integrity verified weekly: call `GET /api/v1/admin/audit/verify` (requires the `audit.manage` permission; there is no CLI wrapper)
 - [ ] Backup encryption passphrase accessible to on-call (separate from prod secrets)
-- [ ] Access to cloud provider console, deployment hosts, and DB read-replica documented in `docs/operations/runbook.md`
+- [ ] Access to cloud provider console, deployment hosts, and DB read-replica documented in `docs/operations/break-glass-admin-recovery-runbook.md`
 - [ ] Incident channel Slack workflow tested quarterly
 - [ ] Pentest findings remediated per `docs/security/penetration-test-plan.md`
 - [ ] Dependency scans pass per `docs/security/dependency-policy.md`
@@ -142,7 +142,7 @@ Medium / Low incident detected
 
 | Signal | Source | Possible Incident |
 |--------|--------|-------------------|
-| Audit chain integrity failure | `modulo audit verify` | Log tampering, DB compromise |
+| Audit chain integrity failure | `GET /api/v1/admin/audit/verify` | Log tampering, DB compromise |
 | Failed login rate spike (>10/min per IP) | Backend logs / OTel | Credential stuffing, SSO probe |
 | 429 rate limit threshold crossed | Reverse proxy logs | DoS, brute force |
 | Unexpected outbound connection | Network policy logs | Data exfiltration, C2 beacon |
@@ -159,11 +159,11 @@ Medium / Low incident detected
 4. **Snapshot** current state:
    - `docker compose -f docker-compose.prod.yml ps`
    - `docker compose -f docker-compose.prod.yml logs modulo --tail=200`
-   - `uv run modulo audit verify`
-   - `uv run modulo health --full`
+   - `GET /api/v1/admin/audit/verify` (audit chain integrity)
+   - `GET /healthz/ready` (readiness)
 5. **Preserve** evidence before any remediation:
    - Export affected container logs: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
-   - Snapshot audit log window: `uv run modulo audit export --since <t-2h> --until <now> > incident-YYYYMMDD-audit.jsonl`
+   - Snapshot audit log window: `GET /api/v1/admin/audit/export?page=... > incident-YYYYMMDD-audit.jsonl` (audit viewer feature; paginate to cover the window)
    - Capture Postgres connection state: `SELECT * FROM pg_stat_activity;`
    - If container compromise suspected: `docker compose -f docker-compose.prod.yml exec modulo cat /proc/1/cmdline`
 6. **Determine scope:**
@@ -176,22 +176,22 @@ Medium / Low incident detected
 
 | Severity | Containment Action | Trade-off |
 |----------|-------------------|-----------|
-| Critical | **Immediate isolation** — revoke compromised creds, block egress IPs, scale affected service to zero | Full or partial service downtime |
-| High | **Targeted mitigation** — rate-limit affected endpoint, revoke individual tokens, block suspicious IPs | Feature degradation for some users |
-| Medium | **Patch deployment** — hotfix through normal CI, no infrastructure change | No immediate action beyond fix |
-| Low | **Ticket** — fix in next regular sprint | None |
+| Critical | **Immediate isolation** – revoke compromised creds, block egress IPs, scale affected service to zero | Full or partial service downtime |
+| High | **Targeted mitigation** – rate-limit affected endpoint, revoke individual tokens, block suspicious IPs | Feature degradation for some users |
+| Medium | **Patch deployment** – hotfix through normal CI, no infrastructure change | No immediate action beyond fix |
+| Low | **Ticket** – fix in next regular sprint | None |
 
 **Containment procedures by incident type:**
 
 **SSO/OIDC compromise:**
 1. Disable the compromised IdP provider in Modulo admin settings.
-2. Revoke all sessions for affected org: `uv run modulo sessions revoke --org-id <id>`.
+2. For each affected org user, deactivate via `POST /api/v1/admin/users/{user_id}/deactivate`, which blacklists their JWT token families and revokes their API keys.
 3. Notify org admins of IdP config re-validation (see §8.1 for template).
 4. Rotate `OIDC_CLIENT_SECRET` for the affected provider.
 
 **API key leak:**
-1. Revoke the leaked key in the admin UI or via `uv run modulo api-keys revoke <key-id>`.
-2. Rotate the affected service's secrets: `uv run modulo rotate-credentials`.
+1. Revoke the leaked key in the admin UI or via `DELETE /api/v1/api-keys/{key_id}`.
+2. Rotate the affected service's secrets in the deployment environment (e.g. `SECRET_KEY`, connector credentials) and redeploy; there is no rotation CLI.
 3. Check audit log for API calls made with the leaked key in the exposure window.
 4. If the key belongs to a third-party connector, rotate the connector's credentials.
 
@@ -207,7 +207,7 @@ Medium / Low incident detected
 
 **Prompt injection attack:**
 1. Identify the injected pipeline ID and checkpoint.
-2. Freeze the agent session: `uv run modulo pipelines freeze <pipeline-id>`.
+2. Stop the affected pipeline's execution by cancelling active runs (run cancel via the UI/MCP `cancel_run` tool); there is no pipeline-freeze CLI.
 3. Review checkpoint data for exfiltration attempts.
 4. Update the prompt guard rules (see `docs/security/input-validation-guide.md`).
 
@@ -230,8 +230,8 @@ Medium / Low incident detected
 4. If attack persists, switch to Cloudflare Magic Transit or equivalent DDoS mitigation.
 
 **Insider threat:**
-1. Suspend the user's account: `uv run modulo users deactivate <user-id>`.
-2. Revoke all active sessions: `uv run modulo sessions revoke --user-id <id>`.
+1. Suspend the user's account: `POST /api/v1/admin/users/{user_id}/deactivate`.
+2. Revoke all active sessions for the user: deactivation blacklists the user's JWT token families and revokes their API keys in one step.
 3. Export audit log for the user's recent activity.
 4. Preserve all evidence for HR/legal review.
 
@@ -242,9 +242,9 @@ Medium / Low incident detected
    - Rotate all secrets exposed during the incident.
    - Apply missing security controls (RLS policy, rate limit, input guard).
 2. **Verify eradication:**
-   - Run affected test suite: `pytest tests/ -k <related> -v`.
-   - Run security-specific tests: `pytest tests/unit/test_rls.py`, `pytest tests/unit/test_audit.py`.
-   - Confirm audit chain integrity: `uv run modulo audit verify`.
+   - Run affected test suite: `uv run pytest backend/tests/ -k <related> -v`.
+   - Run security-specific tests: `uv run pytest backend/tests/integration/ -k "rls or audit" -v` (RLS/audit coverage lives in `backend/tests/integration/`, e.g. `test_api_key_audit_rls.py`, `test_audit_append_only.py`).
+   - Confirm audit chain integrity: `GET /api/v1/admin/audit/verify`.
    - Confirm no residual access: test with revoked credentials.
 3. **Scan for secondary compromise:**
    - Check for cronjobs, scheduled tasks, or webhooks added during the window.
@@ -256,9 +256,8 @@ Medium / Low incident detected
 1. **Restore service:**
    - Scale services back to normal replica count.
    - Re-enable any disabled endpoints or features.
-   - Thaw any frozen pipelines: `uv run modulo pipelines thaw <pipeline-id>`.
 2. **Verify normal operation:**
-   - `uv run modulo health --full` returns all green.
+   - `GET /healthz/ready` returns ready/green.
    - Smoke-test the affected feature through the UI.
    - Confirm monitoring alerts are back to baseline.
 3. **Re-enable elevated protections:**
@@ -287,7 +286,7 @@ See §6 for the full process. Minimum steps:
 | Detection | Failed login spike, unexpected IdP admin user added, session replay from unknown IPs |
 | Containment | Disable IdP provider, revoke all sessions |
 | Eradication | Rotate `OIDC_CLIENT_SECRET`, validate IdP config |
-| Prevention | Enforce IdP-initiated SSO validation per `backend/security/sso.md` |
+| Prevention | Enforce IdP-initiated SSO validation per `docs/product-map/auth/sso-provider-ui.md` |
 
 ### 4.2 API Key Leak
 
@@ -307,7 +306,7 @@ See §6 for the full process. Minimum steps:
 | Detection | Postgres logs showing cross-org queries, audit log anomalies, pentest finding |
 | Containment | Emergency RLS policy, block affected endpoint |
 | Eradication | Add missing policy, review all tables for RLS coverage |
-| Prevention | `pytest tests/unit/test_rls.py -v` in CI, quarterly RLS audit |
+| Prevention | RLS guarantee tests in CI (`backend/tests/integration/`), quarterly RLS audit |
 
 ### 4.4 Prompt Injection Attack
 
@@ -366,7 +365,7 @@ See §6 for the full process. Minimum steps:
 ### 5.1 Escalation Message (Slack)
 
 ```
-🚨 *INCIDENT ESCALATION — #<incident-id>*
+🚨 *INCIDENT ESCALATION – #<incident-id>*
 Severity: <Critical | High>
 Type: <SSO compromise | API key leak | RLS bypass | prompt injection | ...>
 Detected: <timestamp UTC>
@@ -388,7 +387,7 @@ Initial context:
 Severity: <Critical | High | Medium>
 Status: <detecting | containing | eradicating | recovering | closed>
 Opened: <timestamp UTC>
-Closed: <timestamp UTC | —>
+Closed: <timestamp UTC | –>
 
 Lead: @handle
 Responders: @handle1, @handle2
@@ -407,7 +406,7 @@ Links:
 ### 5.3 Status Update (Slack)
 
 ```
-*Status Update — <incident-id> — <time since detection>*
+*Status Update – <incident-id> – <time since detection>*
 
 What happened: <1-sentence summary>
 Current action: <containing | patching | monitoring | ...>
@@ -420,7 +419,7 @@ Responders: @on-call-primary
 ### 5.4 Resolution Announcement (Slack)
 
 ```
-✅ *INCIDENT RESOLVED — #<incident-id>*
+✅ *INCIDENT RESOLVED – #<incident-id>*
 
 Type: <incident type>
 Duration: <Xh Ym>
@@ -433,7 +432,7 @@ Post-mortem: #<link> (due within 5 business days)
 ### 5.5 Customer Notification (Email / Admin UI Banner)
 
 ```
-Subject: Security Incident Notification — <incident-id>
+Subject: Security Incident Notification – <incident-id>
 
 Dear <org admin>,
 
@@ -458,7 +457,7 @@ If you have questions, contact security@modulo.run.
 ### 5.6 Legal / Compliance Notification (Email)
 
 ```
-Subject: [CONFIDENTIAL] Security Incident Notification — <incident-id>
+Subject: [CONFIDENTIAL] Security Incident Notification – <incident-id>
 
 To: <DPO / legal counsel / compliance officer>
 
@@ -486,7 +485,7 @@ For immediate questions, contact security@modulo.run.
 | Critical | Yes | 5 business days | Security lead + CTO |
 | High | Yes | 10 business days | Security lead |
 | Medium | Recommended | Next sprint | Assigned engineer |
-| Low | Optional | Per team discretion | — |
+| Low | Optional | Per team discretion | – |
 
 ### 6.2 Timeline Format
 
@@ -501,7 +500,7 @@ All post-mortems must include a chronological timeline in this format:
 | 2026-06-28 12:12 | Triage: RLS policy missing on `checkpoints` table | `docker compose logs` output |
 | 2026-06-28 12:30 | Containment: emergency RLS policy applied | Git commit <sha> |
 | 2026-06-28 13:00 | Eradication: full RLS audit and fix deployed | Git commit <sha> |
-| 2026-06-28 13:15 | Recovery: service restored, pipelines thawed | `modulo health --full` |
+| 2026-06-28 13:15 | Recovery: service restored | `GET /healthz/ready` |
 | 2026-06-28 13:30 | Incident closed | Slack #security-on-call-20260628 |
 ```
 
@@ -534,17 +533,17 @@ Each action item must include:
 
 After the post-mortem is approved:
 
-1. **Add to product map** — If the incident reveals an undocumented edge case or
+1. **Add to product map** – If the incident reveals an undocumented edge case or
    missing behaviour, add it to the relevant product map entry under "Known Gaps"
    or as a new behaviour checkbox.
-2. **Update AGENTS.md** — If the incident pattern is likely to recur (e.g.,
+2. **Update AGENTS.md** – If the incident pattern is likely to recur (e.g.,
    missing RLS on a new table), add a prevention rule to `Development/Product/AGENTS.md`
    or the most specific subdirectory AGENTS.md.
-3. **Update this playbook** — If the response procedure was missing a step or
+3. **Update this playbook** – If the response procedure was missing a step or
    a containment action was insufficient, revise the relevant section.
-4. **Schedule a tabletop exercise** — For Critical incidents, schedule a
+4. **Schedule a tabletop exercise** – For Critical incidents, schedule a
    tabletop exercise within 30 days to validate that the new controls work.
-5. **Update monitoring** — If detection was delayed or missed entirely, add
+5. **Update monitoring** – If detection was delayed or missed entirely, add
    or adjust the alert rule per `docs/deployment-security.md` §6.4.
 
 ### 6.6 Post-Mortem Template
@@ -619,7 +618,7 @@ After the post-mortem is approved:
 ### 8.1 IdP Re-Validation Request (for SSO compromise)
 
 ```
-Subject: Action Required — Re-validate SSO Configuration
+Subject: Action Required – Re-validate SSO Configuration
 
 Dear <org admin>,
 
@@ -638,22 +637,22 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 ### 8.2 Key Rotation Procedure (Post-Leak)
 
 ```
-1. Rotate SECRET_KEY:      uv run modulo config set SECRET_KEY $(openssl rand -base64 32)
-2. Rotate FERNET_KEY:       uv run modulo rotate-credentials
+1. Rotate SECRET_KEY:      Set a new value in the deployment environment and redeploy
+2. Rotate FERNET_KEY:       Set a new base64-encoded 32-byte value in the deployment environment and redeploy
 3. Rotate DATABASE_URL:     Update in deployment environment + redeploy
 4. Rotate OIDC_CLIENT_SECRET: Update in IdP console + Modulo admin settings
-5. Invalidate all sessions: uv run modulo sessions revoke --all
+5. Invalidate all sessions: deactivate and reactivate affected users via `POST /api/v1/admin/users/{user_id}/deactivate` (blacklists token families); there is no session-revoke CLI
 ```
 
 ### 8.3 Evidence Preservation Checklist
 
 - [ ] Container logs exported: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
-- [ ] Audit log window exported: `uv run modulo audit export --since <t-2h> --until <now>`
+- [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (paginated; there is no audit CLI)
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
-- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo-backend | jq '.[0].RepoDigests'`
+- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses image `ghcr.io/farnalabs/modulo:${TAG}`)
 - [ ] Network logs captured from cloud provider (VPC flow logs, host firewall logs)
-- [ ] Active sessions snapshot: `uv run modulo sessions list --all`
-- [ ] Checkpoint state snapshot: `uv run modulo pipelines list --running`
+- [ ] Active users/accounts snapshot: query the accounts via the admin API (`GET /api/v1/admin/users`); there is no session CLI
+- [ ] Checkpoint state snapshot: list runs via the UI or `GET /api/v1/runs`
 
 ### 8.4 Testing the Playbook
 
@@ -680,5 +679,4 @@ Conduct a tabletop exercise quarterly:
 | Backup & restore | `docs/operations/backup.md` |
 | Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
-| On-call rota | `docs/operations/on-call.md` |
 | Product map (behaviour tracking) | `docs/product-map/` |

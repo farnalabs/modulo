@@ -91,7 +91,7 @@ rejected to prevent CSP injection.
   No data leaves the deployment. No behavior change.
 - **npm dependencies increase**: the default Docker build installs all
   optional SDKs (`@sentry/vue`, `@datadog/browser-rum`, `@grafana/faro-web-sdk`).
-  Run `npm ci --omit=optional` to exclude them.
+  Run `pnpm install --omit=optional` to exclude them (the frontend uses pnpm, not npm).
 - **Existing errors**: the `source: 'frontend'` bugfix means frontend errors
   now successfully reach the DB for the first time. This is a free improvement.
 - **No rebuild needed to switch backends**: use `MODULO_MONITOR_CONFIG` at
