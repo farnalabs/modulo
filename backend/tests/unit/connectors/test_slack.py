@@ -353,24 +353,27 @@ async def test_query_users_http_error(connector):
     respx.get("https://slack.com/api/users.list").mock(
         return_value=httpx.Response(403, text="Forbidden"),
     )
+    query = ConnectorQuery(resource="users")
     with pytest.raises(ValueError, match="Slack API HTTP 403"):
-        await connector.query(ConnectorQuery(resource="users"))
+        await connector.query(query)
 
 
 # -- query: unsupported resource --
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported Slack resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 # -- write: unsupported resource --
 
 
 async def test_write_unsupported_resource(connector):
+    payload = ConnectorPayload(resource="file", data={})
     with pytest.raises(ValueError, match="Unsupported Slack write resource"):
-        await connector.write(ConnectorPayload(resource="file", data={}))
+        await connector.write(payload)
 
 
 # -- write: message --
@@ -390,8 +393,9 @@ async def test_write_message(connector):
 
 @respx.mock
 async def test_write_message_no_channel(connector):
+    payload = ConnectorPayload(resource="message", data={"text": "Hello"})
     with pytest.raises(ValueError, match="Missing 'channel' in message payload"):
-        await connector.write(ConnectorPayload(resource="message", data={"text": "Hello"}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -399,10 +403,9 @@ async def test_write_message_api_error(connector):
     respx.post("https://slack.com/api/chat.postMessage").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "too_many_attachments"}),
     )
+    payload = ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"})
     with pytest.raises(ValueError, match="too_many_attachments"):
-        await connector.write(
-            ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"}),
-        )
+        await connector.write(payload)
 
 
 @respx.mock

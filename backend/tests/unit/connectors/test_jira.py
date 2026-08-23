@@ -163,13 +163,12 @@ async def test_write_create_issue_http_error(connector):
 
 @respx.mock
 async def test_write_update_missing_key(connector):
+    payload = ConnectorPayload(
+        resource="issue_update",
+        data={"fields": {"summary": "No key provided"}},
+    )
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_update",
-                data={"fields": {"summary": "No key provided"}},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -207,8 +206,9 @@ async def test_query_issue_comments_pagination(connector):
 
 @respx.mock
 async def test_query_issue_comments_missing_key(connector):
+    query = ConnectorQuery(resource="issue_comments", filters={})
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.query(ConnectorQuery(resource="issue_comments", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -226,24 +226,22 @@ async def test_write_issue_comment(connector):
 
 @respx.mock
 async def test_write_issue_comment_missing_body(connector):
+    payload = ConnectorPayload(
+        resource="issue_comment",
+        data={"issue_key": "PROJ-123"},
+    )
     with pytest.raises(ValueError, match="requires 'body'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_comment",
-                data={"issue_key": "PROJ-123"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_issue_comment_missing_key(connector):
+    payload = ConnectorPayload(
+        resource="issue_comment",
+        data={"body": "Nice work!"},
+    )
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_comment",
-                data={"body": "Nice work!"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -263,8 +261,9 @@ async def test_query_transitions(connector):
 
 @respx.mock
 async def test_query_transitions_missing_key(connector):
+    query = ConnectorQuery(resource="transitions", filters={})
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.query(ConnectorQuery(resource="transitions", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
