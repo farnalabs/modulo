@@ -27,7 +27,7 @@ import { isProblemDetail, type ProblemDetail } from '../../lib/api/formatError'
 
 const props = defineProps<{
   variant?: 'error' | 'success'
-  message?: string | ProblemDetail
+  message?: string | ProblemDetail | null
   onRetry?: () => void
   retryable?: boolean
   onDismiss?: () => void
