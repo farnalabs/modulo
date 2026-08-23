@@ -3,7 +3,7 @@
     <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
     <p v-else>{{ message }}</p>
     <button
-      v-if="variant === 'error' && onRetry && retryable !== false"
+      v-if="variant !== 'success' && onRetry && retryable !== false"
       class="ml-2 underline"
       @click="onRetry"
     >
