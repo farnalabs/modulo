@@ -13,6 +13,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
+    count_oidc_providers,
     list_oidc_providers,
     oidc_get_authorize_url,
     oidc_process_callback,
@@ -113,8 +114,10 @@ async def sso_providers(
     try:
         async with _new_system_session_factory()() as session, session.begin():
             oidc_providers = await list_oidc_providers(session, org_id=None, fernet_key=settings.fernet_key)
-        if not oidc_providers:
-            oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
+            if not oidc_providers and await count_oidc_providers(session, org_id=None) == 0:
+                # Fall back to env ONLY when the DB has ZERO oidc rows at all —
+                # an all-disabled DB must not resurrect env-var providers.
+                oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
         saml_enabled = (
             settings.modulo_saml_enabled
             and bool(settings.modulo_license_key)
@@ -317,8 +320,14 @@ async def saml_acs(
         )
 
     try:
-        async with session.begin():
-            tokens = await saml_process_response(raw_saml, settings, session)
+        system_factory = _new_system_session_factory()
+        async with system_factory() as system_session, session.begin():
+            tokens = await saml_process_response(
+                raw_saml,
+                settings,
+                session,
+                provider_session=system_session,
+            )
     except ValueError as exc:
         _log.warning("SAML ACS failed: %s", exc, exc_info=True)
         raise HTTPException(

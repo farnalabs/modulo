@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import httpx
 from defusedxml import ElementTree
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
@@ -253,19 +253,38 @@ async def list_oidc_providers(
     ]
 
 
+async def count_oidc_providers(session: AsyncSession, org_id: uuid.UUID | None = None) -> int:
+    """Count ALL OIDC provider rows in the DB, including disabled ones.
+
+    ``list_oidc_providers`` filters ``enabled = True``, so an all-disabled DB
+    is indistinguishable from a DB with no OIDC rows by that query alone.
+    Callers use this count to decide whether env-var ``MODULO_OIDC_PROVIDERS``
+    is a valid fallback: env providers are used only when the DB has ZERO OIDC
+    rows at all. Whenever the DB has rows (even all disabled) it is authoritative.
+    """
+    conditions = [SsoProvider.provider_type == "oidc"]
+    if org_id is not None:
+        conditions.append(SsoProvider.organisation_id == org_id)
+    result = await session.execute(select(func.count()).select_from(SsoProvider).where(*conditions))
+    return int(result.scalar_one() or 0)
+
+
 async def resolve_oidc_provider_org(session: AsyncSession, provider_id: str) -> uuid.UUID | None:
     """Return the organisation that owns a DB-configured OIDC provider.
 
     The pre-auth callback route uses this to scope the provider lookup to the
     provider's own organisation. Returns ``None`` when the provider is not in
     the DB (i.e. it is configured purely via ``MODULO_OIDC_PROVIDERS``).
-    Disabled providers are excluded, matching ``list_oidc_providers``.
+
+    Unlike ``list_oidc_providers`` this does NOT exclude disabled providers:
+    the callback needs the disabled provider's org so it routes into the DB
+    path, where the disabled provider resolves to nothing and login is blocked
+    rather than resurrecting an env-var provider of the same id.
     """
     result = await session.execute(
         select(SsoProvider)
         .where(
             SsoProvider.provider_type == "oidc",
-            SsoProvider.enabled.is_(True),
             SsoProvider.name == provider_id,
         )
         .order_by(SsoProvider.created_at)
@@ -288,12 +307,16 @@ async def _resolve_oidc_providers(
     Env-var providers from ``MODULO_OIDC_PROVIDERS`` are the baseline; when
     ``use_db`` is set and a session is available, DB ``sso_providers`` rows take
     precedence (org-scoped when ``org_id`` is given, org-agnostic otherwise).
+    Env providers are only used when the DB has ZERO oidc rows at all — an
+    all-disabled DB is authoritative and must not resurrect env providers.
     """
     providers = _parse_oidc_providers(settings)
     if use_db and session is not None:
         db_providers = await list_oidc_providers(session, org_id=org_id, fernet_key=settings.fernet_key)
         if db_providers:
-            providers = db_providers
+            return db_providers
+        if await count_oidc_providers(session, org_id=org_id) > 0:
+            return []
     return providers
 
 
@@ -432,7 +455,17 @@ async def oidc_process_callback(
         raw_groups = []
     idp_groups: list[str] = raw_groups
     if idp_groups:
-        db_provider = await _lookup_provider_by_client_id(session, provider["client_id"], resolved_org_id)
+        # ``sso_providers`` carries the strict ``rls_org_isolation`` policy, so
+        # this lookup must run on the BYPASSRLS system session used for the
+        # pre-auth provider resolution — the DI session has no RLS org context
+        # here and would return zero rows, silently disabling group mappings.
+        if provider_session is not None:
+            async with provider_session.begin():
+                db_provider = await _lookup_provider_by_client_id(
+                    provider_session, provider["client_id"], resolved_org_id
+                )
+        else:
+            db_provider = await _lookup_provider_by_client_id(session, provider["client_id"], resolved_org_id)
         if db_provider is not None and db_provider.group_mappings:
             await apply_group_mappings(session, account, resolved_org_id, idp_groups, db_provider.group_mappings)
 
@@ -627,6 +660,7 @@ async def saml_process_response(
     saml_response: str,
     settings: Settings,
     session: AsyncSession,
+    provider_session: AsyncSession | None = None,
 ) -> dict[str, str]:
     """Validate a SAML Response using python3-saml and issue tokens.
 
@@ -634,6 +668,12 @@ async def saml_process_response(
     certificate from metadata (the critical security gap in the old
     implementation), plus condition validation, audience restriction, and
     clock-skew management.
+
+    ``provider_session`` carries the DB provider lookup when it must run on a
+    different session than ``session``: the ACS route is pre-auth, so the
+    ``sso_providers`` group-mapping read runs on the ``modulo_system`` session
+    (BYPASSRLS) via ``provider_session``, while JIT provisioning and token
+    issuance stay on ``session`` (the app role with RLS scoping).
     """
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
@@ -694,7 +734,15 @@ async def saml_process_response(
             saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
             break
     if saml_groups:
-        db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
+        # Same RLS consideration as the OIDC callback: ``sso_providers`` is
+        # RLS-isolated, so the group-mapping lookup must run on the BYPASSRLS
+        # system session when one is supplied — never the RLS-blocked pre-auth
+        # DI session.
+        if provider_session is not None:
+            async with provider_session.begin():
+                db_provider = await _lookup_provider_by_entity_id(provider_session, idp_entity_id, org_id)
+        else:
+            db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
         if db_provider is not None and db_provider.group_mappings:
             await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 
