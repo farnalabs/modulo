@@ -1331,10 +1331,12 @@ async def _pipeline_name(
         return ""
     try:
         from modulo.db.models.pipeline import Pipeline
+        from modulo.db.rls import set_rls_execution_context
 
         ch = _ch()
         async with factory() as session, session.begin():
             await ch._set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             result = await session.execute(select(Pipeline.name).where(Pipeline.id == pipeline_id))
             name = result.scalar_one_or_none()
             return str(name) if name is not None else ""

@@ -16,7 +16,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.mcp_setup_handoff import consume_handoff
 from modulo.db.crud.model_backend import get_model_backend, update_model_backend
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ async def complete_model_backend_setup(
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             record = await consume_handoff(
                 session,
                 raw_token=payload.token,

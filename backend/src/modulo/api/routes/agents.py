@@ -32,7 +32,7 @@ from modulo.db.crud.agent import (
     update_agent,
 )
 from modulo.db.models.model_backend import ModelBackend
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
@@ -572,6 +572,7 @@ async def optimize_prompt(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb_result = await session.execute(
                 select(ModelBackend).where(
                     ModelBackend.id == backend_id,

@@ -294,9 +294,10 @@ async def _dispatch_reject_correction_in_session(
     run, no correction-configured guardrail, no record/account, or no backend
     hub). The caller owns the transaction and error handling.
     """
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     await set_rls_org(session, org_id)
+    await set_rls_execution_context(session)
     run = await get_run(session, run_id)
     if run is None:
         return None

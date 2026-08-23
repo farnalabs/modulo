@@ -140,9 +140,13 @@ def compute_next_send(cron_expression: str, after: datetime.datetime | None = No
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
+    from modulo.db.rls import set_rls_execution_context
     from modulo.db.rls import set_rls_org as _set_rls
 
     await _set_rls(session, org_id)
+    # Scheduled-report generation is background machinery (no user principal) —
+    # the execution hatch lets it read team-scoped tables org-wide.
+    await set_rls_execution_context(session)
 
 
 # ---------------------------------------------------------------------------

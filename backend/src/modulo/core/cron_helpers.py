@@ -436,12 +436,14 @@ def compute_next_send(cron_expression: str, after: datetime | None = None) -> da
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Set org-scoped RLS context for a cron/background transaction."""
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         await session.execute(
             text("SELECT set_config('app.organisation_id', :val, true)"),
             {"val": str(org_id)},
         )
+        await session.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
     else:
         session.info["org_id"] = org_id
 

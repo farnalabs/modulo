@@ -307,6 +307,7 @@ async def test_env_var_secret_ref_resolves_from_vault():
         patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
         patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
         patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
     ):
         result = await fn(_run_state())
 
@@ -337,6 +338,7 @@ async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
         patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
         patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
         patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
         patch.dict(os.environ, {"FOO": "host-value"}),
     ):
         result = await fn(_run_state())

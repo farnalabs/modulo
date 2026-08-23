@@ -162,12 +162,14 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Set org-scoped RLS context for a polling-trigger transaction."""
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         await session.execute(
             text("SELECT set_config('app.organisation_id', :val, true)"),
             {"val": str(org_id)},
         )
+        await session.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
     else:
         session.info["org_id"] = org_id
 

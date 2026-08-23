@@ -23,7 +23,7 @@ from modulo.db.crud.template import (
     list_templates,
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT = "templates.list_templates_endpoint"
 _CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE = "templates.create_pipeline_from_template_endpoint"
@@ -97,6 +97,7 @@ async def list_templates_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_templates(
                 session,
                 page=page,
@@ -142,6 +143,7 @@ async def create_pipeline_from_template_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             template = await get_template(session, template_id)
         if template is None:
             raise HTTPException(
@@ -159,6 +161,7 @@ async def create_pipeline_from_template_endpoint(
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             for idx, agent_cfg in enumerate(agent_configs):
                 agent_id = uuid.uuid4()

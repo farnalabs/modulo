@@ -133,9 +133,14 @@ class TestCheckoutResetListener:
 
         self._listener()(connection, MagicMock(), MagicMock())
 
-        assert cursor.execute.call_count == 3
+        assert cursor.execute.call_count == 4
         executed_sql = [str(call) for call in cursor.execute.call_args_list]
-        for config_name in ("app.organisation_id", "app.user_id", "app.org_role"):
+        for config_name in (
+            "app.organisation_id",
+            "app.user_id",
+            "app.org_role",
+            "app.execution_context",
+        ):
             assert any(f"set_config('{config_name}'" in sql for sql in executed_sql)
         cursor.close.assert_called_once()
 

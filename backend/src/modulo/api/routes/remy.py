@@ -71,7 +71,7 @@ from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import ModelBackendBase
 from modulo.settings import Settings, get_settings
 
@@ -706,6 +706,7 @@ async def _resolve_stream_api_key(ctx: _StreamContext) -> tuple[str | None, str 
         return req.api_key, None
     async with ctx.db_session.begin():
         await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        await set_rls_user_context(ctx.db_session, ctx.principal.account_id, ctx.principal.org_role)
         resolved = await _resolve_api_key(
             req.provider,
             ctx.principal.organisation_id,
@@ -1412,6 +1413,7 @@ async def create_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             max_sn = await session.execute(
                 select(func.coalesce(func.max(ChatSession.session_number), 0)).where(
                     ChatSession.user_id == principal.account_id

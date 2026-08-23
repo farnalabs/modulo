@@ -28,7 +28,7 @@ from modulo.db.crud.environment_profile import (
     update_environment_profile,
 )
 from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 _CODE_ENVIRONMENTS_LIST_PROFILES = "environments.list_profiles"
@@ -178,6 +178,7 @@ async def list_profiles(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
     except IntegrityError as exc:
         _log.exception(_CODE_ENVIRONMENTS_LIST_PROFILES)
@@ -226,6 +227,7 @@ async def create_profile(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await create_environment_profile(
                 session,
                 org_id=principal.organisation_id,
@@ -281,6 +283,7 @@ async def get_profile(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await _get_profile_or_404(session, profile_id)
     except IntegrityError as exc:
         _log.exception(_CODE_ENVIRONMENTS_GET_PROFILE)
@@ -326,6 +329,7 @@ async def update_profile(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await update_environment_profile(session, profile_id, updates)
     except IntegrityError:
         _log.exception(_CODE_ENVIRONMENTS_UPDATE_PROFILE)
@@ -374,6 +378,7 @@ async def delete_profile(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_environment_profile(session, profile_id)
     except IntegrityError as exc:
         _log.exception(_CODE_ENVIRONMENTS_DELETE_PROFILE)
@@ -503,6 +508,7 @@ async def test_profile(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await _get_profile_or_404(session, profile_id)
     except IntegrityError as exc:
         _log.exception(_CODE_ENVIRONMENTS_TEST_PROFILE)

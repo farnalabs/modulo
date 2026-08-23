@@ -111,7 +111,18 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
 
     Expected tables are derived from information_schema (tables with an
     organisation_id column) so this test stays accurate as new tables are added.
+    The five team-scoped tables (0124) intentionally carry ``rls_team_isolation``
+    (which includes the org check) instead of the org-only policy ÔÇö they are
+    asserted by ``test_team_scoped_tables_have_no_org_only_policy``.
     """
+    team_scoped = {
+        "pipelines",
+        "connector_instances",
+        "model_backends",
+        "environment_profiles",
+        "library_primitives",
+    }
+
     async with db_engine.connect() as conn:
         org_scoped = {
             row[0]
@@ -133,8 +144,22 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
             ).fetchall()
         }
 
-    # organisations table has no organisation_id column — correctly excluded
-    expected = org_scoped - {"organisations"}
+    # organisations table has no organisation_id column ÔÇö correctly excluded.
+    # The five team-scoped tables carry rls_team_isolation (org check included),
+    # never the org-only policy ÔÇö excluded here, asserted by the sibling test.
+    # The LangGraph checkpoint tables are runtime-managed by
+    # ``ModuloPostgresSaver.setup()`` (no migration, no RLS policy ÔÇö the saver
+    # app-scopes its own queries by organisation_id) ÔÇö excluded here too.
+    expected = (
+        org_scoped
+        - {"organisations"}
+        - team_scoped
+        - {
+            "checkpoints",
+            "checkpoint_blobs",
+            "checkpoint_writes",
+        }
+    )
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_org_isolation policy: {sorted(missing)}"
 
@@ -323,6 +348,59 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
 
 
+async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine) -> None:
+    """The OR'd org-only RLS policy was dropped on team-scoped tables (0124).
+
+    Regression guard for the cross-team leak: a team-scoped table must carry
+    ONLY the team-visibility policy (which includes the org check), never the
+    org-only policy that ORs in every org row. lifecycle_maps is org-only by
+    design and must keep its org policy.
+
+    The ``rls_team_isolation`` policy body (``pg_policies.qual``) must ALSO
+    contain the execution-context escape hatch (``app.execution_context``) so
+    background machinery (which sets org scope only) can read team-private rows
+    ÔÇö and it must keep the org check (``app.organisation_id``) so the escape
+    hatch can never leak rows across organisations.
+
+    This pins the FINAL policy state on a real Postgres (migrations applied),
+    so the policy-creating migrations, ``team_scope.py``, and the migration's
+    hardcoded ``_TEAM_SCOPED_TABLES`` tuple cannot drift independently without
+    this test failing.
+    """
+    team_scoped = {
+        "pipelines",
+        "connector_instances",
+        "model_backends",
+        "environment_profiles",
+        "library_primitives",
+    }
+    org_only_tables = {"lifecycle_maps"}
+
+    async with db_engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT tablename, policyname, qual FROM pg_policies"))).fetchall()
+
+    policies: dict[str, set[str]] = {}
+    team_policy_bodies: dict[str, str] = {}
+    for table, policy, qual in rows:
+        policies.setdefault(table, set()).add(policy)
+        if policy == "rls_team_isolation":
+            team_policy_bodies[table] = qual or ""
+
+    for table in team_scoped:
+        assert "rls_team_isolation" in policies.get(table, set()), f"{table} missing team policy"
+        assert "rls_org_isolation" not in policies.get(table, set()), f"{table} still has org-only policy"
+        body = team_policy_bodies.get(table, "")
+        assert body, f"{table} team policy has no USING body (qual)"
+        assert "app.organisation_id" in body, f"{table} team policy lost the org check (cross-org leak)"
+        assert "app.execution_context" in body, (
+            f"{table} team policy missing the execution-context escape hatch ÔÇö "
+            "background machinery (org scope only) cannot read team-private rows"
+        )
+
+    for table in org_only_tables:
+        assert "rls_org_isolation" in policies.get(table, set()), f"{table} missing org policy"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -370,7 +448,7 @@ async def _set_rls(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migration 0060 — rls_team_isolation policy correctness after column rename
+# Migration 0060 ÔÇö rls_team_isolation policy correctness after column rename
 # ---------------------------------------------------------------------------
 
 
@@ -379,7 +457,7 @@ async def test_team_memberships_isolated_by_org_rls(
 ) -> None:
     """Team membership rows are correctly isolated by org-scoped RLS.
 
-    After the users→accounts+org_memberships reconciliation (0108_schema_org_identity),
+    After the usersÔåÆaccounts+org_memberships reconciliation (0108_schema_org_identity),
     the rls_org_isolation policy on team_memberships (org-scoped via OrgScoped)
     must use ``organisation_id`` to prevent cross-org membership leaks.
     This test creates accounts in different teams within the same org and
@@ -394,7 +472,7 @@ async def test_team_memberships_isolated_by_org_rls(
     account_b = await _create_account(db_engine, "member-b@rls-membership.com")
 
     # The check_team_privilege_cap trigger requires every account to hold an
-    # org_membership row in the org before it can be added to a team — without
+    # org_membership row in the org before it can be added to a team ÔÇö without
     # it the org role resolves to NULL and the trigger raises
     # "Team role ... exceeds org role <NULL>".
     async with db_engine.connect() as conn, conn.begin():
@@ -474,7 +552,7 @@ async def test_team_memberships_isolated_by_org_rls(
 
 
 # ---------------------------------------------------------------------------
-# ORM tenant filter tests (SQLite — RLS is Postgres-only)
+# ORM tenant filter tests (SQLite ÔÇö RLS is Postgres-only)
 # ---------------------------------------------------------------------------
 
 

@@ -75,7 +75,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.trigger import Trigger
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
@@ -152,6 +152,7 @@ async def _do_get_run(
 ) -> Run:
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         stmt = (
             select(Run)
             .options(selectinload(Run.pipeline))
@@ -304,6 +305,7 @@ async def _do_get_run_observability(
     """Resolve trigger_actor, capacity, and child_runs for a run detail response."""
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         actor = await _resolve_trigger_actor(session, run)
         capacity = await _resolve_capacity(session, principal.organisation_id, run)
         child_runs = await _resolve_child_runs(session, run)
@@ -407,6 +409,7 @@ async def _do_list_runs(
 ) -> dict[str, Any]:
     async with factory() as session, session.begin():
         await set_rls_org(session, user.organisation_id)
+        await set_rls_user_context(session, user.account_id, user.org_role)
         result = await db_list_runs(
             session,
             pipeline_id=query.pipeline_id,
@@ -938,6 +941,7 @@ async def trigger_run(
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             run = await _create_manual_run(session, principal, req)
             run_id = run.id
             # Build the response while the transaction is still open: the
@@ -1011,6 +1015,7 @@ async def get_run_stats_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             return await get_run_stats(session, period)
     except ProgrammingError:
         _log.exception("runs.get_run_stats_endpoint")
@@ -1047,6 +1052,7 @@ async def get_run_heatmap_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             return await get_run_heatmap(session, year)
     except ProgrammingError:
         _log.exception("runs.get_run_heatmap_endpoint")
@@ -1944,6 +1950,7 @@ async def recover_run_node(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             try:
                 run = await recover_node(
                     session,
@@ -2095,6 +2102,7 @@ async def guardrail_override_run(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             try:
                 run = await guardrail_override(
                     session,

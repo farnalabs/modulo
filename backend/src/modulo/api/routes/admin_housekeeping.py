@@ -13,7 +13,7 @@ from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ async def list_housekeeping(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_execution_context(session)
             results = await scan_all(session, principal.organisation_id)
     except ProgrammingError:
         _log.exception("admin_housekeeping.list_housekeeping")
@@ -124,6 +125,7 @@ async def perform_cleanup(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_execution_context(session)
 
             for entity_type, ids in grouped.items():
                 if entity_type in NON_DELETABLE_ENTITY_TYPES:
