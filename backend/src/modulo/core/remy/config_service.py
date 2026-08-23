@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.system_config import get_config, set_config
+from modulo.db.crud.system_config import get_config, update_config
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ class RemyConfigService:
 
     async def update_config(self, org_id: uuid.UUID, config: RemyConfig) -> None:
         try:
-            await set_config(
+            await update_config(
                 self._session,
                 key=f"{_CONFIG_KEY_PREFIX}{org_id}",
                 value=config.model_dump(),

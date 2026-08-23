@@ -177,7 +177,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.set_config",
+            "modulo.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -246,7 +246,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.set_config",
+            "modulo.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -266,7 +266,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.set_config",
+            "modulo.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -312,7 +312,7 @@ class TestSetMonitorConfig:
     async def test_programming_error_returns_501(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.set_config",
+            "modulo.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", "params", Exception("boom")),
         ):
@@ -327,7 +327,7 @@ class TestSetMonitorConfig:
     async def test_sqlalchemy_error_returns_503(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.set_config",
+            "modulo.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("connection lost"),
         ):

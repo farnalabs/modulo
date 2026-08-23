@@ -15,7 +15,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.system_config import get_config, set_config
+from modulo.db.crud.system_config import get_config, set_config, update_config
 from modulo.db.models.system_config import SystemConfig
 
 _INSTANCE_ID_KEY = "product_analytics_instance_id"
@@ -62,7 +62,7 @@ async def rotate_secret(session: AsyncSession) -> str:
     secret before calling this.
     """
     new_secret = secrets.token_hex(32)
-    await set_config(session, _SECRET_KEY, new_secret)
+    await update_config(session, _SECRET_KEY, new_secret)
     _log.info("product_analytics.secret_rotated")
     return new_secret
 

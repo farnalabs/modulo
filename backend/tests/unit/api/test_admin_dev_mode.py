@@ -118,7 +118,7 @@ class TestGetDevMode:
 
 class TestSetDevMode:
     def test_enable_returns_200(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.set_config", new_callable=AsyncMock) as mock_set:
+        with patch("modulo.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": True})
         assert resp.status_code == 200
         body = resp.json()
@@ -127,7 +127,7 @@ class TestSetDevMode:
         mock_set.assert_awaited_once()
 
     def test_disable_returns_200(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.set_config", new_callable=AsyncMock) as mock_set:
+        with patch("modulo.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": False})
         assert resp.status_code == 200
         body = resp.json()
@@ -140,7 +140,7 @@ class TestSetDevMode:
         assert resp.status_code in (401, 403)
 
     def test_db_error_returns_500(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.set_config", side_effect=RuntimeError("DB error")):
+        with patch("modulo.api.routes.admin_dev_mode.update_config", side_effect=RuntimeError("DB error")):
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": True})
         assert resp.status_code == 500
         body = resp.json()

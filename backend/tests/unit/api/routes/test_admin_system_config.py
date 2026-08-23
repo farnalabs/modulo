@@ -50,9 +50,9 @@ class _AutobeginAwareSession:
         result = MagicMock()
         result.scalar_one_or_none.return_value = self._scalar_one_or_none
         result.scalars.return_value.all.return_value = self._scalars_all
-        # set_config's first-write path issues INSERT … ON CONFLICT DO NOTHING
-        # then re-SELECTs the stored row. Capture the inserted key/value so the
-        # re-SELECT round-trips through a real SystemConfig object.
+        # update_config issues INSERT … ON CONFLICT DO UPDATE then re-SELECTs
+        # the stored row. Capture the inserted key/value so the re-SELECT
+        # round-trips through a real SystemConfig object.
         if isinstance(stmt, Insert):
             try:
                 params = stmt.compile().params

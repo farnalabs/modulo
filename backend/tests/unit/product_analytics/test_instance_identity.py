@@ -41,11 +41,12 @@ def _make_mock_session(existing: dict[str, str] | None = None) -> AsyncMock:
         result = MagicMock()
         stmt_str = str(stmt)
 
-        # The new set_config first-write path issues an ``INSERT … ON CONFLICT
-        # DO NOTHING`` (pg_insert) whose ``value`` is JSON-typed and cannot be
-        # rendered with ``literal_binds=True``. Capture the inserted key/value so
-        # the subsequent re-SELECT round-trips, and skip the literal-bind compile
-        # that would otherwise raise a CompileError on the JSON literal.
+        # Both ``set_config`` (TOFU mint) and ``update_config`` (deliberate
+        # overwrite) issue a ``pg_insert`` whose ``value`` is JSON-typed and
+        # cannot be rendered with ``literal_binds=True``. Capture the inserted
+        # key/value so the subsequent re-SELECT round-trips, and skip the
+        # literal-bind compile that would otherwise raise a CompileError on the
+        # JSON literal.
         if isinstance(stmt, Insert):
             try:
                 params = stmt.compile().params

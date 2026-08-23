@@ -14,7 +14,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.system_config import delete_config, list_config, set_config
+from modulo.db.crud.system_config import delete_config, list_config, update_config
 
 _CODE_SYSTEM_CONFIG_MANAGE = "system.config.manage"
 _MSG_DATABASE_NOT_AVAILABLE_RUN = "Database not available. Run migrations."
@@ -100,7 +100,7 @@ async def admin_set_config(
 ) -> ConfigEntry:
     try:
         async with session.begin():
-            entry = await set_config(session, key, req.value, updated_by=current_user.account_id)
+            entry = await update_config(session, key, req.value, updated_by=current_user.account_id)
         return ConfigEntry(
             key=entry.key,
             value=entry.value,
