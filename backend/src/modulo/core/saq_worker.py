@@ -54,8 +54,9 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from redis import asyncio as aioredis
 from saq import CronJob, Worker
@@ -283,6 +284,56 @@ def _check_redis_connection(redis_client: aioredis.Redis, max_retries: int = 3) 
         )
     finally:
         sync_client.close()
+
+
+async def reconcile_cron_registrations(queue: RedisQueue, cron_jobs: Collection[CronJob[Any]]) -> None:
+    """Self-heal stale unique-cron registrations on system-worker startup.
+
+    SAQ's ``Worker.schedule()`` re-enqueues every cron each ``schedule`` tick, but
+    the underlying Redis enqueue Lua script DEDUPS on the job key
+    (``cron:<function_qualname>``): it only writes the registration if the key is
+    NOT already in the ``incomplete`` zset. So a cron's scheduled time is locked at
+    whatever it was when the worker FIRST registered it, and only advances after the
+    job actually fires. A worker restart does NOT clear the persisted ``incomplete``
+    registration — so if a cron expression is changed in code AFTER it was first
+    registered (as happened to ``metrics_dump``: ``0 1 * * *`` -> ``*/10 * * * *``),
+    the stale schedule silently survives restarts and the job never re-aligns.
+
+    This runs ONCE on startup (before ``worker.start()``) and clears each
+    configured UNIQUE cron's persisted Redis registration (job hash + ``incomplete``
+    zset member + ``queued`` list member) so SAQ's ``schedule()`` loop re-enqueues
+    it with the CURRENT cron expression within ~1s at its correct next occurrence.
+    It is idempotent and fail-open: a Redis hiccup must NEVER block worker boot, so
+    a cron that errors during reconciliation is logged and skipped.
+
+    A cron that is CURRENTLY executing lives in ``active``, not ``incomplete`` — so
+    removing its incomplete/queued entries is a harmless no-op and it re-registers on
+    finish. ``active`` is intentionally untouched.
+    """
+    for cron_job in cron_jobs:
+        if not getattr(cron_job, "unique", False):
+            continue
+        function = getattr(cron_job, "function", None)
+        if function is None:
+            continue
+        key = f"cron:{function.__qualname__}"
+        job_id = queue.job_id(key)
+        incomplete = queue.namespace("incomplete")
+        queued = queue.namespace("queued")
+        try:
+            async with queue.redis.pipeline() as pipe:
+                pipe.delete(job_id)
+                pipe.zrem(incomplete, job_id)
+                pipe.lrem(queued, 0, job_id)
+                await pipe.execute()
+            _log.info("saq.reconcile_cron_registrations.cleared", extra={"key": key})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "saq.reconcile_cron_registrations.failed",
+                extra={"key": key},
+            )
 
 
 def _probe_database() -> None:
@@ -1249,6 +1300,7 @@ def run_system_web() -> None:
     async def _worker_start() -> None:
         try:
             await worker.queue.connect()
+            await reconcile_cron_registrations(cast(RedisQueue, worker.queue), worker.cron_jobs)
             await worker.start()
         except asyncio.CancelledError:
             raise
