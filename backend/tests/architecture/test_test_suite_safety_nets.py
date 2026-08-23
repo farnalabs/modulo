@@ -35,12 +35,14 @@ FEATURES = TESTS / "bdd" / "features"
 QUARANTINE_FILE = REPO / ".quarantine.yml"
 
 #: Workflow self-report payloads (GitHub Actions → POST .../journeys/self-report)
-#: must name the lifecycle-map stage the workflow completes. The merge/deploy
-#: stages are EXTERNAL (a GitHub Actions workflow, no ``pipeline_id``), so the
-#: endpoint can only advance journeys into them via ``stage_id`` — a payload
+#: must name the lifecycle-map stage the workflow completes. The deploy
+#: stage is EXTERNAL (a GitHub Actions workflow, no ``pipeline_id``), so the
+#: endpoint can only advance journeys into it via ``stage_id`` — a payload
 #: that drops it silently leaves journeys stuck at their old stage.
+#:
+#: The ``merge-queue.yml`` workflow is internal SDLC tooling and is not part of
+#: the public repo, so it is intentionally not asserted here.
 SELF_REPORT_WORKFLOWS: dict[str, str] = {
-    "merge-queue.yml": "merge",
     "deploy.yml": "deploy",
 }
 
