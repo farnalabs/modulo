@@ -75,6 +75,9 @@ def is_fine_grained_pat(token: str) -> bool:
 # Actions accepted by the batch commit resource (write("commit") / write("files"))
 _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move"})
 
+# Review events accepted by the PR review resource (write("pr_review"))
+_REVIEW_EVENTS = frozenset({"APPROVE", "REQUEST_CHANGES", "COMMENT"})
+
 # Retry/backoff configuration
 _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
@@ -262,6 +265,11 @@ def _encode_write_content(data: dict[str, Any], resource: str) -> str:
     raise ValueError(f"GitHub {resource} write requires 'content' (raw text) or 'content_base64' (pre-encoded) in data")
 
 
+def _is_base64_text(info: dict[str, Any]) -> bool:
+    """True when a Contents API payload carries base64-encoded text content."""
+    return info.get("encoding") == "base64" and isinstance(info.get("content"), str)
+
+
 def _decode_read_content(info: Any) -> None:
     """Decode base64 file content from the GitHub Contents API in place.
 
@@ -272,7 +280,7 @@ def _decode_read_content(info: Any) -> None:
     """
     if not isinstance(info, dict):
         return
-    if info.get("encoding") != "base64" or not isinstance(info.get("content"), str):
+    if not _is_base64_text(info):
         return
     try:
         info["content"] = base64.b64decode(info["content"]).decode("utf-8")
@@ -618,16 +626,8 @@ class GitHubConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
-                        # 304 is a healthy service response (the resource is
-                        # unchanged) — record it as a success so a half-open
-                        # probe closes the circuit instead of wedging it.
-                        self._record_success()
-                        raise GitHubAPIError(
-                            "GitHub API returned 304 Not Modified — resource unchanged",
-                            error_code="not_modified",
-                            status_code=304,
-                        )
-                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                        self._raise_not_modified()
+                    if self._should_retry_status(r.status_code, attempt):
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
@@ -635,26 +635,32 @@ class GitHubConnector(ConnectorBase):
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                if self._should_retry_status(exc.response.status_code, attempt):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 self._raise_status_error(exc)
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(self._backoff_delay(attempt)))
+                if await self._sleep_network_retry(attempt):
                     continue
-                self._record_failure()
-                raise GitHubNetworkError("GitHub API timeout", error_code="network_timeout") from exc
+                self._raise_network_error(exc, "GitHub API timeout", "network_timeout")
             except httpx.ConnectError as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(self._backoff_delay(attempt)))
+                if await self._sleep_network_retry(attempt):
                     continue
-                self._record_failure()
-                raise GitHubNetworkError("GitHub API connection error", error_code="network_connection") from exc
+                self._raise_network_error(exc, "GitHub API connection error", "network_connection")
         self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
+
+    def _should_trip_circuit(self, status_code: int) -> bool:
+        """Whether a terminal HTTP status should be recorded as a circuit failure.
+
+        Service-level failures (retryable statuses and 5xx) count toward the
+        breaker. A 4xx never counts from the closed state, but a client error
+        on a half-open recovery probe means the probe did not confirm recovery
+        — re-trip so a fresh probe is admitted after the next cooldown.
+        """
+        return status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open
 
     def _raise_status_error(self, exc: httpx.HTTPStatusError) -> NoReturn:
         """Raise a structured GitHub error for a terminal (non-retryable) HTTP status.
@@ -666,7 +672,7 @@ class GitHubConnector(ConnectorBase):
         cooldown instead of wedging half-open.
         """
         status_code = exc.response.status_code
-        if status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open:
+        if self._should_trip_circuit(status_code):
             self._record_failure()
         detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
         if status_code == 429:
@@ -674,6 +680,36 @@ class GitHubConnector(ConnectorBase):
             if quota:
                 detail = f"{detail} (quota: {quota})"
         raise _error_for_status(status_code, detail) from exc
+
+    @staticmethod
+    def _should_retry_status(status_code: int, attempt: int) -> bool:
+        """True when a retryable status still has retry budget remaining."""
+        return status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES
+
+    async def _sleep_network_retry(self, attempt: int) -> bool:
+        """Sleep before a transport-level retry; True when a retry should run."""
+        if attempt < _MAX_RETRIES:
+            await asyncio.sleep(self._jitter(self._backoff_delay(attempt)))
+            return True
+        return False
+
+    def _raise_network_error(self, exc: Exception, message: str, error_code: str) -> NoReturn:
+        """Record a transport failure and raise a typed network error."""
+        self._record_failure()
+        raise GitHubNetworkError(message, error_code=error_code) from exc
+
+    def _raise_not_modified(self) -> NoReturn:
+        """Record a healthy 304 response and surface it as a typed API error.
+
+        304 is a healthy service response (the resource is unchanged) — record it
+        as a success so a half-open probe closes the circuit instead of wedging it.
+        """
+        self._record_success()
+        raise GitHubAPIError(
+            "GitHub API returned 304 Not Modified — resource unchanged",
+            error_code="not_modified",
+            status_code=304,
+        )
 
     @staticmethod
     def _backoff_delay(attempt: int) -> float:
@@ -891,6 +927,15 @@ class GitHubConnector(ConnectorBase):
             metadata={"rate_limit": _rate_limit_metadata(response)},
         )
 
+    def _paginated_result(
+        self,
+        records: list[dict[str, Any]],
+        response: httpx.Response,
+    ) -> ConnectorResult:
+        """Build a paginated list result with total and the Link-header cursor."""
+        links = _parse_link_header(response)
+        return self._result(records, response, total=len(records), next_cursor=links.get("next"))
+
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         handlers: dict[str, Callable[[ConnectorQuery], Awaitable[ConnectorResult]]] = {
             "repos": self._query_repos,
@@ -919,8 +964,7 @@ class GitHubConnector(ConnectorBase):
     async def _query_repos(self, q: ConnectorQuery) -> ConnectorResult:
         r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
         data: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(data, r, total=len(data), next_cursor=links.get("next"))
+        return self._paginated_result(data, r)
 
     async def _query_file(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "file")
@@ -961,8 +1005,7 @@ class GitHubConnector(ConnectorBase):
             params["direction"] = q.filters["direction"]
         r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
         prs: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(prs, r, total=len(prs), next_cursor=links.get("next"))
+        return self._paginated_result(prs, r)
 
     async def _query_pr_commits(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
@@ -994,8 +1037,7 @@ class GitHubConnector(ConnectorBase):
                 params[key] = q.filters[key]
         r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
         issues: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(issues, r, total=len(issues), next_cursor=links.get("next"))
+        return self._paginated_result(issues, r)
 
     async def _query_issue(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "issue")
@@ -1007,8 +1049,7 @@ class GitHubConnector(ConnectorBase):
         owner_repo = self._require_filter(q.filters, "repo", "labels")
         r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
         labels: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(labels, r, total=len(labels), next_cursor=links.get("next"))
+        return self._paginated_result(labels, r)
 
     async def _query_milestones(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "milestones")
@@ -1021,8 +1062,7 @@ class GitHubConnector(ConnectorBase):
             params["direction"] = q.filters["direction"]
         r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
         milestones: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(milestones, r, total=len(milestones), next_cursor=links.get("next"))
+        return self._paginated_result(milestones, r)
 
     async def _query_issue_comments(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
@@ -1033,8 +1073,7 @@ class GitHubConnector(ConnectorBase):
             params={"per_page": q.limit},
         )
         comments: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(comments, r, total=len(comments), next_cursor=links.get("next"))
+        return self._paginated_result(comments, r)
 
     async def _query_issue_events(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "issue_events")
@@ -1045,15 +1084,13 @@ class GitHubConnector(ConnectorBase):
             params={"per_page": q.limit},
         )
         events: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(events, r, total=len(events), next_cursor=links.get("next"))
+        return self._paginated_result(events, r)
 
     async def _query_assignees(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "assignees")
         r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
         assignees: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(assignees, r, total=len(assignees), next_cursor=links.get("next"))
+        return self._paginated_result(assignees, r)
 
     async def _query_timeline(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "timeline")
@@ -1064,8 +1101,7 @@ class GitHubConnector(ConnectorBase):
             params={"per_page": q.limit},
         )
         timeline: list[dict[str, Any]] = await self._parse_json(r)
-        links = _parse_link_header(r)
-        return self._result(timeline, r, total=len(timeline), next_cursor=links.get("next"))
+        return self._paginated_result(timeline, r)
 
     async def _query_pr_diff(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "pr_diff")
@@ -1113,6 +1149,35 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"GitHub {resource} write field '{key}' must be a non-empty list of strings")
         return value
 
+    def _write_body(self, data: dict[str, Any], required: dict[str, str], optional: tuple[str, ...]) -> dict[str, Any]:
+        """Build a write body from required fields (validated) plus present optional fields."""
+        body: dict[str, Any] = {}
+        for key, resource in required.items():
+            body[key] = self._require_write_filter(data, key, resource)
+        for key in optional:
+            if key in data:
+                body[key] = data[key]
+        return body
+
+    async def _post_subresource(
+        self,
+        owner_repo: str,
+        entity: str,
+        item_number: str,
+        subpath: str,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """POST a write to a GitHub item sub-resource and parse the JSON response."""
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/{entity}/{item_number}/{subpath}",
+            json=body,
+            headers=headers,
+        )
+        return await self._parse_json_object(r)
+
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         handlers: dict[str, Callable[[ConnectorPayload], Awaitable[dict[str, Any]]]] = {
             "commit": self._write_commit,
@@ -1139,50 +1204,78 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
         return await handler(payload)
 
-    async def _write_commit(self, payload: ConnectorPayload) -> dict[str, Any]:
-        resource = payload.resource
-        owner_repo = self._require_write_filter(payload.data, "repo", resource)
-        actions = payload.data.get("actions")
+    def _require_commit_actions(self, data: dict[str, Any], resource: str) -> list[Any]:
+        """Get the required non-empty 'actions' list for a batch commit."""
+        actions = data.get("actions")
         if not isinstance(actions, list) or not actions:
             raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'actions' list")
-        ref = payload.data.get("ref", payload.data.get("branch", "main"))
+        return actions
+
+    def _require_commit_ref(self, data: dict[str, Any], resource: str) -> str:
+        """Get the target ref/branch for a batch commit (default 'main')."""
+        ref = data.get("ref", data.get("branch", "main"))
         if not isinstance(ref, str) or not ref:
             raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'ref' or 'branch'")
-        message = payload.data.get("message", "Update via Modulo")
+        return ref
+
+    def _require_commit_message(self, data: dict[str, Any], resource: str) -> str:
+        """Get the commit message for a batch commit (default 'Update via Modulo')."""
+        message = data.get("message", "Update via Modulo")
         if not isinstance(message, str) or not message:
             raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'message'")
+        return message
+
+    def _validate_commit_actions(self, actions: list[Any], resource: str) -> set[str]:
+        """Validate batch-commit actions, returning the set of targeted paths.
+
+        Each action must be an object with a known action type, a relative
+        ``path`` (``previous_path`` for moves), and string ``content`` for
+        create/update actions. No path may be targeted more than once.
+        """
         targeted_paths: set[str] = set()
         for action in actions:
-            if not isinstance(action, dict):
-                raise ValueError(f"GitHub resource {resource!r}: each action must be an object")
-            action_type = action.get("action")
-            if action_type not in _COMMIT_ACTIONS:
-                raise ValueError(
-                    f"GitHub resource {resource!r}: action {action_type!r} must be one of {sorted(_COMMIT_ACTIONS)}",
-                )
-            path = action.get("path")
-            if not isinstance(path, str) or not path:
-                raise ValueError(f"GitHub resource {resource!r}: each action requires 'path'")
-            _validate_path(path, resource)
-            targets: tuple[str, ...]
-            if action_type == "move":
-                previous_path = action.get("previous_path")
-                if not isinstance(previous_path, str) or not previous_path:
-                    raise ValueError(f"GitHub resource {resource!r}: move action requires 'previous_path'")
-                _validate_path(previous_path, resource)
-                targets = (previous_path, path)
-            else:
-                targets = (path,)
+            self._validate_commit_action(action, resource)
+            action_type = action["action"]
+            path = action["path"]
+            targets: tuple[str, ...] = (action["previous_path"], path) if action_type == "move" else (path,)
             for targeted in targets:
                 if targeted in targeted_paths:
                     raise ValueError(
                         f"GitHub resource {resource!r}: path {targeted!r} is targeted more than once by the batch",
                     )
                 targeted_paths.add(targeted)
-            if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
-                raise ValueError(
-                    f"GitHub resource {resource!r}: action {action_type!r} requires string 'content'",
-                )
+        return targeted_paths
+
+    def _validate_commit_action(self, action: Any, resource: str) -> None:
+        """Validate a single batch-commit action in place."""
+        if not isinstance(action, dict):
+            raise ValueError(f"GitHub resource {resource!r}: each action must be an object")
+        action_type = action.get("action")
+        if action_type not in _COMMIT_ACTIONS:
+            raise ValueError(
+                f"GitHub resource {resource!r}: action {action_type!r} must be one of {sorted(_COMMIT_ACTIONS)}",
+            )
+        path = action.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"GitHub resource {resource!r}: each action requires 'path'")
+        _validate_path(path, resource)
+        if action_type == "move":
+            previous_path = action.get("previous_path")
+            if not isinstance(previous_path, str) or not previous_path:
+                raise ValueError(f"GitHub resource {resource!r}: move action requires 'previous_path'")
+            _validate_path(previous_path, resource)
+        if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
+            raise ValueError(
+                f"GitHub resource {resource!r}: action {action_type!r} requires string 'content'",
+            )
+
+    async def _write_commit(self, payload: ConnectorPayload) -> dict[str, Any]:
+        resource = payload.resource
+        owner_repo = self._require_write_filter(payload.data, "repo", resource)
+        actions = self._require_commit_actions(payload.data, resource)
+        ref = self._require_commit_ref(payload.data, resource)
+        message = self._require_commit_message(payload.data, resource)
+        self._validate_commit_actions(actions, resource)
         base_sha = await self._resolve_commit_sha(owner_repo, ref, resource)
         tree_entries = await self._build_tree_entries(actions, owner_repo, ref)
         tree_sha = await self._create_tree(owner_repo, base_sha, tree_entries)
@@ -1199,20 +1292,34 @@ class GitHubConnector(ConnectorBase):
         """Turn batch actions into Git tree entries, creating blobs as needed."""
         tree_entries: list[dict[str, Any]] = []
         for action in actions:
-            action_type = action["action"]
-            path = action["path"]
-            if action_type == "delete":
-                tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
-                continue
-            if action_type == "move":
-                previous_path = action["previous_path"]
-                tree_entries.append({"path": previous_path, "mode": "100644", "type": "blob", "sha": None})
-                content = await self._read_file_text(owner_repo, previous_path, ref)
-            else:
-                content = action["content"]
-            blob_sha = await self._create_blob(owner_repo, content)
-            tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
+            tree_entries.extend(await self._build_tree_entry(action, owner_repo, ref))
         return tree_entries
+
+    async def _build_tree_entry(self, action: dict[str, Any], owner_repo: str, ref: str) -> list[dict[str, Any]]:
+        """Build the Git tree entries for a single commit action.
+
+        ``delete`` removes the old path; ``move`` deletes the old path and adds
+        the content read from it under the new path; create/update add a blob
+        for the path with the supplied content.
+        """
+        action_type = action["action"]
+        path = action["path"]
+        if action_type == "delete":
+            return [self._tree_blob_entry(path, None)]
+        if action_type == "move":
+            previous_path = action["previous_path"]
+            content = await self._read_file_text(owner_repo, previous_path, ref)
+            return [
+                self._tree_blob_entry(previous_path, None),
+                self._tree_blob_entry(path, await self._create_blob(owner_repo, content)),
+            ]
+        blob_sha = await self._create_blob(owner_repo, action["content"])
+        return [self._tree_blob_entry(path, blob_sha)]
+
+    @staticmethod
+    def _tree_blob_entry(path: str, sha: str | None) -> dict[str, Any]:
+        """Build a single Git tree blob entry dict."""
+        return {"path": path, "mode": "100644", "type": "blob", "sha": sha}
 
     async def _write_file(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "file")
@@ -1228,17 +1335,11 @@ class GitHubConnector(ConnectorBase):
 
     async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue")
-        issue_body: dict[str, Any] = {
-            "title": self._require_write_filter(payload.data, "title", "issue"),
-        }
-        if "body" in payload.data:
-            issue_body["body"] = payload.data["body"]
-        if "labels" in payload.data:
-            issue_body["labels"] = payload.data["labels"]
-        if "assignees" in payload.data:
-            issue_body["assignees"] = payload.data["assignees"]
-        if "milestone" in payload.data:
-            issue_body["milestone"] = payload.data["milestone"]
+        issue_body = self._write_body(
+            payload.data,
+            {"title": "issue"},
+            ("body", "labels", "assignees", "milestone"),
+        )
         r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
         return await self._parse_json_object(r)
 
@@ -1255,70 +1356,56 @@ class GitHubConnector(ConnectorBase):
     async def _write_issue_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
         issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/issues/{issue_number}/comments",
-            json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
+        return await self._post_subresource(
+            owner_repo,
+            "issues",
+            issue_number,
+            "comments",
+            {"body": self._require_write_filter(payload.data, "body", "issue_comment")},
         )
-        return await self._parse_json_object(r)
 
     async def _write_issue_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
         issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/issues/{issue_number}/labels",
-            json={"labels": self._require_string_list(payload.data, "labels", "issue_label")},
+        return await self._post_subresource(
+            owner_repo,
+            "issues",
+            issue_number,
+            "labels",
+            {"labels": self._require_string_list(payload.data, "labels", "issue_label")},
         )
-        return await self._parse_json_object(r)
 
     async def _write_issue_reaction(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
         issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/issues/{issue_number}/reactions",
-            json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
+        return await self._post_subresource(
+            owner_repo,
+            "issues",
+            issue_number,
+            "reactions",
+            {"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
             headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
         )
-        return await self._parse_json_object(r)
 
     async def _write_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "label")
-        label_body: dict[str, Any] = {
-            "name": self._require_write_filter(payload.data, "name", "label"),
-            "color": self._require_write_filter(payload.data, "color", "label"),
-        }
-        if "description" in payload.data:
-            label_body["description"] = payload.data["description"]
+        label_body = self._write_body(payload.data, {"name": "label", "color": "label"}, ("description",))
         r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
         return await self._parse_json_object(r)
 
     async def _write_milestone(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
-        milestone_body: dict[str, Any] = {
-            "title": self._require_write_filter(payload.data, "title", "milestone"),
-        }
-        if "description" in payload.data:
-            milestone_body["description"] = payload.data["description"]
-        if "due_on" in payload.data:
-            milestone_body["due_on"] = payload.data["due_on"]
+        milestone_body = self._write_body(payload.data, {"title": "milestone"}, ("description", "due_on"))
         r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
         return await self._parse_json_object(r)
 
     async def _write_pr(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr")
-        pr_body: dict[str, Any] = {
-            "title": self._require_write_filter(payload.data, "title", "pr"),
-            "head": self._require_write_filter(payload.data, "head", "pr"),
-            "base": self._require_write_filter(payload.data, "base", "pr"),
-        }
-        if "body" in payload.data:
-            pr_body["body"] = payload.data["body"]
-        if "draft" in payload.data:
-            pr_body["draft"] = payload.data["draft"]
-        if "maintainer_can_modify" in payload.data:
-            pr_body["maintainer_can_modify"] = payload.data["maintainer_can_modify"]
+        pr_body = self._write_body(
+            payload.data,
+            {"title": "pr", "head": "pr", "base": "pr"},
+            ("body", "draft", "maintainer_can_modify"),
+        )
         r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
         return await self._parse_json_object(r)
 
@@ -1326,33 +1413,32 @@ class GitHubConnector(ConnectorBase):
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
         pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
         event = self._require_write_filter(payload.data, "event", "pr_review")
-        if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+        if event not in _REVIEW_EVENTS:
             raise ValueError(
                 f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
             )
-        review_body: dict[str, Any] = {
-            "event": event,
-            "body": payload.data.get("body", ""),
-        }
-        if "comments" in payload.data:
-            review_body["comments"] = payload.data["comments"]
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/pulls/{pull_number}/reviews",
-            json=review_body,
+        review_body = self._write_body(payload.data, {}, ("comments",))
+        review_body["event"] = event
+        review_body["body"] = payload.data.get("body", "")
+        return await self._post_subresource(
+            owner_repo,
+            "pulls",
+            pull_number,
+            "reviews",
+            review_body,
         )
-        return await self._parse_json_object(r)
 
     async def _write_pr_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_comment")
         pull_number = self._require_write_filter(payload.data, "pull_number", "pr_comment")
         body_value = self._require_write_filter(payload.data, "body", "pr_comment")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/pulls/{pull_number}/comments",
-            json={"body": body_value},
+        return await self._post_subresource(
+            owner_repo,
+            "pulls",
+            pull_number,
+            "comments",
+            {"body": body_value},
         )
-        return await self._parse_json_object(r)
 
     async def _write_pr_update(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_update")
@@ -1377,40 +1463,46 @@ class GitHubConnector(ConnectorBase):
     async def _write_pr_review_request(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_review_request")
         pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review_request")
-        reviewers = payload.data.get("reviewers")
-        team_reviewers = payload.data.get("team_reviewers")
-        if not reviewers and not team_reviewers:
-            raise ValueError("GitHub pr_review_request write requires 'reviewers' or 'team_reviewers' in data")
-        request_body: dict[str, Any] = {}
-        if reviewers:
-            request_body["reviewers"] = self._require_string_list(payload.data, "reviewers", "pr_review_request")
-        if team_reviewers:
-            request_body["team_reviewers"] = self._require_string_list(
-                payload.data, "team_reviewers", "pr_review_request"
-            )
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/pulls/{pull_number}/requested_reviewers",
-            json=request_body,
+        request_body = self._optional_reviewer_lists(payload.data)
+        return await self._post_subresource(
+            owner_repo,
+            "pulls",
+            pull_number,
+            "requested_reviewers",
+            request_body,
         )
-        return await self._parse_json_object(r)
 
     async def _write_pr_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_label")
         pull_number = self._require_write_filter(payload.data, "pull_number", "pr_label")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/issues/{pull_number}/labels",
-            json={"labels": self._require_string_list(payload.data, "labels", "pr_label")},
+        return await self._post_subresource(
+            owner_repo,
+            "issues",
+            pull_number,
+            "labels",
+            {"labels": self._require_string_list(payload.data, "labels", "pr_label")},
         )
-        return await self._parse_json_object(r)
 
     async def _write_issue_assign(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_assign")
         issue_number = self._require_write_filter(payload.data, "issue_number", "issue_assign")
-        r = await self._call_api(
-            "POST",
-            f"/repos/{owner_repo}/issues/{issue_number}/assignees",
-            json={"assignees": self._require_string_list(payload.data, "assignees", "issue_assign")},
+        return await self._post_subresource(
+            owner_repo,
+            "issues",
+            issue_number,
+            "assignees",
+            {"assignees": self._require_string_list(payload.data, "assignees", "issue_assign")},
         )
-        return await self._parse_json_object(r)
+
+    def _optional_reviewer_lists(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Build the reviewers/team_reviewers request body, requiring at least one."""
+        reviewers = data.get("reviewers")
+        team_reviewers = data.get("team_reviewers")
+        if not reviewers and not team_reviewers:
+            raise ValueError("GitHub pr_review_request write requires 'reviewers' or 'team_reviewers' in data")
+        request_body: dict[str, Any] = {}
+        if reviewers:
+            request_body["reviewers"] = self._require_string_list(data, "reviewers", "pr_review_request")
+        if team_reviewers:
+            request_body["team_reviewers"] = self._require_string_list(data, "team_reviewers", "pr_review_request")
+        return request_body

@@ -23,7 +23,7 @@ from modulo.core.product_analytics.instance_identity import (
     get_secret_exists,
     rotate_secret,
 )
-from modulo.db.crud.system_config import get_config, set_config
+from modulo.db.crud.system_config import get_config, update_config
 
 _log = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
 async def _set_last_sequence(session: AsyncSession, instance_id: str, seq: int) -> None:
     """Persist the last accepted sequence number."""
     key = _SEQUENCE_KEY_PREFIX + instance_id
-    await set_config(session, key, seq)
+    await update_config(session, key, seq)
 
 
 def _constant_time_equal(a: str, b: str) -> bool:

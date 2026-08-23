@@ -124,8 +124,18 @@ def _get_async_engine() -> AsyncEngine:
 
         settings = get_settings()
         if settings.modulo_db.lower() == "postgres":
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
             _ASYNC_ENGINE = get_shared_engine(
-                pool_size=settings.saq_worker_db_pool_size,
+                pool_size=effective_pool,
                 max_overflow=0,
             )
         else:
@@ -168,6 +178,27 @@ def _effective_redis_pool_size(pool_size: int, concurrency: int) -> int:
 
     Enforce ``pool >= concurrency + reserve`` where reserve covers the upkeep
     ops (a minimum of 5, matching the historical non-dequeue margin).
+    """
+    reserve = 5
+    return max(pool_size, concurrency + reserve)
+
+
+def _effective_db_pool_size(pool_size: int, concurrency: int) -> int:
+    """Guarantee the worker async DB pool is large enough for concurrent runs.
+
+    Every concurrent run holds one DB connection through pre-node setup
+    (``claim_run_async`` / ``load_and_setup`` / ``executor.execute``), and the
+    zombie watchdog's terminalize write (``fail_run_terminal``) needs a
+    connection to fail a run that wedges in that window. With
+    ``SAQ_WORKER_CONCURRENCY=20`` and a pool smaller than ``concurrency + 5``,
+    the worker can exhaust its pool in setup and the watchdog cannot get a slot
+    to terminalize — the run rides to the 35-min ``dispatcher_reconcile``
+    backstop as a nodeless zombie (the agent.stall symptom).
+
+    Mirror :func:`_effective_redis_pool_size`: enforce
+    ``pool >= concurrency + 5`` where the reserve covers the watchdog
+    terminalize writes plus any system-cron connections sharing the same
+    engine.
     """
     reserve = 5
     return max(pool_size, concurrency + reserve)
@@ -410,6 +441,27 @@ async def resume_run(
 # ---------------------------------------------------------------------------
 
 
+async def _dispatch_created_run(result: dict[str, Any], *, org_id: str, log_context: str) -> dict[str, Any]:
+    """Dispatch a run the fire job just created, sharing the dispatch path.
+
+    Called only when a fire helper reports successful creation with a run id;
+    attaches the dispatch outcome and the enqueued job id to ``result``. The
+    ``dispatch_run`` import stays lazy, matching the surrounding worker jobs.
+    """
+    from modulo.core.dispatch import dispatch_run
+
+    if result.get("status") == "fired" and result.get("run_id"):
+        try:
+            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
+            result["dispatch"] = outcome
+            result["job_id"] = job_id
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("%s: dispatch failed for run %s", log_context, result["run_id"])
+    return result
+
+
 async def fire_cron_trigger(
     ctx: dict[str, Any],
     *,
@@ -421,7 +473,6 @@ async def fire_cron_trigger(
 ) -> dict[str, Any]:
     """Per-item cron fire job — fire + dispatch the created run (SAQ)."""
     from modulo.core import cron_helpers as _ch
-    from modulo.core.dispatch import dispatch_run
 
     result = await _ch.fire_cron_trigger(
         trigger_id=uuid.UUID(trigger_id),
@@ -430,16 +481,7 @@ async def fire_cron_trigger(
         cron_expression=cron_expression,
         snapshot_id=uuid.UUID(snapshot_id) if snapshot_id else None,
     )
-    if result.get("status") == "fired" and result.get("run_id"):
-        try:
-            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
-            result["dispatch"] = outcome
-            result["job_id"] = job_id
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_cron_trigger: dispatch failed for run %s", result["run_id"])
-    return result
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_cron_trigger")
 
 
 async def fire_polling_trigger(
@@ -454,7 +496,6 @@ async def fire_polling_trigger(
 ) -> dict[str, Any]:
     """Per-item polling fire job — fire + dispatch the created run (SAQ)."""
     from modulo.core import cron_helpers as _ch
-    from modulo.core.dispatch import dispatch_run
 
     result = await _ch.fire_polling_trigger(
         trigger_id=uuid.UUID(trigger_id),
@@ -464,16 +505,7 @@ async def fire_polling_trigger(
         poll_query=poll_query,
         condition_expression=condition_expression,
     )
-    if result.get("status") == "fired" and result.get("run_id"):
-        try:
-            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
-            result["dispatch"] = outcome
-            result["job_id"] = job_id
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_polling_trigger: dispatch failed for run %s", result["run_id"])
-    return result
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
 async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
@@ -874,8 +906,11 @@ def _get_system_async_engine() -> AsyncEngine:
     """Engine for cross-org system crons using the modulo_system role.
 
     Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
-    so deployments that haven't provisioned the system role still work (system
-    crons run as modulo_app with BYPASSRLS — the pre-PR-1634 posture).
+    so deployments that haven't provisioned the system role still work. The
+    fallback runs system crons as modulo_app, which is NOBYPASSRLS (see
+    bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
+    RLS-scoped reads silently return zero rows — a warning is emitted to surface
+    that the system role is unprovisioned.
     """
     global _SYSTEM_ASYNC_ENGINE
     if _SYSTEM_ASYNC_ENGINE is None:
@@ -883,14 +918,33 @@ def _get_system_async_engine() -> AsyncEngine:
         if settings.modulo_system_database_url:
             from sqlalchemy.ext.asyncio import create_async_engine
 
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
             _SYSTEM_ASYNC_ENGINE = create_async_engine(
                 settings.modulo_system_database_url,
                 pool_pre_ping=True,
-                pool_size=settings.saq_worker_db_pool_size,
+                pool_size=effective_pool,
                 max_overflow=0,
                 connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
+            _log.warning(
+                "saq_worker.system_engine_fallback",
+                extra={
+                    "reason": (
+                        "MODULO_SYSTEM_DATABASE_URL not set — system crons run as modulo_app "
+                        "(NOBYPASSRLS); RLS-scoped reads return zero rows"
+                    )
+                },
+            )
             _SYSTEM_ASYNC_ENGINE = _get_async_engine()
     return _SYSTEM_ASYNC_ENGINE
 
@@ -1100,13 +1154,16 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=1,
             ttl=300,
         ),
-        # metrics_dump: daily 01:00 UTC, unique=True, system session factory.
-        # Runs after analytics_facts_maintenance (same slot, separate job).
-        # Watermark advances only on full success; skips when no consenting
-        # orgs or instance switch off.
+        # metrics_dump: ticks every 10 minutes (*/10 * * * *).  The per-instance
+        # jitter gate (metrics_dump._should_dump_now) opens a 10-minute execution
+        # window aligned to this grid, so each instance performs its daily dump on
+        # exactly one tick, spread across a 6-hour window (36 grid slots).  The
+        # cron must run on the SAME grid the gate is aligned to, or the dump may
+        # never fire (FAR-356 review).  unique=True, long timeout (full org scan),
+        # single retry, generous ttl.  Watermark advances only on full success.
         CronJob(
             metrics_dump,
-            cron="0 1 * * *",
+            cron="*/10 * * * *",
             unique=True,
             timeout=600,
             heartbeat=60,

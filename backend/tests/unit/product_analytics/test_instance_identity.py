@@ -7,6 +7,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.sql import Insert
 
 from modulo.core.product_analytics.hmac_verify import (
     _TIMESTAMP_WINDOW_SECONDS,
@@ -39,6 +40,23 @@ def _make_mock_session(existing: dict[str, str] | None = None) -> AsyncMock:
         """Mock that inspects the compiled statement to find the key param."""
         result = MagicMock()
         stmt_str = str(stmt)
+
+        # Both ``set_config`` (TOFU mint) and ``update_config`` (deliberate
+        # overwrite) issue a ``pg_insert`` whose ``value`` is JSON-typed and
+        # cannot be rendered with ``literal_binds=True``. Capture the inserted
+        # key/value so the subsequent re-SELECT round-trips, and skip the
+        # literal-bind compile that would otherwise raise a CompileError on the
+        # JSON literal.
+        if isinstance(stmt, Insert):
+            try:
+                params = stmt.compile().params
+                inserted_key = params.get("key")
+                if inserted_key is not None:
+                    _stored[inserted_key] = params.get("value")
+            except (ValueError, KeyError, AttributeError):
+                pass
+            result.scalar_one_or_none.return_value = None
+            return result
 
         # Try to extract the key from the statement's compiled parameters
         key = None

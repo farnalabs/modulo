@@ -346,6 +346,32 @@ describe('useRemyStream', () => {
     expect(useRemyStore().isStreaming).toBe(false)
   })
 
+  it('starts a stream after sendMessage pre-sets isStreaming (production send flow)', async () => {
+    const store = setupStore()
+    let streamCalled = 0
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/v1/remy/sessions/session-1/stream') {
+        streamCalled++
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([
+            { event: 'token', data: { token: 'reply' } },
+            { event: 'done', data: { message_id: 'm1' } },
+          ]),
+        })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    await store.sendMessage('Hello')
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(streamCalled).toBe(1)
+    expect(store.messages[store.messages.length - 1].content).toBe('reply')
+    expect(store.isStreaming).toBe(false)
+  })
+
   it('remy-only mode does not execute ui_command_batch (defense-in-depth)', async () => {
     setupStore()
     const postedBatches: any[] = []

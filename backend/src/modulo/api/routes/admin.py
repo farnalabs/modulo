@@ -543,6 +543,7 @@ async def global_search(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             params = _SearchParams(
                 org_id=current_user.organisation_id,
@@ -1853,6 +1854,7 @@ async def admin_billing_overview(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
                 raise HTTPException(
@@ -1932,6 +1934,7 @@ async def request_org_deletion(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             try:
                 result = await _request_deletion(
@@ -2007,6 +2010,7 @@ async def confirm_org_deletion(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             try:
                 result = await _confirm_deletion(
@@ -2058,6 +2062,7 @@ async def cancel_org_deletion(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             try:
                 result = await _cancel(session, org_id=current_user.organisation_id)
             except ValueError as exc:
@@ -2086,6 +2091,7 @@ async def export_org_data(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             try:
                 bundle = await _export(session, org_id=current_user.organisation_id)
@@ -2127,6 +2133,7 @@ async def delete_org_immediate(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             try:
                 req = await _request_deletion(
@@ -2389,6 +2396,7 @@ async def eval_dashboard(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             summary = await _eval_summary(session)
             trend = await _eval_trend(session, current_user.organisation_id)

@@ -1,7 +1,10 @@
-"""Metrics dump -- daily SAQ cron job for product analytics.
+"""Metrics dump -- product analytics SAQ cron job.
 
-Builds an aggregate payload from all consenting orgs and POSTs it to
-the vendor endpoint.  Watermark advances only on full success.
+The SAQ cron ticks every 10 minutes; a per-instance jitter offset (aligned to
+the 10-minute grid, spread across a 6-hour window) opens a 10-minute execution
+window so each instance actually performs its (daily) dump on exactly one tick.
+Builds an aggregate payload from all consenting orgs and POSTs it to the vendor
+endpoint.  Watermark advances only on full success.
 """
 
 from __future__ import annotations
@@ -37,18 +40,92 @@ _WATERMARK_KEY = "product_analytics_last_dumped_date"
 # Backfill cap (design doc section 8).
 _BACKFILL_MAX_DAYS = 14
 
+# Jitter constants — each instance picks a random offset within a 6-hour
+# window so that multiple instances don't all dump at the same minute.
+_DUMP_WINDOW_MINUTES = 360  # 6 hours
+_DUMP_EXECUTION_WINDOW_MINUTES = 10  # each instance gets 10 min to complete
+_OFFSET_KEY = "product_analytics_dump_offset_minutes"
+
+
+async def _get_or_create_system_config(factory: Any, key: str, create: Any) -> str:
+    """Get-or-create a string-valued ``system_config`` entry.
+
+    Shared by the jitter offset and the instance id: read inside a transaction;
+    if absent, generate via ``create`` (a zero-arg callable returning ``str``)
+    and persist.  Returns the stored value as a string.
+    """
+    async with factory() as session, session.begin():
+        value = await read_system_config(session, key)
+        if value is None:
+            value = create()
+            await write_system_config(session, key, value)
+    return str(value)
+
+
+async def _should_dump_now(factory: Any, now: datetime | None = None) -> bool:
+    """Check if it's this instance's turn to dump based on stored jitter offset.
+
+    The SAQ cron ticks every ``_DUMP_EXECUTION_WINDOW_MINUTES`` (10 min), so the
+    instance must pick an offset *aligned* to that grid within the
+    ``_DUMP_WINDOW_MINUTES`` (6h) window.  Because the offset is a multiple of
+    the tick interval, exactly one cron fire per day lands inside the
+    ``[offset, offset + 10)`` execution window and performs the dump.  A legacy
+    unaligned offset (drawn before this alignment) is realigned on first read so
+    its window is centred on a real tick.
+
+    ``now`` is injectable for testing; it defaults to ``datetime.now(UTC)``.
+    """
+    import secrets as _secrets
+
+    if now is None:
+        now = datetime.now(UTC)
+    current_minute_of_day = now.hour * 60 + now.minute
+
+    slots = _DUMP_WINDOW_MINUTES // _DUMP_EXECUTION_WINDOW_MINUTES
+
+    def _create_offset() -> str:
+        value = str(_secrets.randbelow(slots) * _DUMP_EXECUTION_WINDOW_MINUTES)
+        _log.info("product_analytics.jitter_offset_set", extra={"offset_minutes": int(value)})
+        return value
+
+    offset = int(await _get_or_create_system_config(factory, _OFFSET_KEY, _create_offset))
+
+    # Realign a legacy unaligned offset so the window sits on a real tick.
+    if offset % _DUMP_EXECUTION_WINDOW_MINUTES != 0:
+        offset = (offset // _DUMP_EXECUTION_WINDOW_MINUTES) * _DUMP_EXECUTION_WINDOW_MINUTES
+        async with factory() as session, session.begin():
+            await write_system_config(session, _OFFSET_KEY, str(offset))
+
+    return offset <= current_minute_of_day < offset + _DUMP_EXECUTION_WINDOW_MINUTES
+
 
 async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     """SAQ system-cron job -- daily metrics dump.
 
-    Daily 01:00 UTC, unique=True, system session factory.
+    The SAQ cron ticks every 10 minutes (``*/10 * * * *``); the per-instance
+    jitter gate (``_should_dump_now``) opens a 10-minute execution window so the
+    dump runs on exactly one tick per day, spread across a 6-hour window.
+    unique=True, system session factory.
     Skips when: no consenting orgs or instance switch off.
     """
     from modulo.core.saq_worker import _make_system_session_factory
     from modulo.settings import get_settings
 
     settings = get_settings()
+    # System session factory (modulo_system role, LOGIN, BYPASSRLS) — REQUIRED.
+    # _build_payload reads TEAM-SCOPED tables (pipelines, model_backends,
+    # connector_instances, environment_profiles, library_primitives) across ALL
+    # consenting orgs with NO set_rls_org context. Under the modulo_app role
+    # (NOBYPASSRLS) the strict rls_org_isolation policy filters those reads to
+    # the (empty) app.organisation_id, silently returning ZERO rows. The system
+    # factory bypasses RLS so the multi-org aggregation sees every row. Do NOT
+    # swap to _make_session_factory.
     factory = _make_system_session_factory()
+
+    # Jitter gate — each instance has a random offset within a 6-hour window.
+    if not await _should_dump_now(factory):
+        _log.debug("product_analytics.jitter_skip")
+        return {"skipped": "jitter_skip"}
 
     # Instance-level gate (design doc section 5).
     instance_enabled = await _check_instance_switch(factory)
@@ -353,12 +430,11 @@ async def _build_integration_inventory(session: AsyncSession, org_ids: list[uuid
 
 async def _get_or_create_instance_id(factory: Any) -> str:
     key = "product_analytics_instance_id"
-    async with factory() as session, session.begin():
-        instance_id = await read_system_config(session, key)
-        if instance_id is None:
-            instance_id = str(uuid.uuid4())
-            await write_system_config(session, key, instance_id)
-    return str(instance_id)
+
+    def _create_id() -> str:
+        return str(uuid.uuid4())
+
+    return await _get_or_create_system_config(factory, key, _create_id)
 
 
 async def _build_instance_metadata(factory: Any) -> dict[str, Any]:

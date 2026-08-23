@@ -76,6 +76,24 @@ async def test_query_file(connector):
 
 
 @respx.mock
+async def test_query_file_binary_content_left_raw(connector):
+    file_data = {
+        "file_name": "logo.png",
+        "content": "\x89PNG\r\n\x1a\n\x00\x00\x00\rbinary\xff\xfe",
+    }
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/logo.png").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="file",
+            filters={"project": "group/project", "path": "logo.png", "ref": "main"},
+        )
+    )
+    assert result.records[0]["content"] == file_data["content"]
+
+
+@respx.mock
 async def test_query_mrs(connector):
     mrs = [{"id": 42, "title": "Fix bug"}]
     respx.get(f"{_API}/projects/group%2Fproject/merge_requests").mock(return_value=httpx.Response(200, json=mrs))
@@ -106,6 +124,28 @@ async def test_write_file(connector):
 
 
 @respx.mock
+async def test_write_file_honors_branch_key(connector):
+    response_body = {"file_path": "src/main.py", "branch": "feature-branch"}
+    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "src/main.py",
+                "content": "print('hello')",
+                "branch": "feature-branch",
+            },
+        )
+    )
+    assert result["branch"] == "feature-branch"
+    body = json.loads(route.calls.last.request.content)
+    assert body["branch"] == "feature-branch"
+
+
+@respx.mock
 async def test_write_mr(connector):
     mr_response = {"id": 99, "web_url": "https://gitlab.com/group/project/-/merge_requests/99"}
     respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(
@@ -127,13 +167,15 @@ async def test_write_mr(connector):
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported GitLab resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="branch", data={})
     with pytest.raises(ValueError, match="Unsupported GitLab write resource"):
-        await connector.write(ConnectorPayload(resource="branch", data={}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -154,14 +196,16 @@ async def test_health_check_timeout(connector):
 
 @respx.mock
 async def test_query_missing_project_filter(connector):
+    query = ConnectorQuery(resource="file", filters={})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.query(ConnectorQuery(resource="file", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_write_missing_project_data(connector):
+    payload = ConnectorPayload(resource="file", data={})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
@@ -238,8 +282,9 @@ async def test_query_pipelines_next_cursor(connector):
 
 @respx.mock
 async def test_query_invalid_cursor_raises(connector):
+    query = ConnectorQuery(resource="projects", cursor="abc")
     with pytest.raises(ValueError, match="Invalid GitLab pagination cursor"):
-        await connector.query(ConnectorQuery(resource="projects", cursor="abc"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -399,10 +444,12 @@ async def test_write_file_delete_defaults_ref(connector):
 
 @respx.mock
 async def test_write_file_delete_missing_project(connector):
+    payload = ConnectorPayload(resource="file_delete", data={"path": "x"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file_delete", data={"path": "x"}))
+        await connector.write(payload)
+    payload = ConnectorPayload(resource="file_delete", data={"project": "g/p"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file_delete", data={"project": "g/p"}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -410,10 +457,9 @@ async def test_write_file_delete_error_response(connector):
     respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
         return_value=httpx.Response(400, text='{"message": "branch is missing"}')
     )
+    payload = ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
     with pytest.raises(ValueError, match="GitLab API HTTP 400"):
-        await connector.write(
-            ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -493,8 +539,9 @@ async def test_write_file_delete_missing_branch_defaults_main(connector):
 
 @respx.mock
 async def test_write_mr_merge_missing_iid(connector):
+    payload = ConnectorPayload(resource="mr_merge", data={"project": "group/project"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="mr_merge", data={"project": "group/project"}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -540,36 +587,37 @@ async def test_query_mr_changes(connector):
 
 @respx.mock
 async def test_query_mr_changes_missing_iid(connector):
+    query = ConnectorQuery(resource="mr_changes", filters={"project": "group/project"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.query(ConnectorQuery(resource="mr_changes", filters={"project": "group/project"}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_query_file_path_traversal_blocked(connector):
     """A path with a '..' segment must be rejected before any request is sent."""
+    query = ConnectorQuery(resource="file", filters={"project": "group/project", "path": "../secret.txt"})
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.query(
-            ConnectorQuery(resource="file", filters={"project": "group/project", "path": "../secret.txt"})
-        )
+        await connector.query(query)
 
 
 @respx.mock
 async def test_write_file_path_traversal_blocked(connector):
+    payload = ConnectorPayload(
+        resource="file",
+        data={"project": "group/project", "path": "src/../../etc/passwd", "content": "x"},
+    )
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.write(
-            ConnectorPayload(
-                resource="file",
-                data={"project": "group/project", "path": "src/../../etc/passwd", "content": "x"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_file_delete_path_traversal_blocked(connector):
+    payload = ConnectorPayload(
+        resource="file_delete",
+        data={"project": "group/project", "path": "../../evil.txt"},
+    )
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.write(
-            ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "../../evil.txt"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock

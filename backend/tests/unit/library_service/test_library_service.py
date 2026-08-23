@@ -124,6 +124,16 @@ def _mock_session() -> MagicMock:
     return session
 
 
+def _capture_create_with(captured: dict, return_value: MagicMock):
+    """Return an async create_library_primitive side effect that records kwargs."""
+
+    async def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return return_value
+
+    return _capture
+
+
 # ---------------------------------------------------------------------------
 # _filter_modulo
 # ---------------------------------------------------------------------------
@@ -220,7 +230,7 @@ def test_filter_modulo_no_match():
 
 
 def test_community_primitives_have_correct_visibility():
-    for p in _MODULO_PRIMITIVES:
+    for p in _COMMUNITY_PRIMITIVES:
         assert p.visibility == "community"
         assert p.organisation_id == MODULO_ORG_ID
 
@@ -615,14 +625,12 @@ async def test_copy_to_adapt_bumps_version():
 
     captured: dict = {}
 
-    async def _capture(*args, **kwargs):  # type: ignore[misc]
-        captured.update(kwargs)
-        return copied
-
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+        patch(
+            "modulo.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
+        ),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -638,14 +646,12 @@ async def test_copy_to_adapt_propagates_tier():
 
     captured: dict = {}
 
-    async def _capture(*args, **kwargs):  # type: ignore[misc]
-        captured.update(kwargs)
-        return copied
-
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+        patch(
+            "modulo.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
+        ),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -661,14 +667,12 @@ async def test_copy_to_adapt_native_tier_defaults():
 
     captured: dict = {}
 
-    async def _capture(*args, **kwargs):  # type: ignore[misc]
-        captured.update(kwargs)
-        return copied
-
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+        patch(
+            "modulo.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
+        ),
     ):
         await copy_to_adapt(session, org_id, source.id)
 

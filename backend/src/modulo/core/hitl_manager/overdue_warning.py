@@ -26,7 +26,7 @@ from modulo.core.notifier import EVENT_HITL_OVERDUE
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ async def dispatch_overdue_notifications(
         entries: list[dict[str, Any]] = []
         async with factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             # Advisory lock — only one overdue-notification writer per org at a time.
             try:
@@ -198,6 +199,7 @@ async def dispatch_overdue_notifications(
             notified_ids = [entry["claim_id"] for entry in dispatched]
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 await session.execute(
                     update(HitlClaim)
                     .where(HitlClaim.id.in_(notified_ids))

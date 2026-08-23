@@ -477,6 +477,8 @@ async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.Monk
     monkeypatch.setattr(audit_logger, "append_audit_event", append_mock)
     rls_mock = AsyncMock()
     monkeypatch.setattr(rls, "set_rls_org", rls_mock)
+    rls_exec_mock = AsyncMock()
+    monkeypatch.setattr(rls, "set_rls_execution_context", rls_exec_mock)
 
     await nr._append_conformance_audit(
         _fake_factory(),
@@ -489,6 +491,7 @@ async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.Monk
     )
 
     rls_mock.assert_awaited_once()
+    rls_exec_mock.assert_awaited_once()
     append_mock.assert_awaited_once()
     kwargs = append_mock.await_args.kwargs
     assert kwargs["org_id"] == _ORG_ID

@@ -39,7 +39,7 @@ from modulo.core.registry.crypto import (
 )
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.crud.publisher import get_publisher_by_key as db_get_publisher_by_key
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.registry.crypto import (
     verify as crypto_pem_verify,
 )
@@ -287,6 +287,7 @@ async def download_registry_primitive_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             await create_library_primitive(
                 session,
                 org_id=principal.organisation_id,

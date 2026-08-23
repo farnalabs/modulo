@@ -10,7 +10,7 @@ from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.system_config import get_config, set_config
+from modulo.db.crud.system_config import get_config, update_config
 
 # WARNING: system.config.manage is currently ONLY assignable to is_system_admin
 # users. There is NO in-product path to grant is_system_admin. Self-hosted
@@ -126,7 +126,7 @@ async def set_monitor_config(
 ) -> dict[str, Any]:
     try:
         async with session.begin():
-            entry = await set_config(
+            entry = await update_config(
                 session,
                 _CONFIG_KEY,
                 req.model_dump(),

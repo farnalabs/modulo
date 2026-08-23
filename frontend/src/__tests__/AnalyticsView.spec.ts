@@ -915,7 +915,7 @@ describe('AnalyticsView', () => {
     // The chart still renders for a dimensioned (bar) series.
     expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
     const tableText = wrapper.find('[data-testid="analytics-table"]').text()
-    expect(tableText).toContain('Agent stalled')
+    expect(tableText).toContain('Worker claimed run but dispatched no node (recovered by re-dispatch)')
     expect(tableText).toContain('Worker failed')
     expect(tableText).not.toContain('agent.stall')
     expect(tableText).not.toContain('harness.worker_failed')

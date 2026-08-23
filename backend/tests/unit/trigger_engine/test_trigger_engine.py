@@ -164,6 +164,10 @@ def _make_session(
 
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
+        # RLS set_config (org / execution context) is plumbing — do not consume
+        # a result slot or shift the call-count routing below.
+        if "set_config" in str(stmt):
+            return MagicMock()
         call_count += 1
         # Order: 1=advisory lock, 2=trigger lookup, 3=guardrail rows (FAR-214),
         #        4=dedup SELECT, 5=dedup DELETE, 6=count active runs,

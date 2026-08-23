@@ -1667,7 +1667,7 @@ class TestSetRlsOrg:
 
         await ch._set_rls_org(session, org_id)
 
-        assert session.info["organisation_id"] == org_id
+        assert session.info["org_id"] == org_id
 
 
 class TestCountActiveRuns:
@@ -2781,5 +2781,26 @@ class TestGetSystemEngine:
                 result = ch._get_system_engine()
 
             assert result is regular_engine
+        finally:
+            ch._SYSTEM_ENGINE = None
+
+    def test_logs_warning_and_uses_app_engine_when_unset(self) -> None:
+        regular_engine = MagicMock()
+        mock_settings = _settings(modulo_system_database_url="")
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        warnings: list[tuple[object, object]] = []
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch.object(ch, "_get_engine", return_value=regular_engine),
+                patch.object(ch._log, "warning", lambda msg, extra=None: warnings.append((msg, extra))),
+            ):
+                result = ch._get_system_engine()
+
+            assert result is regular_engine
+            assert len(warnings) == 1
+            msg, extra = warnings[0]
+            assert msg == "cron_helpers.system_engine_fallback"
+            assert "MODULO_SYSTEM_DATABASE_URL not set" in extra["reason"]
         finally:
             ch._SYSTEM_ENGINE = None

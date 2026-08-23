@@ -1135,7 +1135,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_reenqueue_window == 600
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
-        assert s.saq_worker_db_pool_size == 10
+        assert s.saq_worker_db_pool_size == 30
         assert s.saq_redis_pool_size == 20
         assert s.saq_worker_concurrency == 5
         assert s.saq_run_claim_cap == 20
@@ -2045,3 +2045,35 @@ class TestNodeDeadlineWatchdog:
             )
         fail.assert_not_awaited()
         assert not exec_task.cancelled()
+
+
+class TestSetRlsOrg:
+    async def test_sqlite_dialect_sets_session_info(self) -> None:
+        """On non-Postgres backends RLS context is stored in session.info[org_id]."""
+        session = MagicMock()
+        session.info = {}
+        bind_mock = MagicMock()
+        bind_mock.dialect.name = "sqlite"
+        session.get_bind = MagicMock(return_value=bind_mock)
+        org_id = uuid.uuid4()
+
+        await pe.set_rls_org(session, org_id)
+
+        assert session.info["org_id"] == org_id
+
+    async def test_postgres_dialect_sets_config(self) -> None:
+        """On Postgres, RLS context is applied via SET LOCAL set_config."""
+        session = MagicMock()
+        session.info = {}
+        bind_mock = MagicMock()
+        bind_mock.dialect.name = "postgresql"
+        session.get_bind = MagicMock(return_value=bind_mock)
+        session.execute = AsyncMock()
+        org_id = uuid.uuid4()
+
+        await pe.set_rls_org(session, org_id)
+
+        session.execute.assert_awaited_once()
+        stmt, params = session.execute.await_args.args
+        assert "set_config" in str(stmt).lower()
+        assert params == {"oid": str(org_id)}

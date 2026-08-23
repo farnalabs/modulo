@@ -215,7 +215,7 @@ def _set_system_config(key: str, value: str, request, client):
 
     mock_entry = _make_mock_config_entry(key=key, value=value)
 
-    with patch("modulo.api.routes.admin_system_config.set_config", new_callable=AsyncMock, return_value=mock_entry):
+    with patch("modulo.api.routes.admin_system_config.update_config", new_callable=AsyncMock, return_value=mock_entry):
         resp = client.put(f"/api/v1/system-admin/config/{key}", json={"value": value})
     request.node._resp = resp
 

@@ -4,13 +4,14 @@ prd: 6
 delivery-tasks: [task-prd-viewmodel-current-endpoint]
 code:
   - backend/src/modulo/api/routes/viewmodel.py
+bdd:
+  - backend/tests/bdd/features/viewmodel/viewmodel_current.feature
 depends-on: [feat-auth-jwt-auth]
 unit-tests:
   - backend/tests/unit/api/test_viewmodel_endpoint.py
   - backend/tests/unit/api/test_viewmodel_view.py
   - backend/tests/unit/api/test_viewmodel_error_paths.py
-status: partial
-bdd: []
+status: covered
 ---
 
 # ViewModel Current Endpoint
@@ -47,11 +48,16 @@ Aggregate endpoint returning the current user's full view of the system — org 
 - Plan limits are basic (daily_spend_limit only)
 - No Redis/response caching layer
 - No pagination on team memberships (truncated flag is always false)
-- No dedicated viewmodel BDD feature file — covered indirectly by view_as_team BDD (2026-08-11: status demoted `covered` → `partial`; per the product map legend, `covered` requires all behaviours to be BDD-tested)
+- ~~No dedicated viewmodel BDD feature file~~ — RESOLVED 2026-08-23: added `backend/tests/bdd/features/viewmodel/viewmodel_current.feature` (16 scenarios) with co-located step definitions driving the real `/api/v1/viewmodel/current` route against mocked CRUD deps — covers user identity/org context, memberships, preferences, feature flags, plan info, pipelines+runs, pending HITL gates, saved/current views, view_as_team 403/404, unauthenticated 401, missing org/account 404, ProgrammingError→501, SQLAlchemyError→503. Status: partial → covered.
 - `/api/v1/license` route does not query DB, so no ProgrammingError catch needed (its `except Exception` is overly broad but harmless)
 
 
 ## QA History
+
+### 2026-08-23 — improve-architecture (feat-core-viewmodel-current)
+- Closed the "No dedicated viewmodel BDD feature file" gap: added `viewmodel_current.feature` + `test_viewmodel_current_steps.py` and linked them in the `bdd:` field; `status: partial` → `covered`.
+- The 16 scenarios exercise the real route: aggregate identity/org, team memberships+preferences, feature flags, plan tier+spend limit, pipelines+runs totals, pending HITL gates, saved views + selected current view, admin-only view_as_team (403 non-admin / 404 unknown team), unauthenticated 401, missing org/account 404, and ProgrammingError→501 / SQLAlchemyError→503 error mapping.
+- view_as_team behaviour overlaps the existing `teams/view_as_team.feature`; the new feature adds the missing 403/404 admin-gate coverage for the aggregate endpoint itself.
 
 ### 2026-08-11 — improve-architecture
 - Corrected `status: covered` → `partial`. This entry has no dedicated BDD feature file (`bdd: []`) and relies on indirect `view_as_team` BDD + unit tests, so `covered` (all behaviours BDD-tested) was inaccurate.

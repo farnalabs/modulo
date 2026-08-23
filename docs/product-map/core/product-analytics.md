@@ -2,7 +2,8 @@
 id: feat-core-product-analytics
 prd: 10.5
 delivery-tasks: []
-bdd: []
+bdd:
+  - backend/tests/bdd/features/product_analytics/metrics_ingest.feature
 code:
   - backend/src/modulo/api/routes/metrics_ingest.py
   - backend/src/modulo/core/product_analytics/metrics_constants.py
@@ -11,7 +12,7 @@ code:
 unit-tests:
   - backend/tests/unit/product_analytics/test_metrics_ingest.py
 depends-on: []
-status: partial
+status: covered
 ---
 
 # Product Analytics Ingest (FAR-355)
@@ -32,8 +33,10 @@ daily `metrics_dump` cron. Consent-gated via the org's
 
 ## Known Gaps
 
-- **No BDD feature file** — coverage is unit only.
+- Flagship `api_error` route-template behaviour was preserving only raw paths — fixed 2026-08-23: the sanitizer now walks FastAPI 0.130+ lazy `_IncludedRouter` trees so registered templates are matched (previously every `api_error` route degraded to `"unknown"`).
 
 ## QA History
 
+- 2026-08-23: improve-architecture: closed the "No BDD feature file" gap — added `backend/tests/bdd/features/product_analytics/metrics_ingest.feature` (15 scenarios) with co-located step definitions driving the real `POST /api/v1/metrics/events` route against mocked CRUD/RLS deps. Covers valid/multi-event batches, consent-gate no-writes (off / no settings / missing org), `api_error` daily-cap skip + under-cap staging, duplicate `event_id` best-effort, DB-failure best-effort, route-template sanitisation (unmatched → `"unknown"`, registered template preserved), and 422 validation for empty/oversized/unknown-type/missing-field batches. Status: `partial` → `covered`.
+  - Found + fixed a real sanitizer bug while writing the BDD case: `_sanitize_route_template` only scanned `app.routes[].path`, which is `None` for FastAPI 0.130+ lazy `_IncludedRouter` wrappers, so no registered template ever matched. Replaced with `_registered_path_templates()` (recursive router-tree walk) + added unit regression test `test_registered_route_template_preserved`.
 - 2026-08-21: branch-fixer: created entry so the `metrics_ingest.py` route module is referenced by the product map graph (route-orphan check).

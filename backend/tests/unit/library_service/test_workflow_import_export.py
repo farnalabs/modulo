@@ -46,22 +46,16 @@ class TestSuggestImportName:
         assert suggest_import_name(existing, "agent") == "agent"
         assert suggest_import_name(existing, "Agent") == "Agent (imported)"
 
-    def test_counter_never_overflows_name_column(self):
+    @pytest.mark.parametrize("include_max_existing", [True, False], ids=["max-existing", "max-free"])
+    def test_counter_never_overflows_name_column(self, include_max_existing):
         name = "A" * 255
         base = name[: 255 - len("(imported)") - 6]
         existing = {name, f"{base} (imported)"}
-        existing.update(f"{base} (imported) {idx}" for idx in range(2, 10000))
+        existing.update(f"{base} (imported) {idx}" for idx in range(2, 10000 if include_max_existing else 9999))
         result = suggest_import_name(existing, name)
         assert len(result) <= 255
-        assert result == f"{base} (imported) 9999"
-
-    def test_full_counter_stays_within_bounds(self):
-        name = "A" * 255
-        base = name[: 255 - len("(imported)") - 6]
-        existing = {name, f"{base} (imported)"}
-        existing.update(f"{base} (imported) {idx}" for idx in range(2, 9999))
-        result = suggest_import_name(existing, name)
-        assert len(result) <= 255
+        # The reserved-count digit cap must clamp the counter to 9999 whether or
+        # not the max counter already exists.
         assert result == f"{base} (imported) 9999"
 
 

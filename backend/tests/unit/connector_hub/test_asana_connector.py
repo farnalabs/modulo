@@ -119,8 +119,9 @@ async def test_query_single_project(connector):
 
 
 async def test_query_single_project_missing_id(connector):
+    query = ConnectorQuery(resource="project")
     with pytest.raises(ValueError, match="'project_id' filter"):
-        await connector.query(ConnectorQuery(resource="project"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +152,9 @@ async def test_query_tasks_by_workspace(connector):
 
 
 async def test_query_tasks_missing_filter(connector):
+    query = ConnectorQuery(resource="tasks")
     with pytest.raises(ValueError, match="'project_id' or 'workspace' filter"):
-        await connector.query(ConnectorQuery(resource="tasks"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +172,9 @@ async def test_query_single_task(connector):
 
 
 async def test_query_single_task_missing_id(connector):
+    query = ConnectorQuery(resource="task")
     with pytest.raises(ValueError, match="'task_id' filter"):
-        await connector.query(ConnectorQuery(resource="task"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +197,9 @@ async def test_query_sections(connector):
 
 
 async def test_query_sections_missing_project_id(connector):
+    query = ConnectorQuery(resource="sections")
     with pytest.raises(ValueError, match="'project_id' filter"):
-        await connector.query(ConnectorQuery(resource="sections"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +208,9 @@ async def test_query_sections_missing_project_id(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported Asana resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------

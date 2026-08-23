@@ -191,6 +191,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { FOCUSABLE_SELECTOR, trapTabInElement } from "../composables/useFocusTrap";
 import { usePlanStore } from "../stores/planStore";
 import Badge from "primevue/badge";
 import LogoMark from "./LogoMark.vue";
@@ -234,9 +235,6 @@ const mobileOpen = ref(false);
 const mobileSidebarRef = ref<HTMLElement | null>(null);
 const mobileButtonRef = ref<HTMLElement | null>(null);
 
-const FOCUSABLE_SELECTOR =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
 const isMac = computed(() =>
   typeof navigator !== "undefined" && navigator.platform.includes("Mac"),
 );
@@ -244,29 +242,6 @@ const isMac = computed(() =>
 const showMobilePanel = computed(
   () => !isDesktop.value && mobileExpanded.value && mobileRailFlag.value,
 );
-
-function trapTabInElement(e: KeyboardEvent, root: HTMLElement | null) {
-  if (!root) return;
-  const focusable = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-  if (focusable.length === 0) {
-    e.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  const active = document.activeElement;
-  const focusInside = active instanceof HTMLElement && root.contains(active);
-
-  if (e.shiftKey) {
-    if (active === first || !focusInside) {
-      e.preventDefault();
-      last.focus();
-    }
-  } else if (active === last || !focusInside) {
-    e.preventDefault();
-    first.focus();
-  }
-}
 
 function handleMobileKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {

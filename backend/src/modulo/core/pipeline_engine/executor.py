@@ -118,7 +118,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -180,6 +180,22 @@ def _sanitize_detail(detail: Any, limit: int = 5000) -> str:
     via ``str()`` and is a NO-OP for clean strings.
     """
     return sanitize_error_text(detail)[:limit]
+
+
+def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
+    """Sanitized, bounded traceback text for a caught exception.
+
+    Formats the full traceback of *exc* into a single string, sanitizes it
+    (FAR-163 redaction runs before truncation), and caps it at *limit* chars.
+    Shared by the generic ``except Exception`` handlers in ``execute`` /
+    ``resume`` / ``_stream_graph`` so each stays a one-liner.
+    """
+    import traceback
+
+    return _sanitize_detail(
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        limit=limit,
+    )
 
 
 def _retry_backoff_seconds(
@@ -605,10 +621,11 @@ async def _script_lease_probe_ok(
     try:
         from sqlalchemy import text as _sql_text
 
-        from modulo.db.rls import set_rls_org
+        from modulo.db.rls import set_rls_execution_context, set_rls_org
 
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
             row = (
                 await session.execute(
                     _sql_text(
@@ -1091,6 +1108,29 @@ class _StreamState:
     session_lost_reason: str | None = None
 
 
+@dataclass
+class _StreamContext:
+    """Immutable per-run stream context shared by the ``astream_events`` handlers.
+
+    Bundles the fixed per-run values every per-event handler needs so the
+    loop body and helpers take a single bundle instead of many loose
+    parameters (CodeScene: excess function arguments). A pure refactor — no
+    behaviour, ordering, or state-transition change.
+    """
+
+    node_ids: set[str]
+    guard: RunawayGuard | None
+    completed_node_outputs: dict[str, Any] | None
+    run_trace_id: str | None
+    broker: RunEventBroker
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID | None
+    org_id: uuid.UUID | None
+    node_token_budgets: dict[str, int] | None
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None
+    node_type_map: dict[str, str] | None
+
+
 def _stream_terminal_reason(
     state: _StreamState,
     broker: RunEventBroker,
@@ -1146,6 +1186,53 @@ def _stream_terminal_reason(
             usage,
         )
     return None
+
+
+def _all_capacities_ok(pipeline_ok: bool, sandbox_ok: bool, run_ok: bool) -> bool:
+    """All three capacity gates (pipeline / sandbox / org-run) admit the run."""
+    return pipeline_ok and sandbox_ok and run_ok
+
+
+def _can_fenced_requeue(
+    node_attempt_count: int,
+    retries: int,
+    superseded: bool,
+    stalled: bool,
+    script_lease_ok: bool,
+    graph_idempotent: bool,
+) -> bool:
+    """Can a transient node failure be fenced back to ``pending`` for a retry?
+
+    False when the retry budget is exhausted, the run is owned by a successor
+    (superseded), the zombie watchdog stalled it, a script lease is still live,
+    or the graph contains a non-idempotent node (FAR-295).
+    """
+    return node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
+
+
+def _can_retry_after_policy(
+    node_attempt_count: int,
+    retry_budget: int,
+    superseded: bool,
+    script_retry_probe_ok: bool,
+) -> bool:
+    """Can the retry_policy re-dispatch this run (FAR-136 / FAR-296 Phase 2)?"""
+    return node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok
+
+
+def _retry_policy_applies(
+    retry_budget: int | None,
+    is_correction_run: bool,
+    graph_idempotent: bool,
+) -> bool:
+    """Should the retry_policy be considered at all for this terminal run?
+
+    False when there is no budget (no policy / exhausted), the run is a
+    correction run (FAR-210: its retry budget is owned by the correction path),
+    or the graph contains a non-idempotent node (FAR-295: re-running would
+    re-execute a side-effecting step).
+    """
+    return retry_budget is not None and not is_correction_run and graph_idempotent
 
 
 class PipelineExecutor:
@@ -1269,6 +1356,7 @@ class PipelineExecutor:
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -1297,7 +1385,7 @@ class PipelineExecutor:
                 org_run_count = await self._org_run_active_count(session, org_id, run_id)
             org_run_cap_ok = org_run_limit is None or org_run_count < org_run_limit
 
-            if pipeline_capacity_ok and org_sandbox_cap_ok and org_run_cap_ok:
+            if _all_capacities_ok(pipeline_capacity_ok, org_sandbox_cap_ok, org_run_cap_ok):
                 if run.status not in _ADMISSIBLE_STATUSES:
                     # The run went terminal (or hold) while a retry was backing
                     # off — never resurrect it. Return it untouched so the
@@ -1441,6 +1529,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 return await get_sandbox_concurrency_limit(session, org_id)
         except asyncio.CancelledError:
             raise
@@ -1462,6 +1551,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 return await get_org_run_concurrency_limit(session, org_id)
         except asyncio.CancelledError:
             raise
@@ -1620,6 +1710,7 @@ class PipelineExecutor:
             try:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     for eval_def in eval_defs:
                         eval_result = results[eval_def.name]
                         node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
@@ -1650,6 +1741,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 backend_rows = (
                     (
                         await session.execute(
@@ -1695,6 +1787,7 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 from sqlalchemy import select
 
                 from modulo.db.models.connector_instance import ConnectorInstance
@@ -1773,6 +1866,7 @@ class PipelineExecutor:
             # teardown must never lose an already-committed compensation.
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 run = await get_run(session, run_id)
                 if run is None:
                     _log.warning("guardrails.compensation.run_not_found run=%s", run_id)
@@ -1826,6 +1920,7 @@ class PipelineExecutor:
         """Execute the DB cancellation check query."""
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             return run is not None and run.cancellation_requested
 
@@ -1872,6 +1967,7 @@ class PipelineExecutor:
         """Append the ``context_write_by_non_setter`` audit event for a run."""
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await append_audit_event(
                 session,
                 org_id=org_id,
@@ -2029,6 +2125,45 @@ class PipelineExecutor:
                     exc_info=res,
                 )
 
+    async def _enforce_resume_sandbox_capacity(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        snapshot_id: uuid.UUID | None,
+    ) -> None:
+        """Atomic sandbox-capacity enforcement for a resume (FAR-1306 TOCTOU fix).
+
+        The pre-check in the HITL route is a fast-fail optimisation; THIS is
+        the real gate — serialised per-org via advisory lock so two concurrent
+        approvals cannot both pass. Raises ``SandboxCapacityExceededError`` when
+        the org's sandbox cap is reached.
+        """
+        graph_json = (
+            await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+        ).scalar_one_or_none()
+        if not _graph_contains_sandbox_agent(graph_json):
+            return
+        cap = await get_sandbox_concurrency_limit(session, org_id)
+        if cap is None:
+            return
+        # pg_advisory_xact_lock(k1, k2) — the two int4 keys are derived
+        # from a deterministic md5 of the org UUID (same pattern as the
+        # break-glass migration), so all workers/machines for the same
+        # org hash to the SAME key (unlike hash(str(org_id)), which
+        # PYTHONHASHSEED salts per-process). xact-scoped, so it is
+        # released automatically exactly at this transaction's commit /
+        # rollback — never leaked onto a pooled connection.
+        k1, k2 = _uuid_to_lock_keys(org_id)
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+            {"k1": k1, "k2": k2},
+        )
+        active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+        if active >= cap:
+            raise SandboxCapacityExceededError(org_id)
+
     async def resume(
         self,
         *,
@@ -2048,41 +2183,22 @@ class PipelineExecutor:
         self._claim_token = claim_token
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
             await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
 
             # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
-            # The pre-check in the HITL route is a fast-fail optimisation;
-            # THIS is the real gate — serialised per-org via advisory lock so
-            # two concurrent approvals cannot both pass.
             # Skipped for reject/terminate paths (check_sandbox_capacity=False)
             # because those routes do not resume sandbox execution.
-            if check_sandbox_capacity and _graph_contains_sandbox_agent(
-                (
-                    await session.execute(
-                        select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
-                    )
-                ).scalar_one_or_none()
-            ):
-                cap = await get_sandbox_concurrency_limit(session, org_id)
-                if cap is not None:
-                    # pg_advisory_xact_lock(k1, k2) — the two int4 keys are derived
-                    # from a deterministic md5 of the org UUID (same pattern as the
-                    # break-glass migration), so all workers/machines for the same
-                    # org hash to the SAME key (unlike hash(str(org_id)), which
-                    # PYTHONHASHSEED salts per-process). xact-scoped, so it is
-                    # released automatically exactly at this transaction's commit /
-                    # rollback — never leaked onto a pooled connection.
-                    k1, k2 = _uuid_to_lock_keys(org_id)
-                    await session.execute(
-                        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
-                        {"k1": k1, "k2": k2},
-                    )
-                    active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
-                    if active >= cap:
-                        raise SandboxCapacityExceededError(org_id)
+            if check_sandbox_capacity:
+                await self._enforce_resume_sandbox_capacity(
+                    session,
+                    org_id=org_id,
+                    run_id=run_id,
+                    snapshot_id=run.snapshot_id,
+                )
 
             snapshot_result = await session.execute(
                 select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
@@ -2112,6 +2228,7 @@ class PipelineExecutor:
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             # Load pipeline for runaway protection limits.
             pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
@@ -2214,12 +2331,7 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            import traceback
-
-            error_detail = _sanitize_detail(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-                limit=2000,
-            )
+            error_detail = _traceback_detail(exc, limit=2000)
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -2273,6 +2385,7 @@ class PipelineExecutor:
         if final_status == "eval_failed" and error_code == "eval_blocked":
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 try:
                     await append_audit_event(
                         session,
@@ -2295,6 +2408,7 @@ class PipelineExecutor:
         work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await finalize_cost(
                 session,
                 run_id=run_id,
@@ -2342,6 +2456,7 @@ class PipelineExecutor:
         # path (the run row was re-terminalized there).
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             final_run = await get_run(session, run_id)
 
         if final_run is None:
@@ -2381,6 +2496,7 @@ class PipelineExecutor:
 
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 await revoke_run_api_key(session, run_id=run_id, org_id=org_id)
         except asyncio.CancelledError:
             raise
@@ -2428,6 +2544,7 @@ class PipelineExecutor:
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
@@ -2530,29 +2647,13 @@ class PipelineExecutor:
                 completed_node_outputs=completed_node_outputs,
                 stall_requested=self._stall_requested,
             )
-            if transient["decision"] == "gate":
-                # SKIP the pending-reset, the re-raise and the run_failed publish
-                # — fall through to the existing finalization with
-                # final_status="complete". run_completed is published after the
-                # eval-skip point (below), while the broker is still open.
-                gate_suppressed = True
-                completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(
-                    transient["gated_node_id"]
-                )
-            elif transient["decision"] in ("requeue", "superseded"):
-                raise
-            # terminal (retries exhausted) — or gate, whose decision dict carries
-            # the same final_status / error_code / error_detail it set above.
-            final_status = transient["final_status"]
-            error_code = transient["error_code"]
-            error_detail = transient["error_detail"]
-        except Exception as exc:
-            import traceback
-
-            _tb = _sanitize_detail(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-                limit=2000,
+            gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
+                transient,
+                completed_node_outputs=completed_node_outputs,
+                gate_suppressed=gate_suppressed,
             )
+        except Exception as exc:
+            _tb = _traceback_detail(exc, limit=2000)
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -2735,7 +2836,14 @@ class PipelineExecutor:
                 "error_detail": "delivery already sent; transient retry suppressed by idempotency gate",
                 "gated_node_id": _gated_node_id,
             }
-        if node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent:
+        if _can_fenced_requeue(
+            node_attempt_count,
+            retries,
+            superseded,
+            stalled,
+            script_lease_ok,
+            graph_idempotent,
+        ):
             # Fenced pending-reset: a conditional UPDATE guarded by OUR
             # captured claim token + status='running' so a superseded
             # original cannot demote the successor's running row, a stalled
@@ -2790,6 +2898,36 @@ class PipelineExecutor:
             "error_detail": error_detail,
         }
 
+    def _apply_transient_decision(
+        self,
+        transient: dict[str, Any],
+        *,
+        completed_node_outputs: dict[str, Any],
+        gate_suppressed: bool,
+    ) -> tuple[bool, str, str | None, str | None]:
+        """Apply a transient-failure decision dict to execute()'s locals.
+
+        Returns ``(gate_suppressed, final_status, error_code, error_detail)``.
+        For ``requeue``/``superseded`` the bare ``raise`` propagates the
+        original exception out of ``execute()`` so the SAQ job retry path
+        re-dispatches — the fenced pending-reset + cleanup already happened
+        inside ``_decide_transient_failure``.
+        """
+        if transient["decision"] == "gate":
+            # SKIP the pending-reset, the re-raise and the run_failed publish
+            # — fall through to the existing finalization with
+            # final_status="complete". run_completed is published after the
+            # eval-skip point, while the broker is still open.
+            completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(
+                transient["gated_node_id"]
+            )
+            return True, transient["final_status"], transient["error_code"], transient["error_detail"]
+        if transient["decision"] in ("requeue", "superseded"):
+            raise
+        # terminal (retries exhausted) — or gate, whose decision dict carries
+        # the same final_status / error_code / error_detail it set above.
+        return gate_suppressed, transient["final_status"], transient["error_code"], transient["error_detail"]
+
     async def _load_execution_context(
         self,
         *,
@@ -2806,6 +2944,7 @@ class PipelineExecutor:
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -2999,6 +3138,7 @@ class PipelineExecutor:
         # (postmortem FAR-121).
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await session.execute(
                 text("UPDATE runs SET node_attempt_count = node_attempt_count + 1 WHERE id = :rid"),
                 {"rid": str(run_id)},
@@ -3060,6 +3200,7 @@ class PipelineExecutor:
         cancellation_requested = False
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
@@ -3133,6 +3274,7 @@ class PipelineExecutor:
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             await session.execute(
                 text(
                     "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
@@ -3243,16 +3385,20 @@ class PipelineExecutor:
         code/detail), or ``"none"`` (nothing to do).
         """
         retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
-        # FAR-295: a run whose graph contains a non-idempotent node is NEVER
-        # re-dispatched by the retry_policy — re-running the run would
-        # re-execute the side-effecting node. The run terminal-fails instead
-        # (mirrors the FAR-210 correction-run exclusion below).
-        if retry_budget is None or is_correction_run or not graph_idempotent:
+        # FAR-295 / FAR-210: a non-idempotent graph or a correction run is
+        # NEVER re-dispatched by the retry_policy (re-running would re-execute
+        # a side-effecting node / a correction's budget is owned elsewhere).
+        if not _retry_policy_applies(retry_budget, is_correction_run, graph_idempotent):
+            return "none"
+        # _retry_policy_applies guarantees a budget (not None) here; a defensive
+        # narrowing keeps mypy strict-clean without introducing an ``assert``.
+        if retry_budget is None:
             return "none"
         node_attempt_count = 0
         current_claim_token: str | None = None
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
@@ -3289,7 +3435,7 @@ class PipelineExecutor:
                     "script.lease_probe.blocked_retry_policy",
                     extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
                 )
-        if node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok:
+        if _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
             _log.warning(
                 "pipeline.retry_policy",
                 extra={
@@ -3371,6 +3517,7 @@ class PipelineExecutor:
             if final_status == "complete" and error_code != _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     final_status, error_code, error_detail = await self._check_eval_suites_for_run(
                         session=session,
                         run_id=run_id,
@@ -3384,6 +3531,7 @@ class PipelineExecutor:
                 # Fire agent_signal triggers for each completed node.
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     await self._fire_agent_signals(
                         session=session,
                         org_id=org_id,
@@ -3660,23 +3808,18 @@ class PipelineExecutor:
     async def _handle_graph_interrupt(
         self,
         interrupts: Any,
-        broker: RunEventBroker,
-        run_id: uuid.UUID,
-        node_token_usage: dict[str, Any] | None,
-        completed_node_outputs: dict[str, Any],
-        *,
-        pipeline_id: uuid.UUID | None,
-        org_id: uuid.UUID | None,
+        state: _StreamState,
+        ctx: _StreamContext,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Create the HITL gate and publish the awaiting event for an interrupt.
 
         PR A signature change (§4.2): the handler ACCEPTS the accumulated
-        ``node_token_usage`` / ``completed_node_outputs`` dicts (which live in
-        ``_stream_graph``'s scope) and RETURNS them in the ``awaiting_human``
-        4-tuple, so the pause persists the CURRENT segment's sets MERGED into
-        the stored cumulative set — NOT ``None``, NOT segment-only. The
-        empty-accumulator case (``{}`` → ``None``) normalizes so
-        ``finalize_cost``'s merge leaves the stored set untouched.
+        ``node_token_usage`` / ``completed_node_outputs`` (via ``state`` /
+        ``ctx``, which live in ``_stream_graph``'s scope) and RETURNS them in
+        the ``awaiting_human`` 4-tuple, so the pause persists the CURRENT
+        segment's sets MERGED into the stored cumulative set — NOT ``None``,
+        NOT segment-only. The empty-accumulator case (``{}`` → ``None``)
+        normalizes so ``finalize_cost``'s merge leaves the stored set untouched.
         """
         first_interrupt = interrupts[0] if interrupts else None
         value = getattr(first_interrupt, "value", None)
@@ -3684,12 +3827,18 @@ class PipelineExecutor:
         gate_id = gate_payload.get("gate_id", "")
         required_team_id_str = gate_payload.get("required_team_id")
         required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+        node_token_usage = state.node_token_usage
+        broker = ctx.broker
+        run_id = ctx.run_id
+        pipeline_id = ctx.pipeline_id
+        org_id = ctx.org_id
 
         if pipeline_id is not None and org_id is not None:
             mgr = HITLManager()
             pipeline_name: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -3784,16 +3933,8 @@ class PipelineExecutor:
         self,
         *,
         state: _StreamState,
+        ctx: _StreamContext,
         lg_event: Any,
-        node_ids: set[str],
-        guard: RunawayGuard | None,
-        completed_node_outputs: dict[str, Any] | None,
-        run_trace_id: str | None,
-        broker: RunEventBroker,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID | None,
-        eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
-        node_type_map: dict[str, str] | None,
     ) -> None:
         """Handle one ``on_chain_end`` event: capture + stamp the completed
         node's output and latch its stall / agent-failure / session-lost markers.
@@ -3801,19 +3942,19 @@ class PipelineExecutor:
         Extracted from ``_stream_graph``'s event loop (pure refactor) so the
         loop body stays small and single-responsibility. Also fires the
         FAR-305 standalone post-node eval path against the node's contract
-        output. ``completed_node_outputs`` / ``state`` are mutated in place.
+        output. ``ctx.completed_node_outputs`` / ``state`` are mutated in place.
         """
         name = lg_event.get("name", "")
-        if name not in node_ids:
+        if name not in ctx.node_ids:
             return
         state.segments_completed += 1
-        if guard is not None:
-            guard.record_step()
+        if ctx.guard is not None:
+            ctx.guard.record_step()
         output = _record_chain_end_output(
-            completed_node_outputs,
+            ctx.completed_node_outputs,
             name,
             lg_event.get("data", {}),
-            run_trace_id,
+            ctx.run_trace_id,
             self._otel_bridge,
             lg_event.get("run_id"),
         )
@@ -3828,18 +3969,18 @@ class PipelineExecutor:
         # NOTE: if this node ALSO feeds a HITL gate with eval-before-interrupt,
         # the evals run twice (once here post-node, once in the gate) —
         # acceptable for now, the gate's eval is a separate node.
-        if eval_definitions_by_node:
+        if ctx.eval_definitions_by_node:
             await self._run_post_node_evals(
                 name,
                 output,
-                eval_definitions_by_node,
-                run_id,
-                org_id,
-                node_type_map=node_type_map,
+                ctx.eval_definitions_by_node,
+                ctx.run_id,
+                ctx.org_id,
+                node_type_map=ctx.node_type_map,
             )
         stall_reason, agent_failure, session_lost = _record_node_markers(
             output,
-            broker,
+            ctx.broker,
             name,
         )
         if stall_reason:
@@ -3848,6 +3989,165 @@ class PipelineExecutor:
             state.agent_failure_reason = agent_failure
         if session_lost:
             state.session_lost_reason = session_lost
+
+    async def _handle_stream_event(
+        self,
+        state: _StreamState,
+        ctx: _StreamContext,
+        lg_event: Any,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+        """Handle one ``astream_events`` event; returns a terminal 4-tuple or None.
+
+        Extracted from ``_stream_graph``'s event loop (pure refactor). Maps a
+        HITL interrupt to the awaiting_human 4-tuple, publishes the node
+        lifecycle event (with first-node zombie-watchdog signalling), fires the
+        chain-end capture handler, and accumulates token usage. Returns None
+        when the loop must keep streaming.
+        """
+        interrupts = _streamed_interrupts(lg_event)
+        if interrupts:
+            return await self._handle_graph_interrupt(interrupts, state, ctx)
+        mapped = _map_lg_event(lg_event, ctx.node_ids)
+        if mapped is not None:
+            event_type, payload = mapped
+            # Zombie-run protection: the first real node dispatch is the
+            # signal that pre-node setup finished — stands down the
+            # execute_run watchdog (pipeline_execution.zombie_watchdog).
+            if not state.first_node_signalled:
+                state.first_node_signalled = True
+                if self.on_first_progress is not None:
+                    self.on_first_progress()
+            # FAR-369 absolute node-deadline watchdog: signal per-node
+            # start/completion (by node_id) so the deadline watchdog can
+            # hold each node to its own timeout_seconds independent of
+            # idle/activity. ``on_node_started`` runs for BOTH the first
+            # and every later node (unlike on_first_progress).
+            if event_type == "node_started" and self.on_node_started is not None:
+                self.on_node_started(str(payload.get("node_id", "")))
+            elif event_type == "node_completed" and self.on_node_completed is not None:
+                self.on_node_completed(str(payload.get("node_id", "")))
+            ctx.broker.publish(event_type, payload)
+        event_kind = lg_event.get("event", "")
+        # Capture node output for agent_signal trigger firing.
+        if event_kind == "on_chain_end":
+            await self._handle_chain_end_event(state=state, ctx=ctx, lg_event=lg_event)
+        if event_kind == "on_chat_model_end":
+            _accumulate_chat_model_tokens(lg_event, state.node_token_usage, ctx.guard, ctx.node_token_budgets)
+        elif event_kind == "on_llm_end":
+            _accumulate_llm_tokens(lg_event, state.node_token_usage, ctx.guard, ctx.node_token_budgets)
+        return None
+
+    async def _stream_exception_outcome(
+        self,
+        exc: BaseException,
+        *,
+        state: _StreamState,
+        ctx: _StreamContext,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Map a stream exception to a terminal 4-tuple, or re-raise it.
+
+        Extracted from ``_stream_graph``'s exception chain (pure refactor) so
+        the stream method keeps a single ``except BaseException`` clause. Every
+        mapped outcome is identical to the original chain; cancellation and
+        transient node failures are re-raised unchanged.
+        """
+        broker = ctx.broker
+        run_id = ctx.run_id
+        if isinstance(exc, GraphInterrupt):
+            interrupts = exc.args[0] if exc.args else []
+            return await self._handle_graph_interrupt(interrupts, state, ctx)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        if isinstance(exc, (NodeCancelledError, SandboxNodeFailedError)):
+            # Transient node cancellation / sandbox-infra failure (langgraph
+            # wraps a node body's asyncio.CancelledError; a stall or command
+            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
+            # terminal failure tuple here — propagate so execute() can decide:
+            # retry (fenced reset to pending + re-raise) or terminal-fail once
+            # retries are exhausted.
+            raise
+        if isinstance(exc, EvalBlockedError):
+            return _terminal_failure(
+                broker,
+                "eval_failed",
+                "eval_blocked",
+                _sanitize_detail(exc, limit=5000),
+                state.node_token_usage or None,
+            )
+        if isinstance(exc, OutputRejectedError):
+            # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
+            # constraint as a STATUS — it is an error CODE on a ``failed`` run.
+            return _terminal_failure(
+                broker,
+                "failed",
+                "output_rejected",
+                _sanitize_detail(exc, limit=5000),
+                state.node_token_usage or None,
+            )
+        if isinstance(exc, RunCancelledError):
+            broker.publish("run_cancelled", {})
+            self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
+            return "cancelled", None, None, state.node_token_usage or None
+        if isinstance(exc, RunawayRunError):
+            error_detail = _sanitize_detail(exc, limit=5000)
+            _log.warning(
+                "runaway.terminated",
+                extra={
+                    "run_id": str(run_id),
+                    "guard": exc.guard,
+                    "current": exc.current,
+                    "limit": exc.limit,
+                },
+            )
+            return _terminal_failure(broker, "failed", "runaway", error_detail, state.node_token_usage or None)
+        if isinstance(exc, TimeoutError):
+            error_detail = _sanitize_detail(exc, limit=5000)
+            _log.warning(
+                _ERROR_CODE_NODE_TIMEOUT,
+                extra={"run_id": str(run_id), "detail": error_detail},
+            )
+            return _terminal_failure(broker, "failed", "node_timeout", error_detail, state.node_token_usage or None)
+        if isinstance(exc, SupersededNodeError):
+            # A6: the sandbox dispatch marker was denied — a superseded claim
+            # or a run no longer running. Terminal ``superseded`` failure; the
+            # token-guarded finalize write is a no-op if a successor already
+            # owns the run. NEVER a completed run with zero work.
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            _log.warning(
+                "pipeline.node_superseded",
+                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
+            )
+            return _terminal_failure(
+                broker,
+                "failed",
+                "executor_superseded",
+                scrubbed,
+                state.node_token_usage or None,
+            )
+        if isinstance(exc, OutputSchemaValidationError):
+            # Manual-node resume output (or agent output) failed validation
+            # against output_schema_json. Domain-specific error code per §8.9 —
+            # never a raw ``ValueError``.
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            _log.warning(
+                "pipeline.output_schema_validation_failed",
+                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
+            )
+            return _terminal_failure(
+                broker,
+                "failed",
+                "schema_validation_failure",
+                scrubbed,
+                state.node_token_usage or None,
+            )
+        _tb = _traceback_detail(exc, limit=5000)
+        return _terminal_failure(
+            broker,
+            "failed",
+            type(exc).__name__,
+            _tb,
+            state.node_token_usage or None,
+        )
 
     async def _stream_graph(
         self,
@@ -3881,6 +4181,19 @@ class PipelineExecutor:
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
         state = _StreamState()
+        ctx = _StreamContext(
+            node_ids=node_ids,
+            guard=guard,
+            completed_node_outputs=completed_node_outputs,
+            run_trace_id=None,
+            broker=broker,
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            org_id=org_id,
+            node_token_budgets=node_token_budgets,
+            eval_definitions_by_node=eval_definitions_by_node,
+            node_type_map=node_type_map,
+        )
         lg_config = {**config, "callbacks": [self._otel_bridge]}
         # FAR-198: seed the OTel context with the run's deterministic trace id
         # so every span exported during graph execution carries the SAME
@@ -3892,195 +4205,26 @@ class PipelineExecutor:
             config,
             self._otel_bridge,
         )
+        ctx.run_trace_id = run_trace_id
         run_root_token = context_api.attach(set_span_in_context(run_root_span)) if run_root_span is not None else None
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
-                if guard is not None:
-                    guard.check_duration()
-
-                interrupts = _streamed_interrupts(lg_event)
-                if interrupts:
-                    # HITL interrupt in a parallel fan-out (FAR-171): the
-                    # interrupted gate node may share a superstep with sibling
-                    # branches. LangGraph pauses the whole run at the interrupt;
-                    # sibling tasks that already completed in that superstep
-                    # keep their state (their outputs are already in
-                    # completed_node_outputs), and in-flight/pending siblings are
-                    # cancelled and re-scheduled from the checkpoint on resume.
-                    # This means the interrupted branch never corrupts a sibling
-                    # branch — the state merge is deterministic (list keys
-                    # concatenate, run_context last-write-wins) and resume
-                    # re-runs the gate node plus any join nodes downstream of it
-                    # with the new _hitl_decision. No sibling replay is needed
-                    # here: LangGraph owns the superstep resumption.
-                    return await self._handle_graph_interrupt(
-                        interrupts,
-                        broker,
-                        run_id,
-                        state.node_token_usage,
-                        completed_node_outputs or {},
-                        pipeline_id=pipeline_id,
-                        org_id=org_id,
-                    )
-
-                mapped = _map_lg_event(lg_event, node_ids)
-                if mapped is not None:
-                    event_type, payload = mapped
-                    # Zombie-run protection: the first real node dispatch is the
-                    # signal that pre-node setup finished — stands down the
-                    # execute_run watchdog (pipeline_execution.zombie_watchdog).
-                    if not state.first_node_signalled:
-                        state.first_node_signalled = True
-                        if self.on_first_progress is not None:
-                            self.on_first_progress()
-                    # FAR-369 absolute node-deadline watchdog: signal per-node
-                    # start/completion (by node_id) so the deadline watchdog can
-                    # hold each node to its own timeout_seconds independent of
-                    # idle/activity. ``on_node_started`` runs for BOTH the first
-                    # and every later node (unlike on_first_progress).
-                    if event_type == "node_started" and self.on_node_started is not None:
-                        self.on_node_started(str(payload.get("node_id", "")))
-                    elif event_type == "node_completed" and self.on_node_completed is not None:
-                        self.on_node_completed(str(payload.get("node_id", "")))
-                    broker.publish(event_type, payload)
-
-                event_kind = lg_event.get("event", "")
-                # Capture node output for agent_signal trigger firing.
-                if event_kind == "on_chain_end":
-                    await self._handle_chain_end_event(
-                        state=state,
-                        lg_event=lg_event,
-                        node_ids=node_ids,
-                        guard=guard,
-                        completed_node_outputs=completed_node_outputs,
-                        run_trace_id=run_trace_id,
-                        broker=broker,
-                        run_id=run_id,
-                        org_id=org_id,
-                        eval_definitions_by_node=eval_definitions_by_node,
-                        node_type_map=node_type_map,
-                    )
-
-                if event_kind == "on_chat_model_end":
-                    _accumulate_chat_model_tokens(lg_event, state.node_token_usage, guard, node_token_budgets)
-
-                elif event_kind == "on_llm_end":
-                    _accumulate_llm_tokens(lg_event, state.node_token_usage, guard, node_token_budgets)
+                if ctx.guard is not None:
+                    ctx.guard.check_duration()
+                outcome = await self._handle_stream_event(state, ctx, lg_event)
+                if outcome is not None:
+                    return outcome
 
             terminal = _stream_terminal_reason(state, broker, run_id)
             if terminal is not None:
                 return terminal
             broker.publish("run_completed", {})
             return "complete", None, None, state.node_token_usage or None
-        except GraphInterrupt as exc:
-            interrupts = exc.args[0] if exc.args else []
-            return await self._handle_graph_interrupt(
-                interrupts,
-                broker,
-                run_id,
-                state.node_token_usage,
-                completed_node_outputs or {},
-                pipeline_id=pipeline_id,
-                org_id=org_id,
-            )
-        except EvalBlockedError as exc:
-            return _terminal_failure(
-                broker,
-                "eval_failed",
-                "eval_blocked",
-                _sanitize_detail(exc, limit=5000),
-                state.node_token_usage or None,
-            )
-        except OutputRejectedError as exc:
-            # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
-            # constraint as a STATUS — it is an error CODE on a ``failed`` run.
-            return _terminal_failure(
-                broker,
-                "failed",
-                "output_rejected",
-                _sanitize_detail(exc, limit=5000),
-                state.node_token_usage or None,
-            )
-        except RunCancelledError:
-            broker.publish("run_cancelled", {})
-            self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
-            return "cancelled", None, None, state.node_token_usage or None
-        except RunawayRunError as exc:
-            error_detail = _sanitize_detail(exc, limit=5000)
-            _log.warning(
-                "runaway.terminated",
-                extra={
-                    "run_id": str(run_id),
-                    "guard": exc.guard,
-                    "current": exc.current,
-                    "limit": exc.limit,
-                },
-            )
-            return _terminal_failure(broker, "failed", "runaway", error_detail, state.node_token_usage or None)
-        except TimeoutError as exc:
-            error_detail = _sanitize_detail(exc, limit=5000)
-            _log.warning(
-                _ERROR_CODE_NODE_TIMEOUT,
-                extra={"run_id": str(run_id), "detail": error_detail},
-            )
-            return _terminal_failure(broker, "failed", "node_timeout", error_detail, state.node_token_usage or None)
-        except SupersededNodeError as exc:
-            # A6: the sandbox dispatch marker was denied — a superseded claim
-            # or a run no longer running. Terminal ``superseded`` failure; the
-            # token-guarded finalize write is a no-op if a successor already
-            # owns the run. NEVER a completed run with zero work.
-            scrubbed = _sanitize_detail(exc, limit=5000)
-            _log.warning(
-                "pipeline.node_superseded",
-                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
-            )
-            return _terminal_failure(
-                broker,
-                "failed",
-                "executor_superseded",
-                scrubbed,
-                state.node_token_usage or None,
-            )
-        except OutputSchemaValidationError as exc:
-            # Manual-node resume output (or agent output) failed validation
-            # against output_schema_json. Domain-specific error code per §8.9 —
-            # never a raw ``ValueError``.
-            scrubbed = _sanitize_detail(exc, limit=5000)
-            _log.warning(
-                "pipeline.output_schema_validation_failed",
-                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
-            )
-            return _terminal_failure(
-                broker,
-                "failed",
-                "schema_validation_failure",
-                scrubbed,
-                state.node_token_usage or None,
-            )
-        except asyncio.CancelledError:
-            raise
-        except (NodeCancelledError, SandboxNodeFailedError):
-            # Transient node cancellation / sandbox-infra failure (langgraph
-            # wraps a node body's asyncio.CancelledError; a stall or command
-            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
-            # terminal failure tuple here — propagate so execute() can decide:
-            # retry (fenced reset to pending + re-raise) or terminal-fail once
-            # retries are exhausted.
-            raise
         except Exception as exc:
-            import traceback
-
-            _tb = _sanitize_detail(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-                limit=5000,
-            )
-            return _terminal_failure(
-                broker,
-                "failed",
-                type(exc).__name__,
-                _tb,
-                state.node_token_usage or None,
-            )
+            # CancelledError / NodeCancelledError / SandboxNodeFailedError
+            # propagate via _stream_exception_outcome's re-raise branches so
+            # execute()'s retry machinery still decides.
+            return await self._stream_exception_outcome(exc, state=state, ctx=ctx)
         finally:
             # FAR-198: tear down the seeded OTel context + run root span on
             # every exit path (returns, exceptions, cancellation).

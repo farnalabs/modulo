@@ -174,6 +174,7 @@ async def _run_fence(node_fn, create_mock) -> dict:
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
         patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
     ):
         return await node_fn(_run_state(claim_lease="tok-owner"))
 
@@ -198,6 +199,7 @@ async def test_pre_seeded_marker_for_different_claim_denies_and_never_creates():
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
         patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(SupersededNodeError) as excinfo,
     ):
         await node_fn(_run_state(claim_lease="tok-owner"))
@@ -217,6 +219,7 @@ async def test_same_claim_transient_denial_is_also_denied():
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
         patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(SupersededNodeError) as excinfo,
     ):
         await node_fn(_run_state(claim_lease="tok-owner"))

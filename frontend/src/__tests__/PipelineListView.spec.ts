@@ -321,4 +321,53 @@ describe('PipelineListView', () => {
     const toggle = wrapper.find('[data-testid="pipeline-tree-folder-toggle"]')
     expect(toggle.attributes('aria-expanded')).toBe('true')
   })
+
+  it('renders an accessible modal dialog with Escape-to-close and a focus trap', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Rename Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    // Attach to the document: @vue/test-utils mounts detached by default, but
+    // the focus-trap assertions below rely on document.activeElement, which only
+    // updates for elements that are part of the live document.
+    const wrapper = mount(PipelineListView, {
+      attachTo: document.body,
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openRename: (p: typeof pipeline) => void }
+    vm.openRename(pipeline)
+    await nextTick()
+
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.attributes('aria-label')).toBeTruthy()
+    // The wrapping container must NOT be a button (the old ARIA violation).
+    // The dialog is now a native <dialog> element (implicit role="dialog"),
+    // so the old separate aria-hidden backdrop sibling no longer exists —
+    // the backdrop is provided by the native ::backdrop pseudo-element.
+    expect(dialog.element.parentElement?.getAttribute('role')).not.toBe('button')
+    expect(dialog.element.tagName).toBe('DIALOG')
+
+    // Tab focus is trapped: from the last control, Tab wraps to the first.
+    const dialogEl = dialog.element as HTMLElement
+    const focusables = dialogEl.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )
+    expect(focusables.length).toBeGreaterThan(1)
+    focusables[focusables.length - 1].focus()
+    expect(document.activeElement).toBe(focusables[focusables.length - 1])
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+    await nextTick()
+    expect(document.activeElement).toBe(focusables[0])
+
+    // Escape closes the dialog.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })

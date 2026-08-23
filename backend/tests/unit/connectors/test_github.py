@@ -188,34 +188,36 @@ async def test_write_file_utf8_content_round_trips(connector) -> None:
 
 
 async def test_write_file_missing_content_raises(connector) -> None:
+    payload = ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"})
     with pytest.raises(ValueError, match=r"requires 'content' \(raw text\) or 'content_base64'"):
-        await connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"}))
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_file_both_content_and_content_base64_raises(connector) -> None:
+    payload = ConnectorPayload(
+        resource="file",
+        data={
+            "repo": "owner/repo",
+            "path": "x",
+            "content": "raw",
+            "content_base64": "cmF3",
+        },
+    )
     with pytest.raises(ValueError, match="exactly one of 'content' or 'content_base64'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="file",
-                data={
-                    "repo": "owner/repo",
-                    "path": "x",
-                    "content": "raw",
-                    "content_base64": "cmF3",
-                },
-            )
-        )
+        await connector.write(payload)
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported GitHub resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="branch", data={})
     with pytest.raises(ValueError, match="Unsupported GitHub write resource"):
-        await connector.write(ConnectorPayload(resource="branch", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
@@ -330,8 +332,9 @@ async def test_write_issue_operations(
     ],
 )
 async def test_query_missing_filters(connector, resource, filters, match_text):
+    query = ConnectorQuery(resource=resource, filters=filters)
     with pytest.raises(ValueError, match=match_text):
-        await connector.query(ConnectorQuery(resource=resource, filters=filters))
+        await connector.query(query)
 
 
 @pytest.mark.parametrize(
@@ -348,8 +351,9 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
     ],
 )
 async def test_write_missing_data(connector, resource, data, match_text):
+    payload = ConnectorPayload(resource=resource, data=data)
     with pytest.raises(ValueError, match=match_text):
-        await connector.write(ConnectorPayload(resource=resource, data=data))
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -384,11 +388,13 @@ async def test_write_missing_data(connector, resource, data, match_text):
 async def test_http_error(connector, resource, filters, data, url_method, url_pattern, status_code):
     getattr(respx, url_method)(url_pattern).mock(return_value=httpx.Response(status_code, text="Error"))
     if data:
+        payload = ConnectorPayload(resource=resource, data=data)
         with pytest.raises(ValueError, match=str(status_code)):
-            await connector.write(ConnectorPayload(resource=resource, data=data))
+            await connector.write(payload)
     else:
+        query = ConnectorQuery(resource=resource, filters=filters)
         with pytest.raises(ValueError, match=str(status_code)):
-            await connector.query(ConnectorQuery(resource=resource, filters=filters))
+            await connector.query(query)
 
 
 @respx.mock
@@ -489,13 +495,12 @@ async def test_write_pr_http_error(connector):
     respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
         return_value=httpx.Response(422, text="Unprocessable")
     )
+    payload = ConnectorPayload(
+        resource="pr",
+        data={"repo": "owner/repo", "title": "Bad PR", "head": "fix", "base": "main"},
+    )
     with pytest.raises(ValueError, match="422"):
-        await connector.write(
-            ConnectorPayload(
-                resource="pr",
-                data={"repo": "owner/repo", "title": "Bad PR", "head": "fix", "base": "main"},
-            )
-        )
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -758,10 +763,9 @@ async def test_write_pr_review_request_both(connector):
 
 
 async def test_write_pr_review_request_missing_reviewers(connector):
+    payload = ConnectorPayload(resource="pr_review_request", data={"repo": "owner/repo", "pull_number": "1"})
     with pytest.raises(ValueError, match="requires 'reviewers' or 'team_reviewers'"):
-        await connector.write(
-            ConnectorPayload(resource="pr_review_request", data={"repo": "owner/repo", "pull_number": "1"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -871,8 +875,9 @@ async def test_query_tree_path_filter(connector):
 
 
 async def test_query_tree_missing_repo(connector):
+    query = ConnectorQuery(resource="tree", filters={})
     with pytest.raises(ValueError, match="requires 'repo' filter"):
-        await connector.query(ConnectorQuery(resource="tree", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -881,8 +886,9 @@ async def test_query_tree_unresolvable_ref(connector):
     respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
         return_value=httpx.Response(200, json={"message": "no commit"})
     )
+    query = ConnectorQuery(resource="tree", filters={"repo": "owner/repo"})
     with pytest.raises(ValueError, match="could not resolve ref"):
-        await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -1141,35 +1147,33 @@ async def test_write_commit_branch_alias(connector):
 @respx.mock
 async def test_write_commit_duplicate_path_rejected(connector):
     """Two actions targeting the same path in one batch fail fast, before any network call."""
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [
+                {"action": "create", "path": "a.txt", "content": "one"},
+                {"action": "update", "path": "a.txt", "content": "two"},
+            ],
+        },
+    )
     with pytest.raises(ValueError, match="targeted more than once"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [
-                        {"action": "create", "path": "a.txt", "content": "one"},
-                        {"action": "update", "path": "a.txt", "content": "two"},
-                    ],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not respx.calls
 
 
 @respx.mock
 async def test_write_commit_move_same_path_rejected(connector):
     """A move whose previous_path equals its path is ambiguous and rejected."""
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [{"action": "move", "path": "a.txt", "previous_path": "a.txt"}],
+        },
+    )
     with pytest.raises(ValueError, match="targeted more than once"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [{"action": "move", "path": "a.txt", "previous_path": "a.txt"}],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not respx.calls
 
 
@@ -1186,16 +1190,15 @@ async def test_write_commit_move_binary_file_raises_descriptive_error(connector)
     blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
         return_value=httpx.Response(201, json={"sha": "blob1"})
     )
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.bin"}],
+        },
+    )
     with pytest.raises(ValueError, match="not decodable UTF-8 text"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.bin"}],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not blob_route.calls
 
 

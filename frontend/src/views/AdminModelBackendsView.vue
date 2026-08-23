@@ -40,9 +40,9 @@
               <div>
                 <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
                 <Select
-  aria-label="Provider"
+  :aria-label="$t('views.AdminModelBackendsView.provider')"
   v-model="formData.provider"
-  placeholder="anthropic"
+  :placeholder="$t('views.AdminModelBackendsView.provider_placeholder')"
   data-testid="admin-model-backends-provider-select"
   class="w-full"
   :options="[{ value: 'anthropic', label: $t('views.AdminModelBackendsView.provider_anthropic') }, { value: 'openai', label: $t('views.AdminModelBackendsView.provider_openai') }, { value: 'opencode', label: $t('views.AdminModelBackendsView.provider_opencode') }, { value: 'azure_openai', label: $t('views.AdminModelBackendsView.azure_openai') }, { value: 'ollama', label: $t('views.AdminModelBackendsView.provider_ollama') }, { value: 'groq', label: $t('views.AdminModelBackendsView.provider_groq') }, { value: 'deepseek', label: $t('views.AdminModelBackendsView.provider_deepseek') }, { value: 'gemini', label: $t('views.AdminModelBackendsView.provider_gemini') }, { value: 'mistral', label: $t('views.AdminModelBackendsView.provider_mistral') }, { value: 'cohere', label: $t('views.AdminModelBackendsView.provider_cohere') }, { value: 'togetherai', label: $t('views.AdminModelBackendsView.provider_togetherai') }, { value: 'fireworks', label: $t('views.AdminModelBackendsView.provider_fireworks') }, { value: 'openrouter', label: $t('views.AdminModelBackendsView.provider_openrouter') }]"
@@ -60,7 +60,7 @@
                   v-model="formData.base_url"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="https://api.example.com/v1"
+                  :placeholder="$t('views.AdminModelBackendsView.base_url_placeholder')"
                   data-testid="admin-model-backends-base-url-input"
                 />
               </div>
@@ -70,7 +70,7 @@
                   v-model="formData.model_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="claude-sonnet-4-20250514"
+                  :placeholder="$t('views.AdminModelBackendsView.model_id_placeholder')"
                   data-testid="admin-model-backends-model-id-input"
                 />
               </div>
@@ -80,7 +80,7 @@
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="sk-..."
+                  :placeholder="$t('views.AdminModelBackendsView.api_key_placeholder')"
                   data-testid="admin-model-backends-api-key-input"
                 />
               </div>
@@ -90,16 +90,16 @@
                   v-model="formData.default_params"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                  placeholder='{ "temperature": 0.7, "max_tokens": 4096 }'
+                  :placeholder="$t('views.AdminModelBackendsView.default_params_placeholder')"
                   data-testid="admin-model-backends-params-input"
                 ></textarea>
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <Select
-  aria-label="Visibility"
+  :aria-label="$t('views.AdminModelBackendsView.visibility')"
   v-model="formData.visibility"
-  placeholder="org"
+  :placeholder="$t('views.AdminModelBackendsView.visibility_placeholder')"
   data-testid="admin-model-backends-visibility-select"
   class="w-full"
   :options="[{ value: 'org', label: $t('views.AdminModelBackendsView.visibility_org') }, { value: 'private', label: $t('views.AdminModelBackendsView.visibility_private') }]"
@@ -129,12 +129,11 @@
           </form>
         </div>
 
-        <div v-if="nativeBackends.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">{{ $t('views.AdminModelBackendsView.no_model_backends_configured') }}</p>
-          <p class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.AdminModelBackendsView.no_backends_description') }}
-          </p>
-        </div>
+        <EmptyState
+          v-if="nativeBackends.length === 0"
+          :title="$t('views.AdminModelBackendsView.no_model_backends_configured')"
+          :description="$t('views.AdminModelBackendsView.no_backends_description')"
+        />
 
         <div v-else class="table-wrapper overflow-x-auto">
           <table class="w-full text-left text-sm">
@@ -197,6 +196,7 @@
                           <span>{{ refsError }}</span>
                           <button
                             class="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
+                            :data-testid="`admin-model-backends-refs-retry-${backend.id}`"
                             @click="fetchPipelineRefs(backend.id, 1)"
                           >
                             {{ $t('views.AdminModelBackendsView.retry') }}
@@ -235,6 +235,7 @@
                               <button
                                 v-if="refsData.page > 1"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
+                                :data-testid="`admin-model-backends-refs-prev-${backend.id}`"
                                 @click="fetchPipelineRefs(backend.id, refsData.page - 1)"
                               >
                                 {{ $t('views.AdminModelBackendsView.previous') }}
@@ -242,6 +243,7 @@
                               <button
                                 v-if="refsData.page < Math.ceil(refsData.total / refsData.page_size)"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
+                                :data-testid="`admin-model-backends-refs-next-${backend.id}`"
                                 @click="fetchPipelineRefs(backend.id, refsData.page + 1)"
                               >
                                 {{ $t('views.AdminModelBackendsView.next') }}
@@ -352,9 +354,9 @@
               <div>
                 <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <Select
-  aria-label="Visibility"
+  :aria-label="$t('views.AdminModelBackendsView.visibility')"
   v-model="formData.visibility"
-  placeholder="org"
+  :placeholder="$t('views.AdminModelBackendsView.visibility_placeholder')"
   data-testid="admin-model-backends-edit-visibility"
   class="w-full"
   :options="[{ value: 'org', label: $t('views.AdminModelBackendsView.visibility_org') }, { value: 'private', label: $t('views.AdminModelBackendsView.visibility_private') }]"
@@ -420,8 +422,12 @@ import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
+import { useI18n } from 'vue-i18n'
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 type PipelineRefItem = components['schemas']['PipelineReference']
+
+const { t } = useI18n()
 
 interface BackendFormState {
   name: string
@@ -574,11 +580,12 @@ function buildCreateBody() {
     api_key: formData.api_key.trim(),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
+    tier: 'native' as const,
   }
 }
 
-function buildUpdateBody() {
-  const body: Record<string, unknown> = {
+function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {
+  const body: components['schemas']['ModelBackendUpdate'] = {
     name: formData.name.trim() || null,
     display_name: formData.display_name.trim() || null,
     model_id: formData.model_id.trim() || null,
@@ -597,7 +604,7 @@ async function createBackend() {
   formError.value = null
   try {
     const { data, error: err } = await api.POST('/api/v1/model-backends', {
-      body: buildCreateBody() as any,
+      body: buildCreateBody(),
     })
     if (err) {
       formError.value = formatApiError(err)
@@ -619,7 +626,7 @@ async function updateBackend() {
   try {
     const { data, error: err } = await api.PATCH('/api/v1/model-backends/{backend_id}', {
       params: { path: { backend_id: editBackendId.value } },
-      body: buildUpdateBody() as any,
+      body: buildUpdateBody(),
     })
     if (err) {
       formError.value = formatApiError(err)
@@ -666,12 +673,12 @@ function backendActions(backend: ModelBackendItem) {
   return [
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('views.AdminModelBackendsView.edit_action'),
       onClick: () => openEditForm(backend),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.AdminModelBackendsView.delete_action'),
       onClick: () => confirmDelete(backend),
       danger: true,
     },

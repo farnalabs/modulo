@@ -171,10 +171,13 @@ class TestFunctionsWiring:
         assert ls.ttl == 300
         assert ls.unique is True
 
-        # metrics_dump: daily 01:00 UTC, unique=True, long timeout (full
-        # organisation scan), single retry, generous ttl.
+        # metrics_dump: ticks every 10 minutes (*/10 * * * *), aligned to the
+        # in-job jitter gate (FAR-356 review — the gate only ever fires when the
+        # cron cadence matches its grid). unique=True, long timeout (full org
+        # scan), single retry, generous ttl. Per-instance jitter spreads real
+        # execution across a 6-hour window via an in-job gate.
         md = jobs["metrics_dump"]
-        assert md.cron == "0 1 * * *"
+        assert md.cron == "*/10 * * * *"
         assert md.timeout == 600
         assert md.heartbeat == 60
         assert md.retries == 1
@@ -358,6 +361,45 @@ class TestEffectiveRedisPoolSize:
         assert from_url.call_args.kwargs["max_connections"] == 50
         assert redis_queue.call_args.kwargs["max_concurrent_ops"] == 45
         assert "pool_raised" not in caplog.text
+
+
+class TestEffectiveDbPoolSize:
+    """The effective DB pool must always exceed concurrency + reserve.
+
+    Every concurrent run holds a connection through pre-node setup and the
+    zombie watchdog's ``fail_run_terminal`` write needs a slot to terminalize a
+    run that wedges in that window. With concurrency 20 and a pool below
+    ``concurrency + 5`` the worker can exhaust its pool in setup and the
+    watchdog cannot terminalize — the run rides to the 35-min
+    ``dispatcher_reconcile`` backstop (the agent.stall nodeless zombie). The
+    effective pool is ``max(configured_pool, concurrency + 5)``.
+    """
+
+    @pytest.mark.parametrize(
+        ("pool_size", "concurrency", "expected"),
+        [
+            (30, 5, 30),  # pool already sufficient, unchanged
+            (20, 20, 25),  # equal -> raised to concurrency + 5
+            (5, 20, 25),  # too small -> raised (the incident config)
+            (2, 20, 25),
+            (20, 5, 20),  # default config, unchanged
+            (1, 1, 6),
+            (50, 50, 55),  # max concurrency raises above the settings cap; the
+            # worker accepts it (le=200 bounds the configured value, the
+            # effective pool is a runtime override)
+        ],
+    )
+    def test_effective_db_pool_never_below_concurrency_plus_reserve(
+        self, pool_size: int, concurrency: int, expected: int
+    ) -> None:
+        assert sw._effective_db_pool_size(pool_size, concurrency) == expected
+
+    def test_effective_db_pool_always_exceeds_concurrency(self) -> None:
+        # For every pool and concurrency in the settings' valid ranges the
+        # effective pool must always be strictly larger than concurrency.
+        for pool in range(1, 201):
+            for concurrency in range(1, 51):
+                assert sw._effective_db_pool_size(pool, concurrency) > concurrency
 
 
 class TestSystemWebRunner:
@@ -838,12 +880,18 @@ class TestGetAsyncEngine:
     Postgres (D4)."""
 
     def test_uses_shared_engine_with_per_worker_pool_override(self) -> None:
+        # A configured pool of 30 with concurrency 5 is already sufficient — no
+        # raise, the effective pool equals the configured value.
         with (
             patch.dict(os.environ, _MIN_ENV),
             patch.object(
                 sw,
                 "get_settings",
-                return_value=_settings(database_url="postgresql+asyncpg://localhost/test", saq_worker_db_pool_size=3),
+                return_value=_settings(
+                    database_url="postgresql+asyncpg://localhost/test",
+                    saq_worker_db_pool_size=30,
+                    saq_worker_concurrency=5,
+                ),
             ),
             patch.object(sw, "_ASYNC_ENGINE", None),
             patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
@@ -851,7 +899,31 @@ class TestGetAsyncEngine:
             engine = sw._get_async_engine()
 
         assert engine is shared.return_value
-        shared.assert_called_once_with(pool_size=3, max_overflow=0)
+        shared.assert_called_once_with(pool_size=30, max_overflow=0)
+
+    def test_uses_effective_db_pool_raised_for_high_concurrency(self, caplog: pytest.LogCaptureFixture) -> None:
+        # A configured pool of 5 with concurrency 20 (the incident config) must
+        # produce an engine with pool_size 25 (concurrency + 5 reserve) and log
+        # a warning that the pool was raised.
+        with (
+            patch.object(
+                sw,
+                "get_settings",
+                return_value=_settings(
+                    database_url="postgresql+asyncpg://localhost/test",
+                    saq_worker_db_pool_size=5,
+                    saq_worker_concurrency=20,
+                ),
+            ),
+            patch.object(sw, "_ASYNC_ENGINE", None),
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            engine = sw._get_async_engine()
+
+        assert engine is shared.return_value
+        shared.assert_called_once_with(pool_size=25, max_overflow=0)
+        assert "db_pool_raised" in caplog.text
 
     def test_uses_plain_shared_engine_for_non_postgres_backend(self) -> None:
         with (

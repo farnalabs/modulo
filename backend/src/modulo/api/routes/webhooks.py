@@ -66,7 +66,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
@@ -223,6 +223,7 @@ async def receive_webhook(
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             # Route-level timestamp + HMAC validation (belt-and-braces ahead of
             # the engine's own check). Only triggers configured with an
@@ -470,6 +471,7 @@ async def replay_webhook(
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             if principal is None:
                 # ADR 017: unauthenticated replay requires a valid HMAC signature

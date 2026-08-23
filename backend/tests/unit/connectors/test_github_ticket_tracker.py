@@ -154,6 +154,21 @@ class TestListTickets:
         call_kwargs = mock_client.get.call_args[1]
         assert call_kwargs["params"]["labels"] == "bug"
 
+    @patch("httpx.AsyncClient")
+    async def test_offset_page_math_uses_effective_per_page(
+        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.return_value = _response(200, json=[])
+
+        tickets = await tracker.list_tickets(TicketFilter(limit=50, offset=100))
+
+        assert tickets == []
+        call_kwargs = mock_client.get.call_args[1]
+        assert call_kwargs["params"]["per_page"] == 50
+        assert call_kwargs["params"]["page"] == 3
+
 
 class TestGetTicket:
     @patch("httpx.AsyncClient")

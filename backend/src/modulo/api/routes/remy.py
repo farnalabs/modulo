@@ -71,7 +71,7 @@ from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import ModelBackendBase
 from modulo.settings import Settings, get_settings
 
@@ -460,6 +460,30 @@ async def _validate_session_ownership(
     return chat_session
 
 
+async def _verify_owned_session(
+    session_id: uuid.UUID,
+    principal: TenantPrincipal,
+    db: AsyncSession,
+) -> None:
+    """Open a transaction, set RLS, and verify the session belongs to the user.
+
+    Raises ``HTTPException`` (404) when the session is missing or foreign.
+    Callers keep their standard DB-error try/except around this helper.
+    """
+    async with db.begin():
+        await set_rls_org(db, principal.organisation_id)
+        await _validate_session_ownership(session_id, principal, db)
+
+
+async def _require_ui_driving(principal: TenantPrincipal) -> None:
+    """Reject the request unless UI driving is enabled for the organisation."""
+    if not await _is_ui_driving_enabled(principal.organisation_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
+        )
+
+
 def _has_destructive_pattern(selector: str) -> bool:
     lower = selector.lower()
     return any(p in lower for p in DESTRUCTIVE_PATTERNS)
@@ -478,48 +502,53 @@ def _check_nogo(tool_name: str, args: dict[str, Any], page_context: str) -> bool
     return False
 
 
-def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
-    """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
-    # 0. No-go zone check (highest priority)
-    if _check_nogo(tool_name, args, page_context) and config.permission_mode == "full_auto":
-        return "disabled"
-
-    # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
+def _tool_allowlist_disabled(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> bool:
+    """True when the tool's selector/page is outside the configured allowlists."""
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
         selector = args.get("selector", "") or args.get("data-testid", "")
-        if (
-            not any(allowed in selector for allowed in config.allowed_selectors)
-            and config.permission_mode == "full_auto"
-        ):
-            return "disabled"
-
+        if not any(allowed in selector for allowed in config.allowed_selectors):
+            return True
     if config.allowed_page_patterns and tool_name == "navigate":
         path = args.get("path", "")
-        if (
-            not any(pattern in path for pattern in config.allowed_page_patterns)
-            and config.permission_mode == "full_auto"
-        ):
-            return "disabled"
+        if not any(pattern in path for pattern in config.allowed_page_patterns):
+            return True
+    return False
 
-    # 1. Per-tool user override
-    overrides = config.tool_permissions or {}
-    if tool_name in overrides:
-        return overrides[tool_name]
 
-    # 2. Mode-based defaults
+def _default_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> str:
+    """Resolve the mode-based default permission for a tool, excluding user overrides.
+
+    Returns ``always_allowed`` or ``requires_approval``.
+    """
     mode = config.permission_mode
     if mode == "locked_down":
-        base = "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
-    elif mode == "full_auto":
-        base = "always_allowed"
+        return "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
+    if mode == "full_auto":
         raw_confidence = args.get("confidence", 1.0)
         confidence = raw_confidence if isinstance(raw_confidence, int | float) else 1.0
         if confidence < config.auto_execute_threshold:
             return "requires_approval"
-    else:
-        base = "requires_approval" if tool_name == "press" else "always_allowed"
+        return "always_allowed"
+    return "requires_approval" if tool_name == "press" else "always_allowed"
 
-    # 3. Destructive pattern override (applies regardless of mode)
+
+def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
+    """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
+    # No-go zone + allowlist enforcement (highest priority, full-auto only)
+    if config.permission_mode == "full_auto" and (
+        _check_nogo(tool_name, args, page_context) or _tool_allowlist_disabled(config, tool_name, args)
+    ):
+        return "disabled"
+
+    # Per-tool user override
+    overrides = config.tool_permissions or {}
+    if tool_name in overrides:
+        return overrides[tool_name]
+
+    # Mode-based defaults
+    base = _default_tool_permission(config, tool_name, args)
+
+    # Destructive pattern override (applies regardless of mode)
     if base == "always_allowed" and tool_name in WRITE_TOOLS:
         selector = args.get("selector", "")
         if _has_destructive_pattern(selector):
@@ -611,26 +640,83 @@ def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, A
 # ── Stream event-generator helpers ───────────────────────────────────────
 
 
+class _StreamContext:
+    """Per-request state shared by the stream helpers (reduces arg passing)."""
+
+    __slots__ = (
+        "chat_session",
+        "db_session",
+        "mcp_base_url",
+        "principal",
+        "req",
+        "session_id",
+        "session_id_str",
+        "settings",
+    )
+
+    def __init__(
+        self,
+        db_session: AsyncSession,
+        principal: TenantPrincipal,
+        session_id: uuid.UUID,
+        req: StreamRequest,
+        settings: Settings,
+        chat_session: ChatSession,
+    ) -> None:
+        self.db_session = db_session
+        self.principal = principal
+        self.session_id = session_id
+        self.req = req
+        self.settings = settings
+        self.chat_session = chat_session
+        self.session_id_str = str(session_id)
+        self.mcp_base_url = settings.modulo_public_url.rstrip("/")
+
+
+class _StreamInit:
+    """Result of stream initialisation (API key → pruned conversation)."""
+
+    __slots__ = ("backend", "error_detail", "messages", "parent_msg_id")
+
+    def __init__(
+        self,
+        error_detail: str | None = None,
+        backend: ModelBackendBase | None = None,
+        parent_msg_id: uuid.UUID | None = None,
+        messages: list[BaseMessage] | None = None,
+    ) -> None:
+        self.error_detail = error_detail
+        self.backend = backend
+        self.parent_msg_id = parent_msg_id
+        self.messages = messages or []
+
+
+class _UiToolFlow:
+    """Mutable signal holder for the UI-tool flow (should_break → stop loop)."""
+
+    __slots__ = ("should_break",)
+
+    def __init__(self) -> None:
+        self.should_break = False
+
+
 def _sse_tool_call_event(tool_result: dict[str, Any]) -> str:
     return f"event: tool_call\ndata: {json.dumps(tool_result)}\n\n"
 
 
-async def _resolve_stream_api_key(
-    req: StreamRequest,
-    principal: TenantPrincipal,
-    db_session: AsyncSession,
-    settings: Settings,
-) -> tuple[str | None, str | None]:
+async def _resolve_stream_api_key(ctx: _StreamContext) -> tuple[str | None, str | None]:
     """Return (api_key, error_detail). A non-None error_detail means no key resolved."""
+    req = ctx.req
     if req.api_key:
         return req.api_key, None
-    async with db_session.begin():
-        await set_rls_org(db_session, principal.organisation_id)
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        await set_rls_user_context(ctx.db_session, ctx.principal.account_id, ctx.principal.org_role)
         resolved = await _resolve_api_key(
             req.provider,
-            principal.organisation_id,
-            db_session,
-            settings.fernet_key,
+            ctx.principal.organisation_id,
+            ctx.db_session,
+            ctx.settings.fernet_key,
         )
     if resolved is None:
         msg = (
@@ -651,53 +737,42 @@ def _build_stream_backend(req: StreamRequest, api_key: str) -> tuple[ModelBacken
         return None, f"Failed to initialize backend: {exc}"
 
 
-async def _build_stream_system_prompt(
-    db_session: AsyncSession,
-    principal: TenantPrincipal,
-    req: StreamRequest,
-    supports_tools: bool,
-) -> str:
-    async with db_session.begin():
-        await set_rls_org(db_session, principal.organisation_id)
-        skill_loader = SkillLoader(db_session)
+async def _build_stream_system_prompt(ctx: _StreamContext, supports_tools: bool) -> str:
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        skill_loader = SkillLoader(ctx.db_session)
         return await skill_loader.build_system_prompt(
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-            page_context=req.page_context,
-            system_prompt_override=req.system_prompt,
-            include_ui_tools_text=(not supports_tools) and not req.exclude_ui_tools,
+            org_id=ctx.principal.organisation_id,
+            user_id=ctx.principal.account_id,
+            page_context=ctx.req.page_context,
+            system_prompt_override=ctx.req.system_prompt,
+            include_ui_tools_text=(not supports_tools) and not ctx.req.exclude_ui_tools,
         )
 
 
-async def _save_stream_user_message(
-    db_session: AsyncSession,
-    principal: TenantPrincipal,
-    session_id: uuid.UUID,
-    req: StreamRequest,
-) -> uuid.UUID:
-    async with db_session.begin():
-        await set_rls_org(db_session, principal.organisation_id)
+async def _save_stream_user_message(ctx: _StreamContext) -> uuid.UUID:
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
         user_msg = ChatMessage(
-            organisation_id=principal.organisation_id,
-            session_id=session_id,
+            organisation_id=ctx.principal.organisation_id,
+            session_id=ctx.session_id,
             role="user",
-            content=req.content,
+            content=ctx.req.content,
         )
-        db_session.add(user_msg)
-        await db_session.flush()
+        ctx.db_session.add(user_msg)
+        await ctx.db_session.flush()
         return user_msg.id
 
 
 async def _build_stream_tools_param(
     backend: ModelBackendBase,
-    principal: TenantPrincipal,
-    req: StreamRequest,
+    ctx: _StreamContext,
 ) -> list[dict[str, Any]] | None:
     if not getattr(backend, "supports_tools", False):
         return None
     await build_tool_registry()
     return _get_all_tool_definitions(
-        include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id)) and not req.exclude_ui_tools,
+        include_ui_tools=(await _is_ui_driving_enabled(ctx.principal.organisation_id)) and not ctx.req.exclude_ui_tools,
     )
 
 
@@ -785,30 +860,36 @@ async def _auto_name_stream_session(
             logger.exception("remy.auto_naming_failed")
 
 
+async def _add_assistant_message(
+    ctx: _StreamContext,
+    full_content: str,
+    tool_calls: list[dict[str, Any]] | None,
+    parent_msg_id: uuid.UUID | None,
+) -> str:
+    """Add an assistant-message row inside an already-open transaction (RLS set)."""
+    assistant_msg = ChatMessage(
+        organisation_id=ctx.principal.organisation_id,
+        session_id=ctx.session_id,
+        role="assistant",
+        content=full_content or None,
+        tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
+        parent_id=parent_msg_id,
+    )
+    ctx.db_session.add(assistant_msg)
+    await ctx.db_session.flush()
+    return str(assistant_msg.id)
+
+
 async def _finalise_stream_assistant_message(
-    db_session: AsyncSession,
-    principal: TenantPrincipal,
-    session_id: uuid.UUID,
+    ctx: _StreamContext,
     full_content: str,
     parent_msg_id: uuid.UUID | None,
-    req: StreamRequest,
-    chat_session: ChatSession,
 ) -> str:
     """Persist the final assistant message (no tool calls) and auto-name the session."""
-    async with db_session.begin():
-        await set_rls_org(db_session, principal.organisation_id)
-        assistant_msg = ChatMessage(
-            organisation_id=principal.organisation_id,
-            session_id=session_id,
-            role="assistant",
-            content=full_content or None,
-            tool_calls_json=None,
-            parent_id=parent_msg_id,
-        )
-        db_session.add(assistant_msg)
-        await db_session.flush()
-        msg_id = str(assistant_msg.id)
-        await _auto_name_stream_session(db_session, session_id, req, chat_session)
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        msg_id = await _add_assistant_message(ctx, full_content, None, parent_msg_id)
+        await _auto_name_stream_session(ctx.db_session, ctx.session_id, ctx.req, ctx.chat_session)
     return msg_id
 
 
@@ -1029,39 +1110,216 @@ def _tool_result_content(tool_result: dict[str, Any]) -> str:
 
 
 async def _persist_assistant_and_tool_messages(
-    db_session: AsyncSession,
-    principal: TenantPrincipal,
-    session_id: uuid.UUID,
+    ctx: _StreamContext,
     full_content: str,
     tool_calls: list[dict[str, Any]],
     tool_results: list[dict[str, Any]],
     parent_msg_id: uuid.UUID | None,
 ) -> str:
-    async with db_session.begin():
-        await set_rls_org(db_session, principal.organisation_id)
-        assistant_msg = ChatMessage(
-            organisation_id=principal.organisation_id,
-            session_id=session_id,
-            role="assistant",
-            content=full_content or None,
-            tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
-            parent_id=parent_msg_id,
-        )
-        db_session.add(assistant_msg)
-        await db_session.flush()
-        msg_id = str(assistant_msg.id)
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        msg_id = await _add_assistant_message(ctx, full_content, tool_calls, parent_msg_id)
 
         for tr in tool_results:
             tool_msg = ChatMessage(
-                organisation_id=principal.organisation_id,
-                session_id=session_id,
+                organisation_id=ctx.principal.organisation_id,
+                session_id=ctx.session_id,
                 role="tool_result",
                 content=_tool_result_content(tr),
                 tool_results_json=tr,
-                parent_id=assistant_msg.id,
+                parent_id=uuid.UUID(msg_id),
             )
-            db_session.add(tool_msg)
+            ctx.db_session.add(tool_msg)
     return msg_id
+
+
+async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
+    """Run the stream preamble: API key → pruned conversation.
+
+    Returns a ``_StreamInit``; a non-None ``error_detail`` means initialisation
+    failed and the caller should emit the SSE error event and stop.
+    """
+    # 1. Resolve API key
+    api_key, api_key_error = await _resolve_stream_api_key(ctx)
+    if api_key_error is not None:
+        return _StreamInit(error_detail=api_key_error)
+    if api_key is None:
+        return _StreamInit(error_detail="Failed to resolve API key for streaming")
+
+    # 2. Create backend (needed before system prompt for supports_tools)
+    backend, backend_error = _build_stream_backend(ctx.req, api_key)
+    if backend_error is not None:
+        return _StreamInit(error_detail=backend_error)
+    if backend is None:
+        return _StreamInit(error_detail="Failed to build model backend")
+
+    # 3. Construct system prompt from config + skills
+    supports_tools = getattr(backend, "supports_tools", False)
+    system_prompt = await _build_stream_system_prompt(ctx, supports_tools)
+
+    # 4. Save user message to DB
+    parent_msg_id = await _save_stream_user_message(ctx)
+
+    # 5. Reconstruct conversation
+    async with ctx.db_session.begin():
+        await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
+        langchain_messages = await _reconstruct_messages(ctx.db_session, ctx.session_id)
+
+    # 6. Prepend system prompt
+    if system_prompt:
+        langchain_messages.insert(0, SystemMessage(content=system_prompt))
+
+    # 7. Context window pruning
+    context_window = (
+        ctx.req.context_window_tokens
+        if ctx.req.context_window_tokens is not None
+        else (ctx.chat_session.context_window_tokens or 200000)
+    )
+    pruned_count = _prune_context_window(langchain_messages, context_window)
+    if pruned_count:
+        logger.info("Pruned %d messages from session %s", pruned_count, ctx.session_id)
+
+    return _StreamInit(
+        backend=backend,
+        parent_msg_id=parent_msg_id,
+        messages=langchain_messages,
+    )
+
+
+async def _stream_approved_commands(
+    ctx: "_StreamContext",
+    config: Any,
+    approved_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    flow: "_UiToolFlow",
+) -> AsyncGenerator[str, None]:
+    """Yield the approved UI commands and their results as SSE events.
+
+    Appends executed tool results to ``tool_results`` and sets
+    ``flow.should_break`` when the loop must exit (rate limited or cancelled
+    by the user).
+    """
+    if not approved_calls:
+        return
+
+    # Rate limiter check before yielding commands
+    rate_limiter = _rate_limiters.get(ctx.session_id_str)
+    if rate_limiter is None:
+        rate_limiter = ActionRateLimiter(
+            max_actions=config.rate_limit_max_actions,
+            window_seconds=config.rate_limit_window_seconds,
+        )
+        _rate_limiters[ctx.session_id_str] = rate_limiter
+    if not rate_limiter.check():
+        yield (
+            _SSE_ERROR_PREFIX
+            + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
+            + "\n\n"
+        )
+        flow.should_break = True
+        return
+
+    yield f"event: ui_command_batch\ndata: {
+        json.dumps(
+            {
+                'commands': approved_calls,
+            }
+        )
+    }\n\n"
+
+    registry = _get_registry()
+    event = asyncio.Event()
+    _pending_ui_results[ctx.session_id_str] = event
+    try:
+        results = await _wait_for_ui_command_results(registry, ctx.session_id_str, event)
+    finally:
+        _pending_ui_results.pop(ctx.session_id_str, None)
+
+    if len(approved_calls) != len(results):
+        logger.warning(
+            "remy.ui_result_length_mismatch",
+            extra={"approved": len(approved_calls), "results": len(results)},
+        )
+    for tr in _merge_ui_command_results(approved_calls, results):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    if results and all(r.get("error") == "cancelled_by_user" for r in results):
+        skipped = len(results)
+        s = "s" if skipped != 1 else ""
+        summary = f"Action cancelled by user. {skipped} action{s} skipped."
+        yield f"event: abort_summary\ndata: {
+            json.dumps(
+                {
+                    'completed': 0,
+                    'skipped': skipped,
+                    'summary': summary,
+                }
+            )
+        }\n\n"
+        flow.should_break = True
+
+
+async def _stream_ui_tool_flow(
+    ctx: _StreamContext,
+    ui_tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    flow: _UiToolFlow,
+) -> AsyncGenerator[str, None]:
+    """Handle UI-tool calls for one LLM turn, yielding SSE events.
+
+    Appends executed tool results to ``tool_results`` and sets
+    ``flow.should_break`` when the caller must exit the agentic loop
+    (rate limited or cancelled by the user).
+    """
+    principal = ctx.principal
+    req = ctx.req
+    db = ctx.db_session
+
+    # UI driving disabled for this org or excluded by the request
+    if req.exclude_ui_tools or not await _is_ui_driving_enabled(principal.organisation_id):
+        ui_driving_error = (
+            "UI driving is not available in this view"
+            if req.exclude_ui_tools
+            else _MSG_UI_DRIVING_DISABLED_ORGANISATION
+        )
+        for tc in ui_tool_calls:
+            tr = {
+                "tool_call_id": tc["id"],
+                "tool_name": tc["name"],
+                "success": False,
+                "error": ui_driving_error,
+            }
+            tool_results.append(tr)
+            yield _sse_tool_call_event(tr)
+        return
+
+    async with db.begin():
+        await set_rls_org(db, principal.organisation_id)
+        config_service = RemyConfigService(db)
+        config = await config_service.get_config(principal.organisation_id)
+
+    # Check if session is paused — wait for resume
+    registry = _get_registry()
+    paused = ctx.session_id_str in _resume_events
+    if paused:
+        yield ("event: paused\ndata: " + json.dumps({"detail": "Session paused. Waiting for resume."}) + "\n\n")
+        await _wait_for_stream_resume(registry, ctx.session_id_str)
+
+    page_path = req.page_context or ""
+    approved_calls, pending_permission_calls = await _classify_ui_tool_permissions(
+        config, ui_tool_calls, page_path, ctx.session_id_str
+    )
+
+    if pending_permission_calls:
+        payload, req_id = _build_permission_request_payload(pending_permission_calls)
+        yield f"event: permission_request\ndata: {json.dumps(payload)}\n\n"
+        approved_calls.extend(
+            await _await_permission_decision(registry, ctx.session_id_str, req_id, pending_permission_calls, page_path)
+        )
+
+    async for event in _stream_approved_commands(ctx, config, approved_calls, tool_results, flow):
+        yield event
 
 
 # ── Session endpoints ────────────────────────────────────────────────────
@@ -1127,6 +1385,47 @@ async def list_sessions(
         ) from None
 
 
+async def _resolve_provider_model(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    provider: str | None,
+    model: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve (provider, model) for a new session.
+
+    Falls back to the org's first configured model backend, then to the
+    Remy default provider/model, and finally to the opencode default model
+    when no model could be resolved.
+    """
+    if provider is not None and model is not None:
+        return provider, model
+
+    mb_result = await session.execute(
+        select(ModelBackend)
+        .where(
+            ModelBackend.organisation_id == principal.organisation_id,
+            ModelBackend.credentials_ciphertext != b"",
+        )
+        .limit(1)
+    )
+    mb = mb_result.scalar_one_or_none()
+    if mb:
+        provider = provider or mb.provider
+        model = model or mb.model_id
+    else:
+        config = await RemyConfigService(session).get_config(principal.organisation_id)
+        provider = provider or config.default_provider
+        model = model or config.default_model
+
+    if not model:
+        default_models: dict[str, str] = {
+            "opencode": "deepseek-v4-flash",
+        }
+        if provider in default_models:
+            model = default_models[provider]
+    return provider, model
+
+
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("remy.create_session")
 async def create_session(
@@ -1137,6 +1436,7 @@ async def create_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             max_sn = await session.execute(
                 select(func.coalesce(func.max(ChatSession.session_number), 0)).where(
                     ChatSession.user_id == principal.account_id
@@ -1144,33 +1444,7 @@ async def create_session(
             )
             next_session_number = (max_sn.scalar() or 0) + 1
 
-            provider = req.provider
-            model = req.model
-
-            if provider is None or model is None:
-                mb_result = await session.execute(
-                    select(ModelBackend)
-                    .where(
-                        ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.credentials_ciphertext != b"",
-                    )
-                    .limit(1)
-                )
-                mb = mb_result.scalar_one_or_none()
-                if mb:
-                    provider = provider or mb.provider
-                    model = model or mb.model_id
-                else:
-                    config = await RemyConfigService(session).get_config(principal.organisation_id)
-                    provider = provider or config.default_provider
-                    model = model or config.default_model
-
-            if not model:
-                default_models: dict[str, str] = {
-                    "opencode": "deepseek-v4-flash",
-                }
-                if provider in default_models:
-                    model = default_models[provider]
+            provider, model = await _resolve_provider_model(session, principal, req.provider, req.model)
 
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
@@ -1205,7 +1479,11 @@ async def create_session(
         ) from None
 
 
-@router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.get_session")
 async def get_session(
     session_id: uuid.UUID,
@@ -1244,7 +1522,11 @@ async def get_session(
         ) from None
 
 
-@router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.rename_session")
 async def rename_session(
     session_id: uuid.UUID,
@@ -1283,7 +1565,11 @@ async def rename_session(
         ) from None
 
 
-@router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.delete_session")
 async def delete_session(
     session_id: uuid.UUID,
@@ -1341,7 +1627,11 @@ async def delete_session(
 # ── Message endpoints ────────────────────────────────────────────────────
 
 
-@router.get("/sessions/{session_id}/messages", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}/messages",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.list_messages")
 async def list_messages(
     session_id: uuid.UUID,
@@ -1397,7 +1687,11 @@ async def list_messages(
         ) from None
 
 
-@router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sessions/{session_id}/messages",
+    status_code=status.HTTP_201_CREATED,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.append_message")
 async def append_message(
     session_id: uuid.UUID,
@@ -1449,7 +1743,143 @@ async def append_message(
 # ── Streaming endpoint ───────────────────────────────────────────────────
 
 
-@router.post("/sessions/{session_id}/stream")
+async def _stream_backend_tokens(
+    backend: Any,
+    langchain_messages: list[Any],
+    tools_param: Any,
+    request: Request,
+    tool_call_buffers: dict[int, dict[str, Any]],
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Stream one LLM turn's tokens as SSE events, tracking content in ``state``.
+
+    Sets ``state["disconnected"]`` when the client disconnects mid-stream.
+    """
+    state["full_content"] = ""
+    async for chunk in backend.stream(langchain_messages, tools=tools_param):
+        if await request.is_disconnected():
+            state["disconnected"] = True
+            return
+        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
+            state["full_content"] += chunk.content
+            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+            _accumulate_tool_call_chunks(chunk, tool_call_buffers)
+
+
+async def _stream_tool_events(
+    ui_tool_calls: list[dict[str, Any]],
+    mcp_tool_calls: list[dict[str, Any]],
+    ctx: _StreamContext,
+    tool_results: list[dict[str, Any]],
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Execute one turn's tool calls, yielding SSE events.
+
+    Sets ``state["should_break"]`` when the UI permission flow asks the agentic
+    loop to exit (cancelled by the user / rate limited).
+    """
+    async for tr in _run_mcp_tool_calls(mcp_tool_calls, ctx.req, ctx.mcp_base_url):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
+    ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
+
+    async for tr in _run_manifest_calls(manifest_calls, ctx.req):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    if ui_tool_calls:
+        flow = _UiToolFlow()
+        async for event in _stream_ui_tool_flow(ctx, ui_tool_calls, tool_results, flow):
+            yield event
+        state["should_break"] = flow.should_break
+
+
+def _append_turn_messages(
+    langchain_messages: list[Any],
+    full_content: str,
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+) -> None:
+    """Append the assistant message and tool results to the conversation for the next turn."""
+    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
+    for tr in tool_results:
+        langchain_messages.append(
+            ToolMessage(
+                content=_tool_result_content(tr),
+                tool_call_id=tr["tool_call_id"],
+            )
+        )
+
+
+def _ping_event_if_due(state: dict[str, Any]) -> str | None:
+    """Return a keepalive ping event when one is due, updating the last-ping timestamp."""
+    now = _time.monotonic()
+    if now - state["last_ping_at"] < 15:
+        return None
+    state["last_ping_at"] = now
+    return "event: ping\ndata: {}\n\n"
+
+
+async def _run_stream_loop(
+    ctx: _StreamContext,
+    request: Request,
+    backend: Any,
+    langchain_messages: list[Any],
+    parent_msg_id: uuid.UUID | None,
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Multi-turn agentic loop: stream tokens, execute tools, persist, ping."""
+    while True:
+        tool_call_buffers: dict[int, dict[str, Any]] = {}
+        tools_param = await _build_stream_tools_param(backend, ctx)
+
+        async for event in _stream_backend_tokens(
+            backend, langchain_messages, tools_param, request, tool_call_buffers, state
+        ):
+            yield event
+        if state["disconnected"]:
+            return
+
+        tool_calls = _reconstruct_tool_calls(tool_call_buffers)
+        if not tool_calls:
+            # LLM done — save assistant message and exit loop
+            state["msg_id"] = await _finalise_stream_assistant_message(ctx, state["full_content"], parent_msg_id)
+            return
+
+        # Separate UI vs MCP tool calls
+        ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
+        mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
+
+        tool_results: list[dict[str, Any]] = []
+        async for event in _stream_tool_events(ui_tool_calls, mcp_tool_calls, ctx, tool_results, state):
+            yield event
+        if state["should_break"]:
+            return
+
+        # Add to conversation for next LLM turn, then persist
+        _append_turn_messages(langchain_messages, state["full_content"], tool_calls, tool_results)
+        state["msg_id"] = await _persist_assistant_and_tool_messages(
+            ctx, state["full_content"], tool_calls, tool_results, parent_msg_id
+        )
+
+        # Ping keepalive if idle
+        ping = _ping_event_if_due(state)
+        if ping is not None:
+            yield ping
+
+
+@router.post(
+    "/sessions/{session_id}/stream",
+    responses={
+        404: {"description": "Session not found"},
+        403: {"description": "Forbidden"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.stream_chat")
 async def stream_chat(
     session_id: uuid.UUID,
@@ -1477,8 +1907,6 @@ async def stream_chat(
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
 
-    mcp_base_url = settings.modulo_public_url.rstrip("/")
-
     session_id_str = str(session_id)
 
     logger.info(
@@ -1494,226 +1922,32 @@ async def stream_chat(
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
         msg_id: str | None = None
-        last_ping_at = _time.monotonic()
-        parent_msg_id: uuid.UUID | None = None
         try:
             async with AsyncSession(session.bind, autobegin=False) as db_session:
-                # 1. Resolve API key
-                api_key, api_key_error = await _resolve_stream_api_key(req, principal, db_session, settings)
-                if api_key_error is not None:
-                    yield f"event: error\ndata: {json.dumps({'detail': api_key_error})}\n\n"
-                    return
-                if api_key is None:
-                    yield f"event: error\ndata: {json.dumps({'detail': 'Failed to resolve API key for streaming'})}\n\n"
+                ctx = _StreamContext(db_session, principal, session_id, req, settings, chat_session)
+
+                # 1-7. Resolve API key → build backend → system prompt →
+                # save user message → reconstruct → prepend → prune.
+                init = await _initialise_stream(ctx)
+                if init.error_detail is not None:
+                    yield f"event: error\ndata: {json.dumps({'detail': init.error_detail})}\n\n"
                     return
 
-                # 2. Create backend (needed before system prompt for supports_tools)
-                backend, backend_error = _build_stream_backend(req, api_key)
-                if backend_error is not None:
-                    yield f"event: error\ndata: {json.dumps({'detail': backend_error})}\n\n"
-                    return
+                backend = init.backend
                 if backend is None:
-                    yield f"event: error\ndata: {json.dumps({'detail': 'Failed to build model backend'})}\n\n"
+                    yield f"event: error\ndata: {json.dumps({'detail': MSG_UNEXPECTED_ERROR})}\n\n"
                     return
 
-                # 3. Construct system prompt from config + skills
-                supports_tools = getattr(backend, "supports_tools", False)
-                system_prompt = await _build_stream_system_prompt(db_session, principal, req, supports_tools)
-
-                # 4. Save user message to DB
-                parent_msg_id = await _save_stream_user_message(db_session, principal, session_id, req)
-
-                # 5. Reconstruct conversation
-                async with db_session.begin():
-                    await set_rls_org(db_session, principal.organisation_id)
-                    langchain_messages = await _reconstruct_messages(db_session, session_id)
-
-                # 6. Prepend system prompt
-                if system_prompt:
-                    langchain_messages.insert(0, SystemMessage(content=system_prompt))
-
-                # 7. Context window pruning
-                context_window = (
-                    req.context_window_tokens
-                    if req.context_window_tokens is not None
-                    else (chat_session.context_window_tokens or 200000)
-                )
-                pruned_count = _prune_context_window(langchain_messages, context_window)
-                if pruned_count:
-                    logger.info("Pruned %d messages from session %s", pruned_count, session_id)
-
-                # ── Agentic loop ────────────────────────────────────────
-                while True:
-                    full_content = ""
-                    tool_call_buffers: dict[int, dict[str, Any]] = {}
-
-                    tools_param = await _build_stream_tools_param(backend, principal, req)
-
-                    async for chunk in backend.stream(langchain_messages, tools=tools_param):
-                        if await request.is_disconnected():
-                            return
-                        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
-                            full_content += chunk.content
-                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
-                            _accumulate_tool_call_chunks(chunk, tool_call_buffers)
-
-                    if await request.is_disconnected():
-                        return
-
-                    tool_calls = _reconstruct_tool_calls(tool_call_buffers)
-
-                    if not tool_calls:
-                        # LLM done — save assistant message and exit loop
-                        msg_id = await _finalise_stream_assistant_message(
-                            db_session, principal, session_id, full_content, parent_msg_id, req, chat_session
-                        )
-                        break
-
-                    # Separate UI vs MCP tool calls
-                    ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
-                    mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
-
-                    tool_results: list[dict[str, Any]] = []
-
-                    # Execute MCP tools
-                    async for tr in _run_mcp_tool_calls(mcp_tool_calls, req, mcp_base_url):
-                        tool_results.append(tr)
-                        yield _sse_tool_call_event(tr)
-
-                    # Handle get_manifest calls server-side
-                    manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
-                    ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
-
-                    async for tr in _run_manifest_calls(manifest_calls, req):
-                        tool_results.append(tr)
-                        yield _sse_tool_call_event(tr)
-
-                    # Handle UI tools
-                    if ui_tool_calls and (
-                        req.exclude_ui_tools or not await _is_ui_driving_enabled(principal.organisation_id)
-                    ):
-                        ui_driving_error = (
-                            "UI driving is not available in this view"
-                            if req.exclude_ui_tools
-                            else _MSG_UI_DRIVING_DISABLED_ORGANISATION
-                        )
-                        for tc in ui_tool_calls:
-                            tr = {
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": False,
-                                "error": ui_driving_error,
-                            }
-                            tool_results.append(tr)
-                            yield _sse_tool_call_event(tr)
-                    elif ui_tool_calls:
-                        async with db_session.begin():
-                            await set_rls_org(db_session, principal.organisation_id)
-                            config_service = RemyConfigService(db_session)
-                            config = await config_service.get_config(principal.organisation_id)
-
-                        # Check if session is paused — wait for resume
-                        registry = _get_registry()
-                        paused = session_id_str in _resume_events
-                        if paused:
-                            yield (
-                                "event: paused\ndata: "
-                                + json.dumps({"detail": "Session paused. Waiting for resume."})
-                                + "\n\n"
-                            )
-                            await _wait_for_stream_resume(registry, session_id_str)
-
-                        page_path = req.page_context or ""
-                        approved_calls, pending_permission_calls = await _classify_ui_tool_permissions(
-                            config, ui_tool_calls, page_path, session_id_str
-                        )
-
-                        if pending_permission_calls:
-                            payload, req_id = _build_permission_request_payload(pending_permission_calls)
-                            yield f"event: permission_request\ndata: {json.dumps(payload)}\n\n"
-                            approved_calls.extend(
-                                await _await_permission_decision(
-                                    registry, session_id_str, req_id, pending_permission_calls, page_path
-                                )
-                            )
-
-                        if approved_calls:
-                            # Rate limiter check before yielding commands
-                            rate_limiter = _rate_limiters.get(session_id_str)
-                            if rate_limiter is None:
-                                rate_limiter = ActionRateLimiter(
-                                    max_actions=config.rate_limit_max_actions,
-                                    window_seconds=config.rate_limit_window_seconds,
-                                )
-                                _rate_limiters[session_id_str] = rate_limiter
-                            if not rate_limiter.check():
-                                yield (
-                                    _SSE_ERROR_PREFIX
-                                    + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
-                                    + "\n\n"
-                                )
-                                break
-
-                            yield f"event: ui_command_batch\ndata: {
-                                json.dumps(
-                                    {
-                                        'commands': approved_calls,
-                                    }
-                                )
-                            }\n\n"
-
-                            registry = _get_registry()
-                            event = asyncio.Event()
-                            _pending_ui_results[session_id_str] = event
-                            try:
-                                results = await _wait_for_ui_command_results(registry, session_id_str, event)
-                            finally:
-                                _pending_ui_results.pop(session_id_str, None)
-
-                            if len(approved_calls) != len(results):
-                                logger.warning(
-                                    "remy.ui_result_length_mismatch",
-                                    extra={"approved": len(approved_calls), "results": len(results)},
-                                )
-                            for tr in _merge_ui_command_results(approved_calls, results):
-                                tool_results.append(tr)
-                                yield _sse_tool_call_event(tr)
-
-                            if results and all(r.get("error") == "cancelled_by_user" for r in results):
-                                skipped = len(results)
-                                s = "s" if skipped != 1 else ""
-                                summary = f"Action cancelled by user. {skipped} action{s} skipped."
-                                yield f"event: abort_summary\ndata: {
-                                    json.dumps(
-                                        {
-                                            'completed': 0,
-                                            'skipped': skipped,
-                                            'summary': summary,
-                                        }
-                                    )
-                                }\n\n"
-                                break
-
-                    # Add to conversation for next LLM turn
-                    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
-                    for tr in tool_results:
-                        langchain_messages.append(
-                            ToolMessage(
-                                content=_tool_result_content(tr),
-                                tool_call_id=tr["tool_call_id"],
-                            )
-                        )
-
-                    # Save to DB
-                    msg_id = await _persist_assistant_and_tool_messages(
-                        db_session, principal, session_id, full_content, tool_calls, tool_results, parent_msg_id
-                    )
-
-                    # Ping keepalive if idle
-                    now = _time.monotonic()
-                    if now - last_ping_at >= 15:
-                        yield "event: ping\ndata: {}\n\n"
-                        last_ping_at = now
+                state: dict[str, Any] = {
+                    "disconnected": False,
+                    "full_content": "",
+                    "should_break": False,
+                    "msg_id": None,
+                    "last_ping_at": _time.monotonic(),
+                }
+                async for event in _run_stream_loop(ctx, request, backend, init.messages, init.parent_msg_id, state):
+                    yield event
+                msg_id = state["msg_id"]
 
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
@@ -1754,15 +1988,9 @@ async def submit_permission_response(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
-    if not await _is_ui_driving_enabled(principal.organisation_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
-        )
+    await _require_ui_driving(principal)
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _validate_session_ownership(session_id, principal, session)
+        await _verify_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.submit_permission_response")
         raise HTTPException(
@@ -1818,15 +2046,9 @@ async def submit_ui_command_results(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
-    if not await _is_ui_driving_enabled(principal.organisation_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
-        )
+    await _require_ui_driving(principal)
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _validate_session_ownership(session_id, principal, session)
+        await _verify_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.submit_ui_command_results")
         raise HTTPException(
@@ -1874,9 +2096,7 @@ async def reset_session_permissions(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _validate_session_ownership(session_id, principal, session)
+        await _verify_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.reset_session_permissions")
         raise HTTPException(
@@ -1921,9 +2141,7 @@ async def resume_session(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _validate_session_ownership(session_id, principal, session)
+        await _verify_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.resume_session")
         raise HTTPException(
@@ -1973,9 +2191,7 @@ async def stop_session(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _validate_session_ownership(session_id, principal, session)
+        await _verify_owned_session(session_id, principal, session)
     except ProgrammingError:
         logger.exception("remy.stop_session")
         raise HTTPException(
@@ -2018,6 +2234,54 @@ async def stop_session(
     return {"status": "stopped"}
 
 
+def _audit_trail_entry(m: ChatMessage) -> dict[str, Any]:
+    """Build one audit-trail row from a tool_result chat message."""
+    tr = m.tool_results_json or {}
+    result_data = tr.get("result")
+    result_dict = result_data if isinstance(result_data, dict) else {}
+    snapshot_data = result_dict.get("snapshotBefore")
+    snapshot = snapshot_data if isinstance(snapshot_data, dict) else {}
+    return {
+        "timestamp": m.created_at.isoformat() if m.created_at else None,
+        "action": tr.get("tool_name", ""),
+        "args": result_dict.get("args", {}),
+        "url": snapshot.get("url", ""),
+        "success": tr.get("success", False),
+        "error": tr.get("error"),
+    }
+
+
+def _last_tool_result_action(last_result: ChatMessage) -> tuple[Any, dict[str, Any]]:
+    """Return (tool_name, tool_args) for the most recent tool_result message."""
+    tr = last_result.tool_results_json or {}
+    tool_name: Any = tr.get("tool_name", "")
+    tool_args: dict[str, Any] = {}
+    inner_result = tr.get("result")
+    if isinstance(inner_result, dict):
+        tool_args = inner_result.get("args", {})
+    return tool_name, tool_args
+
+
+def _derive_undo_action(tool_name: str, tool_args: dict[str, Any]) -> dict[str, Any] | None:
+    """Derive the inverse action for a tool action, or None when not invertible."""
+    inverse: dict[str, Any] | None = None
+    match tool_name:
+        case "navigate":
+            inverse = {"name": "go_back", "args": {}}
+        case "go_back":
+            inverse = {"name": "reload", "args": {}}
+        case "fill":
+            prior = tool_args.get("prior_value", tool_args.get("value", ""))
+            inverse = {
+                "name": "fill",
+                "args": {"selector": tool_args.get("selector", ""), "value": prior},
+            }
+        case _:
+            if tool_name in ("click", "select", "press"):
+                inverse = {"name": tool_name, "args": tool_args, "reversible": False}
+    return inverse
+
+
 @router.get(
     "/sessions/{session_id}/audit-trail",
     status_code=status.HTTP_200_OK,
@@ -2050,25 +2314,7 @@ async def get_audit_trail(
             )
             messages = result.scalars().all()
 
-        trail = []
-        for m in messages:
-            tr = m.tool_results_json or {}
-            result_data = tr.get("result")
-            result_dict = result_data if isinstance(result_data, dict) else {}
-            snapshot_data = result_dict.get("snapshotBefore")
-            snapshot = snapshot_data if isinstance(snapshot_data, dict) else {}
-            trail.append(
-                {
-                    "timestamp": m.created_at.isoformat() if m.created_at else None,
-                    "action": tr.get("tool_name", ""),
-                    "args": result_dict.get("args", {}),
-                    "url": snapshot.get("url", ""),
-                    "success": tr.get("success", False),
-                    "error": tr.get("error"),
-                }
-            )
-
-        return {"items": trail}
+        return {"items": [_audit_trail_entry(m) for m in messages]}
     except ProgrammingError:
         logger.exception("remy.get_audit_trail")
         raise HTTPException(
@@ -2118,28 +2364,8 @@ async def undo_last_action(
         if last_result is None:
             return {"status": "no_action", "detail": "No previous action to undo."}
 
-        tr = last_result.tool_results_json or {}
-        tool_name = tr.get("tool_name", "")
-        tool_args = {}
-        inner_result = tr.get("result")
-        if isinstance(inner_result, dict):
-            tool_args = inner_result.get("args", {})
-
-        inverse: dict[str, Any] | None = None
-        match tool_name:
-            case "navigate":
-                inverse = {"name": "go_back", "args": {}}
-            case "go_back":
-                inverse = {"name": "reload", "args": {}}
-            case "fill":
-                prior = tool_args.get("prior_value", tool_args.get("value", ""))
-                inverse = {
-                    "name": "fill",
-                    "args": {"selector": tool_args.get("selector", ""), "value": prior},
-                }
-            case _:
-                if tool_name in ("click", "select", "press"):
-                    inverse = {"name": tool_name, "args": tool_args, "reversible": False}
+        tool_name, tool_args = _last_tool_result_action(last_result)
+        inverse = _derive_undo_action(tool_name, tool_args)
 
         return {
             "status": "found" if inverse else "no_inverse",

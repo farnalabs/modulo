@@ -208,14 +208,21 @@ class Settings(BaseSettings):
     # slow-but-healthy first node is never false-failed. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
-    # KEPT at 10 after budget verification (2026-08-06). Verified against the
-    # deployed Postgres (modulo-app-db, Fly Postgres 17.9):
-    #   SHOW max_connections  -> 300; current connections ~40 at sample time.
-    # Budget math: 10 x 2 workers (runs + system) x up to 5 machines = 100 +
-    # the web process pools + per-run checkpointer connections — well under the
-    # 300 cap with only ~40 in use. The firefight-era raise to 10 (to relieve
-    # "Too many connections") is justified by the verified budget, so it stays.
-    saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
+    # Default 30. The pool MUST stay >= SAQ_WORKER_CONCURRENCY + reserve (5):
+    # every concurrent run holds a connection in pre-node setup (claim_run_async
+    # / load_and_setup / executor.execute), and the watchdog's terminalize write
+    # (fail_run_terminal in zombie_watchdog) also needs a connection when a run
+    # wedges during that window. With concurrency=20 and only the firefight-era
+    # pool of 10, the worker can exhaust its pool in setup and the watchdog
+    # cannot get a slot to terminalize — the run rides to the 35-min
+    # dispatcher_reconcile backstop as a nodeless zombie. saq_worker._get_async_engine
+    # enforces pool >= concurrency + 5 at runtime (raising the effective pool
+    # above the configured value with a warning when needed), so no config can
+    # wedge the worker on DB connection starvation — exactly like the Redis
+    # pool guard (_effective_redis_pool_size). The le=200 cap bounds the
+    # configured value; the runtime effective pool may exceed it (it is a
+    # runtime override), matching the Redis guard's behaviour.
+    saq_worker_db_pool_size: int = Field(default=30, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=200)
     # SAQ Redis client pool size (Upstash connection budget — F2).
     # Default 20 satisfies the invariant for the default concurrency of 5
     # (20 >= 5 + 5 reserve). NOTE the real invariant: SAQ's dequeue() uses a

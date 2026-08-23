@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from modulo.core.secrets_backend import SecretsBackend, validate_key
 from modulo.db.models.secret import Secret
+from modulo.db.rls import _TENANT_KEY
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,7 +132,7 @@ class FernetSecretsBackend(SecretsBackend):
         The org ID is cached after the first read to avoid redundant queries.
 
         On non-Postgres backends (SQLite, MariaDB), ``current_setting()``
-        is not available — falls back to ``session.info["organisation_id"]``.
+        is not available — falls back to ``session.info["org_id"]``.
         """
         if self._org_id is not None:
             return self._org_id
@@ -155,7 +156,7 @@ class FernetSecretsBackend(SecretsBackend):
         if not org_id_str:
             info = getattr(self._session, "info", {})
             if isinstance(info, dict):
-                org_id_str = info.get("organisation_id")
+                org_id_str = info.get(_TENANT_KEY)
 
         if not org_id_str:
             raise RuntimeError(

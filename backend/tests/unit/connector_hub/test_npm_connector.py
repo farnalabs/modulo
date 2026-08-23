@@ -86,8 +86,9 @@ async def test_query_package(connector):
 
 
 async def test_query_package_missing_filter(connector):
+    query = ConnectorQuery(resource="package")
     with pytest.raises(ValueError, match="'package' in filters"):
-        await connector.query(ConnectorQuery(resource="package"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -106,13 +107,15 @@ async def test_query_package_version(connector):
 
 
 async def test_query_package_version_missing_package(connector):
+    query = ConnectorQuery(resource="package_version", filters={"version": "4.18.2"})
     with pytest.raises(ValueError, match="'package' in filters"):
-        await connector.query(ConnectorQuery(resource="package_version", filters={"version": "4.18.2"}))
+        await connector.query(query)
 
 
 async def test_query_package_version_missing_version(connector):
+    query = ConnectorQuery(resource="package_version", filters={"package": "express"})
     with pytest.raises(ValueError, match="'version' in filters"):
-        await connector.query(ConnectorQuery(resource="package_version", filters={"package": "express"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +171,9 @@ async def test_query_search_with_cursor(connector):
 
 
 async def test_query_search_missing_text(connector):
+    query = ConnectorQuery(resource="search")
     with pytest.raises(ValueError, match="'text' in filters"):
-        await connector.query(ConnectorQuery(resource="search"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -217,8 +221,9 @@ async def test_query_package_files(connector):
 
 
 async def test_query_package_files_missing_filters(connector):
+    query = ConnectorQuery(resource="package_files", filters={"version": "4.18.2"})
     with pytest.raises(ValueError, match="'package' in filters"):
-        await connector.query(ConnectorQuery(resource="package_files", filters={"version": "4.18.2"}))
+        await connector.query(query)
     with pytest.raises(ValueError, match="'version' in filters"):
         await connector.query(ConnectorQuery(resource="package_files", filters={"package": "express"}))
 

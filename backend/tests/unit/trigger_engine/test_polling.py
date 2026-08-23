@@ -1038,7 +1038,7 @@ class TestSetRlsOrg:
 
         await _set_rls_org(session, _ORG_ID)
 
-        assert session.info["organisation_id"] == _ORG_ID
+        assert session.info["org_id"] == _ORG_ID
 
     async def test_postgres_dialect_sets_config(self, mock_db_components) -> None:
         """On Postgres, RLS context is applied via SET LOCAL set_config."""
@@ -1051,10 +1051,14 @@ class TestSetRlsOrg:
 
         await _set_rls_org(session, _ORG_ID)
 
-        session.execute.assert_awaited_once()
-        stmt, params = session.execute.await_args.args
-        assert "set_config" in str(stmt).lower()
-        assert params == {"val": str(_ORG_ID)}
+        # Org scope + the internal-execution hatch (app.execution_context) so
+        # polling reads see team-private rows.
+        assert session.execute.await_count == 2
+        org_stmt, org_params = session.execute.await_args_list[0].args
+        assert "set_config" in str(org_stmt).lower()
+        assert org_params == {"val": str(_ORG_ID)}
+        exec_stmt = session.execute.await_args_list[1].args[0]
+        assert "app.execution_context" in str(exec_stmt).lower()
 
 
 # ---------------------------------------------------------------------------

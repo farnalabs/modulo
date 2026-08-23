@@ -45,6 +45,7 @@
                 <td class="px-4 py-3">{{ schema.parameters?.length ?? 0 }}</td>
                 <td class="px-4 py-3 text-right">
                   <button
+                    type="button"
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     :aria-label="$t('views.ParameterSchemasView.delete')"
                     data-testid="paramschema-delete"
@@ -68,6 +69,7 @@
               {{ deleting ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
             </Button>
             <button
+              type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               @click="deleteConfirmId = null"
             >
@@ -82,6 +84,7 @@
     <template v-else>
       <div class="mb-4">
         <button
+          type="button"
           class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           data-testid="paramschema-back"
           @click="closeEditor"
@@ -114,6 +117,7 @@
                 {{ saving ? $t('views.ParameterSchemasView.saving') : (isNew ? $t('views.ParameterSchemasView.create') : $t('views.ParameterSchemasView.save_as_new_version')) }}
               </Button>
               <button
+                type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                 @click="closeEditor"
               >
@@ -266,6 +270,7 @@
                             :placeholder="$t('views.ParameterSchemasView.option_placeholder')"
                           />
                           <button
+                            type="button"
                             class="rounded p-1 text-muted-foreground hover:text-destructive"
                             :aria-label="$t('views.ParameterSchemasView.remove_option')"
                             data-testid="paramschema-remove-option"
@@ -275,6 +280,7 @@
                           </button>
                         </div>
                         <button
+                          type="button"
                           class="text-xs text-indigo-500 hover:text-indigo-400"
                           @click="(param.options = param.options || []).push('')"
                         >
@@ -321,6 +327,7 @@
                     </div>
                   </div>
                   <button
+                    type="button"
                     class="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     :aria-label="$t('views.ParameterSchemasView.remove_param')"
                     @click="removeParameter(idx)"
@@ -362,6 +369,7 @@
               </div>
               <div class="flex items-center gap-1">
                 <button
+                  type="button"
                   class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
                   @click="editSet(set)"
                   data-testid="paramschema-edit-set"
@@ -369,6 +377,7 @@
                   {{ $t('views.ParameterSchemasView.edit') }}
                 </button>
                 <button
+                  type="button"
                   class="rounded px-2 py-1 text-xs text-muted-foreground hover:text-destructive"
                   @click="cloneSet(set)"
                   data-testid="paramschema-clone-set"
@@ -376,6 +385,7 @@
                   {{ $t('views.ParameterSchemasView.clone') }}
                 </button>
                 <button
+                  type="button"
                   class="rounded px-2 py-1 text-xs text-muted-foreground hover:text-destructive"
                   :aria-label="$t('views.ParameterSchemasView.delete')"
                   data-testid="paramschema-delete-set"

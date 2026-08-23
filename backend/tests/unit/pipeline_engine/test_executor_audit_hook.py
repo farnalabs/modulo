@@ -11,7 +11,7 @@ import asyncio
 import logging
 import uuid
 from typing import Self
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -64,6 +64,7 @@ class TestContextWriteAuditHook:
         with (
             patch("modulo.core.pipeline_engine.executor.append_audit_event", fake_append),
             patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
             await hook(
@@ -100,6 +101,7 @@ class TestContextWriteAuditHook:
         with (
             patch("modulo.core.pipeline_engine.executor.append_audit_event", fake_append),
             patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
             await hook({})
@@ -123,6 +125,7 @@ class TestContextWriteAuditHook:
         with (
             patch("modulo.core.pipeline_engine.executor.append_audit_event", failing_append),
             patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
             caplog.at_level(logging.ERROR),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
@@ -143,6 +146,7 @@ class TestContextWriteAuditHook:
         with (
             patch("modulo.core.pipeline_engine.executor.append_audit_event", hanging_append),
             patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
             caplog.at_level(logging.WARNING),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)

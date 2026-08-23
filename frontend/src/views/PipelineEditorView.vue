@@ -17,9 +17,9 @@
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
             <Button size="small" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
-            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
-            <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
             <Button severity="secondary" outlined size="small" class="text-xs" @click="addNode">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
@@ -27,7 +27,7 @@
         <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
           <div class="flex items-center gap-2">
             <h2 class="text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
-            <button class="rounded p-1 hover:bg-accent" @click="openRenameDialog" title="Rename pipeline">
+            <button type="button" class="rounded p-1 hover:bg-accent" @click="openRenameDialog" title="Rename pipeline">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
             </button>
             <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
@@ -63,6 +63,7 @@
           </Button>
           <div class="relative" @click.stop>
             <button
+              type="button"
               class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent"
               @click="showSaveAsDropdown = !showSaveAsDropdown"
             >
@@ -73,6 +74,7 @@
               class="absolute left-0 top-full mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
             >
               <button
+                type="button"
                 class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
                 @click="openSaveAsComposite"
               >
@@ -83,9 +85,9 @@
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
-            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
-            <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
@@ -103,6 +105,7 @@
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="relative">
             <button
+              type="button"
               ref="retryPolicyToggleRef"
               :id="retryPolicyToggleId"
               class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
@@ -114,12 +117,12 @@
             >
               {{ $t('views.PipelineEditorView.retry_policy') }}
             </button>
-            <div
+            <dialog
               v-if="retryPolicyOpen"
+              open
               :id="retryPolicyPanelId"
               ref="retryPolicyPanelRef"
-              class="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
-              role="dialog"
+              class="absolute right-0 left-auto top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
               tabindex="-1"
               :aria-label="$t('views.PipelineEditorView.retry_policy')"
               data-testid="pipeline-editor-retry-policy-panel"
@@ -176,12 +179,14 @@
               </div>
               <div class="mt-3 flex justify-end gap-2">
                 <button
+                  type="button"
                   class="rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
                   @click="closeRetryPolicy"
                 >
                   {{ $t('views.PipelineEditorView.cancel') }}
                 </button>
                 <button
+                  type="button"
                   class="rounded border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="retryPolicySaving"
                   @click="saveRetryPolicy"
@@ -190,10 +195,11 @@
                   {{ retryPolicySaving ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save') }}
                 </button>
               </div>
-            </div>
+            </dialog>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <button
+            type="button"
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
             @click="addNode"
             title="Add node"
@@ -203,6 +209,7 @@
           </button>
           <span class="mx-2 h-4 w-px bg-border" />
           <button
+            type="button"
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
             @click="() => fitView()"
             title="Fit view"
@@ -212,15 +219,22 @@
           </button>
         </div>
         <!-- Run dialog modal -->
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        <div
           v-if="showRunDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           @click.self="closeRunDialog"
         >
-          <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
+          <dialog
+            open
+            aria-modal="true"
+            :aria-label="$t('views.PipelineEditorView.run_dialog_title')"
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4"
+            style="position: static"
+          >
             <div class="flex items-center justify-between">
               <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineEditorView.run_dialog_title') }}</h2>
               <button
+                type="button"
                 class="text-muted-foreground hover:text-foreground transition-colors"
                 @click="closeRunDialog"
                 aria-label="Close"
@@ -252,6 +266,7 @@
             </div>
             <div class="flex justify-end gap-2 pt-2">
               <button
+                type="button"
                 class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="closeRunDialog"
               >
@@ -271,7 +286,7 @@
                 {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
               </Button>
             </div>
-          </div>
+          </dialog>
         </div>
         <VueFlow
           :key="pipelineId"
@@ -487,6 +502,7 @@
                   <span v-else class="text-xs text-muted-foreground">—</span>
                 </div>
                 <button
+                  type="button"
                   class="mt-1 text-xs text-indigo-500 hover:text-indigo-400"
                   data-testid="pipeline-save-param-set"
                   @click="saveAsNewParamSet"
@@ -572,6 +588,7 @@
           </Button>
           <button
             v-if="selectedNodeData.node_type === 'agent'"
+            type="button"
             data-testid="pipeline-editor-revert-to-manual"
             class="inline-flex w-full items-center justify-center rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="openRevertDialog"
@@ -772,6 +789,7 @@
               {{ savingEdge ? 'Saving...' : 'Save Edge' }}
             </Button>
             <button
+              type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="selectedEdgeData = null"
             >
@@ -1221,8 +1239,8 @@ const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgent
 const eligibleConnectors = computed(() => {
   if (!selectedAgent.value) return []
   const refs: Array<{ connector_type: string }> = selectedAgent.value.connector_type_refs || []
-  const allowedTypes = refs.map(r => r.connector_type)
-  return connectors.value.filter(c => allowedTypes.includes(c.connector_type_id))
+  const allowedTypes = new Set(refs.map(r => r.connector_type))
+  return connectors.value.filter(c => allowedTypes.has(c.connector_type_id))
 })
 
 const modelBackendName = computed(() => {
@@ -1324,7 +1342,7 @@ function onParamSetChange() {
     return
   }
   const set = paramSets.value.find((ps: any) => ps.id === selectedNodeParamSetId.value)
-  selectedNodeOverrides.value = { ...(set?.values || {}) }
+  selectedNodeOverrides.value = { ...(set?.values ?? {}) }
   // Also update the backend node data
   if (selectedNodeData.value) {
     selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value
@@ -1385,17 +1403,21 @@ function convertBackendNode(n: any): any {
 function convertBackendEdge(e: any, i: number): any {
   const isLoop = e.edge_type === 'loop'
   const isLlm = e.edge_type === 'llm'
+  let style: Record<string, string>
+  if (isLoop) {
+    style = { stroke: '#3b82f6', strokeDasharray: '5,5' }
+  } else if (isLlm) {
+    style = { stroke: '#8b5cf6' }
+  } else {
+    style = { stroke: '#888' }
+  }
   return {
     id: e.id || `edge-${i}`,
     source: e.source_node_id,
     target: e.target_node_id,
     type: 'smoothstep',
     animated: isLoop,
-    style: isLoop
-      ? { stroke: '#3b82f6', strokeDasharray: '5,5' }
-      : isLlm
-        ? { stroke: '#8b5cf6' }
-        : { stroke: '#888' },
+    style,
     data: {
       hitl_gate_config: e.hitl_gate_config || null,
       edge_type: e.edge_type || 'normal',
@@ -1468,7 +1490,7 @@ function onNodeClick(event: any) {
   // Populate parameter set + overrides
   if (backendNode?.parameter_set_id) {
     selectedNodeParamSetId.value = backendNode.parameter_set_id
-    selectedNodeOverrides.value = { ...(backendNode.parameter_overrides || {}) }
+    selectedNodeOverrides.value = { ...(backendNode.parameter_overrides ?? {}) }
     loadParamSets()
   } else {
     selectedNodeParamSetId.value = undefined

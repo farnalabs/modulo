@@ -78,8 +78,9 @@ async def test_query_issues(connector):
 
 
 async def test_query_issues_missing_project(connector):
+    query = ConnectorQuery(resource="issues")
     with pytest.raises(ValueError, match="'project' in filters"):
-        await connector.query(ConnectorQuery(resource="issues"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +97,9 @@ async def test_query_events(connector):
 
 
 async def test_query_events_missing_project(connector):
+    query = ConnectorQuery(resource="events")
     with pytest.raises(ValueError, match="'project' in filters"):
-        await connector.query(ConnectorQuery(resource="events"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +156,9 @@ async def test_query_issue_events(connector):
 
 
 async def test_query_issue_events_missing_issue_id(connector):
+    query = ConnectorQuery(resource="issue_events")
     with pytest.raises(ValueError, match="'issue_id' in filters"):
-        await connector.query(ConnectorQuery(resource="issue_events"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +167,9 @@ async def test_query_issue_events_missing_issue_id(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="invalid")
     with pytest.raises(ValueError, match="Unsupported Sentry resource"):
-        await connector.query(ConnectorQuery(resource="invalid"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +188,9 @@ async def test_write_issue_status(connector):
 
 
 async def test_write_issue_status_missing_issue_id(connector):
+    payload = ConnectorPayload(resource="issue_status", data={"status": "resolved"})
     with pytest.raises(ValueError, match="'issue_id' in data"):
-        await connector.write(ConnectorPayload(resource="issue_status", data={"status": "resolved"}))
+        await connector.write(payload)
 
 
 async def test_write_issue_status_missing_status(connector):

@@ -124,7 +124,7 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     """Resolve whether the caller may strip a guardrail binding from a node.
 
     Admin-level only (``org_role == "admin"``, the role the ``guardrail.manage``
-    permission requires) — the same privilege the admin-only guardrail
+    permission requires) ÔÇö the same privilege the admin-only guardrail
     definition / apply / reject endpoints enforce. Uses the flag-independent
     numeric hierarchy so enforcement stays live even when authz.enforce is
     disabled (mirrors ``_is_privileged`` for the HITL guard).
@@ -137,6 +137,33 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     if principal.org_role is None:
         return False
     return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+
+
+async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
+    """Establish the RLS org + user context for a request transaction."""
+    await set_rls_org(session, principal.organisation_id)
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+
+def _raise_db_migration_error() -> None:
+    """Raise the 501 'feature not available' response for a ProgrammingError."""
+    logger.exception(_CODE_ROUTES_PIPELINES)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _require_pipeline(pipeline: Pipeline | None) -> Pipeline:
+    """Return the pipeline, or raise 404 when it does not exist."""
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+    return pipeline
+
+
+async def _get_pipeline_or_404(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline:
+    """Fetch a pipeline, raising 404 when it does not exist."""
+    return _require_pipeline(await get_pipeline(session, pipeline_id))
 
 
 @dataclass(frozen=True)
@@ -221,11 +248,11 @@ async def _deny_hitl_gate(
     exc: HitlGateWeakeningDenied,
     request_id: str | None = None,
 ) -> None:
-    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 §5).
+    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 ┬º5).
 
     The guarded write already rolled back (guard-runs-before-delete), so the
     denial audit event is written in a fresh transaction immediately after the
-    denial — it must never be lost with the rolled-back write.
+    denial ÔÇö it must never be lost with the rolled-back write.
     """
     try:
         async with session.begin():
@@ -262,6 +289,36 @@ async def _deny_hitl_gate(
     raise HTTPException(
         status_code=denial_http_status(exc.reason_code),
         detail=detail,
+    ) from None
+
+
+async def _handle_graph_write_denials(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    exc: HitlGateWeakeningDenied | GuardrailBindingStripDenied,
+) -> None:
+    """Translate a graph-write denial into its HTTP response.
+
+    ``HitlGateWeakeningDenied`` is audited then re-raised as HTTP by
+    ``_deny_hitl_gate``; ``GuardrailBindingStripDenied`` maps directly to its
+    denial status. Shared by the graph-replace, pipeline-update, snapshot-
+    rollback, and node-conversion save paths.
+    """
+    if isinstance(exc, HitlGateWeakeningDenied):
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
+        return
+    raise HTTPException(
+        status_code=denial_http_status(exc.reason_code),
+        detail=exc.detail,
     ) from None
 
 
@@ -380,7 +437,7 @@ class PipelineUpdate(TeamVisibilityMixin):
     @field_validator("retry_policy", mode="before")
     @classmethod
     def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any]:
-        # None clears the policy (empty dict) — the column is non-nullable.
+        # None clears the policy (empty dict) ÔÇö the column is non-nullable.
         return _validate_retry_policy(value) or {}
 
     @field_validator("max_duration_seconds", mode="before")
@@ -429,7 +486,7 @@ class PipelineResponse(BaseModel):
     folder_id: uuid.UUID | None = None
     # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
     # UI warns the user to re-save the graph so connectors/model backends are
-    # rebound for the new team (PRD §9.3 ownership transfer).
+    # rebound for the new team (PRD ┬º9.3 ownership transfer).
     connector_rebind_required: bool = False
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -439,7 +496,7 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_retry_policy(cls, value: Any) -> dict[str, Any]:
         # The column is non-nullable with a {} default, but legacy rows and
-        # partial ORM objects may expose None — the no-policy default is {}.
+        # partial ORM objects may expose None ÔÇö the no-policy default is {}.
         return value if isinstance(value, dict) else {}
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -498,7 +555,7 @@ class PipelineGraphNode(BaseModel):
     # marked idempotent=false (e.g. one with an external side effect like
     # creating a PR or charging a card) suppresses BOTH the run-level
     # retry_policy re-dispatch and the node-level transient retry for any graph
-    # that contains it — re-running would double-execute the side effect.
+    # that contains it ÔÇö re-running would double-execute the side effect.
     idempotent: bool = Field(
         default=True,
         description="Whether the node is logically safe to re-run. When false, "
@@ -511,7 +568,7 @@ class PipelineGraphNode(BaseModel):
     parameter_set_id: uuid.UUID | None = None
     parameter_overrides: dict[str, Any] | None = None
     template_id: str | None = None
-    # FAR-296: sandbox_agent mode — "llm" (default, dispatches an LLM agent with
+    # FAR-296: sandbox_agent mode ÔÇö "llm" (default, dispatches an LLM agent with
     # agent_command + rendered prompt) or "script" (runs script_command verbatim
     # with the full run input at /home/user/input.json).
     mode: Literal["llm", "script"] = "llm"
@@ -521,7 +578,7 @@ class PipelineGraphNode(BaseModel):
     # FAR-296 Phase 3: egress control + resource-limit config surface.
     # egress_policy: "default" (internet allowed, e2b default), "deny_all"
     # (allow_internet_access=False), or "selected" (allow_internet_access=False
-    # + a host:port egress_allowlist carried as metadata — FAR-296 Phase 3b-3).
+    # + a host:port egress_allowlist carried as metadata ÔÇö FAR-296 Phase 3b-3).
     # resource_limits: a known-subset dict carried as sandbox metadata so a
     # server-side template/config can enforce them.
     egress_policy: Literal["default", "deny_all", "selected"] | None = None
@@ -529,7 +586,7 @@ class PipelineGraphNode(BaseModel):
     resource_limits: dict[str, Any] | None = None
     # FAR-212 PR B: sandbox write/egress mediation surface. ``read_only`` mounts
     # / chmods the workspace read-only at runtime (so writes are impossible for
-    # the agent's non-root user — write_files derives False) and
+    # the agent's non-root user ÔÇö write_files derives False) and
     # ``git_credentials`` scopes the provisioned git credential (``scoped`` =
     # limited to the allowlisted github.com host via an enforced helper;
     # ``unscoped`` = full access, the default; ``none`` = no git credentials are
@@ -541,7 +598,7 @@ class PipelineGraphNode(BaseModel):
     git_credentials: Literal["scoped", "unscoped", "none"] | None = None
     # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the
     # node's sandbox is killed by the platform-side runtime killer once the
-    # wall-clock elapsed time exceeds this budget — a tighter spend bound than
+    # wall-clock elapsed time exceeds this budget ÔÇö a tighter spend bound than
     # the node timeout. Must be a positive int (validated at save-time).
     wallclock_budget_seconds: int | None = None
     # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
@@ -610,7 +667,7 @@ class PipelineGraphNode(BaseModel):
             if self.connector_binding is not None:
                 raise ValueError("Composite nodes cannot have connector bindings")
         elif self.node_type == "sandbox_agent":
-            # FAR-296 mode-aware validation — ONE shared helper used by every
+            # FAR-296 mode-aware validation ÔÇö ONE shared helper used by every
             # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
             # MCP update_pipeline_graph, config linter) so save-time and run-time
             # agreement is guaranteed. Imported from the lightweight sandbox_mode
@@ -653,7 +710,7 @@ class PipelineGraphNode(BaseModel):
             if self.agent_id is None:
                 raise ValueError("Agent nodes require an agent")
         # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
-        # A non-sandbox node that sets them is rejected — the enforcement surface
+        # A non-sandbox node that sets them is rejected ÔÇö the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
         # agents, and a declared-but-unenforced field on another node type would
         # be a silent no-op.
@@ -823,7 +880,7 @@ async def _enforce_connector_team_bindings(
 ) -> None:
     """Block graph saves that bind a team-private connector to a different team's pipeline.
 
-    PRD §9.3: a connector with ``visibility: team`` is only usable within pipelines
+    PRD ┬º9.3: a connector with ``visibility: team`` is only usable within pipelines
     owned by the same team. Violations raise 409 ``connector_team_mismatch`` at the
     pipeline-save command layer.
     """
@@ -848,7 +905,7 @@ async def _enforce_model_backend_team_bindings(
 ) -> None:
     """Block graph saves that pin a team-private model backend from another team.
 
-    PRD §9.3: a model backend with ``visibility: team`` is only usable within
+    PRD ┬º9.3: a model backend with ``visibility: team`` is only usable within
     pipelines owned by the same team, mirroring the connector rule. Violations
     raise 409 ``model_backend_team_mismatch`` at the pipeline-save command layer.
     """
@@ -865,23 +922,12 @@ async def _enforce_model_backend_team_bindings(
         )
 
 
-async def _resolve_graph_references(
+async def _load_agents_by_ids(
     session: AsyncSession,
-    nodes: list[PipelineGraphNode],
     org_id: uuid.UUID,
-    pipeline_owner_team_id: uuid.UUID | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Validate tenant-owned graph references and derive validator pins.
-
-    Whenever the graph resolves model-backend pins, they are checked against
-    the pipeline's team: a team-private model backend pinned by a pipeline owned
-    by a different team (or by no team at all) raises 409
-    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
-    which is also enforced unconditionally. The mismatch rule itself decides
-    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
-    backend.
-    """
-    agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
+    agent_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, Agent]:
+    """Load tenant-owned agents by ID, raising 422 for unknown IDs."""
     agents = (
         list(
             (
@@ -903,7 +949,11 @@ async def _resolve_graph_references(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown agent IDs for this organisation: {missing_agent_ids}",
         )
+    return agents_by_id
 
+
+def _collect_schema_ids(nodes: list[PipelineGraphNode]) -> set[uuid.UUID]:
+    """Collect the schema IDs referenced by a graph's nodes."""
     schema_ids_to_check: set[uuid.UUID] = set()
     for node in nodes:
         if node.node_type == "manual":
@@ -915,7 +965,15 @@ async def _resolve_graph_references(
             schema_ids_to_check.add(node.input_schema_pin.schema_id)
         if node.output_schema_pin is not None:
             schema_ids_to_check.add(node.output_schema_pin.schema_id)
+    return schema_ids_to_check
 
+
+async def _load_existing_schema_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    schema_ids_to_check: set[uuid.UUID],
+) -> set[uuid.UUID]:
+    """Load the tenant-owned schema IDs, raising 422 for unknown IDs."""
     existing_schema_ids = (
         set(
             (
@@ -936,7 +994,14 @@ async def _resolve_graph_references(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown schema IDs for this organisation: {missing_schema_ids}",
         )
+    return existing_schema_ids
 
+
+def _build_schema_and_backend_pins(
+    nodes: list[PipelineGraphNode],
+    agents_by_id: dict[uuid.UUID, Agent],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build schema + model-backend pins for a graph's nodes."""
     schema_pins: list[dict[str, Any]] = []
     model_backend_pins: list[dict[str, Any]] = []
     for node in nodes:
@@ -989,6 +1054,29 @@ async def _resolve_graph_references(
                         "schema_id": str(node.output_schema_id),
                     }
                 )
+    return schema_pins, model_backend_pins
+
+
+async def _resolve_graph_references(
+    session: AsyncSession,
+    nodes: list[PipelineGraphNode],
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Validate tenant-owned graph references and derive validator pins.
+
+    Whenever the graph resolves model-backend pins, they are checked against
+    the pipeline's team: a team-private model backend pinned by a pipeline owned
+    by a different team (or by no team at all) raises 409
+    ``model_backend_team_mismatch`` (PRD ┬º9.3), mirroring the connector rule
+    which is also enforced unconditionally. The mismatch rule itself decides
+    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
+    backend.
+    """
+    agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
+    agents_by_id = await _load_agents_by_ids(session, org_id, agent_ids)
+    await _load_existing_schema_ids(session, org_id, _collect_schema_ids(nodes))
+    schema_pins, model_backend_pins = _build_schema_and_backend_pins(nodes, agents_by_id)
     if model_backend_pins:
         await _enforce_model_backend_team_bindings(
             session,
@@ -1012,8 +1100,7 @@ async def list_pipelines_endpoint(
 ) -> PipelineListResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             result = await list_pipelines(
                 session,
                 page=page,
@@ -1023,11 +1110,7 @@ async def list_pipelines_endpoint(
                 folder_id=folder_id,
             )
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
@@ -1048,8 +1131,7 @@ async def create_pipeline_endpoint(
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -1072,12 +1154,7 @@ async def create_pipeline_endpoint(
                 # is persisted on the returned ORM row within this transaction.
                 pipeline.retry_policy = req.retry_policy
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     return PipelineResponse.model_validate(pipeline)
 
@@ -1088,19 +1165,14 @@ async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1116,21 +1188,69 @@ async def get_pipeline_graph_endpoint(
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             graph = await get_pipeline_graph(session, pipeline_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     return _graph_response(nodes, edges)
+
+
+def _prepare_graph_write(
+    req: PipelineGraphUpdate,
+) -> tuple[list[dict[str, Any]], list[GraphEdgeData], dict[str, Any], list[dict[str, Any]]]:
+    """Serialise a graph update into its write + validator representations."""
+    node_data = [node.model_dump(mode="json") for node in req.nodes]
+    edge_data = [_edge_to_data(edge) for edge in req.edges]
+    validator_graph = {
+        "nodes": node_data,
+        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+    }
+    connector_bindings = extract_connector_bindings(node_data)
+    return node_data, edge_data, validator_graph, connector_bindings
+
+
+async def _validate_graph_save(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    validator_graph: dict[str, Any],
+    connector_bindings: list[dict[str, Any]],
+    model_backend_pins: list[dict[str, Any]],
+) -> list[GraphValidationIssue]:
+    """Run save-time graph validation, returning the advisory issue list.
+
+    Loads the pipeline's guardrail eval rows so the graph-save validation can
+    reject a per-node guardrail-cap violation (FAR-223 item 7) ÔÇö the
+    authoring-time rejection that the create_run fail-closed backstop also
+    enforces at run start.
+    """
+    guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline_id,
+        organisation_id=org_id,
+    )
+    validation = await GraphValidator().validate_definition(
+        validator_graph,
+        session,
+        connector_bindings=connector_bindings,
+        model_backend_pins=model_backend_pins,
+        guardrail_definitions=list(guardrail_rows),
+    )
+    _reject_graph_validation_issues(validation.issues)
+    return [
+        _graph_validation_issue(
+            severity=issue.severity,
+            code=issue.code,
+            message=issue.message,
+            node_id=issue.node_id,
+        )
+        for issue in validation.issues
+    ]
 
 
 @router.patch("/{pipeline_id}/graph")
@@ -1145,26 +1265,18 @@ async def replace_pipeline_graph_endpoint(
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
     # service-layer backstop (operator+ privileged under the row lock, non-
-    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # privileged callers denied ÔÇö hitl-gate-removal-guard-plan.md v19 ┬º3 item
     # 5). There is deliberately no admin-only route gate here: operators are
     # "privileged" for weakening by design, and equivalent weakening remains
     # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
     # admin-only gate would only block the operator's primary graph-edit path.
-    node_data = [node.model_dump(mode="json") for node in req.nodes]
-    edge_data = [_edge_to_data(edge) for edge in req.edges]
-    validator_graph = {
-        "nodes": node_data,
-        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
-    }
-    connector_bindings = extract_connector_bindings(node_data)
+    node_data, edge_data, validator_graph, connector_bindings = _prepare_graph_write(req)
+    issues: list[GraphValidationIssue] = []
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await get_pipeline(session, pipeline_id)
-            if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+            await _set_rls_context(session, principal)
+            pipeline = await _get_pipeline_or_404(session, pipeline_id)
             await _enforce_connector_team_bindings(
                 session,
                 principal.organisation_id,
@@ -1173,7 +1285,7 @@ async def replace_pipeline_graph_endpoint(
             )
             # FAR-309 PR A review: the guardrail-binding strip guard now lives
             # in the SERVICE LAYER (replace_pipeline_graph, under the row lock)
-            # so every graph-mutation caller inherits it — including the
+            # so every graph-mutation caller inherits it ÔÇö including the
             # PATCH /{id} graph_json path and snapshot rollback. The admin flag
             # is resolved here and the service layer re-reads the live role
             # under the lock for REST callers.
@@ -1195,58 +1307,55 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
             )
             if graph is not None:
-                # Load the pipeline's guardrail eval rows so the graph-save
-                # validation can reject a per-node guardrail-cap violation
-                # (FAR-223 item 7) — the authoring-time rejection that the
-                # create_run fail-closed backstop also enforces at run start.
-                guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
+                issues = await _validate_graph_save(
                     session,
+                    org_id=principal.organisation_id,
                     pipeline_id=pipeline_id,
-                    organisation_id=principal.organisation_id,
-                )
-                validation = await GraphValidator().validate_definition(
-                    validator_graph,
-                    session,
+                    validator_graph=validator_graph,
                     connector_bindings=connector_bindings,
                     model_backend_pins=model_backend_pins,
-                    guardrail_definitions=list(guardrail_rows),
                 )
-                _reject_graph_validation_issues(validation.issues)
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
             session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
+            principal=principal,
             pipeline_id=pipeline_id,
             exc=exc,
-            request_id=getattr(principal, "request_id", None),
         )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
-    issues = [
-        _graph_validation_issue(
-            severity=issue.severity,
-            code=issue.code,
-            message=issue.message,
-            node_id=issue.node_id,
-        )
-        for issue in validation.issues
-    ]
     return _graph_response(nodes, edges, validation_issues=issues)
+
+
+def _is_admin(principal: TenantPrincipal) -> bool:
+    return principal.org_role == "admin"
+
+
+def _is_team_private(visibility: str | None, owner_team_id: uuid.UUID | None) -> bool:
+    """True when a pipeline is currently team-private (has a team owner)."""
+    return visibility not in ("org", None) and owner_team_id is not None
+
+
+def _is_owner_reassignment(new_owner_team_id: uuid.UUID | None, current_owner_team_id: uuid.UUID | None) -> bool:
+    """True when the update hands the pipeline to a different team."""
+    return new_owner_team_id is not None and new_owner_team_id != current_owner_team_id
+
+
+async def _require_team_membership(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    team_id: uuid.UUID,
+    denial_detail: str,
+) -> None:
+    """Raise 403 unless the caller is a member of the given team."""
+    is_member = await team_membership_exists(session, account_id=account_id, team_id=team_id)
+    if not is_member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
 
 
 async def _assert_team_transition_allowed(
@@ -1260,13 +1369,13 @@ async def _assert_team_transition_allowed(
     The endpoint's ``require_team_membership_or_admin`` dependency checks the
     CURRENT ``owner_team_id`` at request time, but the update can change
     ``visibility`` or reassign/clear ``owner_team_id`` without re-checking the
-    team gate against the NEW values — a member could downgrade a team-private
+    team gate against the NEW values ÔÇö a member could downgrade a team-private
     pipeline to org-visible or hand it to a team they don't belong to
     (task-authz-b-visibility-guard). Re-runs the RLS-parity membership-or-admin
     gate inside the same transaction (RLS context is transaction-scoped).
     """
     # Org-admin bypass applies throughout (RLS parity).
-    if principal.org_role == "admin":
+    if _is_admin(principal):
         return
 
     changes_visibility = "visibility" in update_payload
@@ -1285,31 +1394,107 @@ async def _assert_team_transition_allowed(
         )
 
     # Current team gate (if the pipeline is currently team-private): the caller
-    # must be a member of the CURRENT team (or admin).
-    if current.visibility not in ("org", None) and current.owner_team_id is not None:
-        is_current_member = await team_membership_exists(
+    # must be a member of the CURRENT team (or admin). ``_is_team_private`` is
+    # only True when an owner team is set, so this never skips a real gate.
+    current_team_id = current.owner_team_id
+    if current_team_id is not None and _is_team_private(current.visibility, current_team_id):
+        await _require_team_membership(
             session,
             account_id=principal.account_id,
-            team_id=current.owner_team_id,
+            team_id=current_team_id,
+            denial_detail="Not a member of the team that owns this resource",
         )
-        if not is_current_member:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not a member of the team that owns this resource",
-            )
 
     # New team gate: reassigning to a team requires membership of the NEW team.
-    if new_owner_team_id is not None and new_owner_team_id != current.owner_team_id:
-        is_new_member = await team_membership_exists(
+    if new_owner_team_id is not None and _is_owner_reassignment(new_owner_team_id, current.owner_team_id):
+        await _require_team_membership(
             session,
             account_id=principal.account_id,
             team_id=new_owner_team_id,
+            denial_detail="Cannot reassign a pipeline to a team you are not a member of",
         )
-        if not is_new_member:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot reassign a pipeline to a team you are not a member of",
-            )
+
+
+async def _maybe_audit_autonomy_change(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    updates: dict[str, Any],
+) -> None:
+    """Append the autonomy-level-change audit event when the level changed."""
+    if "default_autonomy_level" not in updates:
+        return
+    previous = await get_pipeline(session, pipeline_id)
+    prev_level = previous.default_autonomy_level if previous else None
+    if prev_level == updates["default_autonomy_level"]:
+        return
+    await append_audit_event(
+        session,
+        org_id=principal.organisation_id,
+        event_type="pipeline.autonomy_level_changed",
+        actor_user_id=principal.account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json=autonomy_change_payload(
+            previous=prev_level,
+            current=updates["default_autonomy_level"],
+        ),
+        request_id=getattr(principal, "request_id", None),
+    )
+
+
+async def _apply_graph_update(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+    graph_json: PipelineGraphUpdate,
+    updates: dict[str, Any],
+) -> None:
+    """Apply a graph replacement shipped inside a PATCH update payload."""
+    node_data = [node.model_dump(mode="json") for node in graph_json.nodes]
+    edge_data = [_edge_to_data(edge) for edge in graph_json.edges]
+    graph_bindings = extract_connector_bindings(node_data)
+    existing = await get_pipeline(session, pipeline_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+    effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
+    await _enforce_connector_team_bindings(
+        session,
+        org_id,
+        effective_owner_team_id,
+        graph_bindings,
+    )
+    await _resolve_graph_references(
+        session,
+        graph_json.nodes,
+        org_id,
+        pipeline_owner_team_id=effective_owner_team_id,
+    )
+    graph = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        nodes=node_data,
+        edges=[_edge_data_to_dict(edge) for edge in edge_data],
+        is_privileged=_is_privileged(principal.org_role),
+        caller_type="rest",
+        account_id=principal.account_id,
+        is_guardrail_admin=_is_guardrail_admin(principal),
+    )
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+
+
+def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
+    """Raise the 409 for an ownership transfer blocked by active runs (PRD ┬º9.3)."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
+        "cannot change ownership while any run is active",
+    ) from None
 
 
 @router.patch("/{pipeline_id}")
@@ -1326,63 +1511,25 @@ async def update_pipeline_endpoint(
     updates.pop("graph_json", None)
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            current = await get_pipeline(session, pipeline_id)
-            if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+            await _set_rls_context(session, principal)
+            current = await _get_pipeline_or_404(session, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
             ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
-            if "default_autonomy_level" in updates:
-                previous = await get_pipeline(session, pipeline_id)
-                prev_level = previous.default_autonomy_level if previous else None
-                if prev_level != updates["default_autonomy_level"]:
-                    await append_audit_event(
-                        session,
-                        org_id=principal.organisation_id,
-                        event_type="pipeline.autonomy_level_changed",
-                        actor_user_id=principal.account_id,
-                        resource_type="pipeline",
-                        resource_id=pipeline_id,
-                        payload_json=autonomy_change_payload(
-                            previous=prev_level,
-                            current=updates["default_autonomy_level"],
-                        ),
-                        request_id=getattr(principal, "request_id", None),
-                    )
+            await _maybe_audit_autonomy_change(
+                session,
+                principal=principal,
+                pipeline_id=pipeline_id,
+                updates=updates,
+            )
             if has_graph and req.graph_json is not None:
-                node_data = [node.model_dump(mode="json") for node in req.graph_json.nodes]
-                edge_data = [_edge_to_data(edge) for edge in req.graph_json.edges]
-                graph_bindings = extract_connector_bindings(node_data)
-                existing = await get_pipeline(session, pipeline_id)
-                if existing is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-                effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
-                await _enforce_connector_team_bindings(
-                    session,
-                    principal.organisation_id,
-                    effective_owner_team_id,
-                    graph_bindings,
-                )
-                await _resolve_graph_references(
-                    session,
-                    req.graph_json.nodes,
-                    principal.organisation_id,
-                    pipeline_owner_team_id=effective_owner_team_id,
-                )
-                graph = await replace_pipeline_graph(
+                await _apply_graph_update(
                     session,
                     pipeline_id=pipeline_id,
                     org_id=principal.organisation_id,
-                    nodes=node_data,
-                    edges=[_edge_data_to_dict(edge) for edge in edge_data],
-                    is_privileged=_is_privileged(principal.org_role),
-                    caller_type="rest",
-                    account_id=principal.account_id,
-                    is_guardrail_admin=_is_guardrail_admin(principal),
+                    principal=principal,
+                    graph_json=req.graph_json,
+                    updates=updates,
                 )
-                if graph is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await update_pipeline(
                 session,
                 pipeline_id,
@@ -1391,34 +1538,23 @@ async def update_pipeline_endpoint(
                 account_id=principal.account_id,
                 request_id=getattr(principal, "request_id", None),
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
+            # Refresh the ORM row inside the transaction so the DB-computed
+            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+            # the transaction is active. Accessing it after commit with
+            # autobegin=False raises InvalidRequestError -> 422 silent-success.
+            if pipeline is not None:
+                await session.refresh(pipeline)
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
             session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
+            principal=principal,
             pipeline_id=pipeline_id,
             exc=exc,
-            request_id=getattr(principal, "request_id", None),
         )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
     except PipelineHasActiveRunsError as exc:
-        # PRD §9.3: ownership transfer is blocked while any run is non-terminal.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
-            "cannot change ownership while any run is active",
-        ) from None
+        _raise_active_runs_conflict(exc)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1437,16 +1573,10 @@ async def delete_pipeline_endpoint(
 ) -> None:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             deleted = await soft_delete_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1461,15 +1591,10 @@ async def restore_pipeline_endpoint(
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await restore_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -1484,15 +1609,10 @@ async def archive_pipeline_endpoint(
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await archive_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -1507,15 +1627,10 @@ async def unarchive_pipeline_endpoint(
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await unarchive_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -1627,8 +1742,7 @@ async def clone_pipeline_endpoint(
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             cloned, target_name = await _clone_pipeline_into_org(
                 session,
                 pipeline_id=pipeline_id,
@@ -1638,12 +1752,7 @@ async def clone_pipeline_endpoint(
                 requested_name=req.name,
             )
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
     return PipelineResponse.model_validate(cloned)
@@ -1713,8 +1822,7 @@ async def save_as_composite_endpoint(
 ) -> dict[str, Any]:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
@@ -1767,12 +1875,7 @@ async def save_as_composite_endpoint(
             )
 
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     return {
         "id": str(template.id),
@@ -1796,6 +1899,19 @@ class QualityReportResponse(BaseModel):
     deliveries: list[dict[str, Any]]
 
 
+def _endpoint_events(raw_events: object) -> list[Any]:
+    """Normalise an endpoint's ``events`` column (JSON list or raw list)."""
+    if isinstance(raw_events, list):
+        return raw_events
+    if isinstance(raw_events, str):
+        try:
+            parsed = json.loads(raw_events)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 async def _quality_report_recipient_urls(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1815,15 +1931,7 @@ async def _quality_report_recipient_urls(
 
     recipient_urls: list[str] = []
     for ep in endpoints:
-        raw_events: object = ep.events
-        events = raw_events if isinstance(raw_events, list) else []
-        if isinstance(raw_events, str):
-            try:
-                parsed = json.loads(raw_events)
-                events = parsed if isinstance(parsed, list) else []
-            except (json.JSONDecodeError, TypeError):
-                events = []
-        if "quality_report" in events:
+        if "quality_report" in _endpoint_events(ep.events):
             recipient_urls.append(ep.url)
     return recipient_urls
 
@@ -1839,8 +1947,7 @@ async def trigger_quality_report(
 ) -> QualityReportResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
@@ -1854,12 +1961,7 @@ async def trigger_quality_report(
             if recipient_urls:
                 deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     return QualityReportResponse(
         period=report["period"],
@@ -1967,19 +2069,13 @@ async def list_snapshot_endpoint(
 ) -> SnapshotListResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
@@ -1998,8 +2094,7 @@ async def get_snapshot_detail_endpoint(
 ) -> SnapshotDetailResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             snapshot = await get_snapshot_detail(
                 session,
                 snapshot_id,
@@ -2007,12 +2102,7 @@ async def get_snapshot_detail_endpoint(
                 pipeline_id=pipeline_id,
             )
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
@@ -2031,16 +2121,10 @@ async def tag_snapshot_endpoint(
 ) -> SnapshotResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
@@ -2059,14 +2143,13 @@ async def rollback_snapshot_endpoint(
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
     # service-layer backstop (operator+ privileged under the row lock, non-
-    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # privileged callers denied ÔÇö hitl-gate-removal-guard-plan.md v19 ┬º3 item
     # 5). There is deliberately no admin-only route gate here, matching the
     # graph-replace endpoint: operators are "privileged" for weakening by
     # design (equivalent weakening stays reachable via update_pipeline).
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             new_snapshot = await rollback_to_snapshot(
                 session,
                 pipeline_id,
@@ -2076,27 +2159,15 @@ async def rollback_snapshot_endpoint(
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
             )
-    except HitlGateWeakeningDenied as exc:
-        await _deny_hitl_gate(
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
             session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
+            principal=principal,
             pipeline_id=pipeline_id,
             exc=exc,
-            request_id=getattr(principal, "request_id", None),
         )
-    except GuardrailBindingStripDenied as exc:
-        raise HTTPException(
-            status_code=denial_http_status(exc.reason_code),
-            detail=exc.detail,
-        ) from None
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if new_snapshot is None:
         raise HTTPException(
@@ -2122,8 +2193,7 @@ async def delete_snapshot_endpoint(
         )
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             snapshot = await get_snapshot_detail(
                 session,
                 snapshot_id,
@@ -2134,12 +2204,7 @@ async def delete_snapshot_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
             deleted = await delete_snapshot(session, snapshot_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if not deleted:
         raise HTTPException(
@@ -2159,16 +2224,10 @@ async def diff_snapshot_endpoint(
 ) -> SnapshotDiffResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
 
     if result is None:
         raise HTTPException(
@@ -2197,8 +2256,7 @@ async def move_pipeline_to_folder_endpoint(
 ) -> PipelineResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
     except ValueError as e:
         raise HTTPException(
@@ -2206,11 +2264,7 @@ async def move_pipeline_to_folder_endpoint(
             detail=str(e),
         ) from None
     except ProgrammingError:
-        logger.exception(_CODE_ROUTES_PIPELINES)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
+        _raise_db_migration_error()
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -2320,8 +2374,7 @@ async def convert_node_to_agent_endpoint(
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
 
             nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
 
@@ -2423,8 +2476,7 @@ async def revert_node_to_manual_endpoint(
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
 
             nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
 

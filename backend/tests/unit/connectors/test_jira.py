@@ -110,13 +110,15 @@ async def test_health_check_token_auth(connector_token):
 
 
 async def test_unsupported_query_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported Jira resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 async def test_unsupported_write_resource(connector):
+    payload = ConnectorPayload(resource="delete", data={})
     with pytest.raises(ValueError, match="Unsupported Jira write resource"):
-        await connector.write(ConnectorPayload(resource="delete", data={}))
+        await connector.write(payload)
 
 
 def test_connector_type(connector):
@@ -131,8 +133,9 @@ def test_missing_credentials_raises():
 @respx.mock
 async def test_query_issue_http_error(connector):
     respx.get(f"{_BASE}/issue/NONEXISTENT").mock(return_value=httpx.Response(404))
+    query = ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"})
     with pytest.raises(ValueError, match="Jira API HTTP 404"):
-        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -140,8 +143,9 @@ async def test_query_search_http_error(connector):
     respx.post(f"{_BASE}/search").mock(
         return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]})
     )
+    query = ConnectorQuery(resource="search", filters={"jql": "invalid jql"})
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
-        await connector.query(ConnectorQuery(resource="search", filters={"jql": "invalid jql"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -149,24 +153,22 @@ async def test_write_create_issue_http_error(connector):
     respx.post(f"{_BASE}/issue").mock(
         return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}})
     )
+    payload = ConnectorPayload(
+        resource="issue",
+        data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
+    )
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue",
-                data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_update_missing_key(connector):
+    payload = ConnectorPayload(
+        resource="issue_update",
+        data={"fields": {"summary": "No key provided"}},
+    )
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_update",
-                data={"fields": {"summary": "No key provided"}},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -204,8 +206,9 @@ async def test_query_issue_comments_pagination(connector):
 
 @respx.mock
 async def test_query_issue_comments_missing_key(connector):
+    query = ConnectorQuery(resource="issue_comments", filters={})
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.query(ConnectorQuery(resource="issue_comments", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -223,24 +226,22 @@ async def test_write_issue_comment(connector):
 
 @respx.mock
 async def test_write_issue_comment_missing_body(connector):
+    payload = ConnectorPayload(
+        resource="issue_comment",
+        data={"issue_key": "PROJ-123"},
+    )
     with pytest.raises(ValueError, match="requires 'body'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_comment",
-                data={"issue_key": "PROJ-123"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_issue_comment_missing_key(connector):
+    payload = ConnectorPayload(
+        resource="issue_comment",
+        data={"body": "Nice work!"},
+    )
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="issue_comment",
-                data={"body": "Nice work!"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -260,8 +261,9 @@ async def test_query_transitions(connector):
 
 @respx.mock
 async def test_query_transitions_missing_key(connector):
+    query = ConnectorQuery(resource="transitions", filters={})
     with pytest.raises(ValueError, match="requires 'issue_key'"):
-        await connector.query(ConnectorQuery(resource="transitions", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -279,13 +281,12 @@ async def test_write_transition(connector):
 
 @respx.mock
 async def test_write_transition_missing_transition_id(connector):
+    payload = ConnectorPayload(
+        resource="transition",
+        data={"issue_key": "PROJ-123"},
+    )
     with pytest.raises(ValueError, match="requires 'transition_id'"):
-        await connector.write(
-            ConnectorPayload(
-                resource="transition",
-                data={"issue_key": "PROJ-123"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -349,8 +350,9 @@ async def test_query_field_metadata_unknown_project(connector):
 
 @respx.mock
 async def test_query_field_metadata_missing_project(connector):
+    query = ConnectorQuery(resource="field_metadata", filters={})
     with pytest.raises(ValueError, match="requires 'project' filter"):
-        await connector.query(ConnectorQuery(resource="field_metadata", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -398,15 +400,17 @@ async def test_query_statuses(connector):
 
 @respx.mock
 async def test_query_statuses_missing_project(connector):
+    query = ConnectorQuery(resource="statuses", filters={})
     with pytest.raises(ValueError, match="requires 'project' filter"):
-        await connector.query(ConnectorQuery(resource="statuses", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_query_statuses_http_error(connector):
     respx.get(f"{_BASE}/project/NOPE/statuses").mock(return_value=httpx.Response(404))
+    query = ConnectorQuery(resource="statuses", filters={"project": "NOPE"})
     with pytest.raises(ValueError, match="Jira API HTTP 404"):
-        await connector.query(ConnectorQuery(resource="statuses", filters={"project": "NOPE"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -470,8 +474,9 @@ async def test_retry_429_exhausted(connector):
 @respx.mock
 async def test_304_not_modified(connector):
     respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(304))
+    query = ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"})
     with pytest.raises(ValueError, match="304 Not Modified"):
-        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+        await connector.query(query)
 
 
 # --- X-RateLimit-* metadata tests ---

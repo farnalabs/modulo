@@ -15,7 +15,8 @@ import logging
 import re
 import uuid
 import zipfile
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, TypeGuard
 
 import yaml
 from sqlalchemy import select
@@ -50,6 +51,55 @@ _IMPORTED_SUFFIX = "(imported)"
 DEFAULT_NODE_TIMEOUT = 300
 _MAX_NAME_RETRIES = 5
 VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional"})
+
+# ---------------------------------------------------------------------------
+# Shared value objects
+# ---------------------------------------------------------------------------
+
+
+class _V2ExportParts(NamedTuple):
+    """Pieces of a v2 YAML bundle gathered from the database."""
+
+    agents: list[dict[str, Any]]
+    schemas: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    triggers: list[dict[str, Any]]
+    owner_team_name: str | None
+    author: str
+
+
+@dataclass(frozen=True)
+class _ImportOverrides:
+    """Override maps applied while materialising an import bundle."""
+
+    model_backends: dict[str, str] = field(default_factory=dict)
+    schema_ids: dict[str, str] = field(default_factory=dict)
+    schema_versions: dict[str, str] = field(default_factory=dict)
+    connector_instances: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ImportSections:
+    """Parsed top-level sections of an import bundle."""
+
+    pipeline_info: dict[str, Any]
+    agents_data: list[dict[str, Any]]
+    schemas_data: list[dict[str, Any]]
+    edges_data: list[dict[str, Any]]
+    name: str
+
+
+@dataclass(frozen=True)
+class _ImportContext:
+    """Ambient state shared by every import-materialisation helper."""
+
+    session: AsyncSession
+    org_id: uuid.UUID
+    created_by: uuid.UUID
+    warnings: list[str]
+    owner_team_id: uuid.UUID | None = None
+    overrides: _ImportOverrides = field(default_factory=_ImportOverrides)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,9 +164,38 @@ def _sanitize_slug(name: str) -> str:
     return slug.strip("-") or "imported-pipeline"
 
 
+def _retries_exhausted(attempt: int) -> bool:
+    """True when the name-collision retry budget is exhausted."""
+    return attempt == _MAX_NAME_RETRIES - 1
+
+
+def _has_matching_definition(existing_sv: SchemaVersion | None, definition: Any) -> TypeGuard[SchemaVersion]:
+    """True when an existing published schema version equals the exported definition."""
+    return existing_sv is not None and existing_sv.definition_json == definition
+
+
+def _is_unresolved_ref(ref_id: str, resolved_id: str | None) -> bool:
+    """True when a referenced id has no resolved local equivalent."""
+    return bool(ref_id) and not resolved_id
+
+
+def _is_valid_edge_type(edge_type: str) -> bool:
+    """True when the edge type is one of the supported graph edge kinds."""
+    return edge_type in VALID_EDGE_TYPES
+
+
 # ---------------------------------------------------------------------------
 # Export — pipeline_id → ZIP bytes
 # ---------------------------------------------------------------------------
+
+
+async def _load_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline:
+    """Fetch a pipeline by id, raising ValueError when it does not exist."""
+    stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+    pipeline = (await session.execute(stmt)).scalar_one_or_none()
+    if pipeline is None:
+        raise ValueError(f"Pipeline {pipeline_id} not found")
+    return pipeline
 
 
 async def _fetch_and_project_edges(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -145,10 +224,7 @@ async def export_pipeline_bundle(
     Strips owner_team_id and other org-private fields.
     """
     try:
-        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
-        pipeline = (await session.execute(stmt)).scalar_one_or_none()
-        if pipeline is None:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
+        pipeline = await _load_pipeline(session, pipeline_id)
 
         agent_ids, schema_ids, model_backend_ids = _collect_referenced_ids(pipeline.graph_nodes_json)
 
@@ -312,43 +388,10 @@ async def export_pipeline_bundle_v2(
     and partial bundle support.
     """
     try:
-        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
-        pipeline = (await session.execute(stmt)).scalar_one_or_none()
-        if pipeline is None:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
-
+        pipeline = await _load_pipeline(session, pipeline_id)
         agent_ids, schema_ids = _collect_agent_and_schema_ids(pipeline.graph_nodes_json)
-
-        agents_list = await _build_v2_agents_list(session, agent_ids, schema_ids)
-        schemas_list = await _build_schemas_list(session, schema_ids)
-
-        edges_list = await _fetch_and_project_edges_v2(session, pipeline_id)
-
-        triggers_list = await _fetch_v2_triggers(session, pipeline_id)
-        owner_team_name = await _resolve_owner_team_name(session, pipeline.owner_team_id)
-        author = await _resolve_author_email(session, pipeline)
-
-        requires = _build_v2_requires(agents_list, schemas_list)
-        bundle_id = str(pipeline.id)
-
-        bundle: dict[str, Any] = {
-            "modulo_workflow": {
-                "id": bundle_id,
-                "name": pipeline.name,
-                "version": "1.0.0",
-                "author": author,
-                "owner_team": owner_team_name,
-                "visibility": pipeline.visibility,
-                "lifecycle_map_ref": None,
-                "composite_template_refs": [],
-                "partial": False,
-                "requires": requires,
-                "triggers": triggers_list,
-                "agents": agents_list,
-                "edges": edges_list,
-                "schemas": schemas_list,
-            }
-        }
+        parts = await _gather_v2_export_parts(session, pipeline, agent_ids, schema_ids)
+        bundle = _build_v2_bundle(pipeline, parts)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -359,10 +402,56 @@ async def export_pipeline_bundle_v2(
     logger.info(
         "Exported v2 bundle for pipeline %s with %d agents, %d edges",
         pipeline_id,
-        len(agents_list),
-        len(edges_list),
+        len(parts.agents),
+        len(parts.edges),
     )
     return yaml_str
+
+
+async def _gather_v2_export_parts(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+) -> _V2ExportParts:
+    """Fetch and project every piece of a v2 bundle for a pipeline."""
+    agents_list = await _build_v2_agents_list(session, agent_ids, schema_ids)
+    schemas_list = await _build_schemas_list(session, schema_ids)
+    edges_list = await _fetch_and_project_edges_v2(session, pipeline.id)
+    triggers_list = await _fetch_v2_triggers(session, pipeline.id)
+    owner_team_name = await _resolve_owner_team_name(session, pipeline.owner_team_id)
+    author = await _resolve_author_email(session, pipeline)
+    return _V2ExportParts(
+        agents=agents_list,
+        schemas=schemas_list,
+        edges=edges_list,
+        triggers=triggers_list,
+        owner_team_name=owner_team_name,
+        author=author,
+    )
+
+
+def _build_v2_bundle(pipeline: Pipeline, parts: _V2ExportParts) -> dict[str, Any]:
+    """Assemble the v2 ``modulo_workflow`` envelope from gathered parts."""
+    requires = _build_v2_requires(parts.agents, parts.schemas)
+    return {
+        "modulo_workflow": {
+            "id": str(pipeline.id),
+            "name": pipeline.name,
+            "version": "1.0.0",
+            "author": parts.author,
+            "owner_team": parts.owner_team_name,
+            "visibility": pipeline.visibility,
+            "lifecycle_map_ref": None,
+            "composite_template_refs": [],
+            "partial": False,
+            "requires": requires,
+            "triggers": parts.triggers,
+            "agents": parts.agents,
+            "edges": parts.edges,
+            "schemas": parts.schemas,
+        }
+    }
 
 
 def _collect_agent_and_schema_ids(
@@ -839,114 +928,134 @@ async def materialize_import(
     _validate_bundle_format(bundle)
     await _validate_owner_team(session, org_id, owner_team_id)
 
-    mb_overrides: dict[str, str] = model_backend_overrides or {}
-    warnings = warnings or []
-    schema_overrides: dict[str, str] = schema_id_overrides or {}
-    sv_overrides: dict[str, str] = schema_version_overrides or {}
-    conn_overrides: dict[str, str] = connector_instance_overrides or {}
-
-    sections = _resolve_bundle_sections(
-        bundle,
-        pipeline_name_override,
-        mb_overrides,
-        schema_overrides,
-        sv_overrides,
-        conn_overrides,
+    ctx = _ImportContext(
+        session=session,
+        org_id=org_id,
+        created_by=created_by,
+        warnings=warnings or [],
+        owner_team_id=owner_team_id,
+        overrides=_ImportOverrides(
+            model_backends=model_backend_overrides or {},
+            schema_ids=schema_id_overrides or {},
+            schema_versions=schema_version_overrides or {},
+            connector_instances=connector_instance_overrides or {},
+        ),
     )
-    pipeline_info = sections["pipeline_info"]
-    agents_data = sections["agents_data"]
-    schemas_data = sections["schemas_data"]
-    edges_data = sections["edges_data"]
-    name = sections["name"]
+    sections = _resolve_bundle_sections(bundle, pipeline_name_override)
 
     existing_agent_names = await get_existing_agent_names(session, org_id)
     existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
 
-    pname = suggest_import_name(existing_pipeline_names, name)
+    pname = suggest_import_name(existing_pipeline_names, sections.name)
+    _log_import_start(pname, sections)
 
-    logger.info(
-        "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
-        _sanitise_log_value(pname),
-        len(agents_data),
-        len(schemas_data),
-        len(edges_data),
-    )
-
-    schema_id_map, schema_version_map = await _materialize_schemas(
-        session,
-        org_id,
-        created_by,
-        schemas_data,
-        schema_overrides,
-        sv_overrides,
-        warnings,
-    )
+    schema_id_map, schema_version_map = await _materialize_schemas(ctx, sections.schemas_data)
 
     agent_id_map = await _materialize_agents(
-        session,
-        org_id,
-        created_by,
-        agents_data,
+        ctx,
+        sections.agents_data,
         existing_agent_names,
         schema_id_map,
         schema_version_map,
-        mb_overrides,
-        warnings,
     )
 
-    graph_nodes = _rewire_graph_nodes(
-        _normalize_graph_nodes(pipeline_info, warnings),
+    pipeline, pipeline_edges_added, prim = await _materialize_pipeline_and_edges(
+        ctx,
+        sections,
+        pname,
+        existing_pipeline_names,
         agent_id_map,
         schema_id_map,
-        conn_overrides,
+        bundle,
+    )
+
+    return _build_import_result(
+        pname,
+        pipeline,
+        prim,
+        sections,
+        pipeline_edges_added,
+        agent_id_map,
+        schema_id_map,
+        ctx.warnings,
+    )
+
+
+def _log_import_start(pname: str, sections: _ImportSections) -> None:
+    """Log the materialisation start with section counts."""
+    logger.info(
+        "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
+        _sanitise_log_value(pname),
+        len(sections.agents_data),
+        len(sections.schemas_data),
+        len(sections.edges_data),
+    )
+
+
+async def _materialize_pipeline_and_edges(
+    ctx: _ImportContext,
+    sections: _ImportSections,
+    pname: str,
+    existing_pipeline_names: set[str],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    bundle: dict[str, Any],
+) -> tuple[Pipeline, list[PipelineEdge], Any]:
+    """Create the imported pipeline, its edges, and the library primitive."""
+    graph_nodes = _rewire_graph_nodes(
+        _normalize_graph_nodes(sections.pipeline_info, ctx.warnings),
+        agent_id_map,
+        schema_id_map,
+        ctx.overrides.connector_instances,
     )
 
     pipeline = await _create_imported_pipeline(
-        session,
-        org_id,
-        created_by,
+        ctx,
         pname,
-        pipeline_info,
-        owner_team_id,
+        sections.pipeline_info,
         existing_pipeline_names,
-        name,
-        warnings,
+        sections.name,
     )
 
     pipeline.graph_nodes_json = list(graph_nodes)
-    _apply_imported_retry_policy(pipeline, pipeline_info, warnings)
-    await session.flush()
+    _apply_imported_retry_policy(pipeline, sections.pipeline_info, ctx.warnings)
+    await ctx.session.flush()
 
-    pipeline_edges_added = await _materialize_edges(session, org_id, pipeline, edges_data, warnings)
-    await session.flush()
+    pipeline_edges_added = await _materialize_edges(ctx, pipeline, sections.edges_data)
+    await ctx.session.flush()
 
-    prim = await _create_import_primitive(
-        session,
-        org_id,
-        created_by,
-        owner_team_id,
-        pipeline,
-        bundle,
-        pname,
-        pipeline_info,
-    )
+    prim = await _create_import_primitive(ctx, pipeline, bundle, pname, sections.pipeline_info)
 
+    return pipeline, pipeline_edges_added, prim
+
+
+def _build_import_result(
+    pname: str,
+    pipeline: Pipeline,
+    prim: Any,
+    sections: _ImportSections,
+    pipeline_edges_added: list[PipelineEdge],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Build the import result dict and log the completion summary."""
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
         _sanitise_log_value(pname),
         pipeline.id,
-        len(agents_data),
-        len(edges_data),
-        len(schemas_data),
+        len(sections.agents_data),
+        len(pipeline_edges_added),
+        len(sections.schemas_data),
     )
 
     return {
         "pipeline_id": str(pipeline.id),
         "pipeline_name": pname,
         "primitive_id": str(prim.id),
-        "agent_count": len(agents_data),
+        "agent_count": len(sections.agents_data),
         "edge_count": len(pipeline_edges_added),
-        "schema_count": len(schemas_data),
+        "schema_count": len(sections.schemas_data),
         "agents": agent_id_map,
         "schemas": schema_id_map,
         "warnings": warnings,
@@ -984,23 +1093,16 @@ async def _validate_owner_team(session: AsyncSession, org_id: uuid.UUID, owner_t
 def _resolve_bundle_sections(
     bundle: dict[str, Any],
     pipeline_name_override: str | None,
-    mb_overrides: dict[str, str],
-    schema_overrides: dict[str, str],
-    sv_overrides: dict[str, str],
-    conn_overrides: dict[str, str],
-) -> dict[str, Any]:
+) -> _ImportSections:
     """Pull the bundle's top-level sections and resolve the pipeline name."""
-    return {
-        "pipeline_info": bundle.get("pipeline") or {},
-        "agents_data": bundle.get("agents") or [],
-        "schemas_data": bundle.get("schemas") or [],
-        "edges_data": bundle.get("edges") or [],
-        "mb_overrides": mb_overrides,
-        "schema_overrides": schema_overrides,
-        "sv_overrides": sv_overrides,
-        "conn_overrides": conn_overrides,
-        "name": pipeline_name_override or (bundle.get("pipeline") or {}).get("name", "Imported Pipeline"),
-    }
+    pipeline_info = bundle.get("pipeline") or {}
+    return _ImportSections(
+        pipeline_info=pipeline_info,
+        agents_data=bundle.get("agents") or [],
+        schemas_data=bundle.get("schemas") or [],
+        edges_data=bundle.get("edges") or [],
+        name=pipeline_name_override or pipeline_info.get("name", "Imported Pipeline"),
+    )
 
 
 def _normalize_graph_nodes(pipeline_info: dict[str, Any], warnings: list[str]) -> list[dict[str, Any]]:
@@ -1022,10 +1124,7 @@ def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, An
 
 
 async def _create_import_primitive(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
-    owner_team_id: uuid.UUID | None,
+    ctx: _ImportContext,
     pipeline: Pipeline,
     bundle: dict[str, Any],
     pname: str,
@@ -1034,14 +1133,14 @@ async def _create_import_primitive(
     """Create the library primitive wrapping the imported workflow."""
     try:
         return await create_library_primitive(
-            session,
-            org_id=org_id,
+            ctx.session,
+            org_id=ctx.org_id,
             source="local",
             primitive_type="workflow",
             name=pname,
             slug=_sanitize_slug(pname),
             description=pipeline_info.get("description", ""),
-            author=created_by.hex[:8],
+            author=ctx.created_by.hex[:8],
             version=DEFAULT_SCHEMA_VERSION,
             tags=["imported"],
             content_json={
@@ -1056,9 +1155,9 @@ async def _create_import_primitive(
             download_count=None,
             average_rating=None,
             review_count=None,
-            owner_team_id=owner_team_id,
+            owner_team_id=ctx.owner_team_id,
             visibility="org",
-            account_id=created_by,
+            account_id=ctx.created_by,
         )
     except Exception:
         logger.exception("Failed to create library primitive for pipeline '%s'", _sanitise_log_value(pname))
@@ -1066,13 +1165,11 @@ async def _create_import_primitive(
 
 
 async def _reconcile_existing_schema(
-    session: AsyncSession,
-    org_id: uuid.UUID,
+    ctx: _ImportContext,
     sname: str,
     definition: Any,
     export_schema_id: str,
     existing_schema_names: set[str] | None,
-    warnings: list[str],
 ) -> tuple[set[str] | None, str, dict[str, dict[str, str]] | None]:
     """Resolve a schema name collision against an existing local schema.
 
@@ -1082,24 +1179,24 @@ async def _reconcile_existing_schema(
     reused rather than created. Otherwise ``reuse`` is ``None`` and
     ``resolved_sname`` is the (possibly suffixed) name to create.
     """
-    existing_stmt = select(Schema).where(Schema.organisation_id == org_id, Schema.name == sname)
-    existing_result = await session.execute(existing_stmt)
+    existing_stmt = select(Schema).where(Schema.organisation_id == ctx.org_id, Schema.name == sname)
+    existing_result = await ctx.session.execute(existing_stmt)
     existing_schema = existing_result.scalar_one_or_none()
     if existing_schema is None:
         return existing_schema_names, sname, None
 
-    existing_sv = await _get_latest_published_version(session, existing_schema.id)
-    if existing_sv and existing_sv.definition_json != definition:
+    existing_sv = await _get_latest_published_version(ctx.session, existing_schema.id)
+    if existing_sv is not None and existing_sv.definition_json != definition:
         if existing_schema_names is None:
-            existing_schema_names = await _load_schema_names(session, org_id)
+            existing_schema_names = await _load_schema_names(ctx)
         sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
         existing_schema_names.add(sname)
-        warnings.append(
+        ctx.warnings.append(
             f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
         )
         return existing_schema_names, sname, None
 
-    if existing_sv and existing_sv.definition_json == definition:
+    if _has_matching_definition(existing_sv, definition):
         return (
             existing_schema_names,
             sname,
@@ -1113,13 +1210,8 @@ async def _reconcile_existing_schema(
 
 
 async def _materialize_schemas(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
+    ctx: _ImportContext,
     schemas_data: list[dict[str, Any]],
-    schema_overrides: dict[str, str],
-    sv_overrides: dict[str, str],
-    warnings: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Create any schemas that don't exist locally; return the id/version maps."""
     schema_id_map: dict[str, str] = {}
@@ -1129,13 +1221,13 @@ async def _materialize_schemas(
     for sd in schemas_data:
         export_schema_id = sd.get("id", "")
         if not export_schema_id:
-            warnings.append("Skipping schema with no 'id' field in bundle.")
+            ctx.warnings.append("Skipping schema with no 'id' field in bundle.")
             continue
 
-        if export_schema_id in schema_overrides:
-            schema_id_map[export_schema_id] = schema_overrides[export_schema_id]
-            if export_schema_id in sv_overrides:
-                schema_version_map[export_schema_id] = sv_overrides[export_schema_id]
+        if export_schema_id in ctx.overrides.schema_ids:
+            schema_id_map[export_schema_id] = ctx.overrides.schema_ids[export_schema_id]
+            if export_schema_id in ctx.overrides.schema_versions:
+                schema_version_map[export_schema_id] = ctx.overrides.schema_versions[export_schema_id]
             continue
 
         existing_schema_id = sd.get("_resolved_id")
@@ -1148,7 +1240,7 @@ async def _materialize_schemas(
 
         definition = sd.get("definition_json")
         if not definition:
-            warnings.append(
+            ctx.warnings.append(
                 f"Schema '{sd.get('name', 'unknown')}' has no definition JSON and will be skipped. "
                 "Agents referencing this schema may fail."
             )
@@ -1158,40 +1250,30 @@ async def _materialize_schemas(
 
         # Check for existing schema with same name but different definition
         existing_schema_names, sname, reuse = await _reconcile_existing_schema(
-            session,
-            org_id,
+            ctx,
             sname,
             definition,
             export_schema_id,
             existing_schema_names,
-            warnings,
         )
         if reuse is not None:
             schema_id_map.update(reuse["schema_id_map"])
             schema_version_map.update(reuse["schema_version_map"])
             continue
 
-        new_schema = await _create_schema_with_retry(
-            session,
-            org_id,
-            created_by,
-            sname,
-            sd,
-            existing_schema_names,
-            warnings,
-        )
+        new_schema = await _create_schema_with_retry(ctx, sname, sd, existing_schema_names)
 
         schema_id_map[export_schema_id] = str(new_schema.id)
 
         try:
             new_sv = await create_schema_version(
-                session,
-                org_id=org_id,
+                ctx.session,
+                org_id=ctx.org_id,
                 schema_id=new_schema.id,
                 version=sd.get("latest_version") or DEFAULT_SCHEMA_VERSION,
                 version_number=1,
                 definition_json=definition,
-                account_id=created_by,
+                account_id=ctx.created_by,
                 published=True,
             )
         except Exception:
@@ -1203,43 +1285,42 @@ async def _materialize_schemas(
     return schema_id_map, schema_version_map
 
 
-async def _load_schema_names(session: AsyncSession, org_id: uuid.UUID) -> set[str]:
+async def _load_schema_names(ctx: _ImportContext) -> set[str]:
     """Load all local schema names for collision-avoiding suggestions."""
-    all_existing = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+    all_existing = (
+        (await ctx.session.execute(select(Schema).where(Schema.organisation_id == ctx.org_id))).scalars().all()
+    )
     return {s.name for s in all_existing}
 
 
 async def _create_schema_with_retry(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
+    ctx: _ImportContext,
     sname: str,
     sd: dict[str, Any],
     existing_schema_names: set[str] | None,
-    warnings: list[str],
 ) -> Schema:
     """Create a schema, retrying with a suffixed name on IntegrityError collision."""
     attempt_sc = 0
     while True:
         try:
-            async with session.begin_nested():
+            async with ctx.session.begin_nested():
                 return await create_schema(
-                    session,
-                    org_id=org_id,
+                    ctx.session,
+                    org_id=ctx.org_id,
                     name=sname,
-                    account_id=created_by,
+                    account_id=ctx.created_by,
                     description=sd.get("description"),
                     abstract_name=sd.get("abstract_name"),
                 )
         except IntegrityError:
-            if attempt_sc == _MAX_NAME_RETRIES - 1:
+            if _retries_exhausted(attempt_sc):
                 raise
             attempt_sc += 1
             if existing_schema_names is None:
-                existing_schema_names = await _load_schema_names(session, org_id)
+                existing_schema_names = await _load_schema_names(ctx)
             existing_schema_names.add(sname)
             new_sname = suggest_import_name(existing_schema_names, sname, suffix=_IMPORTED_SUFFIX)
-            warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
+            ctx.warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
             sname = new_sname
             existing_schema_names.add(sname)
         except Exception:
@@ -1248,15 +1329,11 @@ async def _create_schema_with_retry(
 
 
 async def _materialize_agents(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
+    ctx: _ImportContext,
     agents_data: list[dict[str, Any]],
     existing_agent_names: set[str],
     schema_id_map: dict[str, str],
     schema_version_map: dict[str, str],
-    mb_overrides: dict[str, str],
-    warnings: list[str],
 ) -> dict[str, str]:
     """Create the bundle's agents; return the export→local agent id map."""
     agent_id_map: dict[str, str] = {}
@@ -1265,12 +1342,17 @@ async def _materialize_agents(
         aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
         existing_agent_names.add(aname)
 
-        agent_args = _base_agent_args(session, org_id, created_by, aname, ad)
-        _apply_agent_references(agent_args, ad, schema_id_map, schema_version_map, mb_overrides, warnings)
-
-        agent = await _create_agent_with_retry(
-            session, agent_args, existing_agent_names, ad.get("name", "Imported Agent"), warnings
+        agent_args = _base_agent_args(ctx, aname, ad)
+        _apply_agent_references(
+            agent_args,
+            ad,
+            schema_id_map,
+            schema_version_map,
+            ctx.overrides.model_backends,
+            ctx.warnings,
         )
+
+        agent = await _create_agent_with_retry(ctx, agent_args, existing_agent_names, ad.get("name", "Imported Agent"))
 
         agent_id_map[export_agent_id] = str(agent.id)
 
@@ -1278,18 +1360,16 @@ async def _materialize_agents(
 
 
 def _base_agent_args(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
+    ctx: _ImportContext,
     aname: str,
     ad: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the base create_agent keyword arguments for an imported agent."""
     return {
-        "session": session,
-        "org_id": org_id,
+        "session": ctx.session,
+        "org_id": ctx.org_id,
         "name": aname,
-        "account_id": created_by,
+        "account_id": ctx.created_by,
         "prompt_template": ad.get("prompt_template", ""),
         "description": ad.get("description"),
         "connector_type_refs": ad.get("connector_type_refs"),
@@ -1327,17 +1407,17 @@ def _apply_agent_references(
     export_mb_id = ad.get("model_backend_id", "")
     resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id)
 
-    if input_schema_id_str and not resolved_input_id:
+    if _is_unresolved_ref(input_schema_id_str, resolved_input_id):
         warnings.append(
             f"Agent '{aname}' references unresolved input schema '{input_schema_id_str}'. "
             "The schema reference will be omitted."
         )
-    if output_schema_id_str and not resolved_output_id:
+    if _is_unresolved_ref(output_schema_id_str, resolved_output_id):
         warnings.append(
             f"Agent '{aname}' references unresolved output schema '{output_schema_id_str}'. "
             "The schema reference will be omitted."
         )
-    if export_mb_id and not resolved_mb_id:
+    if _is_unresolved_ref(export_mb_id, resolved_mb_id):
         warnings.append(
             f"Agent '{aname}' references unresolved model backend '{export_mb_id}'. "
             "The model backend reference will be omitted."
@@ -1353,28 +1433,27 @@ def _apply_agent_references(
 
 
 async def _create_agent_with_retry(
-    session: AsyncSession,
+    ctx: _ImportContext,
     agent_args: dict[str, Any],
     existing_agent_names: set[str],
     base_name: str,
-    warnings: list[str],
 ) -> Agent:
     """Create an agent, retrying with a suffixed name on IntegrityError collision."""
     aname = agent_args["name"]
     attempt_a = 0
     while True:
         try:
-            async with session.begin_nested():
+            async with ctx.session.begin_nested():
                 return await create_agent(**agent_args)
         except IntegrityError:
-            if attempt_a == _MAX_NAME_RETRIES - 1:
+            if _retries_exhausted(attempt_a):
                 raise
             attempt_a += 1
             existing_agent_names.add(aname)
             aname = suggest_import_name(existing_agent_names, base_name)
             existing_agent_names.add(aname)
             agent_args["name"] = aname
-            warnings.append(f"Agent name collided; retrying as '{aname}'.")
+            ctx.warnings.append(f"Agent name collided; retrying as '{aname}'.")
         except (ValueError, SQLAlchemyError):
             logger.exception("Failed to create agent '%s'", _sanitise_log_value(aname))
             raise
@@ -1395,59 +1474,59 @@ def _rewire_graph_nodes(
         node_output_schema = node.get("output_schema_id")
         if node_output_schema and node_output_schema in schema_id_map:
             node["output_schema_id"] = schema_id_map[node_output_schema]
-        connector_binding = node.get("connector_binding")
-        if isinstance(connector_binding, dict):
-            existing_id = connector_binding.get("instance_id", "")
-            if existing_id and existing_id in conn_overrides:
-                connector_binding["instance_id"] = conn_overrides[existing_id]
+        _rewire_connector_binding(node, conn_overrides)
     return graph_nodes
 
 
+def _rewire_connector_binding(node: dict[str, Any], conn_overrides: dict[str, str]) -> None:
+    """Rewrite a node's connector binding instance id from an override map."""
+    connector_binding = node.get("connector_binding")
+    if not isinstance(connector_binding, dict):
+        return
+    existing_id = connector_binding.get("instance_id", "")
+    if existing_id and existing_id in conn_overrides:
+        connector_binding["instance_id"] = conn_overrides[existing_id]
+
+
 async def _create_imported_pipeline(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    created_by: uuid.UUID,
+    ctx: _ImportContext,
     pname: str,
     pipeline_info: dict[str, Any],
-    owner_team_id: uuid.UUID | None,
     existing_pipeline_names: set[str],
     base_name: str,
-    warnings: list[str],
 ) -> Pipeline:
     """Create the imported pipeline, retrying with a suffixed name on collision."""
     attempt_p = 0
     while True:
         try:
-            async with session.begin_nested():
+            async with ctx.session.begin_nested():
                 return await create_pipeline(
-                    session,
-                    org_id=org_id,
+                    ctx.session,
+                    org_id=ctx.org_id,
                     name=pname,
-                    account_id=created_by,
+                    account_id=ctx.created_by,
                     description=pipeline_info.get("description"),
                     visibility="org",
-                    owner_team_id=owner_team_id,
+                    owner_team_id=ctx.owner_team_id,
                     node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                 )
         except IntegrityError:
-            if attempt_p == _MAX_NAME_RETRIES - 1:
+            if _retries_exhausted(attempt_p):
                 raise
             attempt_p += 1
             existing_pipeline_names.add(pname)
             pname = suggest_import_name(existing_pipeline_names, base_name)
-            warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
+            ctx.warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
         except Exception:
             logger.exception("Failed to create pipeline '%s'", _sanitise_log_value(pname))
             raise
 
 
 async def _materialize_edges(
-    session: AsyncSession,
-    org_id: uuid.UUID,
+    ctx: _ImportContext,
     pipeline: Pipeline,
     edges_data: list[dict[str, Any]],
-    warnings: list[str],
 ) -> list[PipelineEdge]:
     """Create the imported edges; returns the edges added."""
     pipeline_edges_added: list[PipelineEdge] = []
@@ -1457,21 +1536,21 @@ async def _materialize_edges(
             target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
             edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
         except ValueError as exc:
-            warnings.append(f"Skipping edge with invalid UUID: {exc}")
+            ctx.warnings.append(f"Skipping edge with invalid UUID: {exc}")
             continue
         edge_type = ed.get("edge_type", "normal")
-        if edge_type not in VALID_EDGE_TYPES:
-            warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
+        if not _is_valid_edge_type(edge_type):
+            ctx.warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
             edge_type = "normal"
         edge = PipelineEdge(
             id=edge_id,
-            organisation_id=org_id,
+            organisation_id=ctx.org_id,
             pipeline_id=pipeline.id,
             source_node_id=source_id,
             target_node_id=target_id,
             edge_type=edge_type,
             hitl_gate_config=ed.get("hitl_gate_config"),
         )
-        session.add(edge)
+        ctx.session.add(edge)
         pipeline_edges_added.append(edge)
     return pipeline_edges_added
