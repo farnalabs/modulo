@@ -262,7 +262,7 @@ If sensitive data is discovered in an unmasked location:
 3. Add the missing key pattern to the appropriate `_SENSITIVE_KEY_PATTERNS`
    or `_SENSITIVE_KEYS` set.
 4. Add a test that would have caught the leak.
-5. Run `uv run --project backend --no-sync python scripts/run_graph_validate.py --fix` to update the product map.
+5. Update the product contract/schema documentation to reflect the new key pattern.
 
 ---
 
