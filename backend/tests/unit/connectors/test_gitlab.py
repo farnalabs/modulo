@@ -403,10 +403,12 @@ async def test_write_file_delete_defaults_ref(connector):
 
 @respx.mock
 async def test_write_file_delete_missing_project(connector):
+    payload = ConnectorPayload(resource="file_delete", data={"path": "x"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file_delete", data={"path": "x"}))
+        await connector.write(payload)
+    payload = ConnectorPayload(resource="file_delete", data={"project": "g/p"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="file_delete", data={"project": "g/p"}))
+        await connector.write(payload)
 
 
 @respx.mock
@@ -414,10 +416,9 @@ async def test_write_file_delete_error_response(connector):
     respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
         return_value=httpx.Response(400, text='{"message": "branch is missing"}')
     )
+    payload = ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
     with pytest.raises(ValueError, match="GitLab API HTTP 400"):
-        await connector.write(
-            ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock
@@ -497,8 +498,9 @@ async def test_write_file_delete_missing_branch_defaults_main(connector):
 
 @respx.mock
 async def test_write_mr_merge_missing_iid(connector):
+    payload = ConnectorPayload(resource="mr_merge", data={"project": "group/project"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(resource="mr_merge", data={"project": "group/project"}))
+        await connector.write(payload)
 
 
 @respx.mock

@@ -351,8 +351,9 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
     ],
 )
 async def test_write_missing_data(connector, resource, data, match_text):
+    payload = ConnectorPayload(resource=resource, data=data)
     with pytest.raises(ValueError, match=match_text):
-        await connector.write(ConnectorPayload(resource=resource, data=data))
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -387,11 +388,13 @@ async def test_write_missing_data(connector, resource, data, match_text):
 async def test_http_error(connector, resource, filters, data, url_method, url_pattern, status_code):
     getattr(respx, url_method)(url_pattern).mock(return_value=httpx.Response(status_code, text="Error"))
     if data:
+        payload = ConnectorPayload(resource=resource, data=data)
         with pytest.raises(ValueError, match=str(status_code)):
-            await connector.write(ConnectorPayload(resource=resource, data=data))
+            await connector.write(payload)
     else:
+        query = ConnectorQuery(resource=resource, filters=filters)
         with pytest.raises(ValueError, match=str(status_code)):
-            await connector.query(ConnectorQuery(resource=resource, filters=filters))
+            await connector.query(query)
 
 
 @respx.mock
@@ -492,13 +495,12 @@ async def test_write_pr_http_error(connector):
     respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
         return_value=httpx.Response(422, text="Unprocessable")
     )
+    payload = ConnectorPayload(
+        resource="pr",
+        data={"repo": "owner/repo", "title": "Bad PR", "head": "fix", "base": "main"},
+    )
     with pytest.raises(ValueError, match="422"):
-        await connector.write(
-            ConnectorPayload(
-                resource="pr",
-                data={"repo": "owner/repo", "title": "Bad PR", "head": "fix", "base": "main"},
-            )
-        )
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -761,10 +763,9 @@ async def test_write_pr_review_request_both(connector):
 
 
 async def test_write_pr_review_request_missing_reviewers(connector):
+    payload = ConnectorPayload(resource="pr_review_request", data={"repo": "owner/repo", "pull_number": "1"})
     with pytest.raises(ValueError, match="requires 'reviewers' or 'team_reviewers'"):
-        await connector.write(
-            ConnectorPayload(resource="pr_review_request", data={"repo": "owner/repo", "pull_number": "1"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock
