@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any, ClassVar, Protocol
 
@@ -638,92 +639,95 @@ class FeatureFlagRegistry:
                 return flag.currently_active
         return False
 
-    async def _get_org_override(self, flag_name: str, org_id: uuid.UUID) -> bool | None:
-        """Check org.settings_json.feature_overrides for this flag."""
+    async def _override_from_entity(
+        self,
+        flag_name: str,
+        load_row_factory: Callable[[], Callable[[Any], Awaitable[Any]]],
+        settings_attr: str,
+        error_log: str,
+    ) -> bool | None:
+        """Resolve a ``feature_overrides`` entry from a single org/team/account row.
+
+        Shared session/transaction/error boilerplate for the three entity-scoped
+        flag overrides. ``load_row_factory`` returns a session-bound loader for
+        the entity (so its lazy crud import happens inside this method's try
+        block); ``settings_attr`` names the JSON column that carries
+        ``feature_overrides`` (``settings_json`` / ``settings`` / ``preferences``)
+        and ``error_log`` is logged when the lookup fails. Returns the override
+        value when the entity defines one, else ``None``.
+        """
         try:
             from sqlalchemy.ext.asyncio import AsyncSession
 
             from modulo.api.dependencies import get_or_create_engine
-            from modulo.db.crud.organisation import get_organisation
             from modulo.settings import get_settings
 
+            load_row = load_row_factory()
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
                 in_transaction = session.in_transaction()
                 if asyncio.iscoroutine(in_transaction):
                     in_transaction = await in_transaction
                 if in_transaction:
-                    org = await get_organisation(session, org_id)
+                    entity = await load_row(session)
                 else:
                     async with session.begin():
-                        org = await get_organisation(session, org_id)
-                if org and org.settings_json:
-                    overrides = org.settings_json.get("feature_overrides", {})
+                        entity = await load_row(session)
+                settings = getattr(entity, settings_attr, None) if entity is not None else None
+                if entity and settings:
+                    overrides = settings.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Failed to check org flag override")
+            logger.exception(error_log)
         return None
+
+    async def _get_org_override(self, flag_name: str, org_id: uuid.UUID) -> bool | None:
+        """Check org.settings_json.feature_overrides for this flag."""
+
+        def _load_factory() -> Callable[[Any], Awaitable[Any]]:
+            from modulo.db.crud.organisation import get_organisation
+
+            async def _load(session: Any) -> Any:
+                return await get_organisation(session, org_id)
+
+            return _load
+
+        return await self._override_from_entity(
+            flag_name, _load_factory, "settings_json", "Failed to check org flag override"
+        )
 
     async def _get_team_override(self, flag_name: str, team_id: uuid.UUID) -> bool | None:
         """Check team.settings.feature_overrides for this flag."""
-        try:
-            from sqlalchemy.ext.asyncio import AsyncSession
 
-            from modulo.api.dependencies import get_or_create_engine
+        def _load_factory() -> Callable[[Any], Awaitable[Any]]:
             from modulo.db.crud.team import get_team
-            from modulo.settings import get_settings
 
-            engine = get_or_create_engine(get_settings())
-            async with AsyncSession(engine, autobegin=False) as session:
-                in_transaction = session.in_transaction()
-                if asyncio.iscoroutine(in_transaction):
-                    in_transaction = await in_transaction
-                if in_transaction:
-                    team = await get_team(session, team_id)
-                else:
-                    async with session.begin():
-                        team = await get_team(session, team_id)
-                if team and team.settings:
-                    overrides = team.settings.get("feature_overrides", {})
-                    if flag_name in overrides:
-                        return bool(overrides[flag_name])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Failed to check team flag override")
-        return None
+            async def _load(session: Any) -> Any:
+                return await get_team(session, team_id)
+
+            return _load
+
+        return await self._override_from_entity(
+            flag_name, _load_factory, "settings", "Failed to check team flag override"
+        )
 
     async def _get_user_override(self, flag_name: str, user_id: uuid.UUID) -> bool | None:
         """Check account.preferences.feature_overrides for this flag."""
-        try:
-            from sqlalchemy.ext.asyncio import AsyncSession
 
-            from modulo.api.dependencies import get_or_create_engine
+        def _load_factory() -> Callable[[Any], Awaitable[Any]]:
             from modulo.db.crud.account import get_account_by_id
-            from modulo.settings import get_settings
 
-            engine = get_or_create_engine(get_settings())
-            async with AsyncSession(engine, autobegin=False) as session:
-                in_transaction = session.in_transaction()
-                if asyncio.iscoroutine(in_transaction):
-                    in_transaction = await in_transaction
-                if in_transaction:
-                    account = await get_account_by_id(session, user_id)
-                else:
-                    async with session.begin():
-                        account = await get_account_by_id(session, user_id)
-                if account and account.preferences:
-                    overrides = account.preferences.get("feature_overrides", {})
-                    if flag_name in overrides:
-                        return bool(overrides[flag_name])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Failed to check user flag override")
-        return None
+            async def _load(session: Any) -> Any:
+                return await get_account_by_id(session, user_id)
+
+            return _load
+
+        return await self._override_from_entity(
+            flag_name, _load_factory, "preferences", "Failed to check user flag override"
+        )
 
 
 _registry: FeatureFlagRegistry | None = None
