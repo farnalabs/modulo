@@ -166,7 +166,7 @@ class GitLabCIRunner(CIRunnerBase):
                 return CIRunLog(
                     run_id=run_id,
                     lines=all_lines,
-                    next_cursor=str(len(all_lines)) if cursor is not None else None,
+                    next_cursor=str(offset + len(all_lines)) if cursor is not None else None,
                     truncated=skipped_jobs > 0,
                 )
         except httpx.HTTPStatusError as exc:

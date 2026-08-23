@@ -76,6 +76,24 @@ async def test_query_file(connector):
 
 
 @respx.mock
+async def test_query_file_binary_content_left_raw(connector):
+    file_data = {
+        "file_name": "logo.png",
+        "content": "\x89PNG\r\n\x1a\n\x00\x00\x00\rbinary\xff\xfe",
+    }
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/logo.png").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="file",
+            filters={"project": "group/project", "path": "logo.png", "ref": "main"},
+        )
+    )
+    assert result.records[0]["content"] == file_data["content"]
+
+
+@respx.mock
 async def test_query_mrs(connector):
     mrs = [{"id": 42, "title": "Fix bug"}]
     respx.get(f"{_API}/projects/group%2Fproject/merge_requests").mock(return_value=httpx.Response(200, json=mrs))
@@ -103,6 +121,28 @@ async def test_write_file(connector):
     assert result["file_path"] == "src/main.py"
     body = json.loads(route.calls.last.request.content)
     assert body["branch"] == "main"
+
+
+@respx.mock
+async def test_write_file_honors_branch_key(connector):
+    response_body = {"file_path": "src/main.py", "branch": "feature-branch"}
+    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "src/main.py",
+                "content": "print('hello')",
+                "branch": "feature-branch",
+            },
+        )
+    )
+    assert result["branch"] == "feature-branch"
+    body = json.loads(route.calls.last.request.content)
+    assert body["branch"] == "feature-branch"
 
 
 @respx.mock
