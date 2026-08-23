@@ -74,6 +74,7 @@
               class="absolute left-0 top-full mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
             >
               <button
+                type="button"
                 class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
                 @click="openSaveAsComposite"
               >
@@ -84,9 +85,9 @@
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
-            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
-            <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
@@ -104,6 +105,7 @@
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="relative">
             <button
+              type="button"
               ref="retryPolicyToggleRef"
               :id="retryPolicyToggleId"
               class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"

@@ -102,6 +102,7 @@
               />
               <div class="flex gap-2">
                 <button
+                  type="button"
                   :disabled="Boolean(actioning)"
                   data-testid="run-detail-approve"
                   class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
@@ -110,6 +111,7 @@
                   {{ actioning === 'approve' ? 'Approving...' : 'Approve' }}
                 </button>
                 <button
+                  type="button"
                   :disabled="Boolean(actioning)"
                   data-testid="run-detail-reject"
                   class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
@@ -121,6 +123,7 @@
             </div>
           </template>
           <button
+            type="button"
             v-else
             :disabled="claimLoading"
             class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
@@ -246,6 +249,7 @@
       <!-- Cancel button for non-terminal runs -->
       <div v-if="canCancel" class="my-4">
         <button
+          type="button"
           :disabled="cancelling"
           data-testid="run-detail-cancel"
           class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
@@ -263,6 +267,7 @@
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
         <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="run.trace_id">{{ shortId(run.trace_id) }}</code>
         <button
+          type="button"
           data-testid="run-detail-copy-trace-id"
           :aria-label="$t('views.RunDetailView.copy_trace_id')"
           class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
