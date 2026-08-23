@@ -91,6 +91,7 @@ from modulo.core.run_context.autonomy import (
     should_notify_on_complete,
     should_skip_hitl_gate,
 )
+from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -2117,9 +2118,31 @@ def make_hitl_gate_fn(
         # --- Autonomy skip/approve. ---
         autonomy, autonomy_result = _hitl_gate_autonomy_result(gate_id, state, human_only)
         if autonomy_result is not None:
+            # skipped (fully_autonomous) or auto_approved (notify_on_complete):
+            # record the effective autonomy granted as evidence (fail-open).
+            outcome = autonomy_result["artifacts"][0]["status"]
+            await emit_autonomy_telemetry(
+                session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                gate_id=gate_id,
+                autonomy_level=autonomy.value,
+                gate_outcome=outcome,
+                human_only=human_only,
+            )
             return autonomy_result
 
         # --- First invocation — store config and interrupt. ---
+        # Gate fired (human path): record the effective autonomy + fired outcome.
+        await emit_autonomy_telemetry(
+            session_factory,
+            org_id=org_id,
+            run_id=state.get("_run_id"),
+            gate_id=gate_id,
+            autonomy_level=autonomy.value,
+            gate_outcome="fired",
+            human_only=human_only,
+        )
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
