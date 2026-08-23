@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 import click
 from sqlalchemy import select
-from tqdm import tqdm  # type: ignore[import-untyped]
+from tqdm import tqdm
 
 from modulo.auth.jwt import decode_principal
 from modulo.db.crud.account import get_account_by_id

@@ -55,7 +55,7 @@ class SentryErrorForwarder(BaseForwarder):
             return False
 
         try:
-            import sentry_sdk  # type: ignore[import-not-found]  # optional integration
+            import sentry_sdk  # optional integration
         except ImportError:
             return await self._forward_via_api(dsn, org_slug, project_slug, org_id, error_group, error_event)
 

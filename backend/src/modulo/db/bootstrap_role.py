@@ -38,7 +38,7 @@ import secrets
 import sys
 from urllib.parse import unquote, urlparse, urlunparse
 
-import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
+import asyncpg  # asyncpg does not publish a py.typed marker
 
 _log = logging.getLogger(__name__)
 

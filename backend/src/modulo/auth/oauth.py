@@ -22,8 +22,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from authlib.oauth2 import OAuth2Error as _OAuth2Error  # type: ignore[import-untyped]
-from authlib.oauth2.rfc6749 import (  # type: ignore[import-untyped]
+from authlib.oauth2 import OAuth2Error as _OAuth2Error
+from authlib.oauth2.rfc6749 import (
     ClientMixin,
     list_to_scope,
     scope_to_list,

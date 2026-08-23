@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 import redis.asyncio as aioredis
 from alembic.config import Config
 from alembic.script import ScriptDirectory

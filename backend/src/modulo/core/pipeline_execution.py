@@ -879,7 +879,7 @@ async def _kill_sandbox_best_effort(aeng: AsyncEngine, run_id: str, org_id: str)
             sandbox_id = str(row[0]) if row and row[0] else None
         if not sandbox_id:
             return
-        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox
 
         sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=10.0)
         await asyncio.wait_for(sandbox.kill(request_timeout=10.0), timeout=10.0)

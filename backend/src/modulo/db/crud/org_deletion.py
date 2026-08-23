@@ -79,7 +79,7 @@ async def _abort_org_live_sandboxes(session: AsyncSession, org_id: uuid.UUID) ->
     succeeded).
     """
     try:
-        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox
 
         # Guard: runs.sandbox_id ships in a parallel migration owned by the
         # runs-model worker. Skip the whole abort when the column is absent —
