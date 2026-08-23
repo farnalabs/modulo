@@ -62,6 +62,7 @@
           class="flex shrink-0 items-center gap-1"
         >
             <button
+              type="button"
               :ref="(el) => setTabButtonRef(tab.tabId, el)"
               class="remy-only-tab"
               :class="{ active: tab.sessionId === store.activeSessionId }"
@@ -86,6 +87,7 @@
               />
             </button>
             <button
+              type="button"
               class="remy-only-tab-close"
               :data-testid="`remy-only-tab-close-${tab.tabId}`"
               :aria-label="$t('components.remy.RemyOnlyView.close_tab')"
@@ -96,6 +98,7 @@
             </button>
           </div>
         <button
+          type="button"
           class="remy-only-new-tab"
           data-testid="remy-only-new-tab"
           :title="$t('components.remy.RemyOnlyView.new_tab')"
@@ -113,6 +116,7 @@
         data-testid="remy-only-subtab-bar"
       >
         <button
+          type="button"
           v-for="st in subTabs"
           :key="st.key"
           :ref="(el) => setSubTabButtonRef(st.key, el)"
@@ -266,7 +270,7 @@ function onSessionTablistKeydown(event: KeyboardEvent, tab: RemyTab) {
   const tabs = tabsStore.tabs
   const index = tabs.findIndex(t => t.tabId === tab.tabId)
   if (index === -1) return
-  let nextIndex = index
+  let nextIndex: number
   switch (event.key) {
     case 'ArrowRight':
       nextIndex = (index + 1) % tabs.length

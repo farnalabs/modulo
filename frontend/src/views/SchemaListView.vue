@@ -28,7 +28,7 @@
 
         <div v-if="moveError" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="schema-list-move-error">
           <span>{{ moveError }}</span>
-          <button class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('views.SchemaListView.cancel')" data-testid="schema-list-dismiss-move-error" @click="moveError = null">
+          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('views.SchemaListView.cancel')" data-testid="schema-list-dismiss-move-error" @click="moveError = null">
             <X class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
@@ -78,7 +78,7 @@
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
-              <button class="text-muted-foreground hover:text-foreground transition-colors" data-testid="schema-list-all-schemas" @click="onSelectFolder(null)">
+              <button type="button" class="text-muted-foreground hover:text-foreground transition-colors" data-testid="schema-list-all-schemas" @click="onSelectFolder(null)">
                 {{ $t('views.SchemaListView.all_schemas') }}
               </button>
               <ChevronRight class="h-3 w-3 text-muted-foreground" aria-hidden="true" />
@@ -135,6 +135,7 @@
                     </td>
                     <td class="px-4 py-3 text-right">
                       <button
+                        type="button"
                         class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
                         data-testid="schema-action-menu"
                         :aria-label="$t('views.SchemaListView.schema_actions')"
@@ -187,6 +188,7 @@
       </template>
       <div class="space-y-2">
         <button
+          type="button"
           v-for="f in foldersList"
           :key="f.id"
           class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
@@ -198,6 +200,7 @@
           {{ f.name }}
         </button>
         <button
+          type="button"
           class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
           :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
           data-testid="schema-move-nofolder"
