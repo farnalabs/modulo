@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -123,25 +124,31 @@ class TestOidcLoginRoute:
         assert kwargs.get("org_id") is None
 
 
+def _run_callback_route_test(
+    client: TestClient, provider_id: str, state: str, org_id: uuid.UUID | None
+) -> tuple[httpx.Response, AsyncMock, AsyncMock]:
+    with (
+        patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
+        patch("modulo.api.routes.sso.oidc_process_callback", new_callable=AsyncMock) as mock_cb,
+    ):
+        mock_resolve.return_value = org_id
+        mock_cb.return_value = {
+            "access_token": "at-oidc",
+            "refresh_token": "rt-oidc",
+            "token_type": "bearer",
+        }
+
+        resp = client.get(
+            f"/api/v1/auth/oidc/{provider_id}/callback?code=authcode&state={state}",
+            follow_redirects=False,
+        )
+    return resp, mock_resolve, mock_cb
+
+
 class TestOidcCallbackRoute:
     def test_resolves_org_and_passes_to_callback(self, client: TestClient) -> None:
         org_id = uuid.uuid4()
-
-        with (
-            patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
-            patch("modulo.api.routes.sso.oidc_process_callback", new_callable=AsyncMock) as mock_cb,
-        ):
-            mock_resolve.return_value = org_id
-            mock_cb.return_value = {
-                "access_token": "at-oidc",
-                "refresh_token": "rt-oidc",
-                "token_type": "bearer",
-            }
-
-            resp = client.get(
-                "/api/v1/auth/oidc/okta/callback?code=authcode&state=okta:xyz",
-                follow_redirects=False,
-            )
+        resp, _mock_resolve, mock_cb = _run_callback_route_test(client, "okta", "okta:xyz", org_id)
 
         assert resp.status_code == 307
         location = resp.headers.get("location", "")
@@ -153,21 +160,7 @@ class TestOidcCallbackRoute:
         assert kwargs.get("org_id") == org_id
 
     def test_env_fallback_when_provider_not_in_db(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
-            patch("modulo.api.routes.sso.oidc_process_callback", new_callable=AsyncMock) as mock_cb,
-        ):
-            mock_resolve.return_value = None
-            mock_cb.return_value = {
-                "access_token": "at-oidc",
-                "refresh_token": "rt-oidc",
-                "token_type": "bearer",
-            }
-
-            resp = client.get(
-                "/api/v1/auth/oidc/google/callback?code=authcode&state=google:xyz",
-                follow_redirects=False,
-            )
+        resp, mock_resolve, mock_cb = _run_callback_route_test(client, "google", "google:xyz", None)
 
         assert resp.status_code == 307
         mock_resolve.assert_awaited_once()

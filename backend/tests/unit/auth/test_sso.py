@@ -745,7 +745,7 @@ class TestListOidcProviders:
         result.scalars().all.return_value = []
         session.execute.return_value = result
 
-        assert await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY) == []
+        assert not await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY)
 
     async def test_org_agnostic_when_org_id_none(self) -> None:
         from modulo.auth.sso import list_oidc_providers
@@ -803,195 +803,151 @@ class TestResolveOidcProviderOrg:
         assert await resolve_oidc_provider_org(session, "env-only-provider") is None
 
 
+_OKTA_DB_PROVIDER: dict[str, str] = {
+    "provider_id": "okta",
+    "client_id": "okta-client-id",
+    "client_secret": "okta-client-secret",
+    "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+}
+
+
+def _id_token() -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.sig"
+
+
+async def _run_authorize_url_test(
+    provider_id: str,
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+    db_provider: list[dict[str, str]],
+) -> tuple[str, AsyncMock, Settings]:
+    from modulo.auth.sso import oidc_get_authorize_url
+
+    settings = _override()
+    with (
+        patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+    ):
+        mock_list.return_value = db_provider
+        mock_disc.return_value = {"authorization_endpoint": f"https://{provider_id}.example.com/oauth2/v1/authorize"}
+
+        url, _ = await oidc_get_authorize_url(
+            provider_id, settings, "http://localhost/callback", session=session, org_id=org_id
+        )
+    return url, mock_list, settings
+
+
+async def _run_process_callback_test(
+    provider_id: str,
+    org_id: uuid.UUID | None,
+    db_provider: list[dict[str, str]],
+) -> tuple[dict[str, str], dict[str, AsyncMock], Settings, AsyncSession]:
+    from modulo.auth.sso import oidc_process_callback, sign_state
+
+    settings = _override()
+    session = AsyncMock(spec=AsyncSession)
+    signed = sign_state(f"{provider_id}:{'raw-state'}", settings.secret_key)
+
+    with (
+        patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+    ):
+        mock_list.return_value = db_provider
+        mock_disc.return_value = {
+            "token_endpoint": f"https://{provider_id}.example.com/oauth2/v1/token",
+            "jwks_uri": f"https://{provider_id}.example.com/oauth2/v1/keys",
+            "issuer": f"https://{provider_id}.example.com",
+        }
+        mock_ex.return_value = {"id_token": _id_token()}
+        mock_verify.return_value = {
+            "email": "user@example.com",
+            "name": "Test User",
+            "sub": "abc123",
+        }
+        mock_jit.return_value = (MagicMock(), org_id, "runner")
+        mock_tok.return_value = {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "token_type": "bearer",
+        }
+
+        result = await oidc_process_callback(
+            "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
+        )
+
+    return (
+        result,
+        {
+            "mock_list": mock_list,
+            "mock_disc": mock_disc,
+            "mock_ex": mock_ex,
+            "mock_verify": mock_verify,
+            "mock_jit": mock_jit,
+            "mock_tok": mock_tok,
+        },
+        settings,
+        session,
+    )
+
+
 class TestOidcGetAuthorizeUrlDb:
     async def test_uses_db_provider_when_session_and_org_given(self) -> None:
-        from modulo.auth.sso import oidc_get_authorize_url
-
-        settings = _override()
         session = AsyncMock(spec=AsyncSession)
         org_id = uuid.uuid4()
-        db_provider = {
-            "provider_id": "okta",
-            "client_id": "okta-client-id",
-            "client_secret": "okta-client-secret",
-            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
-        }
-
-        with (
-            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
-            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        ):
-            mock_list.return_value = [db_provider]
-            mock_disc.return_value = {"authorization_endpoint": "https://okta.example.com/oauth2/v1/authorize"}
-
-            url, _raw_state = await oidc_get_authorize_url(
-                "okta", settings, "http://localhost/callback", session=session, org_id=org_id
-            )
-
-            assert url.startswith("https://okta.example.com/oauth2/v1/authorize")
-            assert "client_id=okta-client-id" in url
-            mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+        url, mock_list, settings = await _run_authorize_url_test("okta", session, org_id, [_OKTA_DB_PROVIDER])
+        assert url.startswith("https://okta.example.com/oauth2/v1/authorize")
+        assert "client_id=okta-client-id" in url
+        mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
 
     async def test_uses_db_provider_org_agnostic_when_org_none(self) -> None:
-        from modulo.auth.sso import oidc_get_authorize_url
-
-        settings = _override()
         session = AsyncMock(spec=AsyncSession)
-        db_provider = {
-            "provider_id": "okta",
-            "client_id": "okta-client-id",
-            "client_secret": "okta-client-secret",
-            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
-        }
-
-        with (
-            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
-            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        ):
-            mock_list.return_value = [db_provider]
-            mock_disc.return_value = {"authorization_endpoint": "https://okta.example.com/oauth2/v1/authorize"}
-
-            url, _ = await oidc_get_authorize_url("okta", settings, "http://localhost/callback", session=session)
-
-            assert "client_id=okta-client-id" in url
-            mock_list.assert_awaited_once_with(session, org_id=None, fernet_key=settings.fernet_key)
+        url, mock_list, settings = await _run_authorize_url_test("okta", session, None, [_OKTA_DB_PROVIDER])
+        assert "client_id=okta-client-id" in url
+        mock_list.assert_awaited_once_with(session, org_id=None, fernet_key=settings.fernet_key)
 
     async def test_falls_back_to_env_when_db_empty(self) -> None:
-        from modulo.auth.sso import oidc_get_authorize_url
-
-        settings = _override()
         session = AsyncMock(spec=AsyncSession)
-
-        with (
-            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
-            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        ):
-            mock_list.return_value = []
-            mock_disc.return_value = {"authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth"}
-
-            url, _ = await oidc_get_authorize_url(
-                "google", settings, "http://localhost/callback", session=session, org_id=uuid.uuid4()
-            )
-
-            assert "client_id=google-client-id" in url
-            mock_list.assert_awaited_once()
+        url, mock_list, _settings = await _run_authorize_url_test("google", session, uuid.uuid4(), [])
+        assert "client_id=google-client-id" in url
+        mock_list.assert_awaited_once()
 
 
 class TestOidcProcessCallbackDb:
-    def _id_token(self) -> str:
-        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-        payload = (
-            base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
-            .rstrip(b"=")
-            .decode()
-        )
-        return f"{header}.{payload}.sig"
-
     async def test_uses_db_provider_when_org_id_given(self) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-
-        settings = _override()
-        session = AsyncMock(spec=AsyncSession)
         org_id = uuid.uuid4()
-        signed = sign_state(f"okta:{'raw-state'}", settings.secret_key)
-        db_provider = {
-            "provider_id": "okta",
-            "client_id": "okta-client-id",
-            "client_secret": "okta-client-secret",
-            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
-        }
-
-        with (
-            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
-            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
-        ):
-            mock_list.return_value = [db_provider]
-            mock_disc.return_value = {
-                "token_endpoint": "https://okta.example.com/oauth2/v1/token",
-                "jwks_uri": "https://okta.example.com/oauth2/v1/keys",
-                "issuer": "https://okta.example.com",
-            }
-            mock_ex.return_value = {"id_token": self._id_token()}
-            mock_verify.return_value = {
-                "email": "user@example.com",
-                "name": "Test User",
-                "sub": "abc123",
-            }
-            mock_jit.return_value = (MagicMock(), org_id, "runner")
-            mock_tok.return_value = {
-                "access_token": "at",
-                "refresh_token": "rt",
-                "token_type": "bearer",
-            }
-
-            result = await oidc_process_callback(
-                "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
-            )
-
-            assert result["access_token"] == "at"
-            # The DB provider's client_id + decrypted secret drive the code exchange.
-            call_args = mock_ex.await_args.args
-            assert call_args[1] == "okta-client-id"
-            assert call_args[2] == "okta-client-secret"
-            # JIT provisioning targets the provider's org.
-            mock_jit.assert_awaited_once_with(
-                session,
-                settings,
-                "user@example.com",
-                "Test User",
-                "oidc",
-                "okta:abc123",
-                default_org_id=org_id,
-            )
+        result, mocks, settings, session = await _run_process_callback_test("okta", org_id, [_OKTA_DB_PROVIDER])
+        assert result["access_token"] == "at"
+        call_args = mocks["mock_ex"].await_args.args
+        assert call_args[1] == "okta-client-id"
+        assert call_args[2] == "okta-client-secret"
+        mocks["mock_jit"].assert_awaited_once_with(
+            session,
+            settings,
+            "user@example.com",
+            "Test User",
+            "oidc",
+            "okta:abc123",
+            default_org_id=org_id,
+        )
 
     async def test_falls_back_to_env_when_db_empty(self) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-
-        settings = _override()
-        session = AsyncMock(spec=AsyncSession)
         org_id = uuid.uuid4()
-        signed = sign_state(f"google:{'raw-state'}", settings.secret_key)
-
-        with (
-            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
-            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
-        ):
-            mock_list.return_value = []
-            mock_disc.return_value = {
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "jwks_uri": "https://oauth2.googleapis.com/certs",
-                "issuer": "https://accounts.google.com",
-            }
-            mock_ex.return_value = {"id_token": self._id_token()}
-            mock_verify.return_value = {
-                "email": "user@example.com",
-                "name": "Test User",
-                "sub": "abc123",
-            }
-            mock_jit.return_value = (MagicMock(), org_id, "runner")
-            mock_tok.return_value = {
-                "access_token": "at",
-                "refresh_token": "rt",
-                "token_type": "bearer",
-            }
-
-            result = await oidc_process_callback(
-                "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
-            )
-
-            assert result["access_token"] == "at"
-            call_args = mock_ex.await_args.args
-            assert call_args[1] == "google-client-id"
-            assert call_args[2] == "google-client-secret"
-            mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+        result, mocks, settings, session = await _run_process_callback_test("google", org_id, [])
+        assert result["access_token"] == "at"
+        call_args = mocks["mock_ex"].await_args.args
+        assert call_args[1] == "google-client-id"
+        assert call_args[2] == "google-client-secret"
+        mocks["mock_list"].assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
 
 
 # ---------------------------------------------------------------------------
