@@ -286,12 +286,11 @@ def validate_config_set(config_set: GuardrailConfigSet) -> None:
                     f"Guardrail {item.id!r} regex detection requires non-empty 'pattern' and 'field' "
                     f"(got pattern={item.detection.pattern!r}, field={item.detection.field!r})."
                 )
-        else:
-            if not isinstance(item.detection.schema_data, dict):
-                raise GuardrailConfigError(
-                    f"Guardrail {item.id!r} json_schema detection requires a 'schema' dict "
-                    f"(got {item.detection.schema_data!r})."
-                )
+        elif not isinstance(item.detection.schema_data, dict):
+            raise GuardrailConfigError(
+                f"Guardrail {item.id!r} json_schema detection requires a 'schema' dict "
+                f"(got {item.detection.schema_data!r})."
+            )
         for rule in item.redaction:
             if not rule.path.strip():
                 raise GuardrailConfigError(f"Guardrail {item.id!r} has an empty redaction path.")
@@ -400,14 +399,13 @@ def _describe_item_delta(old_item: GuardrailConfigItem, new_item: GuardrailConfi
     new_type = new_item.detection.type
     if old_type != new_type:
         parts.append(f"detection {old_type}->{new_type}")
-    else:
-        if old_type == "regex":
-            if old_item.detection.pattern != new_item.detection.pattern:
-                parts.append("regex pattern changed")
-            if old_item.detection.field != new_item.detection.field:
-                parts.append("regex field changed")
-        elif old_item.detection.schema_data != new_item.detection.schema_data:
-            parts.append("schema changed")
+    elif old_type == "regex":
+        if old_item.detection.pattern != new_item.detection.pattern:
+            parts.append("regex pattern changed")
+        if old_item.detection.field != new_item.detection.field:
+            parts.append("regex field changed")
+    elif old_item.detection.schema_data != new_item.detection.schema_data:
+        parts.append("schema changed")
     if old_item.redaction != new_item.redaction:
         parts.append("redaction changed")
     if old_item.required_capabilities != new_item.required_capabilities:
@@ -504,10 +502,11 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
             pattern=effective_config.get("pattern"),
             field=effective_config.get("field"),
         )
-    redaction = []
-    for raw in config.get("redaction") or []:
-        if isinstance(raw, dict):
-            redaction.append(RedactionRule(path=str(raw.get("path", "")), mode=raw.get("mode", "transform")))
+    redaction = [
+        RedactionRule(path=str(raw.get("path", "")), mode=raw.get("mode", "transform"))
+        for raw in config.get("redaction") or []
+        if isinstance(raw, dict)
+    ]
     try:
         return GuardrailConfigItem(
             id=engine_def.name,

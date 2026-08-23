@@ -1934,11 +1934,7 @@ async def _quality_report_recipient_urls(
         )
     ).scalars()
 
-    recipient_urls: list[str] = []
-    for ep in endpoints:
-        if "quality_report" in _endpoint_events(ep.events):
-            recipient_urls.append(ep.url)
-    return recipient_urls
+    return [ep.url for ep in endpoints if "quality_report" in _endpoint_events(ep.events)]
 
 
 @router.post(

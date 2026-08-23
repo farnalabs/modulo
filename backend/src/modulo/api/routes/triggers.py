@@ -380,8 +380,7 @@ async def list_triggers(
             # app.organisation_id`` context, which is transaction-scoped — a read
             # after commit sees zero rows on strict-RLS Postgres, silently
             # showing a deactivated trigger as state 'ok'.
-            for r in rows:
-                items.append(await _serialize_trigger(session, r))
+            items.extend([await _serialize_trigger(session, r) for r in rows])
     except ProgrammingError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(

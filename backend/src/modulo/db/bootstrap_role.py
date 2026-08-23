@@ -93,11 +93,10 @@ async def _create_or_update_role(
                 await conn.execute(f"CREATE ROLE \"{name}\" LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
             else:
                 await conn.execute(f"CREATE ROLE \"{name}\" LOGIN PASSWORD '{quoted_pass}'")
+        elif bypassrls:
+            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
         else:
-            if bypassrls:
-                await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
-            else:
-                await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN')
+            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN')
         _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
     else:
         if login:
@@ -105,11 +104,10 @@ async def _create_or_update_role(
                 await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
             else:
                 await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN PASSWORD '{quoted_pass}'")
+        elif bypassrls:
+            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
         else:
-            if bypassrls:
-                await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
-            else:
-                await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN')
+            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN')
         _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
 
 

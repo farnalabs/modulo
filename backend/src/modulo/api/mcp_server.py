@@ -2392,9 +2392,7 @@ def _run_status_detail(run: Run) -> dict[str, Any]:
     node_ids.update(token_usage.keys())
     node_ids.update(outputs_json.keys())
     node_ids.update(telemetry_json.keys())
-    nodes: list[dict[str, Any]] = []
-    for nid in sorted(node_ids):
-        nodes.append(_run_status_node(nid, token_usage, outputs_json, telemetry_json))
+    nodes = [_run_status_node(nid, token_usage, outputs_json, telemetry_json) for nid in sorted(node_ids)]
     result: dict[str, Any] = {"nodes": nodes}
     if run.cost_breakdown is not None:
         result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)

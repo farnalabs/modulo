@@ -874,15 +874,14 @@ async def _load_hitl_series(
 
     # Correlation: eval pass rate vs rejection rate per day
     eval_rate_map: dict[str, float | None] = {r["date"]: r.get("pass_rate") for r in eval_rates}
-    correlation: list[dict[str, Any]] = []
-    for h in hitl_volume:
-        correlation.append(
-            {
-                "date": h["date"],
-                "rejection_rate": h["rejection_rate"],
-                "eval_pass_rate": eval_rate_map.get(h["date"]),
-            }
-        )
+    correlation = [
+        {
+            "date": h["date"],
+            "rejection_rate": h["rejection_rate"],
+            "eval_pass_rate": eval_rate_map.get(h["date"]),
+        }
+        for h in hitl_volume
+    ]
     return hitl_volume, rejection_trend, correlation
 
 

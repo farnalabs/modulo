@@ -1804,13 +1804,9 @@ def _append_turn_messages(
 ) -> None:
     """Append the assistant message and tool results to the conversation for the next turn."""
     langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
-    for tr in tool_results:
-        langchain_messages.append(
-            ToolMessage(
-                content=_tool_result_content(tr),
-                tool_call_id=tr["tool_call_id"],
-            )
-        )
+    langchain_messages.extend(
+        ToolMessage(content=_tool_result_content(tr), tool_call_id=tr["tool_call_id"]) for tr in tool_results
+    )
 
 
 def _ping_event_if_due(state: dict[str, Any]) -> str | None:

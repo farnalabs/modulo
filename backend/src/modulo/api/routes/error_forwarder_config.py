@@ -97,10 +97,11 @@ def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None
     if schema is None:
         return []
     config = config or {}
-    errors: list[str] = []
-    for key in schema["required"]:
-        if not isinstance(config.get(key), str) or not config[key].strip():
-            errors.append(f"missing or empty required config key '{key}'")
+    errors = [
+        f"missing or empty required config key '{key}'"
+        for key in schema["required"]
+        if not isinstance(config.get(key), str) or not config[key].strip()
+    ]
     for key, expected_type in schema["optional"].items():
         if key in config and config[key] is not None and not isinstance(config[key], expected_type):
             expected_name = getattr(expected_type, "__name__", str(expected_type))

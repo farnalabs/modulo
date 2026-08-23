@@ -139,11 +139,12 @@ class PackValidationReport:
     @property
     def errors(self) -> list[str]:
         """Flat, human-readable list of every gap (unmapped + uninstantiable)."""
-        errors: list[str] = []
-        for control_id in self.unmapped_controls:
-            errors.append(f"control {control_id!r} is unmapped (no concrete guardrail)")
-        for control_id, error in self.uninstantiable_controls:
-            errors.append(f"control {control_id!r} is uninstantiable: {error}")
+        errors = [
+            f"control {control_id!r} is unmapped (no concrete guardrail)" for control_id in self.unmapped_controls
+        ]
+        errors.extend(
+            f"control {control_id!r} is uninstantiable: {error}" for control_id, error in self.uninstantiable_controls
+        )
         return errors
 
     @property
