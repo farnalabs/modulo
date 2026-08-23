@@ -443,7 +443,7 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
             {"val": str(org_id)},
         )
     else:
-        session.info["organisation_id"] = org_id
+        session.info["org_id"] = org_id
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:

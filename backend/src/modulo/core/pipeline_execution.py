@@ -290,15 +290,17 @@ async def claim_run_async(
 
 
 async def set_rls_org(session: Any, org_id: uuid.UUID) -> None:
-    """Set the RLS org context for the session (transaction-scoped on Postgres)."""
-    dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        await session.execute(
-            text(_SQL_SET_ORG_ID),
-            {"val": str(org_id)},
-        )
-    else:
-        session.info["organisation_id"] = org_id
+    """Set the RLS org context for the session (transaction-scoped on Postgres).
+
+    Delegates to the canonical helper in ``modulo.db.rls`` so the tenant-filter
+    key (``org_id``) stays consistent with every other writer. Previously this
+    copy wrote ``session.info["organisation_id"]`` which never activated the
+    generic-backend tenant filter (the listener reads ``org_id``), leaving the
+    run-by-id reads below unscoped.
+    """
+    from modulo.db.rls import set_rls_org as _canonical_set_rls_org
+
+    await _canonical_set_rls_org(session, org_id)
 
 
 async def load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> tuple[Any, Any]:
