@@ -149,6 +149,7 @@ async def test_stream_without_api_keys_preserves_tool_control_flow(
     with (
         patch("modulo.api.routes.remy.AsyncSession", return_value=stream_session),
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy.set_rls_user_context", new_callable=AsyncMock),
         patch("modulo.api.routes.remy._resolve_api_key", new_callable=AsyncMock, return_value="provider-key"),
         patch("modulo.api.routes.remy._build_backend", return_value=backend),
         patch("modulo.api.routes.remy.SkillLoader", return_value=loader),

@@ -51,7 +51,7 @@ from modulo.db.crud.schema import (
 from modulo.db.crud.schema_folder import move_schema_to_folder
 from modulo.db.models.schema import Schema
 from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_SCHEMA_LIST = "schema.list"
@@ -813,6 +813,7 @@ async def infer_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             ci = await get_connector_instance(session, req.connector_instance_id)
             if ci is None:
@@ -1022,6 +1023,7 @@ async def generate_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
             if not mbs.items:
                 raise HTTPException(

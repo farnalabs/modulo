@@ -21,7 +21,7 @@ from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -183,6 +183,7 @@ async def reveal_sensitive_value(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             actual_value = await _fetch_value(payload, session, principal, settings)
 
     except ProgrammingError:

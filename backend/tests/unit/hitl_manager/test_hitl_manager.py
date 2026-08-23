@@ -1695,6 +1695,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
         patch("modulo.core.cost_controller.finalize.update_run_status", return_value=final_run) as mock_update,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch(

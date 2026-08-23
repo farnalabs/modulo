@@ -58,6 +58,7 @@ from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
+from modulo.db.rls import set_rls_execution_context
 from modulo.db.settings_resolver import ensure_triggers_resumable
 
 _log = logging.getLogger(__name__)
@@ -368,6 +369,10 @@ async def handle_app_mention(
         if pipeline_rate_limit is None:
             from modulo.db.models.pipeline import Pipeline
 
+            # Org-only context (Slack automation has no user principal) — the
+            # execution hatch lets the rate-limit fallback read a team-private
+            # pipeline's config.
+            await set_rls_execution_context(session)
             pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
             pipeline = pipe_result.scalar_one_or_none()
             if pipeline is not None:

@@ -61,7 +61,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
@@ -201,6 +201,7 @@ async def receive_slack_event(
         async with session.begin():
             trigger, org_id = await _load_trigger_and_org(session, trigger_id, principal)
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
 
             cfg = trigger.config_json or {}
             signing_secret: str | None = cfg.get("signing_secret")

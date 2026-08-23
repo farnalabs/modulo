@@ -99,6 +99,27 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
         session.info["org_role"] = org_role
 
 
+async def set_rls_execution_context(session: AsyncSession) -> None:
+    """Mark the transaction as internal execution (org-scoped, team-blind).
+
+    Background machinery (executor, cron, dispatch, recovery, cost controller,
+    housekeeping) reads team-scoped tables with org scope only — there is no
+    single user context for a run. The ``rls_team_isolation`` policy ORs in
+    ``app.execution_context`` so internal reads see all org rows while
+    user-facing sessions (which never set it) stay team-filtered.
+
+    Must be called inside an active transaction alongside set_rls_org.
+    """
+    dialect = await _ensure_active_transaction(session)
+
+    if dialect == "postgresql":
+        await session.execute(
+            text("SELECT set_config('app.execution_context', 'true', true)"),
+        )
+    else:
+        session.info["execution_context"] = True
+
+
 def register_rls_reset_hook(engine: AsyncEngine) -> None:
     """Register a pool-checkout listener that clears stale org context.
 
@@ -123,7 +144,7 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         _log.info("Skipping pool-level RLS reset hook — %s backend", dialect)
         return
 
-    _rls_config_names = ["app.organisation_id", "app.user_id", "app.org_role"]
+    _rls_config_names = ["app.organisation_id", "app.user_id", "app.org_role", "app.execution_context"]
 
     @event.listens_for(engine.sync_engine, "checkout")
     def _reset_org_on_checkout(

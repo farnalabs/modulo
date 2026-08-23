@@ -457,6 +457,17 @@ class TestVariantAndReplayWiring:
             async def flush(self) -> None:
                 return None
 
+            def in_transaction(self) -> bool:
+                # Replays run inside the advisory-lock transaction; feature-flag
+                # and library-service paths guard on an active transaction.
+                return True
+
+            def get_bind(self) -> object:
+                # Postgres dialect so RLS set_config paths take the SQL branch.
+                bind = SimpleNamespace()
+                bind.dialect = SimpleNamespace(name="postgresql")
+                return bind
+
             def add(self, obj: Any) -> None:
                 self.added.append(obj)
 

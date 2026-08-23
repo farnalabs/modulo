@@ -92,7 +92,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -994,6 +994,7 @@ async def _persist_raw_output_marker(
         try:
             async with session_factory() as session, session.begin():
                 await set_rls_org(session, org_uuid)
+                await set_rls_execution_context(session)
                 run = (
                     await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
                 ).scalar_one_or_none()
@@ -1117,11 +1118,12 @@ async def _read_run_raw_output_markers_for_gate(
         return None
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async def _read() -> dict[str, Any] | None:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
             row = (
                 await session.execute(
                     _sql_text(
@@ -1389,9 +1391,10 @@ async def _append_conformance_audit(
     """Best-effort audit event for a mid-run conformance outcome (never raises)."""
     try:
         async with session_factory() as session, session.begin():
-            from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
 
             await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
             from modulo.core.audit_logger import append_audit_event
 
             await append_audit_event(
@@ -1917,6 +1920,7 @@ async def _persist_gate_eval_results(
             if _run_id is not None:
                 async with session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
                     for eval_def in eval_definitions:
                         eval_result = eval_results_by_name[eval_def.name]
                         node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
@@ -2530,12 +2534,13 @@ async def _sandbox_resolve_secret_ref(
                 org_uuid = None
         if org_uuid is not None:
             from modulo.core.secrets_backend import create_secrets_backend
-            from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
             from modulo.settings import get_settings
 
             try:
                 async with session_factory() as session, session.begin():
                     await set_rls_org(session, org_uuid)
+                    await set_rls_execution_context(session)
                     backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
                     return await backend.get_secret(secret_key)
             except KeyError:
@@ -2585,10 +2590,11 @@ async def _sandbox_acquire_dispatch_marker(
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
         await set_rls_org(session, org_uuid)
+        await set_rls_execution_context(session)
         row = (
             await session.execute(
                 _sql_text(
@@ -2642,10 +2648,11 @@ async def _sandbox_store_dispatch_marker_sandbox(
         return
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
         await set_rls_org(session, org_uuid)
+        await set_rls_execution_context(session)
         await session.execute(
             _sql_text(
                 "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
@@ -2692,10 +2699,11 @@ async def _sandbox_store_script_lease(
         return
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
         await set_rls_org(session, org_uuid)
+        await set_rls_execution_context(session)
         result = await session.execute(
             _sql_text(
                 "UPDATE runs SET sandbox_dispatch_state=:marker "
@@ -2755,6 +2763,7 @@ async def _sandbox_mint_run_api_key_for_sandbox(
         ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
             # account_id: the run's triggering user; fall back to the
             # first active admin in the org when the run row has none.
             from sqlalchemy import text as _sql_text
@@ -2826,10 +2835,11 @@ async def _sandbox_clear_dispatch_marker(
         return
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
         await set_rls_org(session, org_uuid)
+        await set_rls_execution_context(session)
         await session.execute(
             _sql_text(
                 "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
@@ -3898,10 +3908,11 @@ async def _sandbox_agent_impl(
                         count_active_sandbox_leases_for_org,
                         get_sandbox_concurrency_limit,
                     )
-                    from modulo.db.rls import set_rls_org
+                    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
                     async with session_factory() as _cap_session, _cap_session.begin():
                         await set_rls_org(_cap_session, _org_uuid)
+                        await set_rls_execution_context(_cap_session)
                         _cap = await get_sandbox_concurrency_limit(_cap_session, _org_uuid)
                         if _cap is not None:
                             _active = await count_active_sandbox_leases_for_org(

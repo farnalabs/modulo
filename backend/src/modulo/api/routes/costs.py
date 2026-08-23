@@ -40,7 +40,7 @@ from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.scheduled_report import ScheduledReport
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_COST_MANAGE = "cost.manage"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again."
@@ -589,6 +589,7 @@ async def reset_circuit_breaker(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             reset = await reset_pipeline_circuit_breaker(
                 session,
                 org_id=current_user.organisation_id,

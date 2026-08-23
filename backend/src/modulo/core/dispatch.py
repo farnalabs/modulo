@@ -363,9 +363,10 @@ async def dispatch_run(
         async with session.begin():
             from modulo.db.crud.run import get_run
             from modulo.db.models.run import TERMINAL_STATUSES
-            from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
 
             await set_rls_org(session, oid)
+            await set_rls_execution_context(session)
             run = await get_run(session, rid)
             if run is not None and run.status in TERMINAL_STATUSES:
                 # A terminal run must NEVER be enqueued for execution — the
@@ -387,9 +388,10 @@ async def dispatch_run(
     session = _open_session()
     try:
         async with session.begin():
-            from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
 
             await set_rls_org(session, oid)
+            await set_rls_execution_context(session)
             await _record_dispatched(session, rid)
     finally:
         await session.close()
@@ -410,9 +412,10 @@ async def dispatch_run(
             session = _open_session()
             try:
                 async with session.begin():
-                    from modulo.db.rls import set_rls_org
+                    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
                     await set_rls_org(session, oid)
+                    await set_rls_execution_context(session)
                     await _mark_enqueue_failed(session, rid)
                     await _expire_webhook_dedup(session, rid)
             finally:
@@ -439,9 +442,10 @@ async def dispatch_run(
             session = _open_session()
             try:
                 async with session.begin():
-                    from modulo.db.rls import set_rls_org
+                    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
                     await set_rls_org(session, oid)
+                    await set_rls_execution_context(session)
                     # NON-terminal: leave the run pending for dispatcher_reconcile
                     # recovery (a >6s Redis outage must not permanently fail the
                     # whole dispatch window). Keep the webhook dedup expiry even
@@ -456,9 +460,10 @@ async def dispatch_run(
     session = _open_session()
     try:
         async with session.begin():
-            from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
 
             await set_rls_org(session, oid)
+            await set_rls_execution_context(session)
             await _record_saq_job(session, rid, job_id, _new_claim_token())
     finally:
         await session.close()

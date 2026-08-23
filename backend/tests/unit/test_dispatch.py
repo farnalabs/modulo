@@ -82,8 +82,12 @@ def _make_settings(**overrides: object) -> MagicMock:
 
 
 def _rls_patch() -> MagicMock:
-    """Patch set_rls_org (imported lazily inside dispatch_run)."""
-    return patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock)
+    """Patch set_rls_org / set_rls_execution_context (imported lazily inside dispatch_run)."""
+    return patch.multiple(
+        "modulo.db.rls",
+        set_rls_org=AsyncMock(),
+        set_rls_execution_context=AsyncMock(),
+    )
 
 
 def _enqueue_patch(**kwargs: object) -> MagicMock:

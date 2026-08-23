@@ -49,7 +49,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import org_row_is_paused
 from modulo.settings import Settings, get_settings
 
@@ -874,6 +874,7 @@ async def create_trigger(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
@@ -963,6 +964,7 @@ async def update_trigger(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
             cron_changed = req.cron_expression is not None or req.cron_timezone is not None
@@ -1262,6 +1264,7 @@ async def test_trigger(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 select(Trigger).where(
                     Trigger.id == trigger_id,

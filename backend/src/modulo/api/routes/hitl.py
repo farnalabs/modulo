@@ -43,7 +43,7 @@ from modulo.core.pipeline_engine.executor import (
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
@@ -710,6 +710,7 @@ async def list_run_pending_gates(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             run = await get_run(session, run_id)
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -775,6 +776,7 @@ async def list_org_pending_gates(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             gates = await mgr.list_pending(session, principal.organisation_id)
 
             pipeline_ids = list({g.pipeline_id for g in gates})

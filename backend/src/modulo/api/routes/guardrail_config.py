@@ -51,7 +51,7 @@ from modulo.core.guardrails.config import (
 from modulo.db.crud.guardrail_config import get_guardrail_pin, load_pipeline_guardrail_rows, set_guardrail_pin
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
 _CODE_GUARDRAIL_MANAGE = "guardrail.manage"
@@ -484,6 +484,7 @@ async def apply_guardrail_config(
         )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         pin = await _load_pin(session, principal.organisation_id)
         if pin is None or pin.status != "proposed" or not pin.serialized_proposal:
             raise HTTPException(

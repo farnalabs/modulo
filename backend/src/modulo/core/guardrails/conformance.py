@@ -566,9 +566,10 @@ async def check_node_start(
 
 
 async def _set_rls(session: Any, org_id: uuid.UUID) -> None:
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     await set_rls_org(session, org_id)
+    await set_rls_execution_context(session)
 
 
 __all__ = [

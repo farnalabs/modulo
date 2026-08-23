@@ -1311,6 +1311,10 @@ async def test_dispatch_capacity_denied_before_provisioning():
             "modulo.db.rls.set_rls_org",
             new=_noop_set_rls,
         ),
+        patch(
+            "modulo.db.rls.set_rls_execution_context",
+            new=_noop_set_rls,
+        ),
         pytest.raises(SandboxCapacityExceededError, match="at capacity"),
     ):
         await fn(_run_state())

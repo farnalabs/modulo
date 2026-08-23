@@ -23,7 +23,7 @@ from modulo.core.library_service import (
     submit_contribution_for_review,
     submit_contribution_version,
 )
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _MSG_CONTRIBUTION_FEATURE_TEMPORARILY_UNAVAILABLE = (
     "The contribution feature is temporarily unavailable due to a database issue. Please retry."
@@ -78,6 +78,7 @@ async def create_contribution(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await contribute_fixture(
                 session,
                 org_id=principal.organisation_id,
@@ -128,12 +129,15 @@ async def submit_for_review(
 ) -> ContributionStatusResponse:
     """Move a draft contribution to the review queue."""
     try:
-        prim = await submit_contribution_for_review(
-            session,
-            principal.organisation_id,
-            primitive_id,
-            created_by=principal.account_id,
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            prim = await submit_contribution_for_review(
+                session,
+                principal.organisation_id,
+                primitive_id,
+                created_by=principal.account_id,
+            )
     except ProgrammingError:
         _log.exception("contributions.submit_for_review")
         raise HTTPException(
@@ -179,11 +183,14 @@ async def publish_contribution_endpoint(
     Only org admins may publish contributions (``contribution.publish``).
     """
     try:
-        prim = await publish_contribution(
-            session,
-            principal.organisation_id,
-            primitive_id,
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            prim = await publish_contribution(
+                session,
+                principal.organisation_id,
+                primitive_id,
+            )
     except ProgrammingError:
         _log.exception("contributions.publish_contribution_endpoint")
         raise HTTPException(
@@ -248,6 +255,7 @@ async def submit_contribution_version_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await submit_contribution_version(
                 session,
                 principal.organisation_id,
@@ -303,11 +311,14 @@ async def list_contribution_versions_endpoint(
 ) -> VersionListResponse:
     """List all versions for a fixture contribution."""
     try:
-        versions = await list_contribution_versions(
-            session,
-            principal.organisation_id,
-            primitive_id,
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            versions = await list_contribution_versions(
+                session,
+                principal.organisation_id,
+                primitive_id,
+            )
     except ProgrammingError:
         _log.exception("contributions.list_contribution_versions_endpoint")
         raise HTTPException(
@@ -359,6 +370,7 @@ async def list_contributions_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_contributions(
                 session,
                 principal.organisation_id,

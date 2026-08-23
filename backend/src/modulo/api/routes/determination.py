@@ -18,7 +18,7 @@ from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, infer
 from modulo.determination.scanner import ScanSample, run_scan
@@ -135,6 +135,7 @@ async def run_determination(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
                 instances = await list_connector_instances(
                     session, organisation_id=principal.organisation_id, page_size=100
                 )
@@ -224,6 +225,7 @@ async def create_determination_draft(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
                 instances = await list_connector_instances(
                     session, organisation_id=principal.organisation_id, page_size=100
                 )

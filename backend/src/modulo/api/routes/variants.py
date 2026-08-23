@@ -31,7 +31,7 @@ from modulo.db.crud.variant_group import (
     update_variant_group,
     validate_batch_ownership,
 )
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_VARIANTS_CREATE_GROUP = "variants.create_group"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again."
@@ -234,6 +234,7 @@ async def create_group(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             await _assert_variant_ownership(
                 session,
                 org_id=principal.organisation_id,
@@ -293,6 +294,7 @@ async def list_groups(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
     except IntegrityError:
         _log.exception(_CODE_VARIANTS_LIST_GROUPS)
@@ -376,6 +378,7 @@ async def update_group(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             await _assert_variant_ownership(
                 session,
                 org_id=principal.organisation_id,
@@ -517,6 +520,7 @@ async def run_variant(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             group = await get_variant_group(session, group_id)
             if group is None:
                 raise HTTPException(
@@ -605,6 +609,7 @@ async def run_batch(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             group = await get_variant_group(session, group_id)
             if group is None:
                 raise HTTPException(

@@ -66,6 +66,7 @@ from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from modulo.db.rls import set_rls_execution_context
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.db.unique_violation import is_unique_violation
 
@@ -1116,6 +1117,10 @@ class TriggerEngine:
         if pipeline_rate_limit is None:
             from modulo.db.models.pipeline import Pipeline
 
+            # Org-only context (webhook automation has no user principal) — the
+            # execution hatch lets the rate-limit fallback read a team-private
+            # pipeline's config.
+            await set_rls_execution_context(session)
             pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id))
             pipeline = pipe_result.scalar_one_or_none()
             if pipeline is not None:
