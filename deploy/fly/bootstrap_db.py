@@ -44,17 +44,18 @@ def derive_system_database_url(runtime_url: str) -> str:
     bootstrap_role.py can create the role with the same credential), the
     host/port, the scheme, and any query params. Returns an empty string
     when the netloc has no ``@`` separator (no userinfo), when the userinfo
-    has no password, or when the password is explicitly empty (``user:@host``)
-    — in all three cases the caller falls back to modulo_app rather than
-    wiring a modulo_system URL whose credential could never match the role
+    has no password, when the password is explicitly empty (``user:@host``),
+    or when the username is empty (``:pass@host`` / ``::@host``) — in all
+    four cases the caller falls back to modulo_app rather than wiring a
+    modulo_system URL whose credential could never match the role
     bootstrap_role.py would create (it seeds ``secrets.token_urlsafe`` when
     the URL carries no password).
     """
     parts = urlsplit(runtime_url)
     userinfo, sep, hostport = parts.netloc.rpartition("@")
     if sep:
-        _, _, password = userinfo.partition(":")
-        if password:
+        username, _, password = userinfo.partition(":")
+        if username and password:
             new_userinfo = f"modulo_system:{password}"
             parts = parts._replace(netloc=f"{new_userinfo}@{hostport}")
             return urlunsplit(parts)

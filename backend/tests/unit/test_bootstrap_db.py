@@ -54,6 +54,16 @@ def bootstrap_db():
             "postgresql+asyncpg://modulo:@db.internal:5432/modulo",
             "",
         ),
+        # empty username (:pass@host) — nothing to swap, returns empty
+        (
+            "postgresql+asyncpg://:pass@db.internal:5432/modulo",
+            "",
+        ),
+        # empty username + literal colon password (::@host) — returns empty
+        (
+            "postgresql+asyncpg://::@db.internal:5432/modulo",
+            "",
+        ),
         # query-string preserved unchanged
         (
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
@@ -113,6 +123,70 @@ def test_main_warns_when_system_url_derivation_fails(
     err = capsys.readouterr().err
     assert "cannot derive MODULO_SYSTEM_DATABASE_URL" in err
     assert "no usable password/userinfo" in err
+
+
+@pytest.mark.parametrize(
+    ("system_url_env", "database_url"),
+    [
+        # MODULO_SYSTEM_DATABASE_URL already set — derivation is skipped entirely,
+        # so the failure warning must not fire even for a no-userinfo DATABASE_URL.
+        pytest.param(
+            "postgres://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require",
+            "postgresql+asyncpg://db.internal:5432/modulo",
+            id="system-url-set-skips-derivation",
+        ),
+        # derivation succeeds — a normal URL with a password derives a system URL,
+        # so the failure warning must not fire.
+        pytest.param(
+            None,
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            id="derivation-succeeds",
+        ),
+    ],
+)
+def test_main_does_not_warn_when_system_url_resolves(
+    bootstrap_db,
+    monkeypatch,
+    capsys,
+    system_url_env: str | None,
+    database_url: str,
+) -> None:
+    # The derivation-failure warning fires ONLY when derivation is actually
+    # attempted and fails. It must stay silent when the system URL is provided
+    # up front (the elif branch never runs) and when derivation succeeds.
+    monkeypatch.setenv(
+        "DATABASE_ADMIN_URL",
+        "postgresql+asyncpg://admin:pw@db.internal:5432/modulo",
+    )
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    if system_url_env is None:
+        monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", system_url_env)
+
+    def _skip_bootstrap(coro) -> None:
+        # Avoid the "coroutine was never awaited" RuntimeWarning (a CI error).
+        coro.close()
+
+    monkeypatch.setattr(bootstrap_db.asyncio, "run", _skip_bootstrap)
+
+    class _NullFile:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def write(self, _text: str) -> None:
+            return None
+
+    monkeypatch.setattr(builtins, "open", lambda *_a, **_k: _NullFile())
+
+    bootstrap_db.main()
+
+    err = capsys.readouterr().err
+    assert "cannot derive MODULO_SYSTEM_DATABASE_URL" not in err
+    assert "no usable password/userinfo" not in err
 
 
 @pytest.mark.parametrize(
