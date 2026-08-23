@@ -112,6 +112,14 @@ async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     from modulo.settings import get_settings
 
     settings = get_settings()
+    # System session factory (modulo_system role, LOGIN, BYPASSRLS) — REQUIRED.
+    # _build_payload reads TEAM-SCOPED tables (pipelines, model_backends,
+    # connector_instances, environment_profiles, library_primitives) across ALL
+    # consenting orgs with NO set_rls_org context. Under the modulo_app role
+    # (NOBYPASSRLS) the strict rls_org_isolation policy filters those reads to
+    # the (empty) app.organisation_id, silently returning ZERO rows. The system
+    # factory bypasses RLS so the multi-org aggregation sees every row. Do NOT
+    # swap to _make_session_factory.
     factory = _make_system_session_factory()
 
     # Jitter gate — each instance has a random offset within a 6-hour window.

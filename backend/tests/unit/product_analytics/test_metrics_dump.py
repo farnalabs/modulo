@@ -469,6 +469,102 @@ class TestMetricsDumpSkipConditions:
         assert result["skipped"] == "missing_vendor_config"
 
 
+# --- RLS / system session factory ---
+
+
+class TestSystemSessionFactory:
+    """The metrics dump MUST build its payload through the SYSTEM session factory.
+
+    ``_build_payload`` reads TEAM-SCOPED tables (pipelines, model_backends,
+    connector_instances, environment_profiles, library_primitives) across all
+    consenting orgs with no ``set_rls_org`` context. Those reads only return
+    every org's rows because the system factory connects as the ``modulo_system``
+    role (LOGIN, BYPASSRLS) — the strict ``rls_org_isolation`` policy is bypassed.
+    Swapping to ``_make_session_factory`` (``modulo_app``, NOBYPASSRLS) would
+    silently filter those reads to the empty ``app.organisation_id`` and return
+    ZERO rows. These tests pin the system factory so a future swap is caught.
+    """
+
+    @pytest.mark.asyncio
+    async def test_metrics_dump_uses_system_session_factory(self) -> None:
+        """metrics_dump obtains its session factory from _make_system_session_factory."""
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ) as system_factory,
+            patch(
+                "modulo.core.saq_worker._make_session_factory",
+                side_effect=AssertionError(
+                    "metrics_dump must use the SYSTEM session factory "
+                    "(BYPASSRLS) — the app factory silently returns zero rows "
+                    "on team-scoped tables without an org context"
+                ),
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+
+        system_factory.assert_called_once()
+        assert result["skipped"] == "no_consenting_orgs"
+
+    @pytest.mark.asyncio
+    async def test_metrics_dump_never_uses_regular_session_factory(self) -> None:
+        """Swapping to _make_session_factory must fail loudly, not silently.
+
+        Drives the dump past the jitter and instance-switch gates with the app
+        factory stubbed to raise; reaching _get_consenting_orgs proves the run
+        used the system factory (the app factory path would have exploded).
+        """
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch(
+                "modulo.core.saq_worker._make_session_factory",
+                side_effect=AssertionError("metrics_dump swapped to the app session factory"),
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as get_orgs,
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+
+        get_orgs.assert_awaited_once()
+        assert result["skipped"] == "no_consenting_orgs"
+
+
 # --- Vendor client ---
 
 
