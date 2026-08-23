@@ -387,6 +387,14 @@ async def oidc_process_callback(
     ``sso_providers`` table first (falling back to the env var when the DB has
     no OIDC providers), and JIT provisioning targets that org.
 
+    When ``org_id`` is None (a callback for an env-only provider id that is not
+    in the DB) but ``provider_session`` is supplied, the provider is resolved
+    DB-first and org-agnostic: the DB is authoritative whenever it has ANY oidc
+    rows, so env fallback only applies when the DB has ZERO oidc rows — the
+    same count-gated rule login uses. A callback for an env-only id with
+    DB-configured providers present resolves to not-found rather than
+    resurrecting an env provider login already rejected.
+
     ``provider_session`` carries the DB provider lookup when it must run on a
     different session than ``session``: the OIDC callback is pre-auth, so the
     ``sso_providers`` read runs on the ``modulo_system`` session (BYPASSRLS)
@@ -404,6 +412,15 @@ async def oidc_process_callback(
     if org_id is not None and provider_session is not None:
         async with provider_session.begin():
             providers = await _resolve_oidc_providers(settings, provider_session, org_id, use_db=True)
+    elif provider_session is not None:
+        # Pre-auth callback for an env-only provider id (not in the DB), so
+        # ``resolve_oidc_provider_org`` returned no org. Mirror login's rule:
+        # the DB is authoritative whenever it has ANY oidc rows, so resolve
+        # DB-first (org-agnostic) and only fall back to env when the DB has
+        # ZERO oidc rows — a callback for an env-only id must not resurrect an
+        # env provider that login already rejected because the DB took over.
+        async with provider_session.begin():
+            providers = await _resolve_oidc_providers(settings, provider_session, None, use_db=True)
     else:
         providers = await _resolve_oidc_providers(settings, session, org_id, use_db=org_id is not None)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)

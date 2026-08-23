@@ -1179,6 +1179,98 @@ class TestOidcProcessCallbackDb:
         # Because the DB provider exists (with mappings), group mappings fire.
         mock_mappings.assert_awaited_once()
 
+    async def test_callback_env_only_provider_no_env_fallback_when_db_has_rows(self) -> None:
+        """A callback for an env-only provider id must not resolve from env when
+        the DB has OTHER oidc rows — mirroring login, which 400s env-only ids
+        once the DB has any providers. ``resolve_oidc_provider_org`` returns
+        None for the env-only id, but the callback still must resolve DB-first
+        (org-agnostic) and treat the id as not found (401) instead of
+        resurrecting an env provider login already rejected."""
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        provider_session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__.return_value = None
+        begin_cm.__aexit__.return_value = False
+        provider_session.begin.return_value = begin_cm
+        signed = sign_state("google:raw-state", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock, return_value=1),
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            pytest.raises(ValueError, match="not found"),
+        ):
+            mock_list.return_value = [_OKTA_DB_PROVIDER]
+            await oidc_process_callback(
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
+                org_id=None,
+                provider_session=provider_session,
+            )
+
+        # The DB lookup runs org-agnostic on the BYPASSRLS provider session.
+        mock_list.assert_awaited_once_with(provider_session, org_id=None, fernet_key=settings.fernet_key)
+        # The env path was never entered — no discovery fetch for the env id.
+        mock_disc.assert_not_awaited()
+
+    async def test_callback_env_only_provider_env_fallback_when_db_empty(self) -> None:
+        """With ZERO oidc rows in the DB, a callback for an env provider id
+        still resolves from env (existing behaviour preserved)."""
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        provider_session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__.return_value = None
+        begin_cm.__aexit__.return_value = False
+        provider_session.begin.return_value = begin_cm
+        signed = sign_state("google:raw-state", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock, return_value=0),
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_disc.return_value = {
+                "token_endpoint": "https://accounts.google.com/oauth2/v1/token",
+                "jwks_uri": "https://accounts.google.com/oauth2/v1/keys",
+                "issuer": "https://accounts.google.com",
+            }
+            mock_ex.return_value = {"id_token": _id_token()}
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+            }
+            mock_jit.return_value = (MagicMock(), None, "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            result = await oidc_process_callback(
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
+                org_id=None,
+                provider_session=provider_session,
+            )
+
+        assert result["access_token"] == "at"
+        call_args = mock_ex.await_args.args
+        assert call_args[1] == "google-client-id"
+        assert call_args[2] == "google-client-secret"
+
 
 class TestApplyGroupMappingsRlsContext:
     async def test_sets_rls_org_on_di_session_before_write(self) -> None:
@@ -1619,6 +1711,8 @@ class TestOidcCallbackEndpointExtended:
                 return_value=_fake_system_factory(AsyncMock(spec=AsyncSession)),
             ),
             patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock, return_value=0),
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
             patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
