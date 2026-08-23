@@ -1866,6 +1866,59 @@ async def _run_stream_loop(
             yield ping
 
 
+async def _stream_event_generator(
+    session: AsyncSession,
+    request: Request,
+    principal: TenantPrincipal,
+    session_id: uuid.UUID,
+    req: StreamRequest,
+    settings: Settings,
+    chat_session: ChatSession,
+) -> AsyncGenerator[str, None]:
+    """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
+    msg_id: str | None = None
+    try:
+        async with AsyncSession(session.bind, autobegin=False) as db_session:
+            ctx = _StreamContext(db_session, principal, session_id, req, settings, chat_session)
+
+            # 1-7. Resolve API key → build backend → system prompt →
+            # save user message → reconstruct → prepend → prune.
+            init = await _initialise_stream(ctx)
+            if init.error_detail is not None:
+                yield f"event: error\ndata: {json.dumps({'detail': init.error_detail})}\n\n"
+                return
+
+            backend = init.backend
+            if backend is None:
+                yield f"event: error\ndata: {json.dumps({'detail': MSG_UNEXPECTED_ERROR})}\n\n"
+                return
+
+            state: dict[str, Any] = {
+                "disconnected": False,
+                "full_content": "",
+                "should_break": False,
+                "msg_id": None,
+                "last_ping_at": _time.monotonic(),
+            }
+            async for event in _run_stream_loop(ctx, request, backend, init.messages, init.parent_msg_id, state):
+                yield event
+            msg_id = state["msg_id"]
+
+        yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
+
+    except HTTPException as exc:
+        yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
+    except ProgrammingError:
+        logger.exception("Remy streaming error — missing DB table or schema")
+        yield (_SSE_ERROR_PREFIX + json.dumps({"detail": MSG_FEATURE_NOT_AVAILABLE}) + "\n\n")
+    except SQLAlchemyError:
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
+        yield (_SSE_ERROR_PREFIX + json.dumps({"detail": _MSG_DATABASE_ERROR_PLEASE_TRY}) + "\n\n")
+    except Exception:
+        logger.exception("Remy streaming error")
+        yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
+
+
 @router.post(
     "/sessions/{session_id}/stream",
     responses={
@@ -1915,52 +1968,8 @@ async def stream_chat(
         },
     )
 
-    async def event_generator() -> AsyncGenerator[str, None]:
-        """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
-        msg_id: str | None = None
-        try:
-            async with AsyncSession(session.bind, autobegin=False) as db_session:
-                ctx = _StreamContext(db_session, principal, session_id, req, settings, chat_session)
-
-                # 1-7. Resolve API key → build backend → system prompt →
-                # save user message → reconstruct → prepend → prune.
-                init = await _initialise_stream(ctx)
-                if init.error_detail is not None:
-                    yield f"event: error\ndata: {json.dumps({'detail': init.error_detail})}\n\n"
-                    return
-
-                backend = init.backend
-                if backend is None:
-                    yield f"event: error\ndata: {json.dumps({'detail': MSG_UNEXPECTED_ERROR})}\n\n"
-                    return
-
-                state: dict[str, Any] = {
-                    "disconnected": False,
-                    "full_content": "",
-                    "should_break": False,
-                    "msg_id": None,
-                    "last_ping_at": _time.monotonic(),
-                }
-                async for event in _run_stream_loop(ctx, request, backend, init.messages, init.parent_msg_id, state):
-                    yield event
-                msg_id = state["msg_id"]
-
-            yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
-
-        except HTTPException as exc:
-            yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
-        except ProgrammingError:
-            logger.exception("Remy streaming error — missing DB table or schema")
-            yield (_SSE_ERROR_PREFIX + json.dumps({"detail": MSG_FEATURE_NOT_AVAILABLE}) + "\n\n")
-        except SQLAlchemyError:
-            logger.exception(_CODE_REMY_DATABASE_ERROR)
-            yield (_SSE_ERROR_PREFIX + json.dumps({"detail": _MSG_DATABASE_ERROR_PLEASE_TRY}) + "\n\n")
-        except Exception:
-            logger.exception("Remy streaming error")
-            yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
-
     return StreamingResponse(
-        event_generator(),
+        _stream_event_generator(session, request, principal, session_id, req, settings, chat_session),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1975,7 +1984,10 @@ async def stream_chat(
 
 @router.post(
     "/sessions/{session_id}/permission-response",
-    responses={404: {"description": "Not Found"}},
+    responses={
+        404: {"description": "Not Found"},
+        403: {"description": "Permission request does not belong to this session"},
+    },
 )
 @handle_db_errors("remy.submit_permission_response")
 async def submit_permission_response(

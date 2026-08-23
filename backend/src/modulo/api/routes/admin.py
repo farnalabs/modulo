@@ -5,7 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import NamedTuple, NoReturn
+from typing import Any, NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -1520,6 +1520,44 @@ async def admin_list_teams(
     )
 
 
+async def _update_team_or_raise(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    team_id: uuid.UUID,
+    updates: dict[str, Any],
+    expected_updated_at: str | None,
+) -> Any:
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+        if "name" in updates:
+            existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
+            if existing is not None and existing.id != team_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+                )
+
+        if expected_updated_at is not None:
+            outcome, team = await update_team_if_unchanged(
+                session,
+                team_id,
+                updates,
+                expected_updated_at,
+            )
+            if outcome is TeamUpdateOutcome.NOT_FOUND:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+            if outcome is TeamUpdateOutcome.STALE:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=("Team was modified by another request. Refresh and try again (optimistic lock mismatch)."),
+                )
+        else:
+            team = await crud_update_team(session, team_id, updates)
+    return team
+
+
 @router.put("/teams/{team_id}", dependencies=[require_feature("team_rbac")])
 async def admin_update_team(
     team_id: uuid.UUID,
@@ -1533,36 +1571,7 @@ async def admin_update_team(
     updates.pop("expected_updated_at", None)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-
-            if "name" in updates:
-                existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
-                if existing is not None and existing.id != team_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
-                    )
-
-            if req.expected_updated_at is not None:
-                outcome, team = await update_team_if_unchanged(
-                    session,
-                    team_id,
-                    updates,
-                    req.expected_updated_at,
-                )
-                if outcome is TeamUpdateOutcome.NOT_FOUND:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
-                if outcome is TeamUpdateOutcome.STALE:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            "Team was modified by another request. Refresh and try again (optimistic lock mismatch)."
-                        ),
-                    )
-            else:
-                team = await crud_update_team(session, team_id, updates)
+        team = await _update_team_or_raise(session, current_user, team_id, updates, req.expected_updated_at)
     except IntegrityError:
         logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
         _raise_conflict()
@@ -2746,6 +2755,44 @@ async def admin_create_publisher(
     return _to_publisher_response(publisher)
 
 
+async def _enforce_publisher_name_uniqueness(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    name_val: object,
+    publisher_id: uuid.UUID,
+) -> None:
+    if not isinstance(name_val, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="publisher_name_invalid: Name must be a string",
+        )
+    existing = await get_publisher_by_name(session, org_id, name_val)
+    if existing is not None and existing.id != publisher_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A publisher with this name already exists",
+        )
+
+
+async def _enforce_publisher_key_uniqueness(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    key_val: object,
+    publisher_id: uuid.UUID,
+) -> None:
+    if not isinstance(key_val, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="publisher_key_invalid: Public key must be a string",
+        )
+    existing_key = await get_publisher_by_key(session, org_id, key_val)
+    if existing_key is not None and existing_key.id != publisher_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A publisher with this public key already exists",
+        )
+
+
 @router.put("/publishers/{publisher_id}")
 @handle_db_errors("admin.admin_update_publisher")
 async def admin_update_publisher(
@@ -2763,32 +2810,20 @@ async def admin_update_publisher(
             await set_rls_org(session, current_user.organisation_id)
 
             if "name" in updates:
-                name_val = updates["name"]
-                if not isinstance(name_val, str):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="publisher_name_invalid: Name must be a string",
-                    )
-                existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
-                if existing is not None and existing.id != publisher_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A publisher with this name already exists",
-                    )
+                await _enforce_publisher_name_uniqueness(
+                    session,
+                    current_user.organisation_id,
+                    updates["name"],
+                    publisher_id,
+                )
 
             if "public_key_hex" in updates:
-                key_val = updates["public_key_hex"]
-                if not isinstance(key_val, str):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="publisher_key_invalid: Public key must be a string",
-                    )
-                existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
-                if existing_key is not None and existing_key.id != publisher_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A publisher with this public key already exists",
-                    )
+                await _enforce_publisher_key_uniqueness(
+                    session,
+                    current_user.organisation_id,
+                    updates["public_key_hex"],
+                    publisher_id,
+                )
 
             try:
                 publisher = await crud_update_publisher(

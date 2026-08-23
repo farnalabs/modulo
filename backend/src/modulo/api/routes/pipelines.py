@@ -654,66 +654,13 @@ class PipelineGraphNode(BaseModel):
 
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:
-        if self.node_type == "manual":
-            if self.agent_id is not None:
-                raise ValueError("Manual nodes cannot reference an agent")
-            if self.connector_binding is not None:
-                raise ValueError("Manual nodes cannot have connector bindings")
-            has_output = self.output_schema_pin is not None or self.output_schema_id is not None
-            if not has_output:
-                raise ValueError("Manual nodes require an output schema")
-            if self.label is None:
-                raise ValueError("Manual nodes require a label")
-        elif self.node_type == "composite":
-            if self.composite_ref is None:
-                raise ValueError("Composite nodes require a composite_ref")
-            if self.agent_id is not None:
-                raise ValueError("Composite nodes cannot reference an agent")
-            if self.connector_binding is not None:
-                raise ValueError("Composite nodes cannot have connector bindings")
-        elif self.node_type == "sandbox_agent":
-            # FAR-296 mode-aware validation ÔÇö ONE shared helper used by every
-            # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
-            # MCP update_pipeline_graph, config linter) so save-time and run-time
-            # agreement is guaranteed. Imported from the lightweight sandbox_mode
-            # module (no LangGraph) to keep the API layer import-linter-clean.
-            from modulo.core.pipeline_engine.sandbox_mode import (
-                _validate_sandbox_egress_allowlist_config,
-                _validate_sandbox_egress_config,
-                _validate_sandbox_git_credentials_config,
-                _validate_sandbox_mode_config,
-                _validate_sandbox_read_only_config,
-                _validate_sandbox_resource_limits_config,
-                _validate_sandbox_wallclock_budget_config,
-            )
-
-            _validate_sandbox_mode_config(self.model_dump())
-            _validate_sandbox_egress_config(self.model_dump())
-            _validate_sandbox_egress_allowlist_config(
-                self.egress_policy,
-                self.egress_allowlist,
-                str(self.id),
-            )
-            _validate_sandbox_resource_limits_config(self.model_dump())
-            # FAR-212 PR B: read_only / git_credentials are sandbox-only fields.
-            # Validated here (and by the graph validator / MCP / node runner via
-            # the shared helpers) so a non-boolean read_only or an unrecognised
-            # git_credentials scope can never reach the capability derivation
-            # (which fails CLOSED on an unvalidated key).
-            _validate_sandbox_read_only_config(self.model_dump())
-            _validate_sandbox_git_credentials_config(self.model_dump())
-            _validate_sandbox_wallclock_budget_config(
-                self.wallclock_budget_seconds,
-                self.timeout_seconds,
-                str(self.id),
-            )
-            if not self.template_id:
-                raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
-            self._validate_sandbox_env_vars()
-            self._validate_sandbox_context_files()
-        elif self.node_type == "agent":
-            if self.agent_id is None:
-                raise ValueError("Agent nodes require an agent")
+        node_validators = {
+            "manual": self._validate_manual_node,
+            "composite": self._validate_composite_node,
+            "sandbox_agent": self._validate_sandbox_agent_node,
+            "agent": self._validate_agent_node,
+        }
+        node_validators[self.node_type]()
         # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
         # A non-sandbox node that sets them is rejected ÔÇö the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
@@ -736,6 +683,70 @@ class PipelineGraphNode(BaseModel):
                 f"does not match output_schema_id ({self.output_schema_id})"
             )
         return self
+
+    def _validate_manual_node(self) -> None:
+        if self.agent_id is not None:
+            raise ValueError("Manual nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Manual nodes cannot have connector bindings")
+        has_output = self.output_schema_pin is not None or self.output_schema_id is not None
+        if not has_output:
+            raise ValueError("Manual nodes require an output schema")
+        if self.label is None:
+            raise ValueError("Manual nodes require a label")
+
+    def _validate_composite_node(self) -> None:
+        if self.composite_ref is None:
+            raise ValueError("Composite nodes require a composite_ref")
+        if self.agent_id is not None:
+            raise ValueError("Composite nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Composite nodes cannot have connector bindings")
+
+    def _validate_sandbox_agent_node(self) -> None:
+        # FAR-296 mode-aware validation ÔÇö ONE shared helper used by every
+        # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
+        # MCP update_pipeline_graph, config linter) so save-time and run-time
+        # agreement is guaranteed. Imported from the lightweight sandbox_mode
+        # module (no LangGraph) to keep the API layer import-linter-clean.
+        from modulo.core.pipeline_engine.sandbox_mode import (
+            _validate_sandbox_egress_allowlist_config,
+            _validate_sandbox_egress_config,
+            _validate_sandbox_git_credentials_config,
+            _validate_sandbox_mode_config,
+            _validate_sandbox_read_only_config,
+            _validate_sandbox_resource_limits_config,
+            _validate_sandbox_wallclock_budget_config,
+        )
+
+        _validate_sandbox_mode_config(self.model_dump())
+        _validate_sandbox_egress_config(self.model_dump())
+        _validate_sandbox_egress_allowlist_config(
+            self.egress_policy,
+            self.egress_allowlist,
+            str(self.id),
+        )
+        _validate_sandbox_resource_limits_config(self.model_dump())
+        # FAR-212 PR B: read_only / git_credentials are sandbox-only fields.
+        # Validated here (and by the graph validator / MCP / node runner via
+        # the shared helpers) so a non-boolean read_only or an unrecognised
+        # git_credentials scope can never reach the capability derivation
+        # (which fails CLOSED on an unvalidated key).
+        _validate_sandbox_read_only_config(self.model_dump())
+        _validate_sandbox_git_credentials_config(self.model_dump())
+        _validate_sandbox_wallclock_budget_config(
+            self.wallclock_budget_seconds,
+            self.timeout_seconds,
+            str(self.id),
+        )
+        if not self.template_id:
+            raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
+        self._validate_sandbox_env_vars()
+        self._validate_sandbox_context_files()
+
+    def _validate_agent_node(self) -> None:
+        if self.agent_id is None:
+            raise ValueError("Agent nodes require an agent")
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:

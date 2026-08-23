@@ -35062,6 +35062,13 @@ export interface operations {
                     };
                 };
             };
+            /** @description Permission request does not belong to this session */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Not Found */
             404: {
                 headers: {
