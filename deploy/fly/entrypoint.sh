@@ -103,6 +103,12 @@ if [ -f /tmp/database_admin_url.env ]; then
   echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
 fi
 
+if [[ -f /tmp/system_database_url.env ]]; then
+  SYSTEM_URL=$(cat /tmp/system_database_url.env)
+  export MODULO_SYSTEM_DATABASE_URL="$SYSTEM_URL"
+  echo "MODULO_SYSTEM_DATABASE_URL fixed: $(echo $SYSTEM_URL | cut -c1-80)..."
+fi
+
 echo "=== Bootstrapping modulo_app role ==="
 python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
