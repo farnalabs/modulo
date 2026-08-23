@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
+from modulo.auth.secret_storage import encrypt_stored_secret
 from modulo.auth.sso import (
     parse_oidc_providers,
     sign_state,
@@ -23,6 +24,10 @@ from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+
+# A real Fernet key (32 bytes base64url-encoded) — required by the
+# encrypted-secret round-trip tests; _VALID_32 is used for Settings only.
+_FERNET_KEY = base64.urlsafe_b64encode(b"a" * 32).decode()
 
 
 def _override(**kwargs: str | bool) -> Settings:
@@ -187,7 +192,8 @@ class TestJitProvisioning:
 
 class TestSsoProvidersEndpoint:
     def test_returns_oidc_providers(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/sso/providers")
+        with patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["oidc"]) == 2
@@ -195,13 +201,29 @@ class TestSsoProvidersEndpoint:
         assert body["oidc"][1]["provider_id"] == "github"
         assert body["saml"] is False
 
+    def test_returns_db_providers_first(self, client: TestClient) -> None:
+        db_providers = [
+            {"provider_id": "okta", "client_id": "c", "client_secret": "s", "discovery_url": "u"},
+        ]
+        with patch(
+            "modulo.api.routes.sso.list_oidc_providers",
+            new_callable=AsyncMock,
+            return_value=db_providers,
+        ) as mock_list:
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["oidc"] == [{"provider_id": "okta"}]
+        mock_list.assert_awaited_once()
+
     def test_saml_enabled_with_license(self, client: TestClient) -> None:
         _override_settings(
             modulo_license_key="license-123",
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
         )
-        resp = client.get("/api/v1/auth/sso/providers")
+        with patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
@@ -679,6 +701,300 @@ class TestOidcProcessCallback:
 
 
 # ---------------------------------------------------------------------------
+# DB-backed OIDC providers — list_oidc_providers + login/callback resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_db_row(
+    name: str = "okta", client_id: str = "okta-client-id", secret: str = "okta-client-secret"
+) -> MagicMock:
+    row = MagicMock()
+    row.name = name
+    row.client_id = client_id
+    row.client_secret = encrypt_stored_secret(secret, _FERNET_KEY)
+    row.discovery_url = f"https://{name}.example.com/.well-known/openid-configuration"
+    return row
+
+
+class TestListOidcProviders:
+    async def test_resolves_provider_with_decrypted_secret(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [_make_db_row()]
+        session.execute.return_value = result
+        org_id = uuid.uuid4()
+
+        providers = await list_oidc_providers(session, org_id=org_id, fernet_key=_FERNET_KEY)
+
+        assert providers == [
+            {
+                "provider_id": "okta",
+                "client_id": "okta-client-id",
+                "client_secret": "okta-client-secret",
+                "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+            }
+        ]
+
+    async def test_returns_empty_when_no_rows(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = []
+        session.execute.return_value = result
+
+        assert await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY) == []
+
+    async def test_org_agnostic_when_org_id_none(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [_make_db_row(name="okta")]
+        session.execute.return_value = result
+
+        providers = await list_oidc_providers(session, org_id=None, fernet_key=_FERNET_KEY)
+
+        assert [p["provider_id"] for p in providers] == ["okta"]
+
+    async def test_legacy_plaintext_secret_passes_through(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        row = MagicMock()
+        row.name = "legacy"
+        row.client_id = "cid"
+        row.client_secret = b"plaintext-secret"
+        row.discovery_url = "https://legacy.example.com/.well-known/openid-configuration"
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [row]
+        session.execute.return_value = result
+
+        providers = await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY)
+
+        assert providers[0]["client_secret"] == "plaintext-secret"
+
+
+class TestResolveOidcProviderOrg:
+    async def test_returns_org_of_db_provider(self) -> None:
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        org_id = uuid.uuid4()
+        row = MagicMock()
+        row.organisation_id = org_id
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        assert await resolve_oidc_provider_org(session, "okta") == org_id
+
+    async def test_returns_none_when_not_in_db(self) -> None:
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        assert await resolve_oidc_provider_org(session, "env-only-provider") is None
+
+
+class TestOidcGetAuthorizeUrlDb:
+    async def test_uses_db_provider_when_session_and_org_given(self) -> None:
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        org_id = uuid.uuid4()
+        db_provider = {
+            "provider_id": "okta",
+            "client_id": "okta-client-id",
+            "client_secret": "okta-client-secret",
+            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+        }
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        ):
+            mock_list.return_value = [db_provider]
+            mock_disc.return_value = {"authorization_endpoint": "https://okta.example.com/oauth2/v1/authorize"}
+
+            url, _raw_state = await oidc_get_authorize_url(
+                "okta", settings, "http://localhost/callback", session=session, org_id=org_id
+            )
+
+            assert url.startswith("https://okta.example.com/oauth2/v1/authorize")
+            assert "client_id=okta-client-id" in url
+            mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+
+    async def test_uses_db_provider_org_agnostic_when_org_none(self) -> None:
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        db_provider = {
+            "provider_id": "okta",
+            "client_id": "okta-client-id",
+            "client_secret": "okta-client-secret",
+            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+        }
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        ):
+            mock_list.return_value = [db_provider]
+            mock_disc.return_value = {"authorization_endpoint": "https://okta.example.com/oauth2/v1/authorize"}
+
+            url, _ = await oidc_get_authorize_url("okta", settings, "http://localhost/callback", session=session)
+
+            assert "client_id=okta-client-id" in url
+            mock_list.assert_awaited_once_with(session, org_id=None, fernet_key=settings.fernet_key)
+
+    async def test_falls_back_to_env_when_db_empty(self) -> None:
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        ):
+            mock_list.return_value = []
+            mock_disc.return_value = {"authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth"}
+
+            url, _ = await oidc_get_authorize_url(
+                "google", settings, "http://localhost/callback", session=session, org_id=uuid.uuid4()
+            )
+
+            assert "client_id=google-client-id" in url
+            mock_list.assert_awaited_once()
+
+
+class TestOidcProcessCallbackDb:
+    def _id_token(self) -> str:
+        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+        payload = (
+            base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
+            .rstrip(b"=")
+            .decode()
+        )
+        return f"{header}.{payload}.sig"
+
+    async def test_uses_db_provider_when_org_id_given(self) -> None:
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        org_id = uuid.uuid4()
+        signed = sign_state(f"okta:{'raw-state'}", settings.secret_key)
+        db_provider = {
+            "provider_id": "okta",
+            "client_id": "okta-client-id",
+            "client_secret": "okta-client-secret",
+            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+        }
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_list.return_value = [db_provider]
+            mock_disc.return_value = {
+                "token_endpoint": "https://okta.example.com/oauth2/v1/token",
+                "jwks_uri": "https://okta.example.com/oauth2/v1/keys",
+                "issuer": "https://okta.example.com",
+            }
+            mock_ex.return_value = {"id_token": self._id_token()}
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+            }
+            mock_jit.return_value = (MagicMock(), org_id, "runner")
+            mock_tok.return_value = {
+                "access_token": "at",
+                "refresh_token": "rt",
+                "token_type": "bearer",
+            }
+
+            result = await oidc_process_callback(
+                "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
+            )
+
+            assert result["access_token"] == "at"
+            # The DB provider's client_id + decrypted secret drive the code exchange.
+            call_args = mock_ex.await_args.args
+            assert call_args[1] == "okta-client-id"
+            assert call_args[2] == "okta-client-secret"
+            # JIT provisioning targets the provider's org.
+            mock_jit.assert_awaited_once_with(
+                session,
+                settings,
+                "user@example.com",
+                "Test User",
+                "oidc",
+                "okta:abc123",
+                default_org_id=org_id,
+            )
+
+    async def test_falls_back_to_env_when_db_empty(self) -> None:
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        org_id = uuid.uuid4()
+        signed = sign_state(f"google:{'raw-state'}", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_list.return_value = []
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
+            mock_ex.return_value = {"id_token": self._id_token()}
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+            }
+            mock_jit.return_value = (MagicMock(), org_id, "runner")
+            mock_tok.return_value = {
+                "access_token": "at",
+                "refresh_token": "rt",
+                "token_type": "bearer",
+            }
+
+            result = await oidc_process_callback(
+                "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
+            )
+
+            assert result["access_token"] == "at"
+            call_args = mock_ex.await_args.args
+            assert call_args[1] == "google-client-id"
+            assert call_args[2] == "google-client-secret"
+            mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+
+
+# ---------------------------------------------------------------------------
 # SAML helpers — edge cases
 # ---------------------------------------------------------------------------
 
@@ -1048,12 +1364,14 @@ class TestOidcCallbackEndpointExtended:
         )
 
         with (
+            patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
             patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
+            mock_resolve.return_value = None
             mock_disc.return_value = {
                 "token_endpoint": "https://oauth2.googleapis.com/token",
                 "jwks_uri": "https://oauth2.googleapis.com/certs",
