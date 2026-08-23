@@ -118,6 +118,40 @@ async def _resolve_scim_admin_caller(session: AsyncSession, org_id: uuid.UUID) -
     return row[0] if row is not None else None
 
 
+async def _deactivate_scim_user(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Account:
+    """Deactivate a SCIM user, resolving the caller and enforcing last-admin.
+
+    Raises ``_scim_error`` on conflict or not-found, mirroring the route-level
+    behaviour so callers (replace/patch/delete) share one implementation.
+    """
+    caller = await _resolve_scim_admin_caller(session, org_id)
+    if caller is None:
+        raise _scim_error(
+            status.HTTP_409_CONFLICT,
+            _MSG_NO_ACTIVE_ADMIN_EXISTS,
+        )
+    await assert_not_last_admin(
+        session,
+        org_id=org_id,
+        target_account_id=user_id,
+        target_role_after=None,
+        target_active_after=False,
+    )
+    account = await scim_deactivate_user(
+        session,
+        org_id,
+        user_id,
+        caller_account_id=caller,
+    )
+    if account is None:
+        raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+    return account
+
+
 def _user_to_scim(account: Account, base_url: str) -> dict[str, object]:
     given_name = (account.display_name or "").split(" ")[0] if account.display_name else ""
     parts = (account.display_name or "").split(" ")
@@ -259,7 +293,7 @@ async def get_service_provider_config(
 @router.get("/Users", dependencies=[Depends(require_scim_feature)])
 async def list_users(
     filter: str | None = Query(None),
-    startIndex: int = Query(1, ge=1),
+    start_index: int = Query(1, ge=1, alias="startIndex"),
     count: int = Query(20, ge=1, le=100),
     settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -272,7 +306,7 @@ async def list_users(
                 session,
                 principal.organisation_id,
                 filter_str=filter,
-                start_index=startIndex,
+                start_index=start_index,
                 count=count,
             )
     except HTTPException:
@@ -309,7 +343,7 @@ async def list_users(
         schemas=[_SCIM_LIST_SCHEMA],
         totalResults=total,
         itemsPerPage=count,
-        startIndex=startIndex,
+        startIndex=start_index,
         Resources=[_user_to_scim(a, base_url) for a in accounts],
     )
 
@@ -447,27 +481,7 @@ async def replace_user(
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
             if not req.active:
-                caller = await _resolve_scim_admin_caller(session, principal.organisation_id)
-                if caller is None:
-                    raise _scim_error(
-                        status.HTTP_409_CONFLICT,
-                        _MSG_NO_ACTIVE_ADMIN_EXISTS,
-                    )
-                await assert_not_last_admin(
-                    session,
-                    org_id=principal.organisation_id,
-                    target_account_id=user_id,
-                    target_role_after=None,
-                    target_active_after=False,
-                )
-                account = await scim_deactivate_user(
-                    session,
-                    principal.organisation_id,
-                    user_id,
-                    caller_account_id=caller,
-                )
-                if account is None:
-                    raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+                account = await _deactivate_scim_user(session, principal.organisation_id, user_id)
             else:
                 display_name = req.name.formatted if req.name and req.name.formatted else req.userName
                 account = await scim_update_user(
@@ -523,6 +537,65 @@ async def replace_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
+def _apply_user_replace_op(account: Account, op: ScimPatchOperation) -> bool:
+    """Apply a ``replace`` PATCH operation to a user; True when deactivation requested."""
+    deactivate_requested = False
+    if isinstance(op.value, dict):
+        if "userName" in op.value:
+            account.email = str(op.value["userName"])
+        if "active" in op.value:
+            account.active = bool(op.value["active"])
+            deactivate_requested = not bool(op.value["active"])
+        name_data = op.value.get("name")
+        if isinstance(name_data, dict):
+            given = name_data.get("givenName") or ""
+            family = name_data.get("familyName") or ""
+            formatted = name_data.get("formatted") or (given + " " + family).strip()
+            account.display_name = str(formatted).strip()
+    if op.path == "active":
+        account.active = bool(op.value)
+        deactivate_requested = deactivate_requested or not bool(op.value)
+    return deactivate_requested
+
+
+def _apply_user_remove_op(account: Account, op: ScimPatchOperation) -> bool:
+    """Apply a ``remove`` PATCH operation to a user; True when deactivation requested."""
+    if op.path == "active":
+        account.active = False
+        return True
+    return False
+
+
+def _apply_user_add_op(account: Account, op: ScimPatchOperation) -> bool:
+    """Apply an ``add`` PATCH operation to a user; True when deactivation requested."""
+    deactivate_requested = False
+    if isinstance(op.value, dict) and "userName" in op.value:
+        account.email = str(op.value["userName"])
+        if "active" in op.value:
+            account.active = bool(op.value["active"])
+            deactivate_requested = not bool(op.value["active"])
+    return deactivate_requested
+
+
+def _apply_user_patch_ops(account: Account, operations: list[ScimPatchOperation]) -> bool:
+    """Apply SCIM User PATCH operations to an account; True when deactivation requested."""
+    deactivate_requested = False
+    for op in operations:
+        if op.op not in ("replace", "remove", "add"):
+            raise _scim_error(
+                status.HTTP_400_BAD_REQUEST,
+                f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
+            )
+        if op.op == "replace":
+            op_deactivate = _apply_user_replace_op(account, op)
+        elif op.op == "remove":
+            op_deactivate = _apply_user_remove_op(account, op)
+        else:
+            op_deactivate = _apply_user_add_op(account, op)
+        deactivate_requested = op_deactivate or deactivate_requested
+    return deactivate_requested
+
+
 @router.patch("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_user(
     user_id: uuid.UUID,
@@ -538,62 +611,9 @@ async def patch_user(
             if account is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-            deactivate_requested = False
-            for op in req.Operations:
-                if op.op not in ("replace", "remove", "add"):
-                    raise _scim_error(
-                        status.HTTP_400_BAD_REQUEST,
-                        f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
-                    )
-                if op.op == "replace":
-                    if isinstance(op.value, dict):
-                        if "userName" in op.value:
-                            account.email = str(op.value["userName"])
-                        if "active" in op.value:
-                            account.active = bool(op.value["active"])
-                            deactivate_requested = deactivate_requested or not bool(op.value["active"])
-                        if isinstance(op.value.get("name"), dict):
-                            name_data = op.value["name"]
-                            given = name_data.get("givenName") or ""
-                            family = name_data.get("familyName") or ""
-                            formatted = name_data.get("formatted") or (given + " " + family).strip()
-                            account.display_name = str(formatted).strip()
-                    if op.path == "active":
-                        account.active = bool(op.value)
-                        deactivate_requested = deactivate_requested or not bool(op.value)
-                elif op.op == "remove":
-                    if op.path == "active":
-                        account.active = False
-                        deactivate_requested = True
-                elif op.op == "add":
-                    if isinstance(op.value, dict) and "userName" in op.value:
-                        account.email = str(op.value["userName"])
-                        if "active" in op.value:
-                            account.active = bool(op.value["active"])
-                            deactivate_requested = deactivate_requested or not bool(op.value["active"])
-
+            deactivate_requested = _apply_user_patch_ops(account, req.Operations)
             if deactivate_requested:
-                caller = await _resolve_scim_admin_caller(session, principal.organisation_id)
-                if caller is None:
-                    raise _scim_error(
-                        status.HTTP_409_CONFLICT,
-                        _MSG_NO_ACTIVE_ADMIN_EXISTS,
-                    )
-                await assert_not_last_admin(
-                    session,
-                    org_id=principal.organisation_id,
-                    target_account_id=user_id,
-                    target_role_after=None,
-                    target_active_after=False,
-                )
-                account = await scim_deactivate_user(
-                    session,
-                    principal.organisation_id,
-                    user_id,
-                    caller_account_id=caller,
-                )
-                if account is None:
-                    raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+                account = await _deactivate_scim_user(session, principal.organisation_id, user_id)
             else:
                 await session.flush()
     except LastAdminLockoutError as exc:
@@ -727,7 +747,7 @@ async def delete_user(
 @router.get("/Groups", dependencies=[Depends(require_scim_feature)])
 async def list_groups(
     filter: str | None = Query(None),
-    startIndex: int = Query(1, ge=1),
+    start_index: int = Query(1, ge=1, alias="startIndex"),
     count: int = Query(20, ge=1, le=100),
     settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -740,7 +760,7 @@ async def list_groups(
                 session,
                 principal.organisation_id,
                 filter_str=filter,
-                start_index=startIndex,
+                start_index=start_index,
                 count=count,
             )
             base_url = _get_base_url(settings)
@@ -789,7 +809,7 @@ async def list_groups(
         schemas=[_SCIM_LIST_SCHEMA],
         totalResults=total,
         itemsPerPage=count,
-        startIndex=startIndex,
+        startIndex=start_index,
         Resources=resources,
     )
 

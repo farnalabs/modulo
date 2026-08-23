@@ -128,7 +128,7 @@ def add_user_to_team(request, username: str, team_name: str, role: str, client, 
                 return_value=MagicMock(id=uuid.UUID(target_user_id)),
             ),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.teams.get_membership_by_account_and_org",
                 new_callable=AsyncMock,
                 return_value=MagicMock(role=ctx.get("target_user_role", "operator")),
             ),

@@ -226,7 +226,7 @@ class TestTeamSuccess:
             patch("modulo.api.routes.teams.add_team_member", new=AsyncMock(return_value=membership)),
             patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.teams.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=target_membership),
             ),
             patch("modulo.api.routes.teams.get_team", new=AsyncMock(return_value=_make_team())),
