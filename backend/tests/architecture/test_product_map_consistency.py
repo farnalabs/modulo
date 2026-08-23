@@ -17,7 +17,11 @@ This suite pins the invariants a healthy product map must keep:
 - ``sidebar_order`` is unique among the visible (non-``detail_page``) items
   of a group, so the sidebar sort order is fully deterministic;
 - every mapped route resolves to a rendered router page (not a redirect-only
-  alias) and every non-auth router page has a map entry.
+  alias) and every non-auth router page has a map entry;
+- every ``elements`` record carries ``testid`` / ``type``, is unique within
+  its route, and its ``testid`` resolves to a real ``data-testid`` in the
+  shipped frontend (ADR-008: no orphaned elements, every static testid exists
+  in a template).
 """
 
 from __future__ import annotations
@@ -44,6 +48,10 @@ _ROUTE_BLOCK_START = re.compile(_PATH_INDENT + r"'[^']*'", re.MULTILINE)
 _ROUTE_NAME = re.compile(r"^\s{6}name: '([^']+)'", re.MULTILINE)
 _HAS_COMPONENT = re.compile(r"^\s{6}component:", re.MULTILINE)
 _IS_REDIRECT = re.compile(r"^\s{6}redirect:", re.MULTILINE)
+
+#: Static ``data-testid`` literals contributing to each element inventory are
+#: qualified with the exact attribute form they must appear as in the sources.
+_TESTID_LITERAL = re.compile(r"data-testid=\"([a-zA-Z0-9_-]+)\"")
 
 
 def _routes_text() -> str:
@@ -157,6 +165,64 @@ def test_mapped_routes_render_a_page_not_a_redirect():
     assert not redirect_only, (
         "manifest advertises pages the router only redirects away from; drop the map entry or ship the page:\n"
         + "\n".join(f"  {path} -> {name}" for path, name in sorted(redirect_only.items()))
+    )
+
+
+def _load_elements() -> dict[str, list[dict]]:
+    data = _load_manifest()
+    elements = data.get("elements")
+    assert isinstance(elements, dict), "manifest.yaml must declare an 'elements' mapping"
+    return elements
+
+
+def _static_testids_in_frontend() -> frozenset[str]:
+    """Every static ``data-testid`` literal shipped anywhere in the frontend."""
+    src = set()
+    for path in (REPO_ROOT / "frontend" / "src").rglob("*"):
+        if path.suffix not in {".vue", ".ts", ".js"}:
+            continue
+        try:
+            src.update(_TESTID_LITERAL.findall(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return frozenset(src)
+
+
+def test_element_entries_have_core_fields():
+    elements = _load_elements()
+    for path, items in elements.items():
+        assert path in _load_manifest()["routes"], f"elements map an unregistered route: {path}"
+        assert isinstance(items, list), f"elements for {path} must be a list"
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise AssertionError(f"elements[{path}][{index}] is not a mapping")
+            missing = sorted({"testid", "type"} - set(item))
+            assert not missing, f"elements[{path}][{index}] missing required fields: {missing}"
+
+
+def test_element_testids_unique_within_route():
+    elements = _load_elements()
+    for path, items in elements.items():
+        seen: dict[str, int] = {}
+        for index, item in enumerate(items):
+            testid = item.get("testid")
+            if testid is None:
+                continue
+            if testid in seen:
+                raise AssertionError(
+                    f"duplicate element testid {testid!r} in {path} (entries {seen[testid]} and {index})"
+                )
+            seen[testid] = index
+
+
+def test_element_testids_exist_in_frontend():
+    elements = _load_elements()
+    live = _static_testids_in_frontend()
+    dangling = {
+        testid: path for path, items in elements.items() for item in items if (testid := item.get("testid")) not in live
+    }
+    assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(
+        f"  {path} -> {testid}" for testid, path in sorted(dangling.items())
     )
 
 

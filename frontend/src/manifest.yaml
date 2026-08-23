@@ -843,14 +843,1741 @@ routes:
         exact: true
 
 elements:
+    /admin/audit:
+      - testid: admin-audit-verify-chain
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-export-csv
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-export-jsonl
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-chain-result
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-actor
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-target-type
+        type: select
+        dynamic_testid: false
+      - testid: admin-audit-apply-filters
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-reset
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-next
+        type: button
+        dynamic_testid: false
+    /admin/connectors:
+      - testid: admin-connectors-add
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-name-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-connectors-type-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-connectors-description-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-connectors-config-input
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-connectors-submit
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-edit-name
+        type: input
+        dynamic_testid: false
+      - testid: admin-connectors-edit-description
+        type: input
+        dynamic_testid: false
+      - testid: admin-connectors-edit-config
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-connectors-save
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-edit-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-connectors-delete-cancel
+        type: button
+        dynamic_testid: false
+    /admin/costs:
+      - testid: cost-total-spend
+        type: element
+        dynamic_testid: false
+      - testid: cost-avg-per-run
+        type: element
+        dynamic_testid: false
+      - testid: cost-total-runs
+        type: element
+        dynamic_testid: false
+      - testid: cost-annotation-refused
+        type: element
+        dynamic_testid: false
+      - testid: cost-annotation-clamped
+        type: element
+        dynamic_testid: false
+    /admin/costs/components:
+      - testid: cost-components-add
+        type: button
+        dynamic_testid: false
+      - testid: cost-components-form-error
+        type: element
+        dynamic_testid: false
+      - testid: cost-components-form-success
+        type: element
+        dynamic_testid: false
+      - testid: cost-components-name
+        type: input
+        dynamic_testid: false
+      - testid: cost-components-display-name
+        type: input
+        dynamic_testid: false
+      - testid: cost-components-kind-calculated
+        type: element
+        dynamic_testid: false
+      - testid: cost-components-kind-self-reported
+        type: element
+        dynamic_testid: false
+      - testid: cost-components-rate
+        type: input
+        dynamic_testid: false
+      - testid: cost-components-fallback
+        type: select
+        dynamic_testid: false
+      - testid: cost-components-formula
+        type: input
+        dynamic_testid: false
+      - testid: cost-components-report-key
+        type: input
+        dynamic_testid: false
+      - testid: cost-components-enabled
+        type: element
+        dynamic_testid: false
+      - testid: cost-components-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: cost-components-delete-cancel
+        type: button
+        dynamic_testid: false
+    /admin/costs/controls:
+      - testid: cc-total-spend
+        type: element
+        dynamic_testid: false
+      - testid: cc-budget
+        type: element
+        dynamic_testid: false
+      - testid: cc-remaining
+        type: element
+        dynamic_testid: false
+      - testid: cc-progress-bar
+        type: element
+        dynamic_testid: false
+      - testid: cc-threshold-50
+        type: element
+        dynamic_testid: false
+      - testid: cc-threshold-75
+        type: element
+        dynamic_testid: false
+      - testid: cc-threshold-90
+        type: element
+        dynamic_testid: false
+      - testid: cc-threshold-100
+        type: element
+        dynamic_testid: false
+      - testid: cc-circuit-breaker
+        type: element
+        dynamic_testid: false
+      - testid: cc-currency
+        type: select
+        dynamic_testid: false
+      - testid: cc-billing-period
+        type: select
+        dynamic_testid: false
+      - testid: cc-budget-save
+        type: button
+        dynamic_testid: false
+    /admin/costs/limits:
+      - testid: admin-spend-limits-org-save
+        type: button
+        dynamic_testid: false
+    /admin/environments:
+      - testid: admin-envprofiles-add
+        type: button
+        dynamic_testid: false
+      - testid: admin-envprofiles-name-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-description-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-provider-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-envprofiles-image-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-timeout-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-memory-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-cpu-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-envprofiles-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-envprofiles-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-envprofiles-delete-cancel
+        type: button
+        dynamic_testid: false
+    /admin/feature-flags:
+      - testid: developer-mode-toggle
+        type: element
+        dynamic_testid: false
+    /admin/housekeeping:
+      - testid: hk-refresh
+        type: button
+        dynamic_testid: false
+      - testid: hk-error
+        type: element
+        dynamic_testid: false
+      - testid: hk-retry
+        type: button
+        dynamic_testid: false
+      - testid: hk-empty
+        type: element
+        dynamic_testid: false
+      - testid: hk-select-all
+        type: input
+        dynamic_testid: false
+      - testid: hk-category
+        type: element
+        dynamic_testid: false
+      - testid: hk-category-checkbox
+        type: input
+        dynamic_testid: false
+      - testid: hk-candidate
+        type: element
+        dynamic_testid: false
+      - testid: hk-candidate-checkbox
+        type: input
+        dynamic_testid: false
+      - testid: hk-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: hk-cancel-cleanup
+        type: button
+        dynamic_testid: false
+      - testid: hk-confirm-cleanup
+        type: button
+        dynamic_testid: false
+    /admin/model-backends:
+      - testid: admin-model-backends-add
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-name-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-display-name-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-provider-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-model-backends-base-url-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-model-id-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-api-key-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-params-input
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-model-backends-visibility-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-model-backends-submit
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-name
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-display-name
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-model-id
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-api-key
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-params
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-visibility
+        type: select
+        dynamic_testid: false
+      - testid: admin-model-backends-save
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-delete-confirm
+        type: button
+        dynamic_testid: false
+    /admin/my-profile:
+      - testid: my-profile-my-teams-retry
+        type: button
+        dynamic_testid: false
+      - testid: my-profile-my-team
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-current-password
+        type: input
+        dynamic_testid: false
+      - testid: my-profile-new-password
+        type: input
+        dynamic_testid: false
+      - testid: my-profile-confirm-password
+        type: input
+        dynamic_testid: false
+      - testid: my-profile-update-password
+        type: button
+        dynamic_testid: false
+    /admin/node-categories:
+      - testid: admin-node-categories-add
+        type: button
+        dynamic_testid: false
+      - testid: admin-node-categories-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-node-categories-delete-cancel
+        type: button
+        dynamic_testid: false
+    /admin/notification-delivery:
+      - testid: admin-notification-log-status
+        type: select
+        dynamic_testid: false
+      - testid: admin-notification-log-event-type
+        type: select
+        dynamic_testid: false
+      - testid: admin-notification-log-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-notification-log-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-notification-log-apply
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-reset
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-retry-all
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-retry-success
+        type: element
+        dynamic_testid: false
+      - testid: admin-notification-log-empty
+        type: element
+        dynamic_testid: false
+      - testid: admin-notification-log-retry
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-next
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-dlq-filter
+        type: button
+        dynamic_testid: false
+    /admin/org:
+      - testid: org-delete-confirm-input
+        type: input
+        dynamic_testid: false
+    /admin/parameter-schemas:
+      - testid: paramschema-new
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-back
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-name-input
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-desc-input
+        type: textarea
+        dynamic_testid: false
+      - testid: paramschema-remove-option
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-remove-param
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-new-set
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-edit-set
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-clone-set
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-set-name
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-set-save
+        type: button
+        dynamic_testid: false
+    /admin/plugins:
+      - testid: admin-plugins-refresh
+        type: button
+        dynamic_testid: false
+      - testid: admin-plugins-expand
+        type: button
+        dynamic_testid: false
     /admin/remy:
+      - testid: remy-providers
+        type: element
+        dynamic_testid: false
+      - testid: remy-custom-backends
+        type: element
+        dynamic_testid: false
       - testid: remy-access-save
         type: button
+        dynamic_testid: false
         label: Save Access List
+      - testid: remy-model-provider
+        type: select
+        dynamic_testid: false
+      - testid: remy-model-name
+        type: input
+        dynamic_testid: false
+      - testid: remy-model-context
+        type: input
+        dynamic_testid: false
+      - testid: remy-allowed-providers
+        type: element
+        dynamic_testid: false
+      - testid: remy-allowed-models
+        type: input
+        dynamic_testid: false
+      - testid: remy-model-save
+        type: button
+        dynamic_testid: false
+      - testid: remy-system-prompt
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-prompt-save
+        type: button
+        dynamic_testid: false
+      - testid: remy-guidance
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-guidance-save
+        type: button
+        dynamic_testid: false
+      - testid: remy-rate-limit-max-actions
+        type: input
+        dynamic_testid: false
+      - testid: remy-rate-limit-window
+        type: input
+        dynamic_testid: false
+      - testid: remy-auto-execute-threshold
+        type: input
+        dynamic_testid: false
+      - testid: remy-nogo-page-patterns
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-nogo-selector-patterns
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-allowed-selectors
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-allowed-page-patterns
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-safety-save
+        type: button
         dynamic_testid: false
       - testid: remy-skills-add
         type: button
+        dynamic_testid: false
         label: Add Skill
+    /admin/run-retention:
+      - testid: admin-run-retention-save
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-purge-now
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-total-runs
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-estimated-saved
+        type: element
+        dynamic_testid: false
+    /admin/sandbox-concurrency:
+      - testid: admin-sandbox-concurrency-save
+        type: button
+        dynamic_testid: false
+    /admin/users:
+      - testid: admin-users-add-user
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-create-email
+        type: input
+        dynamic_testid: false
+      - testid: admin-users-create-display-name
+        type: input
+        dynamic_testid: false
+      - testid: admin-users-create-password
+        type: input
+        dynamic_testid: false
+      - testid: admin-users-create-role
+        type: select
+        dynamic_testid: false
+      - testid: admin-users-copy-password
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-reset-done
+        type: button
+        dynamic_testid: false
+    /admin/views:
+      - testid: admin-views-add
+        type: button
+        dynamic_testid: false
+      - testid: admin-views-error
+        type: element
+        dynamic_testid: false
+      - testid: admin-views-form-title
+        type: element
+        dynamic_testid: false
+      - testid: admin-views-name-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-views-type-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-views-filters-input
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-views-columns-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-views-sort-by-input
+        type: input
+        dynamic_testid: false
+      - testid: admin-views-sort-order-select
+        type: select
+        dynamic_testid: false
+      - testid: admin-views-save
+        type: button
+        dynamic_testid: false
+      - testid: admin-views-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-views-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-views-delete-cancel
+        type: button
+        dynamic_testid: false
+    /analytics:
+      - testid: analytics-view
+        type: element
+        dynamic_testid: false
+      - testid: analytics-title
+        type: element
+        dynamic_testid: false
+      - testid: analytics-not-enabled
+        type: element
+        dynamic_testid: false
+      - testid: analytics-error
+        type: element
+        dynamic_testid: false
+      - testid: analytics-loading
+        type: element
+        dynamic_testid: false
+      - testid: analytics-stale-notice
+        type: element
+        dynamic_testid: false
+      - testid: analytics-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: analytics-table
+        type: element
+        dynamic_testid: false
+      - testid: analytics-trend-arrow
+        type: element
+        dynamic_testid: false
+    /environment-profiles:
+      - testid: envprofile-list-search
+        type: input
+        dynamic_testid: false
+      - testid: envprofile-list-new
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-list-empty-create
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-list-delete
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-list-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-list-delete-cancel
+        type: button
+        dynamic_testid: false
+    /environment-profiles/:id/edit:
+      - testid: envprofile-form-back
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-form-name
+        type: input
+        dynamic_testid: false
+      - testid: envprofile-form-description
+        type: textarea
+        dynamic_testid: false
+      - testid: envprofile-form-provider
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-image
+        type: input
+        dynamic_testid: false
+      - testid: envprofile-form-network
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-init
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-persistence
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-submit
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-form-cancel
+        type: button
+        dynamic_testid: false
+    /environment-profiles/new:
+      - testid: envprofile-form-back
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-form-name
+        type: input
+        dynamic_testid: false
+      - testid: envprofile-form-description
+        type: textarea
+        dynamic_testid: false
+      - testid: envprofile-form-provider
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-image
+        type: input
+        dynamic_testid: false
+      - testid: envprofile-form-network
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-init
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-persistence
+        type: select
+        dynamic_testid: false
+      - testid: envprofile-form-submit
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-form-cancel
+        type: button
+        dynamic_testid: false
+    /evals/editor:
+      - testid: eval-editor-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-node
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-name
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-eval-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-config
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-pass-threshold
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-failure-warn
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-failure-block
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-save
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-cancel
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-edit
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-delete
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-cancel-delete
+        type: button
+        dynamic_testid: false
+    /evals/proposals:
+      - testid: proposal-publish
+        type: button
+        dynamic_testid: false
+      - testid: proposal-dismiss
+        type: button
+        dynamic_testid: false
+    /feedback/inbox:
+      - testid: feedback-inbox-title
+        type: element
+        dynamic_testid: false
+      - testid: feedback-inbox-pipeline-select
+        type: select
+        dynamic_testid: false
+      - testid: feedback-inbox-date-from
+        type: input
+        dynamic_testid: false
+      - testid: feedback-inbox-date-to
+        type: input
+        dynamic_testid: false
+      - testid: feedback-inbox-empty
+        type: element
+        dynamic_testid: false
+      - testid: feedback-inbox-toggle-expand
+        type: button
+        dynamic_testid: false
+      - testid: feedback-inbox-retry
+        type: button
+        dynamic_testid: false
+      - testid: feedback-inbox-trigger-correction
+        type: button
+        dynamic_testid: false
+      - testid: feedback-inbox-annotation
+        type: textarea
+        dynamic_testid: false
+      - testid: feedback-inbox-save-annotation
+        type: button
+        dynamic_testid: false
+      - testid: feedback-inbox-mark-resolved
+        type: button
+        dynamic_testid: false
+      - testid: feedback-inbox-dismiss
+        type: button
+        dynamic_testid: false
+    /library:
+      - testid: library-create-pipeline-header
+        type: button
+        dynamic_testid: false
+      - testid: library-type-filter-button
+        type: button
+        dynamic_testid: false
+      - testid: library-type-filter-dropdown
+        type: element
+        dynamic_testid: false
+      - testid: library-section-native
+        type: button
+        dynamic_testid: false
+      - testid: library-section-community
+        type: button
+        dynamic_testid: false
+      - testid: library-community-disclaimer
+        type: element
+        dynamic_testid: false
+      - testid: library-error
+        type: element
+        dynamic_testid: false
+      - testid: library-previous-page
+        type: button
+        dynamic_testid: false
+    /library/:id/create-pipeline:
+      - testid: library-wizard-back
+        type: button
+        dynamic_testid: false
+      - testid: library-wizard-pipeline-name
+        type: input
+        dynamic_testid: false
+      - testid: library-wizard-description
+        type: textarea
+        dynamic_testid: false
+      - testid: library-wizard-create
+        type: button
+        dynamic_testid: false
+      - testid: library-wizard-cancel
+        type: button
+        dynamic_testid: false
+    /lifecycle-maps:
+      - testid: lifecycle-map-list-owner-filter
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-list-new
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-list-empty-new
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-list-card
+        type: element
+        dynamic_testid: false
+      - testid: lifecycle-map-list-edit
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-list-prev-page
+        type: button
+        dynamic_testid: false
+    /lifecycle-maps/:id:
+      - testid: lifecycle-map-version-select
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-view-edit
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-export-error
+        type: element
+        dynamic_testid: false
+      - testid: lifecycle-map-import-dialog
+        type: element
+        dynamic_testid: false
+      - testid: lifecycle-map-import-payload
+        type: textarea
+        dynamic_testid: false
+      - testid: lifecycle-map-import-confirm
+        type: button
+        dynamic_testid: false
+    /notifications:
+      - testid: notifications-apply-filters
+        type: button
+        dynamic_testid: false
+      - testid: notifications-reset-filters
+        type: button
+        dynamic_testid: false
+      - testid: notifications-clear-filters
+        type: button
+        dynamic_testid: false
+      - testid: notifications-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: notifications-next-page
+        type: button
+        dynamic_testid: false
+    /onboarding:
+      - testid: onboarding-wizard-create-connector
+        type: link
+        dynamic_testid: false
+      - testid: onboarding-wizard-connector-card
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-resource-type
+        type: input
+        dynamic_testid: false
+      - testid: onboarding-wizard-sample-query
+        type: textarea
+        dynamic_testid: false
+      - testid: onboarding-wizard-infer-schema
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-schema-name
+        type: input
+        dynamic_testid: false
+      - testid: onboarding-wizard-schema-description
+        type: input
+        dynamic_testid: false
+      - testid: onboarding-wizard-confirm-save-schema
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-library-search
+        type: input
+        dynamic_testid: false
+      - testid: onboarding-wizard-library-type-filter
+        type: select
+        dynamic_testid: false
+      - testid: onboarding-wizard-library-item
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-pipeline-name
+        type: input
+        dynamic_testid: false
+      - testid: onboarding-wizard-pipeline-description
+        type: textarea
+        dynamic_testid: false
+      - testid: onboarding-wizard-create-pipeline
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-run-pipeline-now
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-go-to-dashboard
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-run-empty-warning
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-next
+        type: button
+        dynamic_testid: false
+    /pipelines:
+      - testid: pipeline-list-move-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-list-new-pipeline
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-browse-library
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-mobile-folder-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-tree-folder-row
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-tree-folder-toggle
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-action-menu
+        type: button
+        dynamic_testid: false
+    /pipelines/:id/editor:
+      - testid: pipeline-editor-save
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-save-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-run
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-max-duration
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-toggle
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-panel
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-max
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-warning
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-save
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-run-prompt
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-run-submit
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-node-label
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-node-description
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-idempotent-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-idempotent-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-param-set
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-save-param-set
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-stall-timeout-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-stall-timeout-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-heartbeat-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-heartbeat-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-watch-log-path-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-watch-log-path-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-stdout-delta-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-stdout-delta-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-watch-globs-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-watch-globs-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-convert-to-agent
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-revert-to-manual
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-save-edge
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-agent-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-select
+        type: select
+        dynamic_testid: false
+    /pipelines/copy:
+      - testid: copy-wizard-visibility-filter
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-pipeline-option
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-next-step1
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-scope-all
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-scope-selected
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-keep-evals
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-keep-triggers
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-share-connectors
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-back-step2
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-next-step2
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-back-step3
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-execute
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-open-editor
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-copy-another
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-retry
+        type: button
+        dynamic_testid: false
+      - testid: copy-wizard-back-error
+        type: button
+        dynamic_testid: false
+    /runs:
+      - testid: runs-list-aggregate-cost
+        type: element
+        dynamic_testid: false
+    /runs/:id:
+      - testid: run-detail-share-summary
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-queue-banner
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-queued-starting
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-copy-gate-id
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-hitl-notes
+        type: textarea
+        dynamic_testid: false
+      - testid: run-detail-approve
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-reject
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-claim-gate
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-trigger-actor
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-heartbeat
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-live-cost
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-input-payload
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-copy-input
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-cancel
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-copy-trace-id
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-view-trace
+        type: link
+        dynamic_testid: false
+      - testid: run-detail-copy-output
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-waiting-for-capacity
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-guardrail-bucket
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-guardrail-override-panel
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-override-guardrail
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-override-role-note
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-copy-node-id
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-node-stalled
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-node-trace-id
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-toggle-io
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-toggle-logs
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-show-prompt
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-io-row
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-no-input
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-no-output
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-log-row
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-live-output
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-node-telemetry
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-node-stall-telemetry
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-node-summary
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cost-clamped
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-not-reported
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-no-attributable-costs
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cost-transition-note
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-copy-prompt
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-override-input
+        type: textarea
+        dynamic_testid: false
+      - testid: run-detail-override-submit
+        type: button
+        dynamic_testid: false
+    /runs/diff:
+      - testid: diff-loading
+        type: element
+        dynamic_testid: false
+      - testid: diff-recent-runs-a
+        type: select
+        dynamic_testid: false
+      - testid: diff-run-id-a
+        type: input
+        dynamic_testid: false
+      - testid: diff-node-id
+        type: input
+        dynamic_testid: false
+      - testid: diff-recent-runs-b
+        type: select
+        dynamic_testid: false
+      - testid: diff-run-id-b
+        type: input
+        dynamic_testid: false
+      - testid: diff-compare-btn
+        type: button
+        dynamic_testid: false
+      - testid: diff-identical-banner
+        type: element
+        dynamic_testid: false
+    /schemas:
+      - testid: schema-list-move-error
+        type: element
+        dynamic_testid: false
+      - testid: schema-list-dismiss-move-error
+        type: button
+        dynamic_testid: false
+      - testid: schema-list-mobile-folder-select
+        type: select
+        dynamic_testid: false
+      - testid: schema-list-all-schemas
+        type: button
+        dynamic_testid: false
+      - testid: schema-action-menu
+        type: button
+        dynamic_testid: false
+      - testid: schema-deprecate-dialog
+        type: element
+        dynamic_testid: false
+      - testid: schema-deprecate-cancel
+        type: button
+        dynamic_testid: false
+      - testid: schema-deprecate-confirm
+        type: button
+        dynamic_testid: false
+      - testid: schema-move-dialog
+        type: element
+        dynamic_testid: false
+      - testid: schema-move-nofolder
+        type: button
+        dynamic_testid: false
+      - testid: schema-move-cancel
+        type: button
+        dynamic_testid: false
+      - testid: schema-move-confirm
+        type: button
+        dynamic_testid: false
+    /schemas/editor/:id:
+      - testid: schema-editor-save
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-cancel
+        type: button
+        dynamic_testid: false
+    /schemas/infer:
+      - testid: schema-inference-connector
+        type: select
+        dynamic_testid: false
+      - testid: schema-inference-resource-type
+        type: input
+        dynamic_testid: false
+      - testid: schema-inference-sample-query
+        type: textarea
+        dynamic_testid: false
+      - testid: schema-inference-infer-schema
+        type: button
+        dynamic_testid: false
+      - testid: schema-inference-toggle-raw-json
+        type: button
+        dynamic_testid: false
+      - testid: schema-inference-publish
+        type: button
+        dynamic_testid: false
+      - testid: schema-inference-discard
+        type: button
+        dynamic_testid: false
+    /settings/guardrails:
+      - testid: settings-guardrails-create
+        type: button
+        dynamic_testid: false
+      - testid: settings-guardrails-kill-switch-banner
+        type: element
+        dynamic_testid: false
+      - testid: settings-guardrails-observe-badge
+        type: element
+        dynamic_testid: false
+      - testid: settings-guardrails-form-name
+        type: input
+        dynamic_testid: false
+      - testid: settings-guardrails-form-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: settings-guardrails-form-action
+        type: select
+        dynamic_testid: false
+      - testid: settings-guardrails-form-detection
+        type: select
+        dynamic_testid: false
+      - testid: settings-guardrails-form-field
+        type: input
+        dynamic_testid: false
+      - testid: settings-guardrails-form-pattern
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-guardrails-form-schema
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-guardrails-form-disclosure
+        type: element
+        dynamic_testid: false
+      - testid: settings-guardrails-form-error
+        type: element
+        dynamic_testid: false
+    /settings/hitl-review:
+      - testid: hitl-review-pipeline-select
+        type: select
+        dynamic_testid: false
+      - testid: hitl-review-date-from
+        type: input
+        dynamic_testid: false
+      - testid: hitl-review-date-to
+        type: input
+        dynamic_testid: false
+      - testid: hitl-review-toggle-expand
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-claim
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-notes
+        type: textarea
+        dynamic_testid: false
+      - testid: hitl-review-approve
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-reject
+        type: button
+        dynamic_testid: false
+    /settings/license:
+      - testid: license-key-input
+        type: textarea
+        dynamic_testid: false
+      - testid: license-verify-btn
+        type: button
+        dynamic_testid: false
+      - testid: license-apply-btn
+        type: button
+        dynamic_testid: false
+    /settings/mcp:
+      - testid: settings-mcp-copy-url
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-create-key
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-revoke-key
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-create-key-name
+        type: input
+        dynamic_testid: false
+      - testid: settings-mcp-create-key-role
+        type: select
+        dynamic_testid: false
+      - testid: settings-mcp-copy-key-value
+        type: button
+        dynamic_testid: false
+    /settings/observability:
+      - testid: settings-observability-env-override
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-otlp-endpoint
+        type: input
+        dynamic_testid: false
+      - testid: settings-observability-add-header
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-no-headers
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-header-key
+        type: input
+        dynamic_testid: false
+      - testid: settings-observability-header-value
+        type: input
+        dynamic_testid: false
+      - testid: settings-observability-remove-header
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-export-interval
+        type: input
+        dynamic_testid: false
+      - testid: settings-observability-langsmith-toggle
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-langsmith-api-key
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-observability-toggle-key-visibility
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-form-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-form-success
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-test-result
+        type: element
+        dynamic_testid: false
+      - testid: settings-observability-test-connection
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-reset
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-save
+        type: button
+        dynamic_testid: false
+      - testid: settings-observability-readonly
+        type: element
+        dynamic_testid: false
+    /settings/rate-limits:
+      - testid: rate-limits-mode
+        type: element
+        dynamic_testid: false
+      - testid: rate-limits-rules
+        type: element
+        dynamic_testid: false
+      - testid: rate-limits-table
+        type: element
+        dynamic_testid: false
+    /settings/remy:
+      - testid: remy-user-skills-add
+        type: button
+        dynamic_testid: false
+    /settings/runtime-config:
+      - testid: settings-runtime-config-reload
+        type: button
+        dynamic_testid: false
+      - testid: settings-runtime-config-apply
+        type: button
+        dynamic_testid: false
+      - testid: settings-runtime-config-reset
+        type: button
+        dynamic_testid: false
+    /settings/sso:
+      - testid: settings-sso-add-provider
+        type: button
+        dynamic_testid: false
+      - testid: settings-sso-test
+        type: button
+        dynamic_testid: false
+      - testid: settings-sso-edit
+        type: button
+        dynamic_testid: false
+      - testid: settings-sso-toggle
+        type: element
+        dynamic_testid: false
+      - testid: settings-sso-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: settings-sso-delete-cancel
+        type: button
+        dynamic_testid: false
+    /settings/teams:
+      - testid: settings-teams-create-team
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-create-name
+        type: input
+        dynamic_testid: false
+      - testid: settings-teams-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-teams-create-submit
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-owned-resource-count
+        type: element
+        dynamic_testid: false
+      - testid: settings-teams-rename-name
+        type: input
+        dynamic_testid: false
+      - testid: settings-teams-rename-save
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-rename-cancel
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-members-retry
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-member-role
+        type: select
+        dynamic_testid: false
+      - testid: settings-teams-add-member-user
+        type: select
+        dynamic_testid: false
+      - testid: settings-teams-add-member-role
+        type: select
+        dynamic_testid: false
+      - testid: settings-teams-add-member-submit
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-add-member-cancel
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-add-member
+        type: button
+        dynamic_testid: false
+    /settings/triggers:
+      - testid: settings-triggers-create
+        type: button
+        dynamic_testid: false
+      - testid: settings-triggers-paused-banner
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-pause-all
+        type: button
+        dynamic_testid: false
+      - testid: settings-triggers-pause-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-streak
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-deactivated-badge
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-toggle
+        type: button
+        dynamic_testid: false
+      - testid: settings-triggers-reenable
+        type: button
+        dynamic_testid: false
+      - testid: settings-triggers-toggle-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-form-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: settings-triggers-form-type
+        type: select
+        dynamic_testid: false
+      - testid: settings-triggers-form-webhook-url
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-webhook-method
+        type: select
+        dynamic_testid: false
+      - testid: settings-triggers-form-webhook-headers
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-triggers-form-cron-expr
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-cron-tz
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-cron-input
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-triggers-form-polling-connector
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-polling-query
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-triggers-form-polling-interval
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-polling-condition
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-signal-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: settings-triggers-form-signal-node
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-ongoing-target
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-ongoing-interval
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-ongoing-template
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-triggers-form-ongoing-spend
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-ongoing-snapshot
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-form-active
+        type: input
+        dynamic_testid: false
+      - testid: settings-triggers-delete-error
+        type: element
+        dynamic_testid: false
+    /variants/ab-test:
+      - testid: variant-builder-pipeline-select
+        type: select
+        dynamic_testid: false
+      - testid: variant-builder-name
+        type: input
+        dynamic_testid: false
+      - testid: variant-builder-headroom
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-min-two
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-fire-error
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-fire
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-confirm
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-cancel
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-confirm-fire
+        type: button
+        dynamic_testid: false
+    /variants/compare:
+      - testid: variant-compare-group-select
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-node
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-variant-a
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-variant-b
+        type: select
+        dynamic_testid: false
+    /variants/compare/:batchId:
+      - testid: variant-batch-status
+        type: element
+        dynamic_testid: false
+      - testid: variant-batch-refire
+        type: button
+        dynamic_testid: false
+      - testid: variant-batch-back
+        type: button
+        dynamic_testid: false
+      - testid: variant-batch-partial
+        type: element
+        dynamic_testid: false
+      - testid: variant-batch-failed
+        type: element
+        dynamic_testid: false
+      - testid: variant-batch-status-badge
+        type: element
+        dynamic_testid: false
+      - testid: variant-batch-pass-rate
+        type: element
+        dynamic_testid: false
+      - testid: variant-batch-new-comparison
+        type: element
         dynamic_testid: false
 
 features:
