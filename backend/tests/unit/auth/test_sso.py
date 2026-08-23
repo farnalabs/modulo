@@ -266,7 +266,7 @@ class TestSsoProvidersEndpoint:
         ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
-        assert resp.json()["oidc"] == []
+        assert not resp.json()["oidc"]
 
     def test_saml_enabled_with_license(self, client: TestClient) -> None:
         system_session = AsyncMock(spec=AsyncSession)
@@ -1664,14 +1664,14 @@ class TestDecryptProviderSecret:
     def test_returns_empty_when_stored_none(self) -> None:
         from modulo.auth.sso import _decrypt_provider_secret
 
-        assert _decrypt_provider_secret(None, _FERNET_KEY) == ""
+        assert not _decrypt_provider_secret(None, _FERNET_KEY)
 
     def test_returns_empty_when_no_fernet_key(self) -> None:
         from modulo.auth.sso import _decrypt_provider_secret
 
         # Legacy plaintext bytes can never decrypt without a key; the login flow
         # must not crash, so it falls back to an empty client_secret.
-        assert _decrypt_provider_secret(b"some-bytes", None) == ""
+        assert not _decrypt_provider_secret(b"some-bytes", None)
 
     def test_returns_empty_on_decrypt_failure(self) -> None:
         """A corrupt/undeserialisable stored secret must not crash login — it
@@ -1681,7 +1681,7 @@ class TestDecryptProviderSecret:
 
         token = encrypt_stored_secret("real-secret", _FERNET_KEY)
         wrong_key = base64.urlsafe_b64encode(b"b" * 32).decode()
-        assert _decrypt_provider_secret(token, wrong_key) == ""
+        assert not _decrypt_provider_secret(token, wrong_key)
 
 
 # ---------------------------------------------------------------------------

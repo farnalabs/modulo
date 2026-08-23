@@ -1110,6 +1110,8 @@ export interface paths {
          *
          *     OIDC providers come from the DB ``sso_providers`` table (admin UI) first,
          *     falling back to ``MODULO_OIDC_PROVIDERS`` for env-var-only deployments.
+         *     This is a pre-auth route, so the provider lookup runs on the system session
+         *     (``modulo_system`` role, BYPASSRLS) — the caller has no RLS context.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;
@@ -1134,7 +1136,8 @@ export interface paths {
          *     Providers configured via the admin UI (the DB ``sso_providers`` table) are
          *     resolved first; providers from ``MODULO_OIDC_PROVIDERS`` remain supported
          *     as a fallback for env-var-only deployments. This is a pre-auth route, so
-         *     the DB lookup is org-agnostic.
+         *     the DB lookup is org-agnostic and runs on the system session (``modulo_system``
+         *     role, BYPASSRLS) — the caller has no RLS context.
          */
         get: operations["oidc_login_api_v1_auth_oidc__provider__login_get"];
         put?: never;
