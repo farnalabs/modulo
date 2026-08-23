@@ -1,6 +1,5 @@
-"""Unit tests for DocumentationIndex — parsing PRD markdown, keyword search, and result formatting."""
+"""Unit tests for DocumentationIndex — manifest build, keyword search, and result formatting."""
 
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -9,86 +8,64 @@ from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
 
 class TestDocumentationIndexBuild:
-    """Tests for DocumentationIndex.build and _parse."""
+    """Tests for DocumentationIndex.build from a YAML product manifest."""
 
-    def test_parse_h2_and_h3_headings(self) -> None:
-        md = textwrap.dedent("""\
-            # Title
-
-            ## Pipelines
-
-            Pipelines are the core execution unit. They chain nodes together.
-
-            ### Pipeline Configuration
-
-            Configure pipeline nodes and edges in the visual editor.
-
-            ## Triggers
-
-            Triggers fire pipelines automatically.
-
-            ### Trigger Types
-
-            There are webhook, schedule, and event triggers.
-        """)
-        index = DocumentationIndex._parse(md)
-        assert len(index.entries) == 4
-
-        assert index.entries[0].heading == "Pipelines"
-        assert index.entries[0].heading_path == "Pipelines"
-        assert "core execution unit" in index.entries[0].first_paragraph
-
-        assert index.entries[1].heading == "Pipeline Configuration"
-        assert index.entries[1].heading_path == "Pipelines > Pipeline Configuration"
-        assert "visual editor" in index.entries[1].first_paragraph
-
-        assert index.entries[2].heading == "Triggers"
-        assert index.entries[2].heading_path == "Triggers"
-
-        assert index.entries[3].heading == "Trigger Types"
-        assert index.entries[3].heading_path == "Triggers > Trigger Types"
-
-    def test_parse_empty_text_returns_empty_index(self) -> None:
-        index = DocumentationIndex._parse("")
-        assert not index.entries
-
-    def test_parse_text_with_no_headings(self) -> None:
-        index = DocumentationIndex._parse("Just some plain text without headings.")
-        assert not index.entries
-
-    def test_parse_first_paragraph_extraction(self) -> None:
-        md = textwrap.dedent("""\
-            ## Setup
-
-            First, install the package. Then configure your API key.
-
-            This is a second paragraph. It should not appear in first_paragraph.
-        """)
-        index = DocumentationIndex._parse(md)
+    def test_build_creates_entries_from_routes(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "routes:\n"
+            "    /pipelines:\n"
+            "        name: pipeline-list\n"
+            "        breadcrumb: Pipelines\n"
+            "        type: list_page\n"
+            "        sidebar_group: build\n"
+            "        deprecated: false\n",
+            encoding="utf-8",
+        )
+        index = DocumentationIndex.build(manifest)
         assert len(index.entries) == 1
-        assert "First, install the package" in index.entries[0].first_paragraph
-        assert "second paragraph" not in index.entries[0].first_paragraph
+        assert index.entries[0].heading_path == "/pipelines"
+        assert index.entries[0].heading == "Pipelines"
+        assert "pipeline-list" in index.entries[0].first_paragraph
+        assert "type=list_page" in index.entries[0].first_paragraph
 
-    def test_parse_bold_text_is_stripped(self) -> None:
-        md = textwrap.dedent("""\
-            ## Overview
+    def test_build_heading_falls_back_to_name(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("routes:\n    /settings/license:\n        name: settings-license\n", encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        assert index.entries[0].heading == "settings-license"
 
-            This is **very important** documentation.
-        """)
-        index = DocumentationIndex._parse(md)
-        assert "very important" in index.entries[0].first_paragraph
-        assert "**" not in index.entries[0].first_paragraph
+    def test_build_heading_falls_back_to_path(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("routes:\n    /orphan:\n        name:\n        breadcrumb:\n", encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        assert index.entries[0].heading == "/orphan"
+
+    def test_build_empty_text_returns_empty_index(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("", encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        assert not index.entries
+
+    def test_build_manifest_with_no_routes(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("schema_version: 1\n", encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        assert not index.entries
 
     def test_build_returns_empty_index_when_file_not_found(self, tmp_path: Path) -> None:
-        missing = tmp_path / "nonexistent.md"
+        missing = tmp_path / "nonexistent.yaml"
         index = DocumentationIndex.build(missing)
         assert isinstance(index, DocumentationIndex)
         assert not index.entries
 
     def test_build_from_existing_file(self, tmp_path: Path) -> None:
-        md_file = tmp_path / "prd.md"
-        md_file.write_text("## Features\n\nFeature overview text.")
-        index = DocumentationIndex.build(md_file)
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "routes:\n    /features:\n        name: features\n        breadcrumb: Features\n        type: page\n",
+            encoding="utf-8",
+        )
+        index = DocumentationIndex.build(manifest)
         assert len(index.entries) == 1
         assert index.entries[0].heading == "Features"
 

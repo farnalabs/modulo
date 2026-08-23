@@ -108,7 +108,8 @@ fi
 if [[ -f /tmp/system_database_url.env ]]; then
   SYSTEM_URL=$(cat /tmp/system_database_url.env)
   export MODULO_SYSTEM_DATABASE_URL="$SYSTEM_URL"
-  echo "MODULO_SYSTEM_DATABASE_URL fixed: $(echo $SYSTEM_URL | cut -c1-80)..."
+  MASKED_SYSTEM_URL=$(echo "$SYSTEM_URL" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')
+  echo "MODULO_SYSTEM_DATABASE_URL fixed: $MASKED_SYSTEM_URL"
 fi
 
 echo "=== Bootstrapping modulo_app role ==="

@@ -4793,8 +4793,8 @@ def _is_sensitive_key(key: str) -> bool:
 @mcp.tool(
     name="search_documentation",
     description=(
-        "Search product documentation for relevant sections. Supports free-text "
-        "keyword search against PRD sections and FAQ entries. Returns Markdown-formatted results."
+        "Search the product surface and navigation for relevant sections. Supports "
+        "free-text keyword search against routes and pages in the product manifest. Returns Markdown-formatted results."
     ),
 )
 async def search_documentation(query: str, section: str | None = None) -> dict[str, Any]:
