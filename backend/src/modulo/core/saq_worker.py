@@ -184,25 +184,36 @@ def _effective_redis_pool_size(pool_size: int, concurrency: int) -> int:
     return max(pool_size, concurrency + reserve)
 
 
+# Estimated DB connections drawn per in-flight run. A single run is not one
+# connection: ``load_and_setup`` opens its own session, the executor holds a
+# connection through ``execute``/``resume``, and the heartbeat/watchdog
+# terminalize path (``fail_run_terminal``) needs a slot to fail a run that
+# wedges in setup. Sizing the floor for this fan-out (rather than assuming 1
+# connection/run) is what prevents the pool from being exhausted in pre-node
+# setup — the agent.stall root cause.
+CONNS_PER_RUN = 3
+
+
 def _effective_db_pool_size(pool_size: int, concurrency: int) -> int:
     """Guarantee the worker async DB pool is large enough for concurrent runs.
 
-    Every concurrent run holds one DB connection through pre-node setup
-    (``claim_run_async`` / ``load_and_setup`` / ``executor.execute``), and the
-    zombie watchdog's terminalize write (``fail_run_terminal``) needs a
-    connection to fail a run that wedges in that window. With
-    ``SAQ_WORKER_CONCURRENCY=20`` and a pool smaller than ``concurrency + 5``,
-    the worker can exhaust its pool in setup and the watchdog cannot get a slot
-    to terminalize — the run rides to the 35-min ``dispatcher_reconcile``
-    backstop as a nodeless zombie (the agent.stall symptom).
+    Each concurrent run draws multiple DB connections (see :data:`CONNS_PER_RUN`),
+    and the zombie watchdog's terminalize write (``fail_run_terminal``) needs a
+    connection to fail a run that wedges in pre-node setup. With
+    ``SAQ_WORKER_CONCURRENCY=20`` and 1 connection/run assumed (as the old
+    ``concurrency + 5`` floor did), a 30-conn pool is exhausted (20 runs Ã— 2-3
+    conns = 40-60 > 30) and ``load_and_setup`` wedges awaiting a connection —
+    the run rides to the 35-min ``dispatcher_reconcile`` backstop as a nodeless
+    zombie (the agent.stall symptom).
 
     Mirror :func:`_effective_redis_pool_size`: enforce
-    ``pool >= concurrency + 5`` where the reserve covers the watchdog
-    terminalize writes plus any system-cron connections sharing the same
-    engine.
+    ``pool >= concurrency * CONNS_PER_RUN + reserve`` so the floor covers the
+    per-run connection fan-out plus a reserve for the watchdog terminalize
+    writes and any system-cron connections sharing the same engine.
     """
     reserve = 5
-    return max(pool_size, concurrency + reserve)
+    floor = concurrency * CONNS_PER_RUN + reserve
+    return max(pool_size, floor)
 
 
 def _build_queue(queue_name: str) -> RedisQueue:
@@ -419,8 +430,27 @@ async def execute_run(
         except Exception:
             _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid)
 
+    settings = get_settings()
     try:
-        run, executor = await load_and_setup(aeng, rid, oid)
+        run, executor = await asyncio.wait_for(
+            load_and_setup(aeng, rid, oid),
+            timeout=settings.saq_setup_grace_seconds,
+        )
+    except TimeoutError:
+        _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail=(
+                f"load_and_setup (pre-node setup) exceeded setup grace "
+                f"({settings.saq_setup_grace_seconds}s) — likely DB connection "
+                "exhaustion or a wedged worker; was riding to the 35-min "
+                "agent.stall backstop"
+            ),
+        )
+        return {"status": "setup_failed"}
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -787,7 +817,7 @@ async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
+    """System cron — the cost-tracking probe (spec Â§4.7, every 5 min, retries=0).
 
     The verification canary for the ledger/report system: samples the N=50 most
     recent terminal runs per org, checks ``total == sum``, asserts the org-row
@@ -1140,7 +1170,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         ),
         # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
         # separately by the heartbeat/staleness alert), unique=True so a second
-        # overlapping instance cannot double-advance probe_state (§4.7).
+        # overlapping instance cannot double-advance probe_state (Â§4.7).
         # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
         # 6-field expression ("0 */5 * * * *") differently and the probe fires
         # per-5-hours instead of per-5-minutes (bug class #680).

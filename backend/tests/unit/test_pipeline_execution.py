@@ -1134,7 +1134,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_reenqueue_window == 600
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
-        assert s.saq_worker_db_pool_size == 30
+        assert s.saq_worker_db_pool_size == 65
         assert s.saq_redis_pool_size == 20
         assert s.saq_worker_concurrency == 5
         assert s.saq_run_claim_cap == 20

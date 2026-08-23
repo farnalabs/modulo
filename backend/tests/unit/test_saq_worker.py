@@ -364,27 +364,29 @@ class TestEffectiveRedisPoolSize:
 
 
 class TestEffectiveDbPoolSize:
-    """The effective DB pool must always exceed concurrency + reserve.
+    """The effective DB pool must size for multiple connections per run.
 
-    Every concurrent run holds a connection through pre-node setup and the
-    zombie watchdog's ``fail_run_terminal`` write needs a slot to terminalize a
-    run that wedges in that window. With concurrency 20 and a pool below
-    ``concurrency + 5`` the worker can exhaust its pool in setup and the
-    watchdog cannot terminalize — the run rides to the 35-min
-    ``dispatcher_reconcile`` backstop (the agent.stall nodeless zombie). The
-    effective pool is ``max(configured_pool, concurrency + 5)``.
+    Each concurrent run draws several DB connections (the
+    ``load_and_setup`` session, the executor connection, and the watchdog's
+    ``fail_run_terminal`` write), so the floor is ``concurrency *
+    CONNS_PER_RUN + reserve`` — not ``concurrency + 5``. With concurrency 20
+    and a pool sized for 1 connection/run the worker exhausts its pool in
+    pre-node setup and the watchdog cannot terminalize — the run rides to the
+    35-min ``dispatcher_reconcile`` backstop (the agent.stall nodeless zombie).
+    The effective pool is ``max(configured_pool, concurrency * CONNS_PER_RUN +
+    reserve)``.
     """
 
     @pytest.mark.parametrize(
         ("pool_size", "concurrency", "expected"),
         [
             (30, 5, 30),  # pool already sufficient, unchanged
-            (20, 20, 25),  # equal -> raised to concurrency + 5
-            (5, 20, 25),  # too small -> raised (the incident config)
-            (2, 20, 25),
+            (20, 20, 65),  # equal -> raised to concurrency*CONNS_PER_RUN + 5
+            (5, 20, 65),  # too small -> raised (the incident config)
+            (2, 20, 65),
             (20, 5, 20),  # default config, unchanged
-            (1, 1, 6),
-            (50, 50, 55),  # max concurrency raises above the settings cap; the
+            (1, 1, 8),  # 1*3 + 5 reserve
+            (50, 50, 155),  # max concurrency raises above the settings cap; the
             # worker accepts it (le=200 bounds the configured value, the
             # effective pool is a runtime override)
         ],
@@ -650,6 +652,53 @@ class TestExecuteResumeWrappers:
         assert record_facts.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_execute_run_setup_hang_meets_setup_timeout(self) -> None:
+        """FIX A (FAR-372): a load_and_setup that NEVER returns (a wedged
+        pre-node setup — DB connection exhaustion, graph-compile hang) must
+        fail fast at the setup grace instead of riding to the 35-min
+        agent.stall backstop. The run is terminal-failed with
+        executor_setup_failed and execute_run returns promptly (well under the
+        backstop). Without the asyncio.wait_for wrap this test hangs until the
+        35-min dispatcher_reconcile backstop — proving the fix."""
+
+        async def _hang(*a: Any, **k: Any) -> tuple[MagicMock, MagicMock]:
+            # Never returns: simulates a run wedged in pre-node setup.
+            await asyncio.sleep(10_000)
+            return (MagicMock(), MagicMock())
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.claim_run_async",
+                new_callable=AsyncMock,
+                return_value="tok-claim",
+            ),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock, side_effect=_hang),
+            patch(
+                "modulo.core.pipeline_execution.fail_run_terminal",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as fail,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch.object(sw, "get_settings", return_value=_settings(saq_setup_grace_seconds=1)),
+        ):
+            # The outer guard fails the test fast (instead of hanging 35 min)
+            # if the inner setup-grace wrap is missing.
+            result = await asyncio.wait_for(
+                sw.execute_run(
+                    {},
+                    run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                    org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+                ),
+                timeout=10,
+            )
+
+        assert result == {"status": "setup_failed"}
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_setup_failed"
+        complete.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_resume_run_delegates(self) -> None:
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
@@ -903,8 +952,8 @@ class TestGetAsyncEngine:
 
     def test_uses_effective_db_pool_raised_for_high_concurrency(self, caplog: pytest.LogCaptureFixture) -> None:
         # A configured pool of 5 with concurrency 20 (the incident config) must
-        # produce an engine with pool_size 25 (concurrency + 5 reserve) and log
-        # a warning that the pool was raised.
+        # produce an engine with pool_size 65 (concurrency * CONNS_PER_RUN + 5
+        # reserve) and log a warning that the pool was raised.
         with (
             patch.object(
                 sw,
@@ -922,7 +971,7 @@ class TestGetAsyncEngine:
             engine = sw._get_async_engine()
 
         assert engine is shared.return_value
-        shared.assert_called_once_with(pool_size=25, max_overflow=0)
+        shared.assert_called_once_with(pool_size=65, max_overflow=0)
         assert "db_pool_raised" in caplog.text
 
     def test_uses_plain_shared_engine_for_non_postgres_backend(self) -> None:

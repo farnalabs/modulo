@@ -222,7 +222,7 @@ class Settings(BaseSettings):
     # pool guard (_effective_redis_pool_size). The le=200 cap bounds the
     # configured value; the runtime effective pool may exceed it (it is a
     # runtime override), matching the Redis guard's behaviour.
-    saq_worker_db_pool_size: int = Field(default=30, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=200)
+    saq_worker_db_pool_size: int = Field(default=65, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=200)
     # SAQ Redis client pool size (Upstash connection budget — F2).
     # Default 20 satisfies the invariant for the default concurrency of 5
     # (20 >= 5 + 5 reserve). NOTE the real invariant: SAQ's dequeue() uses a
