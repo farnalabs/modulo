@@ -27,7 +27,7 @@ from modulo.core.eval_engine import EvalType
 from modulo.core.graph_validator import GraphValidator
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
 
-FULL_UNIVERSE = {"llm_judge", "regex", "json_schema", "custom_function", "guardrail"}
+FULL_UNIVERSE = {"llm_judge", "regex", "json_schema", "custom_function", "guardrail", "human_set"}
 COMPOSITE_ELIGIBLE = {"regex", "json_schema", "llm_judge"}
 
 

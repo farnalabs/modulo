@@ -2229,7 +2229,7 @@ class GraphValidator:
                 node_id=node_id,
             )
 
-        valid_types = {"regex", "json_schema", "llm_judge"}
+        valid_types = {"regex", "json_schema", "llm_judge", "human_set"}
         valid_behaviours = {"retry", "block", "warn"}
 
         eval_definitions: list[dict[str, Any]] = output_validation.get("eval_definitions", [])

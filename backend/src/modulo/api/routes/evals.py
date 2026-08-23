@@ -43,7 +43,7 @@ _CODE_EVALS_DELETE_EVAL_DEFINITION = "evals.delete_eval_definition"
 _CODE_EVALS_LIST_RUN_EVALS = "evals.list_run_evals"
 _CODE_EVALS_COMPARE_EVALS = "evals.compare_evals"
 _CODE_EVALS_CREATE_EVAL_RUN = "evals.create_eval_from_run"
-_EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail)$"
+_EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
 
 

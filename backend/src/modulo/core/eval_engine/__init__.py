@@ -1,10 +1,12 @@
 """EvalEngine — evaluates node outputs against eval definitions.
 
-Supports four eval types:
-  - llm_judge      : LLM-as-judge via ModelBackendHub
-  - regex          : pattern match against output field
-  - json_schema    : validate output against JSON Schema
+Supports five eval types:
+  - llm_judge      : LLM-as-judge via ModelBackendHub (soft signal, injection-prone)
+  - regex          : pattern match against output field (shape-only)
+  - json_schema    : validate output against JSON Schema (shape-only)
   - custom_function: call a user-defined function
+  - human_set      : run a registered, versioned, human-authored eval set
+                     (deterministic correctness checks; the trustworthy path)
 
 Each eval has a configurable failure_behaviour (warn | block).
 Blocked evals raise EvalBlockedError.
@@ -60,6 +62,7 @@ class EvalType(StrEnum):
     JSON_SCHEMA = "json_schema"
     CUSTOM_FUNCTION = "custom_function"
     GUARDRAIL = "guardrail"
+    HUMAN_SET = "human_set"
 
 
 FailureBehaviour = Literal["warn", "block"]
@@ -239,6 +242,8 @@ class EvalEngine:
                 # block semantics are guardrail-owned (terminal eval_failed). Fail
                 # loudly on misrouting rather than silently mis-evaluate.
                 raise GuardrailMisroutedError(eval_def.name)
+            case EvalType.HUMAN_SET:
+                result = self._evaluate_human_set(output, eval_def, run_id)
             case _:
                 raise UnknownEvalTypeError(str(eval_def.eval_type))
 
@@ -554,6 +559,34 @@ class EvalEngine:
             log_prefix="LLM judge",
             callable_name="callable",
         )
+
+    def _evaluate_human_set(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        run_id: UUID,
+    ) -> EvalResult:
+        """Evaluate using a human-authored, versioned eval set.
+
+        The set name is taken from ``config["set_name"]`` (optional
+        ``config["version"]`` is currently advisory — the registry holds a
+        single active version per name). Human-authored sets are deterministic
+        and not model-mediated, so they are the trustworthy correctness path
+        that ``llm_judge`` (circular, injection-prone) and ``regex`` /
+        ``json_schema`` (shape-only) cannot provide.
+        """
+        from modulo.core.eval_engine.human_eval_sets import run_human_eval_set
+
+        set_name = eval_def.config.get("set_name")
+        if not set_name:
+            _log.warning("Human-set eval %s missing 'set_name' in config", eval_def.id)
+            return _fail_result(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                detail="Human-set eval missing 'set_name' in config",
+            )
+        return run_human_eval_set(set_name, output, eval_def=eval_def, run_id=run_id)
 
     # ------------------------------------------------------------------
     # Standalone evaluate() path for Feedback System (§8.20)
