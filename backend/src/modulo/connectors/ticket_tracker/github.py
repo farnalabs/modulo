@@ -71,9 +71,10 @@ class GitHubTicketTracker(TicketTrackerBase):
             return {"ticket_id": str(result["number"]), "url": result["html_url"]}
 
     async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
+        per_page = min((ticket_filter.limit if ticket_filter else 20), 100)
         params: dict[str, Any] = {
-            "per_page": min((ticket_filter.limit if ticket_filter else 20), 100),
-            "page": ((ticket_filter.offset if ticket_filter else 0) // 20) + 1,
+            "per_page": per_page,
+            "page": ((ticket_filter.offset if ticket_filter else 0) // per_page) + 1,
             "state": "all",
         }
         if ticket_filter and ticket_filter.status and ticket_filter.status.lower() in ("open", "closed"):

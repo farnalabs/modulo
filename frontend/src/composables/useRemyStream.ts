@@ -27,7 +27,7 @@ export function useRemyStream() {
   let activeStream: Promise<void> | null = null
 
   async function connectStream(sessionId: string, options: StreamOptions = {}) {
-    if (store.isStreaming && store.activeSessionId === sessionId) return
+    if (connected.value && store.activeSessionId === sessionId) return
     await disconnectStream()
     const seq = ++streamId
     const controller = new AbortController()

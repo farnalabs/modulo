@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import random
 import re
@@ -770,7 +771,8 @@ class GitLabConnector(ConnectorBase):
         )
         info = _safe_json(r)
         if "content" in info:
-            info["content"] = base64.b64decode(info["content"]).decode("utf-8")
+            with contextlib.suppress(ValueError, UnicodeDecodeError):
+                info["content"] = base64.b64decode(info["content"]).decode("utf-8")
         return ConnectorResult(records=[info], metadata={"rate_limit": _rate_limit_metadata(r)})
 
     async def _query_tree(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1020,7 +1022,7 @@ class GitLabConnector(ConnectorBase):
         _validate_path(path, payload.resource)
         encoded = _project_path(project)
         body: dict[str, Any] = {
-            "branch": payload.data.get("ref", "main"),
+            "branch": payload.data.get("ref", payload.data.get("branch", "main")),
             "content": payload.data["content"],
             "commit_message": payload.data.get("message", "Update via Modulo"),
         }
