@@ -281,3 +281,32 @@ class TestRouteSanitizer:
         payload = _inserted_payload(mock_session)
         assert payload["route"] == "unknown", "unmatched route must be sanitized to 'unknown' in the staged payload"
         assert payload["status"] == 500, "non-route fields must be preserved"
+
+    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_registered_route_template_preserved(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        mock_count: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        mock_count.return_value = 0
+        event = _valid_event("evt-1", "api_error")
+        event["payload"] = {"route": "/api/v1/metrics/events", "status": 500}
+        resp = _post_events(client, [event])
+        assert resp.status_code == 204
+        # Prove-the-fix: FastAPI 0.130+ stores included routers lazily as
+        # _IncludedRouter wrappers (path=None), so the sanitizer must walk the
+        # nested router tree or it would never match a registered template and
+        # would degrade every api_error route to "unknown".
+        payload = _inserted_payload(mock_session)
+        assert payload["route"] == "/api/v1/metrics/events", (
+            f"registered route template must be preserved, got {payload.get('route')!r}"
+        )
+        assert payload["status"] == 500, "non-route fields must be preserved"
