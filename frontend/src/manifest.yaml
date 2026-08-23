@@ -853,6 +853,27 @@ elements:
       - testid: dashboard-token-spend
         type: link
         dynamic_testid: false
+      - testid: dashboard-stats-card
+        type: element
+        dynamic_testid: false
+      - testid: notifications-panel-toggle
+        type: button
+        dynamic_testid: false
+      - testid: sparkline
+        type: element
+        dynamic_testid: false
+      - testid: sparkline-endpoint
+        type: element
+        dynamic_testid: false
+      - testid: sparkline-plot
+        type: element
+        dynamic_testid: false
+      - testid: sparkline-tooltip
+        type: element
+        dynamic_testid: false
+      - testid: stat-no-baseline
+        type: element
+        dynamic_testid: false
     /admin/audit:
       - testid: admin-audit-verify-chain
         type: button
@@ -932,6 +953,9 @@ elements:
         dynamic_testid: false
       - testid: admin-connectors-delete-cancel
         type: button
+        dynamic_testid: false
+      - testid: connectors-preview-section
+        type: element
         dynamic_testid: false
     /admin/costs:
       - testid: cost-total-spend
@@ -1029,9 +1053,15 @@ elements:
       - testid: cc-budget-save
         type: button
         dynamic_testid: false
+      - testid: cc-budget-input
+        type: input
+        dynamic_testid: false
     /admin/costs/limits:
       - testid: admin-spend-limits-org-save
         type: button
+        dynamic_testid: false
+      - testid: admin-spend-limits-org-limit
+        type: input
         dynamic_testid: false
     /admin/environments:
       - testid: admin-envprofiles-add
@@ -1108,6 +1138,9 @@ elements:
       - testid: hk-confirm-cleanup
         type: button
         dynamic_testid: false
+      - testid: hk-delete-selected
+        type: button
+        dynamic_testid: false
     /admin/model-backends:
       - testid: admin-model-backends-add
         type: button
@@ -1168,6 +1201,9 @@ elements:
         dynamic_testid: false
       - testid: admin-model-backends-delete-confirm
         type: button
+        dynamic_testid: false
+      - testid: model-backends-preview-section
+        type: element
         dynamic_testid: false
     /admin/my-profile:
       - testid: my-profile-my-teams-retry
@@ -1238,9 +1274,15 @@ elements:
       - testid: admin-notification-log-dlq-filter
         type: button
         dynamic_testid: false
+      - testid: admin-notification-log-dlq
+        type: element
+        dynamic_testid: false
     /admin/org:
       - testid: org-delete-confirm-input
         type: input
+        dynamic_testid: false
+      - testid: product-analytics-toggle
+        type: element
         dynamic_testid: false
     /admin/parameter-schemas:
       - testid: paramschema-new
@@ -1374,6 +1416,33 @@ elements:
         type: button
         dynamic_testid: false
         label: Add Skill
+      - testid: remy-skills-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-active
+        type: input
+        dynamic_testid: false
+      - testid: remy-skills-form-body
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-skills-form-cancel
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-description
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-skills-form-name
+        type: input
+        dynamic_testid: false
+      - testid: remy-skills-form-submit
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-triggers
+        type: input
+        dynamic_testid: false
     /admin/run-retention:
       - testid: admin-run-retention-save
         type: button
@@ -1387,9 +1456,18 @@ elements:
       - testid: admin-run-retention-estimated-saved
         type: element
         dynamic_testid: false
+      - testid: admin-run-retention-days
+        type: input
+        dynamic_testid: false
+      - testid: admin-run-retention-purge-age
+        type: input
+        dynamic_testid: false
     /admin/sandbox-concurrency:
       - testid: admin-sandbox-concurrency-save
         type: button
+        dynamic_testid: false
+      - testid: admin-sandbox-concurrency-limit
+        type: input
         dynamic_testid: false
     /admin/users:
       - testid: admin-users-add-user
@@ -1414,6 +1492,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: admin-users-reset-done
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-next
         type: button
         dynamic_testid: false
     /admin/views:
@@ -1484,6 +1565,39 @@ elements:
       - testid: analytics-trend-arrow
         type: element
         dynamic_testid: false
+      - testid: analytics-chart
+        type: element
+        dynamic_testid: false
+      - testid: analytics-chart-canvas
+        type: element
+        dynamic_testid: false
+      - testid: analytics-chart-empty
+        type: element
+        dynamic_testid: false
+      - testid: analytics-filter-bar
+        type: element
+        dynamic_testid: false
+      - testid: analytics-filter-dimension
+        type: select
+        dynamic_testid: false
+      - testid: analytics-filter-error-code
+        type: input
+        dynamic_testid: false
+      - testid: analytics-filter-folder
+        type: select
+        dynamic_testid: false
+      - testid: analytics-filter-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: analytics-filter-status
+        type: select
+        dynamic_testid: false
+      - testid: analytics-filter-trigger-type
+        type: select
+        dynamic_testid: false
+      - testid: analytics-group-by-hour
+        type: button
+        dynamic_testid: false
     /environment-profiles:
       - testid: envprofile-list-search
         type: input
@@ -1502,6 +1616,12 @@ elements:
         dynamic_testid: false
       - testid: envprofile-list-delete-cancel
         type: button
+        dynamic_testid: false
+      - testid: envprofile-list-edit
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-list-name
+        type: link
         dynamic_testid: false
     /environment-profiles/:id/edit:
       - testid: envprofile-form-back
@@ -1677,6 +1797,24 @@ elements:
       - testid: library-previous-page
         type: button
         dynamic_testid: false
+      - testid: library-community-badge
+        type: element
+        dynamic_testid: false
+      - testid: library-create-lifecycle-map
+        type: button
+        dynamic_testid: false
+      - testid: library-create-pipeline
+        type: button
+        dynamic_testid: false
+      - testid: library-next-page
+        type: button
+        dynamic_testid: false
+      - testid: library-preview-section
+        type: element
+        dynamic_testid: false
+      - testid: library-view-details
+        type: button
+        dynamic_testid: false
     /library/:id/create-pipeline:
       - testid: library-wizard-back
         type: button
@@ -1692,6 +1830,9 @@ elements:
         dynamic_testid: false
       - testid: library-wizard-cancel
         type: button
+        dynamic_testid: false
+      - testid: library-wizard-view-pipeline
+        type: link
         dynamic_testid: false
     /lifecycle-maps:
       - testid: lifecycle-map-list-owner-filter
@@ -1710,6 +1851,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: lifecycle-map-list-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-list-next-page
         type: button
         dynamic_testid: false
     /lifecycle-maps/:id:
@@ -1813,6 +1957,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: onboarding-wizard-next
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-previous
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-skip-to-end
         type: button
         dynamic_testid: false
     /pipelines:
@@ -1989,6 +2139,12 @@ elements:
       - testid: copy-wizard-back-error
         type: button
         dynamic_testid: false
+      - testid: copy-wizard-pipeline-name
+        type: input
+        dynamic_testid: false
+      - testid: copy-wizard-step-indicator
+        type: element
+        dynamic_testid: false
     /remy:
       - testid: remy-only-view
         type: element
@@ -2154,6 +2310,21 @@ elements:
       - testid: run-detail-override-submit
         type: button
         dynamic_testid: false
+      - testid: run-detail-aggregate-cost
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-child-runs
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-guardrail-summary
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-node-progress
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-work-items
+        type: element
+        dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
         type: element
@@ -2222,6 +2393,60 @@ elements:
         dynamic_testid: false
       - testid: schema-editor-cancel
         type: button
+        dynamic_testid: false
+      - testid: schema-editor-add-field
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-copy-json
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-description
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-field
+        type: element
+        dynamic_testid: false
+      - testid: schema-editor-field-default
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-field-description
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-field-move-down
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-field-move-up
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-field-name
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-field-remove
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-field-required
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-field-type
+        type: select
+        dynamic_testid: false
+      - testid: schema-editor-json-preview
+        type: element
+        dynamic_testid: false
+      - testid: schema-editor-list-item
+        type: element
+        dynamic_testid: false
+      - testid: schema-editor-name
+        type: input
+        dynamic_testid: false
+      - testid: schema-editor-new
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-restore-version
+        type: button
+        dynamic_testid: false
+      - testid: schema-editor-version
+        type: input
         dynamic_testid: false
     /schemas/infer:
       - testid: schema-inference-connector
@@ -2408,6 +2633,33 @@ elements:
       - testid: remy-user-skills-add
         type: button
         dynamic_testid: false
+      - testid: remy-skills-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-active
+        type: input
+        dynamic_testid: false
+      - testid: remy-skills-form-body
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-skills-form-cancel
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-description
+        type: textarea
+        dynamic_testid: false
+      - testid: remy-skills-form-name
+        type: input
+        dynamic_testid: false
+      - testid: remy-skills-form-submit
+        type: button
+        dynamic_testid: false
+      - testid: remy-skills-form-triggers
+        type: input
+        dynamic_testid: false
     /settings/runtime-config:
       - testid: settings-runtime-config-reload
         type: button
@@ -2417,6 +2669,9 @@ elements:
         dynamic_testid: false
       - testid: settings-runtime-config-reset
         type: button
+        dynamic_testid: false
+      - testid: settings-runtime-config-value
+        type: element
         dynamic_testid: false
     /settings/sso:
       - testid: settings-sso-add-provider
@@ -2490,6 +2745,54 @@ elements:
         type: button
         dynamic_testid: false
       - testid: settings-teams-add-member
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-add-button
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-add-cancel
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-add-description
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-add-save
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-add-secret
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-add-url
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-delete
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-edit
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-edit-cancel
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-edit-description
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-edit-save
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-edit-secret
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-edit-url
+        type: input
+        dynamic_testid: false
+      - testid: team-notif-retry
+        type: button
+        dynamic_testid: false
+      - testid: team-notif-test
         type: button
         dynamic_testid: false
     /settings/triggers:
@@ -2583,6 +2886,9 @@ elements:
       - testid: settings-triggers-delete-error
         type: element
         dynamic_testid: false
+      - testid: settings-triggers-outcomes-toggle
+        type: element
+        dynamic_testid: false
     /variants/ab-test:
       - testid: variant-builder-pipeline-select
         type: select
@@ -2611,6 +2917,12 @@ elements:
       - testid: variant-builder-confirm-fire
         type: button
         dynamic_testid: false
+      - testid: variant-builder-add
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-create-snapshot
+        type: button
+        dynamic_testid: false
     /variants/compare:
       - testid: variant-compare-group-select
         type: select
@@ -2623,6 +2935,9 @@ elements:
         dynamic_testid: false
       - testid: variant-compare-diff-variant-b
         type: select
+        dynamic_testid: false
+      - testid: variant-compare-run-variants
+        type: button
         dynamic_testid: false
     /variants/compare/:batchId:
       - testid: variant-batch-status
