@@ -94,13 +94,15 @@ python3 /app/deploy/fly/bootstrap_db.py
 if [ -f /tmp/database_url.env ]; then
   FIXED_URL=$(cat /tmp/database_url.env)
   export DATABASE_URL="$FIXED_URL"
-  echo "DATABASE_URL fixed: $(echo $DATABASE_URL | cut -c1-80)..."
+  MASKED_URL=$(echo "$DATABASE_URL" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')
+  echo "DATABASE_URL fixed: $MASKED_URL"
 fi
 
 if [ -f /tmp/database_admin_url.env ]; then
   ADMIN_URL=$(cat /tmp/database_admin_url.env)
   export DATABASE_ADMIN_URL="$ADMIN_URL"
-  echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
+  MASKED_ADMIN_URL=$(echo "$DATABASE_ADMIN_URL" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')
+  echo "DATABASE_ADMIN_URL fixed: $MASKED_ADMIN_URL"
 fi
 
 echo "=== Bootstrapping modulo_app role ==="

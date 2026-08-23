@@ -340,9 +340,10 @@ def _get_engine() -> AsyncEngine:
 def _get_system_engine() -> AsyncEngine:
     """Engine for cross-org system crons using the modulo_system role.
 
-    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
-    so deployments that haven't provisioned the system role still work (system
-    crons run as modulo_app with BYPASSRLS — the pre-PR-1634 posture).
+    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set.
+    In that fallback posture system crons run as modulo_app (NOBYPASSRLS), so
+    RLS-scoped reads return zero rows — a WARNING is logged. Provision
+    MODULO_SYSTEM_DATABASE_URL to use the modulo_system role (BYPASSRLS).
     """
     global _SYSTEM_ENGINE
     if _SYSTEM_ENGINE is None:
@@ -356,6 +357,12 @@ def _get_system_engine() -> AsyncEngine:
                 connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
+            _log.warning(
+                "system_engine.fallback: MODULO_SYSTEM_DATABASE_URL not set — "
+                "system crons run as modulo_app (NOBYPASSRLS); RLS-scoped "
+                "reads return zero rows. Provision MODULO_SYSTEM_DATABASE_URL "
+                "to use the modulo_system role (BYPASSRLS)."
+            )
             _SYSTEM_ENGINE = _get_engine()
     return _SYSTEM_ENGINE
 
