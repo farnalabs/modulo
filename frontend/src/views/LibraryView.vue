@@ -210,12 +210,14 @@
         class="flex justify-center items-center gap-2 mt-8"
       >
         <button
-          :disabled="page <= 1"
+          v-for="pager in pagers"
+          :key="pager.testid"
+          :disabled="pager.disabled"
           :class="pageButtonClass"
-          @click="prevPage"
-          data-testid="library-previous-page"
+          :data-testid="pager.testid"
+          @click="pager.onClick"
         >
-          {{ $t("views.LibraryView.previous_page") }}
+          {{ $t(pager.labelKey) }}
         </button>
         <span class="px-4 py-2 text-sm text-muted-foreground">
           {{
@@ -225,14 +227,6 @@
             })
           }}
         </span>
-        <button
-          :disabled="page >= Math.ceil(total / pageSize)"
-          :class="pageButtonClass"
-          @click="nextPage"
-          data-testid="library-next-page"
-        >
-          {{ $t("views.LibraryView.next_page") }}
-        </button>
       </div>
     </main>
   </div>
@@ -428,12 +422,8 @@ let clearSuccessTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 async function loadHostedCommunity(): Promise<void> {
   await runApiCall({
-    setLoading: (v) => {
-      hostedLoading.value = v;
-    },
-    setError: (m) => {
-      hostedError.value = m;
-    },
+    setLoading: (v) => (hostedLoading.value = v),
+    setError: (m) => (hostedError.value = m),
     call: () => api.GET("/api/v1/libraries/community"),
     onSuccess: (data) => {
       const payload = data as { items?: CommunityLibraryEntry[] } | undefined;
@@ -461,12 +451,8 @@ async function installHostedEntry(entry: CommunityLibraryEntry): Promise<void> {
   hostedError.value = null;
   successMessage.value = null;
   await runApiCall({
-    setLoading: (v) => {
-      installingIds.value[entry.id] = v;
-    },
-    setError: (m) => {
-      hostedError.value = m;
-    },
+    setLoading: (v) => (installingIds.value[entry.id] = v),
+    setError: (m) => (hostedError.value = m),
     call: () =>
       api.POST("/api/v1/libraries/community/{entry_id}/install", {
         params: { path: { entry_id: entry.id } },
@@ -534,6 +520,28 @@ function nextPage() {
     loadPrimitives();
   }
 }
+
+interface PagerButton {
+  testid: string;
+  labelKey: string;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+const pagers = computed<PagerButton[]>(() => [
+  {
+    testid: "library-previous-page",
+    labelKey: "views.LibraryView.previous_page",
+    disabled: page.value <= 1,
+    onClick: prevPage,
+  },
+  {
+    testid: "library-next-page",
+    labelKey: "views.LibraryView.next_page",
+    disabled: page.value >= Math.ceil(total.value / pageSize.value),
+    onClick: nextPage,
+  },
+]);
 
 function createPipeline(prim: LibraryPrimitive) {
   router.push({ name: "library-pipeline-wizard", params: { id: prim.id } });

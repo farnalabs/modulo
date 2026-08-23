@@ -42,37 +42,11 @@
         </div>
 
         <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-          <div>
+          <div v-for="field in detailFields" :key="field.labelKey">
             <dt class="text-muted-foreground">
-              {{ $t("views.LibraryCommunityDetail.author") }}
+              {{ $t(field.labelKey) }}
             </dt>
-            <dd class="mt-0.5 text-foreground">{{ entry.author }}</dd>
-          </div>
-          <div>
-            <dt class="text-muted-foreground">
-              {{ $t("views.LibraryCommunityDetail.version") }}
-            </dt>
-            <dd class="mt-0.5 text-foreground">{{ entry.version }}</dd>
-          </div>
-          <div>
-            <dt class="text-muted-foreground">
-              {{ $t("views.LibraryCommunityDetail.license") }}
-            </dt>
-            <dd class="mt-0.5 text-foreground">{{ entry.license }}</dd>
-          </div>
-          <div>
-            <dt class="text-muted-foreground">
-              {{ $t("views.LibraryCommunityDetail.status") }}
-            </dt>
-            <dd class="mt-0.5 text-foreground">{{ entry.status }}</dd>
-          </div>
-          <div v-if="entry.published_at">
-            <dt class="text-muted-foreground">
-              {{ $t("views.LibraryCommunityDetail.published_at") }}
-            </dt>
-            <dd class="mt-0.5 text-foreground">
-              {{ formatDateShort(entry.published_at) }}
-            </dd>
+            <dd class="mt-0.5 text-foreground">{{ field.value }}</dd>
           </div>
         </dl>
 
@@ -121,6 +95,24 @@ const hasContent = computed(
   () => !!entry.value?.content && Object.keys(entry.value.content).length > 0,
 );
 
+const detailFields = computed(() => {
+  const e = entry.value;
+  if (!e) return [] as { labelKey: string; value: string }[];
+  const fields: { labelKey: string; value: string }[] = [
+    { labelKey: "views.LibraryCommunityDetail.author", value: e.author },
+    { labelKey: "views.LibraryCommunityDetail.version", value: e.version },
+    { labelKey: "views.LibraryCommunityDetail.license", value: e.license },
+    { labelKey: "views.LibraryCommunityDetail.status", value: e.status },
+  ];
+  if (e.published_at) {
+    fields.push({
+      labelKey: "views.LibraryCommunityDetail.published_at",
+      value: formatDateShort(e.published_at),
+    });
+  }
+  return fields;
+});
+
 async function loadEntry(): Promise<void> {
   const id = typeof route.params.id === "string" ? route.params.id : null;
   if (!id) {
@@ -128,12 +120,8 @@ async function loadEntry(): Promise<void> {
     return;
   }
   await runApiCall({
-    setLoading: (v) => {
-      loading.value = v;
-    },
-    setError: (m) => {
-      error.value = m;
-    },
+    setLoading: (v) => (loading.value = v),
+    setError: (m) => (error.value = m),
     call: () =>
       api.GET("/api/v1/libraries/community/{entry_id}", {
         params: { path: { entry_id: id } },

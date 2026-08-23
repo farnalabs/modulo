@@ -13,26 +13,11 @@
         </h3>
       </div>
       <span
-        v-if="badge === 'modulo' && prim.source === 'modulo'"
-        class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded"
+        v-if="leadingBadge.show"
+        :class="leadingBadge.class"
+        :data-testid="leadingBadge.testid"
       >
-        {{ $t("views.LibraryView.modulo_badge") }}
-      </span>
-      <span
-        v-else-if="
-          badge === 'community' ||
-          (badge === 'modulo' && prim.source === 'community')
-        "
-        class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
-        data-testid="library-community-badge"
-      >
-        {{ $t("views.LibraryView.community_badge") }}
-      </span>
-      <span
-        v-else-if="badge === 'preview'"
-        class="badge badge-context-amber text-xs"
-      >
-        {{ $t("views.LibraryView.preview_badge") }}
+        {{ leadingBadge.text }}
       </span>
       <span
         v-if="installed"
@@ -154,9 +139,45 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Check as CheckIcon, Loader as LoaderIcon } from "@lucide/vue";
 import { typeBadgeClass } from "../../lib/ui/typeBadge";
 import type { LibraryCardEmits } from "../../components/library/libraryCardContracts";
+
+const { t } = useI18n();
+
+const leadingBadge = computed(() => {
+  if (props.badge === "modulo" && props.prim.source === "modulo") {
+    return {
+      show: true,
+      class: "text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded",
+      text: t("views.LibraryView.modulo_badge"),
+      testid: "",
+    };
+  }
+  if (
+    props.badge === "community" ||
+    (props.badge === "modulo" && props.prim.source === "community")
+  ) {
+    return {
+      show: true,
+      class:
+        "text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded",
+      text: t("views.LibraryView.community_badge"),
+      testid: "library-community-badge",
+    };
+  }
+  if (props.badge === "preview") {
+    return {
+      show: true,
+      class: "badge badge-context-amber text-xs",
+      text: t("views.LibraryView.preview_badge"),
+      testid: "",
+    };
+  }
+  return { show: false, class: "", text: "", testid: "" };
+});
 
 const primaryActionButton =
   "flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60";
@@ -177,7 +198,7 @@ export interface LibraryPrimitive {
   tier?: "native" | "preview" | "in_dev";
 }
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     prim: LibraryPrimitive;
     badge: "modulo" | "community" | "preview";
