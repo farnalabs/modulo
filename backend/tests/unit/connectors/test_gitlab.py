@@ -282,8 +282,9 @@ async def test_query_pipelines_next_cursor(connector):
 
 @respx.mock
 async def test_query_invalid_cursor_raises(connector):
+    query = ConnectorQuery(resource="projects", cursor="abc")
     with pytest.raises(ValueError, match="Invalid GitLab pagination cursor"):
-        await connector.query(ConnectorQuery(resource="projects", cursor="abc"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -586,36 +587,37 @@ async def test_query_mr_changes(connector):
 
 @respx.mock
 async def test_query_mr_changes_missing_iid(connector):
+    query = ConnectorQuery(resource="mr_changes", filters={"project": "group/project"})
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.query(ConnectorQuery(resource="mr_changes", filters={"project": "group/project"}))
+        await connector.query(query)
 
 
 @respx.mock
 async def test_query_file_path_traversal_blocked(connector):
     """A path with a '..' segment must be rejected before any request is sent."""
+    query = ConnectorQuery(resource="file", filters={"project": "group/project", "path": "../secret.txt"})
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.query(
-            ConnectorQuery(resource="file", filters={"project": "group/project", "path": "../secret.txt"})
-        )
+        await connector.query(query)
 
 
 @respx.mock
 async def test_write_file_path_traversal_blocked(connector):
+    payload = ConnectorPayload(
+        resource="file",
+        data={"project": "group/project", "path": "src/../../etc/passwd", "content": "x"},
+    )
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.write(
-            ConnectorPayload(
-                resource="file",
-                data={"project": "group/project", "path": "src/../../etc/passwd", "content": "x"},
-            )
-        )
+        await connector.write(payload)
 
 
 @respx.mock
 async def test_write_file_delete_path_traversal_blocked(connector):
+    payload = ConnectorPayload(
+        resource="file_delete",
+        data={"project": "group/project", "path": "../../evil.txt"},
+    )
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.write(
-            ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "../../evil.txt"})
-        )
+        await connector.write(payload)
 
 
 @respx.mock

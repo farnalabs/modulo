@@ -875,8 +875,9 @@ async def test_query_tree_path_filter(connector):
 
 
 async def test_query_tree_missing_repo(connector):
+    query = ConnectorQuery(resource="tree", filters={})
     with pytest.raises(ValueError, match="requires 'repo' filter"):
-        await connector.query(ConnectorQuery(resource="tree", filters={}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -885,8 +886,9 @@ async def test_query_tree_unresolvable_ref(connector):
     respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
         return_value=httpx.Response(200, json={"message": "no commit"})
     )
+    query = ConnectorQuery(resource="tree", filters={"repo": "owner/repo"})
     with pytest.raises(ValueError, match="could not resolve ref"):
-        await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -1145,35 +1147,33 @@ async def test_write_commit_branch_alias(connector):
 @respx.mock
 async def test_write_commit_duplicate_path_rejected(connector):
     """Two actions targeting the same path in one batch fail fast, before any network call."""
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [
+                {"action": "create", "path": "a.txt", "content": "one"},
+                {"action": "update", "path": "a.txt", "content": "two"},
+            ],
+        },
+    )
     with pytest.raises(ValueError, match="targeted more than once"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [
-                        {"action": "create", "path": "a.txt", "content": "one"},
-                        {"action": "update", "path": "a.txt", "content": "two"},
-                    ],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not respx.calls
 
 
 @respx.mock
 async def test_write_commit_move_same_path_rejected(connector):
     """A move whose previous_path equals its path is ambiguous and rejected."""
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [{"action": "move", "path": "a.txt", "previous_path": "a.txt"}],
+        },
+    )
     with pytest.raises(ValueError, match="targeted more than once"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [{"action": "move", "path": "a.txt", "previous_path": "a.txt"}],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not respx.calls
 
 
@@ -1190,16 +1190,15 @@ async def test_write_commit_move_binary_file_raises_descriptive_error(connector)
     blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
         return_value=httpx.Response(201, json={"sha": "blob1"})
     )
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": "owner/repo",
+            "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.bin"}],
+        },
+    )
     with pytest.raises(ValueError, match="not decodable UTF-8 text"):
-        await connector.write(
-            ConnectorPayload(
-                resource="commit",
-                data={
-                    "repo": "owner/repo",
-                    "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.bin"}],
-                },
-            )
-        )
+        await connector.write(payload)
     assert not blob_route.calls
 
 
