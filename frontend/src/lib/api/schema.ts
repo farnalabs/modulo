@@ -1107,6 +1107,9 @@ export interface paths {
         /**
          * Sso Providers
          * @description List configured SSO providers (OIDC) and whether SAML is enabled.
+         *
+         *     OIDC providers come from the DB ``sso_providers`` table (admin UI) first,
+         *     falling back to ``MODULO_OIDC_PROVIDERS`` for env-var-only deployments.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;
@@ -1127,6 +1130,11 @@ export interface paths {
         /**
          * Oidc Login
          * @description Redirect the user to the OIDC provider's authorization page.
+         *
+         *     Providers configured via the admin UI (the DB ``sso_providers`` table) are
+         *     resolved first; providers from ``MODULO_OIDC_PROVIDERS`` remain supported
+         *     as a fallback for env-var-only deployments. This is a pre-auth route, so
+         *     the DB lookup is org-agnostic.
          */
         get: operations["oidc_login_api_v1_auth_oidc__provider__login_get"];
         put?: never;

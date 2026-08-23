@@ -229,13 +229,13 @@ async def list_oidc_providers(
 ) -> list[dict[str, str]]:
     """Resolve OIDC providers from the DB ``sso_providers`` table.
 
-    Returns provider dicts in the same shape ``_parse_oidc_providers`` produces
-    (the DB ``name`` column carries the provider id, mirroring how the startup
-    seeder migrates env-var providers). When ``org_id`` is ``None`` the lookup
-    is org-agnostic, which the pre-auth login flow relies on. The stored
-    ``client_secret`` is encrypted, so it is decrypted with the Fernet key.
+        Returns provider dicts in the same shape ``_parse_oidc_providers`` produces
+        (the DB ``name`` column carries the provider id, mirroring how the startup
+        seeder migrates env-var providers). When ``org_id`` is ``None`` the lookup
+        is org-agnostic, which the pre-auth login flow relies on. The stored
+        ``client_secret`` is encrypted, so it is decrypted with the Fernet key.
     Disabled providers (``enabled = False``) are excluded — toggling a provider
-    off in the admin UI must remove it from the login page and the auth flow.
+        off in the admin UI must remove it from the login page and the auth flow.
     """
     conditions = [SsoProvider.provider_type == "oidc", SsoProvider.enabled.is_(True)]
     if org_id is not None:
@@ -277,6 +277,26 @@ async def resolve_oidc_provider_org(session: AsyncSession, provider_id: str) -> 
     return row.organisation_id
 
 
+async def _resolve_oidc_providers(
+    settings: Settings,
+    session: AsyncSession | None,
+    org_id: uuid.UUID | None,
+    use_db: bool,
+) -> list[dict[str, str]]:
+    """Resolve the OIDC provider list, preferring DB-configured providers.
+
+    Env-var providers from ``MODULO_OIDC_PROVIDERS`` are the baseline; when
+    ``use_db`` is set and a session is available, DB ``sso_providers`` rows take
+    precedence (org-scoped when ``org_id`` is given, org-agnostic otherwise).
+    """
+    providers = _parse_oidc_providers(settings)
+    if use_db and session is not None:
+        db_providers = await list_oidc_providers(session, org_id=org_id, fernet_key=settings.fernet_key)
+        if db_providers:
+            providers = db_providers
+    return providers
+
+
 async def oidc_get_authorize_url(
     provider_id: str,
     settings: Settings,
@@ -291,11 +311,7 @@ async def oidc_get_authorize_url(
     otherwise), falling back to ``MODULO_OIDC_PROVIDERS`` for backwards
     compatibility with env-var-only deployments.
     """
-    providers = _parse_oidc_providers(settings)
-    if session is not None:
-        db_providers = await list_oidc_providers(session, org_id=org_id, fernet_key=settings.fernet_key)
-        if db_providers:
-            providers = db_providers
+    providers = await _resolve_oidc_providers(settings, session, org_id, use_db=session is not None)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not configured")
@@ -352,16 +368,11 @@ async def oidc_process_callback(
         raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
-    providers = _parse_oidc_providers(settings)
-    if org_id is not None:
-        lookup_session = provider_session if provider_session is not None else session
-        if provider_session is not None:
-            async with lookup_session.begin():
-                db_providers = await list_oidc_providers(lookup_session, org_id=org_id, fernet_key=settings.fernet_key)
-        else:
-            db_providers = await list_oidc_providers(lookup_session, org_id=org_id, fernet_key=settings.fernet_key)
-        if db_providers:
-            providers = db_providers
+    if org_id is not None and provider_session is not None:
+        async with provider_session.begin():
+            providers = await _resolve_oidc_providers(settings, provider_session, org_id, use_db=True)
+    else:
+        providers = await _resolve_oidc_providers(settings, session, org_id, use_db=org_id is not None)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not found")
