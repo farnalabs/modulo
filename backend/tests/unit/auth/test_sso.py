@@ -1180,6 +1180,70 @@ class TestOidcProcessCallbackDb:
         mock_mappings.assert_awaited_once()
 
 
+class TestApplyGroupMappingsRlsContext:
+    async def test_sets_rls_org_on_di_session_before_write(self) -> None:
+        """The group-mapping write must run with RLS org context on the DI session.
+
+        ``team_memberships`` has the strict ``rls_org_isolation`` policy (no
+        null-context escape), so the ``add_team_member`` INSERT violates WITH
+        CHECK — and the whole callback 503s — unless ``set_rls_org`` has run on
+        the DI session first. ``set_rls_org`` must be awaited BEFORE the write.
+        """
+        from modulo.auth.sso import apply_group_mappings
+
+        session = AsyncMock(spec=AsyncSession)
+        account = MagicMock()
+        account.id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        team_id = uuid.uuid4()
+        mappings = [{"idp_group": "admins", "team_id": str(team_id), "team_role": "admin"}]
+
+        order: list[str] = []
+
+        async def _record_rls(*args: object, **kwargs: object) -> None:
+            order.append("set_rls_org")
+
+        async def _record_add(*args: object, **kwargs: object) -> None:
+            order.append("add_team_member")
+
+        with (
+            patch("modulo.auth.sso.set_rls_org", new=AsyncMock(side_effect=_record_rls)) as mock_rls,
+            patch("modulo.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock, return_value=None),
+            patch("modulo.auth.sso.add_team_member", new=AsyncMock(side_effect=_record_add)) as mock_add,
+        ):
+            await apply_group_mappings(session, account, org_id, ["admins"], mappings)
+
+        # RLS org context is set on the DI session for the resolved org.
+        mock_rls.assert_awaited_once_with(session, org_id)
+        # ...and it happens BEFORE the team_memberships write.
+        assert order == ["set_rls_org", "add_team_member"]
+        add_kwargs = mock_add.await_args.kwargs
+        assert add_kwargs["org_id"] == org_id
+        assert mock_add.await_args.args[0] is session
+
+    async def test_skips_rls_setup_when_no_matching_groups(self) -> None:
+        """With no matching IDP groups, no membership is written and the RLS
+        context is still set — the org-scoped write never fires."""
+        from modulo.auth.sso import apply_group_mappings
+
+        session = AsyncMock(spec=AsyncSession)
+        account = MagicMock()
+        account.id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso.set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch("modulo.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock) as mock_get,
+            patch("modulo.auth.sso.add_team_member", new_callable=AsyncMock) as mock_add,
+        ):
+            await apply_group_mappings(session, account, org_id, ["engineering"], mappings)
+
+        mock_rls.assert_awaited_once_with(session, org_id)
+        mock_get.assert_not_awaited()
+        mock_add.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # SAML helpers — edge cases
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ from modulo.db.crud.token_family import create_family
 from modulo.db.models.account import Account
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -127,7 +128,16 @@ async def apply_group_mappings(
     idp_groups: list[str],
     group_mappings: list[dict[str, str]],
 ) -> None:
-    """Apply SSO group-to-team mappings for a JIT-provisioned account."""
+    """Apply SSO group-to-team mappings for a JIT-provisioned account.
+
+    ``team_memberships`` carries the strict ``rls_org_isolation`` policy (no
+    null-context escape in ``0108_schema_org_identity``), so the write MUST run
+    with the DI session's RLS org context set to the resolved org. Without
+    ``set_rls_org`` the ``add_team_member`` INSERT violates WITH CHECK and the
+    whole OIDC/SAML callback returns 503. Both callers wrap the callback in
+    ``async with session.begin():``, so an active transaction exists here.
+    """
+    await set_rls_org(session, org_id)
     for mapping in group_mappings:
         if not isinstance(mapping, dict):
             _log.warning("sso.non_dict_mapping", extra={"mapping_type": type(mapping).__name__})
