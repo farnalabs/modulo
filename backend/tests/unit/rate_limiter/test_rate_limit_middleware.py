@@ -198,6 +198,17 @@ class TestShouldRateLimit:
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
         assert mw._should_rate_limit(make_mock_request(path="/api/v1/other")) is False
 
+    def test_true_for_hitl_path_without_matching_rule(self):
+        """A POST containing /hitl/ must be rate limited even when no RULES
+        entry prefix-matches the path."""
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(make_mock_request(path="/not/a/rule/hitl/gate/approve")) is True
+
+    def test_false_for_hitl_path_on_get(self):
+        """GET requests with /hitl/ in the path must not be rate limited."""
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(make_mock_request(method="GET", path="/api/v1/runs/x/hitl/y")) is False
+
 
 class TestRuleFor:
     def test_matching_prefix(self):

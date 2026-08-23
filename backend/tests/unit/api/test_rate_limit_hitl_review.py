@@ -115,7 +115,53 @@ class TestHitlReviewRateLimit:
         assert resp.status_code == status.HTTP_200_OK
         mock_registry.check.assert_awaited_once()
         key = mock_registry.check.await_args[0][0]
-        assert "/api/v1/runs" in key
+        assert key == f"ip:testclient:{endpoint}"
+
+    def test_hitl_key_normalizes_variable_uuid_segments(self) -> None:
+        """Variable run/gate UUIDs must be normalised to fixed placeholders so
+        per-segment bucket rotation never happens (FAR-1304)."""
+        run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
+        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        endpoint = f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim"
+        app = FastAPI()
+        app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
+        mock_registry = MagicMock(spec=RateLimiterRegistry)
+        mock_registry.check = AsyncMock(return_value=True)
+        app.add_middleware(
+            RateLimitMiddleware,  # type: ignore[arg-type]
+            settings=_make_settings(),
+            registry=mock_registry,
+        )
+
+        with TestClient(app) as client:
+            resp = client.post(endpoint)
+
+        assert resp.status_code == status.HTTP_200_OK
+        key = mock_registry.check.await_args[0][0]
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>/claim"
+
+    def test_hitl_key_does_not_leak_raw_uuids(self) -> None:
+        """Raw run/gate UUIDs must never surface in a rate-limit bucket key."""
+        run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
+        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        endpoint = f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim"
+        app = FastAPI()
+        app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
+        mock_registry = MagicMock(spec=RateLimiterRegistry)
+        mock_registry.check = AsyncMock(return_value=True)
+        app.add_middleware(
+            RateLimitMiddleware,  # type: ignore[arg-type]
+            settings=_make_settings(),
+            registry=mock_registry,
+        )
+
+        with TestClient(app) as client:
+            resp = client.post(endpoint)
+
+        assert resp.status_code == status.HTTP_200_OK
+        key = mock_registry.check.await_args[0][0]
+        assert run_id not in key
+        assert gate_id not in key
 
     @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
     def test_hitl_check_uses_20_per_min_budget(self, endpoint: str) -> None:

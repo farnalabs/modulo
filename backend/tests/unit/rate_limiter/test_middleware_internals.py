@@ -45,6 +45,35 @@ class TestClientKey:
         request = make_mock_request(headers={}, client=None)
         assert middleware._client_key(request) == "ip:unknown:/api/v1/runs"
 
+    def test_hitl_path_normalizes_hex_uuid_segments(self, middleware):
+        """Variable run/gate UUIDs in HITL paths must be normalised to fixed
+        placeholders so pre-bucket rotation by variable segments is prevented
+        (FAR-1304)."""
+        run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
+        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        request = make_mock_request(
+            path=f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim",
+            headers={"X-Forwarded-For": "198.51.100.7"},
+        )
+        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/<run_id>/hitl/<gate_id>/claim"
+
+    def test_hitl_path_keeps_non_hex_segments(self, middleware):
+        """Non-hex (already-stable) segment values must be left untouched."""
+        request = make_mock_request(
+            path="/api/v1/runs/run-123/hitl/gate-abc/approve",
+            headers={"X-Forwarded-For": "198.51.100.7"},
+        )
+        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/run-123/hitl/gate-abc/approve"
+
+    def test_hitl_client_key_does_not_leak_raw_uuids(self, middleware):
+        """Raw run/gate UUIDs must never appear in a rate-limit bucket key."""
+        run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
+        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        request = make_mock_request(path=f"/api/v1/runs/{run_id}/hitl/{gate_id}/reject")
+        key = middleware._client_key(request)
+        assert run_id not in key
+        assert gate_id not in key
+
 
 class TestRuleFor:
     def test_matching_rule(self, middleware):
@@ -54,6 +83,14 @@ class TestRuleFor:
     def test_no_matching_rule_returns_empty_rule(self, middleware):
         request = make_mock_request(path="/api/v1/other")
         assert middleware._rule_for(request) == RateLimitRule(path_prefix="", max_requests=0, window_s=0)
+
+    def test_hitl_rule_takes_precedence_over_prefix_match(self, middleware):
+        """HITL paths must resolve to the dedicated 20/min rule, not the
+        /api/v1/runs 60/min rule that also prefix-matches them."""
+        request = make_mock_request(path="/api/v1/runs/some-run/hitl/some-gate/approve")
+        rule = middleware._rule_for(request)
+        assert rule.path_prefix == "/hitl/"
+        assert rule.max_requests == 20
 
 
 class TestSetRules:

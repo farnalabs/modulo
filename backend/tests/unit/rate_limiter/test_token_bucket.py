@@ -79,9 +79,9 @@ class TestTokenBucket:
         assert sum(results) == 10
         assert await bucket.consume() is False
 
-    def test_reset_restores_full_capacity(self) -> None:
+    async def test_reset_restores_full_capacity(self) -> None:
         bucket = TokenBucket(rate=1.0, burst=4)
-        asyncio.get_event_loop().run_until_complete(bucket.consume())
+        assert await bucket.consume() is True
         assert bucket._tokens < bucket.burst
         bucket.reset()
         assert bucket._tokens == bucket.burst
@@ -101,11 +101,11 @@ class TestTokenBucketRegistry:
         assert await registry.consume("client-a") is False
         assert await registry.consume("client-b") is True
 
-    def test_reset_clears_buckets(self) -> None:
+    async def test_reset_clears_buckets(self) -> None:
         registry = TokenBucketRegistry(rate=1.0, burst=1)
-        asyncio.get_event_loop().run_until_complete(registry.consume("client-a"))
+        assert await registry.consume("client-a") is True
         registry.reset()
-        assert asyncio.get_event_loop().run_until_complete(registry.consume("client-a")) is True
+        assert await registry.consume("client-a") is True
 
     async def test_concurrent_consume_registry(self) -> None:
         registry = TokenBucketRegistry(rate=1.0, burst=5)
