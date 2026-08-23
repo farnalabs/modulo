@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from jsonschema import Draft202012Validator, ValidationError
-from jsonschema.exceptions import SchemaError as JsSchemaError
+from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
+from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError

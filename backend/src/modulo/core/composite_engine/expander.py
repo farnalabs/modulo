@@ -6,7 +6,7 @@ import re
 import uuid
 from typing import Any
 
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

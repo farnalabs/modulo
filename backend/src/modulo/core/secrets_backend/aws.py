@@ -29,7 +29,7 @@ _MODULE_AVAILABLE: bool = True
 _boto3: Any = None
 
 try:
-    import boto3
+    import boto3  # type: ignore[import-untyped]
 
     _boto3 = boto3
 except ImportError:
