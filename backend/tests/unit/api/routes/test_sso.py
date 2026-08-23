@@ -8,7 +8,7 @@ fake session; the callback is mocked to perform a ``session.execute()`` (standin
 for the JIT-provisioning queries) so the pre-fix handler fails loudly.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
 
@@ -75,20 +75,42 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
     """The OIDC callback's DB work must run inside session.begin().
 
     The mocked ``oidc_process_callback`` performs a ``session.execute()`` (standing
-    in for ``jit_provision_user``'s queries). The fake session only allows executes
-    inside a transaction, so the pre-fix handler (bare call, no begin) fails while
-    the fixed handler (``async with session.begin()``) redirects successfully.
+    in for ``jit_provision_user``'s queries). The fake DI session only allows
+    executes inside a transaction, so the pre-fix handler (bare call, no begin)
+    fails while the fixed handler (``async with session.begin()``) redirects
+    successfully. The pre-auth provider resolution runs on the system session
+    and is mocked out here.
     """
     settings = _make_settings()
     request = _make_callback_request()
     fake = _AutobeginAwareSession()
 
-    async def fake_process_callback(code: str, state: str, s: Settings, session: object, redirect_uri: str) -> dict:
+    system_session = _AutobeginAwareSession()
+    factory = MagicMock()
+    cm = AsyncMock()
+    cm.__aenter__.return_value = system_session
+    cm.__aexit__.return_value = False
+    factory.return_value = cm
+
+    async def fake_process_callback(
+        code: str,
+        state: str,
+        s: Settings,
+        session: object,
+        redirect_uri: str,
+        org_id: object | None = None,
+        provider_session: object | None = None,
+    ) -> dict:
         assert isinstance(session, _AutobeginAwareSession)
+        assert isinstance(provider_session, _AutobeginAwareSession)
         await session.execute(MagicMock())
         return {"access_token": "at", "refresh_token": "rt"}
 
-    with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
+    with (
+        patch("modulo.api.routes.sso._new_system_session_factory", return_value=factory),
+        patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback),
+    ):
         resp = await oidc_callback(provider="google", request=request, _=None, settings=settings, session=fake)
 
     assert resp.status_code == 307

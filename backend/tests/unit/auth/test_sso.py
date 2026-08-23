@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
+from modulo.auth.secret_storage import encrypt_stored_secret
 from modulo.auth.sso import (
     parse_oidc_providers,
     sign_state,
@@ -23,6 +24,10 @@ from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+
+# A real Fernet key (32 bytes base64url-encoded) — required by the
+# encrypted-secret round-trip tests; _VALID_32 is used for Settings only.
+_FERNET_KEY = base64.urlsafe_b64encode(b"a" * 32).decode()
 
 
 def _override(**kwargs: str | bool) -> Settings:
@@ -88,6 +93,21 @@ def _override_settings(**kwargs: str | bool) -> None:
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
         FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
     )
+
+
+def _fake_system_factory(session: AsyncMock) -> MagicMock:
+    """Return a fake ``async_sessionmaker`` whose ``()`` yields ``session``.
+
+    Mirrors the route's ``async with _new_system_session_factory()() as session``
+    usage: calling the factory produces an async context manager that resolves
+    to ``session``, and ``session.begin()`` (an ``AsyncMock``) supports ``async with``.
+    """
+    factory = MagicMock()
+    cm = AsyncMock()
+    cm.__aenter__.return_value = session
+    cm.__aexit__.return_value = False
+    factory.return_value = cm
+    return factory
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +207,16 @@ class TestJitProvisioning:
 
 class TestSsoProvidersEndpoint:
     def test_returns_oidc_providers(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/sso/providers")
+        system_session = AsyncMock(spec=AsyncSession)
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.api.routes.sso.count_oidc_providers", new_callable=AsyncMock, return_value=0),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["oidc"]) == 2
@@ -195,13 +224,66 @@ class TestSsoProvidersEndpoint:
         assert body["oidc"][1]["provider_id"] == "github"
         assert body["saml"] is False
 
+    def test_returns_db_providers_first(self, client: TestClient) -> None:
+        system_session = AsyncMock(spec=AsyncSession)
+        db_providers = [
+            {"provider_id": "okta", "client_id": "c", "client_secret": "s", "discovery_url": "u"},
+        ]
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch(
+                "modulo.api.routes.sso.list_oidc_providers",
+                new_callable=AsyncMock,
+                return_value=db_providers,
+            ) as mock_list,
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["oidc"] == [{"provider_id": "okta"}]
+        mock_list.assert_awaited_once()
+        list_args, _ = mock_list.await_args
+        assert list_args[0] is system_session
+
+    def test_no_env_fallback_when_all_db_providers_disabled(self, client: TestClient) -> None:
+        """An all-disabled DB is authoritative — env providers must not reappear.
+
+        ``list_oidc_providers`` returns ``[]`` both when the DB is empty and when
+        every oidc row is ``enabled = False``. The env fallback must only fire
+        for the former; an all-disabled DB renders no login providers.
+        """
+        system_session = AsyncMock(spec=AsyncSession)
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.api.routes.sso.count_oidc_providers", new_callable=AsyncMock, return_value=1),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        assert not resp.json()["oidc"]
+
     def test_saml_enabled_with_license(self, client: TestClient) -> None:
+        system_session = AsyncMock(spec=AsyncSession)
         _override_settings(
             modulo_license_key="license-123",
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
         )
-        resp = client.get("/api/v1/auth/sso/providers")
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.api.routes.sso.count_oidc_providers", new_callable=AsyncMock, return_value=0),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
@@ -679,6 +761,490 @@ class TestOidcProcessCallback:
 
 
 # ---------------------------------------------------------------------------
+# DB-backed OIDC providers — list_oidc_providers + login/callback resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_db_row(
+    name: str = "okta", client_id: str = "okta-client-id", secret: str = "okta-client-secret"
+) -> MagicMock:
+    row = MagicMock()
+    row.name = name
+    row.client_id = client_id
+    row.client_secret = encrypt_stored_secret(secret, _FERNET_KEY)
+    row.discovery_url = f"https://{name}.example.com/.well-known/openid-configuration"
+    return row
+
+
+def _statement_filters_on_enabled(stmt: object) -> bool:
+    """True when the given select statement constrains the ``enabled`` column.
+
+    ``list_oidc_providers`` / ``resolve_oidc_provider_org`` exclude disabled
+    providers via a WHERE clause on ``SsoProvider.enabled``. Unit tests use a
+    mocked session, so the SQL itself is never executed — this inspects the
+    statement that would be sent to prove the filter is present.
+    """
+    where = getattr(stmt, "whereclause", None)
+    if where is None:
+        return False
+    for cond in where.get_children():
+        left = getattr(cond, "left", None)
+        if left is not None and getattr(left, "name", "") == "enabled":
+            return True
+    return False
+
+
+class TestListOidcProviders:
+    async def test_resolves_provider_with_decrypted_secret(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [_make_db_row()]
+        session.execute.return_value = result
+        org_id = uuid.uuid4()
+
+        providers = await list_oidc_providers(session, org_id=org_id, fernet_key=_FERNET_KEY)
+
+        assert providers == [
+            {
+                "provider_id": "okta",
+                "client_id": "okta-client-id",
+                "client_secret": "okta-client-secret",
+                "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+            }
+        ]
+
+    async def test_returns_empty_when_no_rows(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = []
+        session.execute.return_value = result
+
+        assert not await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY)
+
+    async def test_org_agnostic_when_org_id_none(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [_make_db_row(name="okta")]
+        session.execute.return_value = result
+
+        providers = await list_oidc_providers(session, org_id=None, fernet_key=_FERNET_KEY)
+
+        assert [p["provider_id"] for p in providers] == ["okta"]
+
+    async def test_legacy_plaintext_secret_passes_through(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        row = MagicMock()
+        row.name = "legacy"
+        row.client_id = "cid"
+        row.client_secret = b"plaintext-secret"
+        row.discovery_url = "https://legacy.example.com/.well-known/openid-configuration"
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = [row]
+        session.execute.return_value = result
+
+        providers = await list_oidc_providers(session, org_id=uuid.uuid4(), fernet_key=_FERNET_KEY)
+
+        assert providers[0]["client_secret"] == "plaintext-secret"
+
+    async def test_excludes_disabled_providers(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = []
+        session.execute.return_value = result
+
+        await list_oidc_providers(session, org_id=None, fernet_key=_FERNET_KEY)
+
+        stmt = session.execute.await_args.args[0]
+        assert _statement_filters_on_enabled(stmt)
+
+
+class TestResolveOidcProviderOrg:
+    async def test_returns_org_of_db_provider(self) -> None:
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        org_id = uuid.uuid4()
+        row = MagicMock()
+        row.organisation_id = org_id
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        assert await resolve_oidc_provider_org(session, "okta") == org_id
+
+    async def test_returns_none_when_not_in_db(self) -> None:
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        assert await resolve_oidc_provider_org(session, "env-only-provider") is None
+
+    async def test_returns_org_of_disabled_provider(self) -> None:
+        """Disabled providers still resolve their org so the callback can route
+        them into the DB path and block login instead of env-falling back."""
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        org_id = uuid.uuid4()
+        row = MagicMock()
+        row.organisation_id = org_id
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        assert await resolve_oidc_provider_org(session, "okta") == org_id
+
+        stmt = session.execute.await_args.args[0]
+        assert not _statement_filters_on_enabled(stmt)
+
+
+_OKTA_DB_PROVIDER: dict[str, str] = {
+    "provider_id": "okta",
+    "client_id": "okta-client-id",
+    "client_secret": "okta-client-secret",
+    "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
+}
+
+
+def _id_token() -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.sig"
+
+
+async def _run_authorize_url_test(
+    provider_id: str,
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+    db_provider: list[dict[str, str]],
+) -> tuple[str, AsyncMock, Settings]:
+    from modulo.auth.sso import oidc_get_authorize_url
+
+    settings = _override()
+    with (
+        patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+        patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock) as mock_count,
+        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+    ):
+        mock_list.return_value = db_provider
+        mock_count.return_value = 1 if db_provider else 0
+        mock_disc.return_value = {"authorization_endpoint": f"https://{provider_id}.example.com/oauth2/v1/authorize"}
+
+        url, _ = await oidc_get_authorize_url(
+            provider_id, settings, "http://localhost/callback", session=session, org_id=org_id
+        )
+    return url, mock_list, settings
+
+
+async def _run_process_callback_test(
+    provider_id: str,
+    org_id: uuid.UUID | None,
+    db_provider: list[dict[str, str]],
+) -> tuple[dict[str, str], dict[str, AsyncMock], Settings, AsyncSession]:
+    from modulo.auth.sso import oidc_process_callback, sign_state
+
+    settings = _override()
+    session = AsyncMock(spec=AsyncSession)
+    signed = sign_state(f"{provider_id}:{'raw-state'}", settings.secret_key)
+
+    with (
+        patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+        patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock) as mock_count,
+        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+    ):
+        mock_list.return_value = db_provider
+        # The DB is authoritative whenever it has any oidc rows; an empty
+        # enabled-list only falls back to env when the DB has ZERO rows.
+        mock_count.return_value = 1 if db_provider else 0
+        mock_disc.return_value = {
+            "token_endpoint": f"https://{provider_id}.example.com/oauth2/v1/token",
+            "jwks_uri": f"https://{provider_id}.example.com/oauth2/v1/keys",
+            "issuer": f"https://{provider_id}.example.com",
+        }
+        mock_ex.return_value = {"id_token": _id_token()}
+        mock_verify.return_value = {
+            "email": "user@example.com",
+            "name": "Test User",
+            "sub": "abc123",
+        }
+        mock_jit.return_value = (MagicMock(), org_id, "runner")
+        mock_tok.return_value = {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "token_type": "bearer",
+        }
+
+        result = await oidc_process_callback(
+            "auth-code", signed, settings, session, "http://localhost/callback", org_id=org_id
+        )
+
+    return (
+        result,
+        {
+            "mock_list": mock_list,
+            "mock_disc": mock_disc,
+            "mock_ex": mock_ex,
+            "mock_verify": mock_verify,
+            "mock_jit": mock_jit,
+            "mock_tok": mock_tok,
+        },
+        settings,
+        session,
+    )
+
+
+class TestOidcGetAuthorizeUrlDb:
+    async def test_uses_db_provider_when_session_and_org_given(self) -> None:
+        session = AsyncMock(spec=AsyncSession)
+        org_id = uuid.uuid4()
+        url, mock_list, settings = await _run_authorize_url_test("okta", session, org_id, [_OKTA_DB_PROVIDER])
+        assert url.startswith("https://okta.example.com/oauth2/v1/authorize")
+        assert "client_id=okta-client-id" in url
+        mock_list.assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+
+    async def test_uses_db_provider_org_agnostic_when_org_none(self) -> None:
+        session = AsyncMock(spec=AsyncSession)
+        url, mock_list, settings = await _run_authorize_url_test("okta", session, None, [_OKTA_DB_PROVIDER])
+        assert "client_id=okta-client-id" in url
+        mock_list.assert_awaited_once_with(session, org_id=None, fernet_key=settings.fernet_key)
+
+    async def test_falls_back_to_env_when_db_empty(self) -> None:
+        session = AsyncMock(spec=AsyncSession)
+        url, mock_list, _settings = await _run_authorize_url_test("google", session, uuid.uuid4(), [])
+        assert "client_id=google-client-id" in url
+        mock_list.assert_awaited_once()
+
+    async def test_no_env_fallback_when_db_has_rows_all_disabled(self) -> None:
+        """Login must not resurrect env providers when the DB has oidc rows
+        that are all disabled."""
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        session = AsyncMock(spec=AsyncSession)
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock, return_value=1),
+            pytest.raises(ValueError, match="not configured"),
+        ):
+            await oidc_get_authorize_url(
+                "google", _override(), "http://localhost/callback", session=session, org_id=uuid.uuid4()
+            )
+
+
+class TestOidcProcessCallbackDb:
+    async def test_uses_db_provider_when_org_id_given(self) -> None:
+        org_id = uuid.uuid4()
+        result, mocks, settings, session = await _run_process_callback_test("okta", org_id, [_OKTA_DB_PROVIDER])
+        assert result["access_token"] == "at"
+        call_args = mocks["mock_ex"].await_args.args
+        assert call_args[1] == "okta-client-id"
+        assert call_args[2] == "okta-client-secret"
+        mocks["mock_jit"].assert_awaited_once_with(
+            session,
+            settings,
+            "user@example.com",
+            "Test User",
+            "oidc",
+            "okta:abc123",
+            default_org_id=org_id,
+        )
+
+    async def test_falls_back_to_env_when_db_empty(self) -> None:
+        org_id = uuid.uuid4()
+        result, mocks, settings, session = await _run_process_callback_test("google", org_id, [])
+        assert result["access_token"] == "at"
+        call_args = mocks["mock_ex"].await_args.args
+        assert call_args[1] == "google-client-id"
+        assert call_args[2] == "google-client-secret"
+        mocks["mock_list"].assert_awaited_once_with(session, org_id=org_id, fernet_key=settings.fernet_key)
+
+    async def test_callback_no_env_fallback_when_db_all_disabled(self) -> None:
+        """A disabled DB provider must not resolve from env in the callback.
+
+        The callback resolves the provider's org (disabled providers still
+        resolve their org) and routes into the DB path; ``list_oidc_providers``
+        returns ``[]`` but the DB still has oidc rows, so there is no env
+        fallback and the provider is treated as not found.
+        """
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        provider_session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__.return_value = None
+        begin_cm.__aexit__.return_value = False
+        provider_session.begin.return_value = begin_cm
+        org_id = uuid.uuid4()
+        signed = sign_state("okta:raw-state", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock, return_value=1),
+            pytest.raises(ValueError, match="not found"),
+        ):
+            await oidc_process_callback(
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
+                org_id=org_id,
+                provider_session=provider_session,
+            )
+
+    async def test_group_mapping_lookup_runs_on_provider_session(self) -> None:
+        """The group-mapping lookup must run on the BYPASSRLS provider session,
+        not the RLS-blocked DI session — otherwise ``apply_group_mappings``
+        silently never fires."""
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        provider_session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__.return_value = None
+        begin_cm.__aexit__.return_value = False
+        provider_session.begin.return_value = begin_cm
+        org_id = uuid.uuid4()
+        signed = sign_state("okta:raw-state", settings.secret_key)
+
+        db_row = MagicMock()
+        db_row.group_mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock) as mock_count,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_mappings,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_list.return_value = [_OKTA_DB_PROVIDER]
+            mock_count.return_value = 1
+            mock_disc.return_value = {
+                "token_endpoint": "https://okta.example.com/oauth2/v1/token",
+                "jwks_uri": "https://okta.example.com/oauth2/v1/keys",
+                "issuer": "https://okta.example.com",
+            }
+            mock_ex.return_value = {"id_token": _id_token()}
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+                "groups": ["admins"],
+            }
+            mock_jit.return_value = (MagicMock(), org_id, "runner")
+            mock_lookup.return_value = db_row
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            await oidc_process_callback(
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
+                org_id=org_id,
+                provider_session=provider_session,
+            )
+
+        # The group-mapping lookup runs on the BYPASSRLS provider session.
+        mock_lookup.assert_awaited_once()
+        lookup_args, _ = mock_lookup.await_args
+        assert lookup_args[0] is provider_session
+        # Because the DB provider exists (with mappings), group mappings fire.
+        mock_mappings.assert_awaited_once()
+
+
+class TestApplyGroupMappingsRlsContext:
+    async def test_sets_rls_org_on_di_session_before_write(self) -> None:
+        """The group-mapping write must run with RLS org context on the DI session.
+
+        ``team_memberships`` has the strict ``rls_org_isolation`` policy (no
+        null-context escape), so the ``add_team_member`` INSERT violates WITH
+        CHECK — and the whole callback 503s — unless ``set_rls_org`` has run on
+        the DI session first. ``set_rls_org`` must be awaited BEFORE the write.
+        """
+        from modulo.auth.sso import apply_group_mappings
+
+        session = AsyncMock(spec=AsyncSession)
+        account = MagicMock()
+        account.id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        team_id = uuid.uuid4()
+        mappings = [{"idp_group": "admins", "team_id": str(team_id), "team_role": "admin"}]
+
+        order: list[str] = []
+
+        async def _record_rls(*args: object, **kwargs: object) -> None:
+            order.append("set_rls_org")
+
+        async def _record_add(*args: object, **kwargs: object) -> None:
+            order.append("add_team_member")
+
+        with (
+            patch("modulo.auth.sso.set_rls_org", new=AsyncMock(side_effect=_record_rls)) as mock_rls,
+            patch("modulo.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock, return_value=None),
+            patch("modulo.auth.sso.add_team_member", new=AsyncMock(side_effect=_record_add)) as mock_add,
+        ):
+            await apply_group_mappings(session, account, org_id, ["admins"], mappings)
+
+        # RLS org context is set on the DI session for the resolved org.
+        mock_rls.assert_awaited_once_with(session, org_id)
+        # ...and it happens BEFORE the team_memberships write.
+        assert order == ["set_rls_org", "add_team_member"]
+        add_kwargs = mock_add.await_args.kwargs
+        assert add_kwargs["org_id"] == org_id
+        assert mock_add.await_args.args[0] is session
+
+    async def test_skips_rls_setup_when_no_matching_groups(self) -> None:
+        """With no matching IDP groups, no membership is written and the RLS
+        context is still set — the org-scoped write never fires."""
+        from modulo.auth.sso import apply_group_mappings
+
+        session = AsyncMock(spec=AsyncSession)
+        account = MagicMock()
+        account.id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso.set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch("modulo.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock) as mock_get,
+            patch("modulo.auth.sso.add_team_member", new_callable=AsyncMock) as mock_add,
+        ):
+            await apply_group_mappings(session, account, org_id, ["engineering"], mappings)
+
+        mock_rls.assert_awaited_once_with(session, org_id)
+        mock_get.assert_not_awaited()
+        mock_add.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # SAML helpers — edge cases
 # ---------------------------------------------------------------------------
 
@@ -1048,12 +1614,18 @@ class TestOidcCallbackEndpointExtended:
         )
 
         with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(AsyncMock(spec=AsyncSession)),
+            ),
+            patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
             patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
+            mock_resolve.return_value = None
             mock_disc.return_value = {
                 "token_endpoint": "https://oauth2.googleapis.com/token",
                 "jwks_uri": "https://oauth2.googleapis.com/certs",
@@ -1081,3 +1653,281 @@ class TestOidcCallbackEndpointExtended:
             location = resp.headers.get("location", "")
             assert "access_token=at-oidc" in location
             assert "refresh_token=rt-oidc" in location
+
+
+# ---------------------------------------------------------------------------
+# Encrypted secret decryption — edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestDecryptProviderSecret:
+    def test_returns_empty_when_stored_none(self) -> None:
+        from modulo.auth.sso import _decrypt_provider_secret
+
+        assert not _decrypt_provider_secret(None, _FERNET_KEY)
+
+    def test_returns_empty_when_no_fernet_key(self) -> None:
+        from modulo.auth.sso import _decrypt_provider_secret
+
+        # Legacy plaintext bytes can never decrypt without a key; the login flow
+        # must not crash, so it falls back to an empty client_secret.
+        assert not _decrypt_provider_secret(b"some-bytes", None)
+
+    def test_returns_empty_on_decrypt_failure(self) -> None:
+        """A corrupt/undeserialisable stored secret must not crash login — it
+        falls back to an empty client_secret rather than raising."""
+        from modulo.auth.secret_storage import encrypt_stored_secret
+        from modulo.auth.sso import _decrypt_provider_secret
+
+        token = encrypt_stored_secret("real-secret", _FERNET_KEY)
+        wrong_key = base64.urlsafe_b64encode(b"b" * 32).decode()
+        assert not _decrypt_provider_secret(token, wrong_key)
+
+
+# ---------------------------------------------------------------------------
+# count_oidc_providers — real body (excluded-disabled awareness)
+# ---------------------------------------------------------------------------
+
+
+class TestCountOidcProviders:
+    async def test_counts_rows_org_agnostic(self) -> None:
+        from modulo.auth.sso import count_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalar_one.return_value = 3
+        session.execute.return_value = result
+
+        assert await count_oidc_providers(session, org_id=None) == 3
+
+    async def test_counts_rows_org_scoped(self) -> None:
+        from modulo.auth.sso import count_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalar_one.return_value = 1
+        session.execute.return_value = result
+        org_id = uuid.uuid4()
+
+        assert await count_oidc_providers(session, org_id=org_id) == 1
+
+    async def test_returns_zero_when_scalar_none(self) -> None:
+        from modulo.auth.sso import count_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalar_one.return_value = None
+        session.execute.return_value = result
+
+        assert await count_oidc_providers(session, org_id=None) == 0
+
+
+# ---------------------------------------------------------------------------
+# SAML group-mapping lookup — provider_session vs DI session
+# ---------------------------------------------------------------------------
+
+
+class TestSamlGroupMapping:
+    SAMPLE_IDP_METADATA = """<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="https://idp.example.com">
+  <md:IDPSSODescriptor
+   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:SingleSignOnService
+     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+     Location="https://idp.example.com/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"""
+
+    SAML_RESPONSE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response
+ xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+ xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
+  <saml:Assertion ID="_abc123" IssueInstant="2024-01-01T00:00:00Z">
+    <saml:Subject>
+      <saml:NameID
+       Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">
+       user@example.com
+      </saml:NameID>
+    </saml:Subject>
+    <saml:AttributeStatement>
+      <saml:Attribute Name="email">
+        <saml:AttributeValue>user@example.com</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="displayName">
+        <saml:AttributeValue>Test User</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="groups">
+        <saml:AttributeValue>admins</saml:AttributeValue>
+      </saml:Attribute>
+    </saml:AttributeStatement>
+  </saml:Assertion>
+</samlp:Response>"""
+
+    async def test_group_mapping_lookup_runs_on_provider_session(self) -> None:
+        """The group-mapping lookup must run on the BYPASSRLS provider session,
+        not the RLS-blocked DI session — otherwise ``apply_group_mappings``
+        silently never fires for the pre-auth ACS route."""
+        from modulo.auth.saml_handler import ModuloSamlAuth
+        from modulo.auth.sso import saml_process_response
+
+        settings = _override(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
+            modulo_public_url="https://app.example.com",
+        )
+        session = AsyncMock(spec=AsyncSession)
+        provider_session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__.return_value = None
+        begin_cm.__aexit__.return_value = False
+        provider_session.begin.return_value = begin_cm
+
+        encoded = base64.b64encode(self.SAML_RESPONSE_XML.encode()).decode()
+        db_row = MagicMock()
+        db_row.group_mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+            patch.object(
+                ModuloSamlAuth,
+                "process_response",
+                return_value={
+                    "name_id": "user@example.com",
+                    "attributes": {
+                        "email": ["user@example.com"],
+                        "displayName": ["Test User"],
+                        "groups": ["admins"],
+                    },
+                },
+            ),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_mappings,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_fetch.return_value = self.SAMPLE_IDP_METADATA
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_lookup.return_value = db_row
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            await saml_process_response(encoded, settings, session, provider_session=provider_session)
+
+        mock_lookup.assert_awaited_once()
+        lookup_args, _ = mock_lookup.await_args
+        assert lookup_args[0] is provider_session
+        mock_mappings.assert_awaited_once()
+
+    async def test_group_mapping_lookup_runs_on_session_when_no_provider_session(self) -> None:
+        """When no provider session is supplied the group-mapping lookup falls
+        back to the DI session (post-auth admin flows)."""
+        from modulo.auth.saml_handler import ModuloSamlAuth
+        from modulo.auth.sso import saml_process_response
+
+        settings = _override(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
+            modulo_public_url="https://app.example.com",
+        )
+        session = AsyncMock(spec=AsyncSession)
+
+        encoded = base64.b64encode(self.SAML_RESPONSE_XML.encode()).decode()
+        db_row = MagicMock()
+        db_row.group_mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+            patch.object(
+                ModuloSamlAuth,
+                "process_response",
+                return_value={
+                    "name_id": "user@example.com",
+                    "attributes": {
+                        "email": ["user@example.com"],
+                        "displayName": ["Test User"],
+                        "groups": ["admins"],
+                    },
+                },
+            ),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_mappings,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_fetch.return_value = self.SAMPLE_IDP_METADATA
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_lookup.return_value = db_row
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            await saml_process_response(encoded, settings, session)
+
+        mock_lookup.assert_awaited_once()
+        lookup_args, _ = mock_lookup.await_args
+        assert lookup_args[0] is session
+        mock_mappings.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# OIDC callback group-mapping lookup — provider_session vs DI session (else branch)
+# ---------------------------------------------------------------------------
+
+
+class TestOidcCallbackGroupMappingNoProviderSession:
+    async def test_group_mapping_lookup_runs_on_session_when_no_provider_session(self) -> None:
+        """The provider_session branch is exercised elsewhere; this covers the
+        fallback where no provider session is supplied (post-auth admin flow)
+        and the group-mapping lookup runs on the DI session."""
+        from modulo.auth.sso import oidc_process_callback, sign_state
+
+        settings = _override()
+        session = AsyncMock(spec=AsyncSession)
+        org_id = uuid.uuid4()
+        signed = sign_state("okta:raw-state", settings.secret_key)
+
+        db_row = MagicMock()
+        db_row.group_mappings = [{"idp_group": "admins", "team_id": str(uuid.uuid4()), "team_role": "admin"}]
+
+        with (
+            patch("modulo.auth.sso.list_oidc_providers", new_callable=AsyncMock) as mock_list,
+            patch("modulo.auth.sso.count_oidc_providers", new_callable=AsyncMock) as mock_count,
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_mappings,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_list.return_value = [_OKTA_DB_PROVIDER]
+            mock_count.return_value = 1
+            mock_disc.return_value = {
+                "token_endpoint": "https://okta.example.com/oauth2/v1/token",
+                "jwks_uri": "https://okta.example.com/oauth2/v1/keys",
+                "issuer": "https://okta.example.com",
+            }
+            mock_ex.return_value = {"id_token": _id_token()}
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+                "groups": ["admins"],
+            }
+            mock_jit.return_value = (MagicMock(), org_id, "runner")
+            mock_lookup.return_value = db_row
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            await oidc_process_callback(
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
+                org_id=org_id,
+            )
+
+        mock_lookup.assert_awaited_once()
+        lookup_args, _ = mock_lookup.await_args
+        assert lookup_args[0] is session
+        mock_mappings.assert_awaited_once()

@@ -474,9 +474,33 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
         app.dependency_overrides[get_current_tenant_user] = _override_tenant
         app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
 
+    # The SSO pre-auth routes create a real ``modulo_system`` (BYPASSRLS) session
+    # via ``_new_system_session_factory`` instead of using the injected
+    # ``get_db_session``. Point that factory at the same mocked session so the
+    # BDD tests stay DB-free (otherwise the route opens a real connection and the
+    # ``sso_providers`` table is absent).
+    from modulo.api.routes import sso as _sso_routes
+
+    _orig_system_factory = _sso_routes._new_system_session_factory
+
+    def _mock_system_session_factory() -> Any:
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _cm() -> AsyncMock:
+            yield mock_session
+
+        def _make() -> Any:
+            return _cm()
+
+        return _make
+
+    _sso_routes._new_system_session_factory = _mock_system_session_factory
+
     yield TestClient(app)
 
     app.dependency_overrides.clear()
+    _sso_routes._new_system_session_factory = _orig_system_factory
 
 
 @pytest.fixture

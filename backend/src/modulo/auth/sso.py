@@ -11,12 +11,13 @@ from datetime import UTC, datetime
 
 import httpx
 from defusedxml import ElementTree
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
+from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
 from modulo.db.crud.account import create_account, get_account_by_email, update_last_login
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_account, update_member_role
@@ -24,6 +25,7 @@ from modulo.db.crud.token_family import create_family
 from modulo.db.models.account import Account
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -126,7 +128,16 @@ async def apply_group_mappings(
     idp_groups: list[str],
     group_mappings: list[dict[str, str]],
 ) -> None:
-    """Apply SSO group-to-team mappings for a JIT-provisioned account."""
+    """Apply SSO group-to-team mappings for a JIT-provisioned account.
+
+    ``team_memberships`` carries the strict ``rls_org_isolation`` policy (no
+    null-context escape in ``0108_schema_org_identity``), so the write MUST run
+    with the DI session's RLS org context set to the resolved org. Without
+    ``set_rls_org`` the ``add_team_member`` INSERT violates WITH CHECK and the
+    whole OIDC/SAML callback returns 503. Both callers wrap the callback in
+    ``async with session.begin():``, so an active transaction exists here.
+    """
+    await set_rls_org(session, org_id)
     for mapping in group_mappings:
         if not isinstance(mapping, dict):
             _log.warning("sso.non_dict_mapping", extra={"mapping_type": type(mapping).__name__})
@@ -210,13 +221,130 @@ async def issue_sso_tokens(
 # ---------------------------------------------------------------------------
 
 
+def _decrypt_provider_secret(stored: bytes | None, fernet_key: str | None) -> str:
+    """Decrypt a stored OIDC client_secret (or pass legacy plaintext through)."""
+    if stored is None or not fernet_key:
+        return ""
+    try:
+        return decode_stored_secret(stored, fernet_key)
+    except SecretStorageError:
+        _log.warning("sso.oidc_secret_decrypt_failed")
+        return ""
+
+
+async def list_oidc_providers(
+    session: AsyncSession,
+    org_id: uuid.UUID | None = None,
+    fernet_key: str | None = None,
+) -> list[dict[str, str]]:
+    """Resolve OIDC providers from the DB ``sso_providers`` table.
+
+        Returns provider dicts in the same shape ``_parse_oidc_providers`` produces
+        (the DB ``name`` column carries the provider id, mirroring how the startup
+        seeder migrates env-var providers). When ``org_id`` is ``None`` the lookup
+        is org-agnostic, which the pre-auth login flow relies on. The stored
+        ``client_secret`` is encrypted, so it is decrypted with the Fernet key.
+    Disabled providers (``enabled = False``) are excluded — toggling a provider
+        off in the admin UI must remove it from the login page and the auth flow.
+    """
+    conditions = [SsoProvider.provider_type == "oidc", SsoProvider.enabled.is_(True)]
+    if org_id is not None:
+        conditions.append(SsoProvider.organisation_id == org_id)
+    result = await session.execute(select(SsoProvider).where(*conditions).order_by(SsoProvider.created_at))
+    rows = list(result.scalars().all())
+    return [
+        {
+            "provider_id": row.name,
+            "client_id": row.client_id or "",
+            "client_secret": _decrypt_provider_secret(row.client_secret, fernet_key),
+            "discovery_url": row.discovery_url or "",
+        }
+        for row in rows
+    ]
+
+
+async def count_oidc_providers(session: AsyncSession, org_id: uuid.UUID | None = None) -> int:
+    """Count ALL OIDC provider rows in the DB, including disabled ones.
+
+    ``list_oidc_providers`` filters ``enabled = True``, so an all-disabled DB
+    is indistinguishable from a DB with no OIDC rows by that query alone.
+    Callers use this count to decide whether env-var ``MODULO_OIDC_PROVIDERS``
+    is a valid fallback: env providers are used only when the DB has ZERO OIDC
+    rows at all. Whenever the DB has rows (even all disabled) it is authoritative.
+    """
+    conditions = [SsoProvider.provider_type == "oidc"]
+    if org_id is not None:
+        conditions.append(SsoProvider.organisation_id == org_id)
+    result = await session.execute(select(func.count()).select_from(SsoProvider).where(*conditions))
+    return int(result.scalar_one() or 0)
+
+
+async def resolve_oidc_provider_org(session: AsyncSession, provider_id: str) -> uuid.UUID | None:
+    """Return the organisation that owns a DB-configured OIDC provider.
+
+    The pre-auth callback route uses this to scope the provider lookup to the
+    provider's own organisation. Returns ``None`` when the provider is not in
+    the DB (i.e. it is configured purely via ``MODULO_OIDC_PROVIDERS``).
+
+    Unlike ``list_oidc_providers`` this does NOT exclude disabled providers:
+    the callback needs the disabled provider's org so it routes into the DB
+    path, where the disabled provider resolves to nothing and login is blocked
+    rather than resurrecting an env-var provider of the same id.
+    """
+    result = await session.execute(
+        select(SsoProvider)
+        .where(
+            SsoProvider.provider_type == "oidc",
+            SsoProvider.name == provider_id,
+        )
+        .order_by(SsoProvider.created_at)
+        .limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return row.organisation_id
+
+
+async def _resolve_oidc_providers(
+    settings: Settings,
+    session: AsyncSession | None,
+    org_id: uuid.UUID | None,
+    use_db: bool,
+) -> list[dict[str, str]]:
+    """Resolve the OIDC provider list, preferring DB-configured providers.
+
+    Env-var providers from ``MODULO_OIDC_PROVIDERS`` are the baseline; when
+    ``use_db`` is set and a session is available, DB ``sso_providers`` rows take
+    precedence (org-scoped when ``org_id`` is given, org-agnostic otherwise).
+    Env providers are only used when the DB has ZERO oidc rows at all — an
+    all-disabled DB is authoritative and must not resurrect env providers.
+    """
+    providers = _parse_oidc_providers(settings)
+    if use_db and session is not None:
+        db_providers = await list_oidc_providers(session, org_id=org_id, fernet_key=settings.fernet_key)
+        if db_providers:
+            return db_providers
+        if await count_oidc_providers(session, org_id=org_id) > 0:
+            return []
+    return providers
+
+
 async def oidc_get_authorize_url(
     provider_id: str,
     settings: Settings,
     redirect_uri: str,
+    session: AsyncSession | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> tuple[str, str]:
-    """Build the OIDC authorization URL and return (url, raw_state)."""
-    providers = _parse_oidc_providers(settings)
+    """Build the OIDC authorization URL and return (url, raw_state).
+
+    Providers are resolved from the DB ``sso_providers`` table first when a
+    session is supplied (org-scoped when ``org_id`` is given, org-agnostic
+    otherwise), falling back to ``MODULO_OIDC_PROVIDERS`` for backwards
+    compatibility with env-var-only deployments.
+    """
+    providers = await _resolve_oidc_providers(settings, session, org_id, use_db=session is not None)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not configured")
@@ -250,8 +378,21 @@ async def oidc_process_callback(
     settings: Settings,
     session: AsyncSession,
     redirect_uri: str,
+    org_id: uuid.UUID | None = None,
+    provider_session: AsyncSession | None = None,
 ) -> dict[str, str]:
-    """Exchange auth code for tokens, JIT provision account, return JWT pair."""
+    """Exchange auth code for tokens, JIT provision account, return JWT pair.
+
+    When ``org_id`` is provided the provider is resolved from the DB
+    ``sso_providers`` table first (falling back to the env var when the DB has
+    no OIDC providers), and JIT provisioning targets that org.
+
+    ``provider_session`` carries the DB provider lookup when it must run on a
+    different session than ``session``: the OIDC callback is pre-auth, so the
+    ``sso_providers`` read runs on the ``modulo_system`` session (BYPASSRLS)
+    via ``provider_session``, while JIT provisioning and token issuance stay on
+    ``session`` (the app role with RLS scoping).
+    """
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
         _log.warning(
@@ -260,7 +401,11 @@ async def oidc_process_callback(
         raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
-    providers = _parse_oidc_providers(settings)
+    if org_id is not None and provider_session is not None:
+        async with provider_session.begin():
+            providers = await _resolve_oidc_providers(settings, provider_session, org_id, use_db=True)
+    else:
+        providers = await _resolve_oidc_providers(settings, session, org_id, use_db=org_id is not None)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not found")
@@ -309,7 +454,9 @@ async def oidc_process_callback(
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
     try:
-        account, org_id, org_role = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
+        account, resolved_org_id, org_role = await jit_provision_user(
+            session, settings, email, name, "oidc", sso_subject, default_org_id=org_id
+        )
     except RuntimeError as exc:
         raise ValueError(str(exc)) from None
 
@@ -318,11 +465,21 @@ async def oidc_process_callback(
         raw_groups = []
     idp_groups: list[str] = raw_groups
     if idp_groups:
-        db_provider = await _lookup_provider_by_client_id(session, provider["client_id"], org_id)
+        # ``sso_providers`` carries the strict ``rls_org_isolation`` policy, so
+        # this lookup must run on the BYPASSRLS system session used for the
+        # pre-auth provider resolution — the DI session has no RLS org context
+        # here and would return zero rows, silently disabling group mappings.
+        if provider_session is not None:
+            async with provider_session.begin():
+                db_provider = await _lookup_provider_by_client_id(
+                    provider_session, provider["client_id"], resolved_org_id
+                )
+        else:
+            db_provider = await _lookup_provider_by_client_id(session, provider["client_id"], resolved_org_id)
         if db_provider is not None and db_provider.group_mappings:
-            await apply_group_mappings(session, account, org_id, idp_groups, db_provider.group_mappings)
+            await apply_group_mappings(session, account, resolved_org_id, idp_groups, db_provider.group_mappings)
 
-    return await issue_sso_tokens(account, org_id, org_role, session, settings)
+    return await issue_sso_tokens(account, resolved_org_id, org_role, session, settings)
 
 
 def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
@@ -513,6 +670,7 @@ async def saml_process_response(
     saml_response: str,
     settings: Settings,
     session: AsyncSession,
+    provider_session: AsyncSession | None = None,
 ) -> dict[str, str]:
     """Validate a SAML Response using python3-saml and issue tokens.
 
@@ -520,6 +678,12 @@ async def saml_process_response(
     certificate from metadata (the critical security gap in the old
     implementation), plus condition validation, audience restriction, and
     clock-skew management.
+
+    ``provider_session`` carries the DB provider lookup when it must run on a
+    different session than ``session``: the ACS route is pre-auth, so the
+    ``sso_providers`` group-mapping read runs on the ``modulo_system`` session
+    (BYPASSRLS) via ``provider_session``, while JIT provisioning and token
+    issuance stay on ``session`` (the app role with RLS scoping).
     """
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
@@ -580,7 +744,15 @@ async def saml_process_response(
             saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
             break
     if saml_groups:
-        db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
+        # Same RLS consideration as the OIDC callback: ``sso_providers`` is
+        # RLS-isolated, so the group-mapping lookup must run on the BYPASSRLS
+        # system session when one is supplied — never the RLS-blocked pre-auth
+        # DI session.
+        if provider_session is not None:
+            async with provider_session.begin():
+                db_provider = await _lookup_provider_by_entity_id(provider_session, idp_entity_id, org_id)
+        else:
+            db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
         if db_provider is not None and db_provider.group_mappings:
             await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 
