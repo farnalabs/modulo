@@ -23,19 +23,19 @@
 <script setup lang="ts">
 import LibraryPrimitiveCard from "./LibraryPrimitiveCard.vue";
 import type { LibraryPrimitive } from "./LibraryPrimitiveCard.vue";
-import type { LibraryCardEmits } from "./libraryCardContracts";
+import type {
+  LibraryCardEmits,
+  LibraryCardSharedProps,
+} from "./libraryCardContracts";
+
+interface Props extends LibraryCardSharedProps {
+  items: LibraryPrimitive[];
+  installedMap?: Record<string, boolean>;
+  installingMap?: Record<string, boolean>;
+}
 
 withDefaults(
-  defineProps<{
-    items: LibraryPrimitive[];
-    badge: "modulo" | "community" | "preview";
-    showTags?: boolean;
-    showAutoUpdate?: boolean;
-    toggleLoading?: Record<string, boolean>;
-    installedMap?: Record<string, boolean>;
-    installingMap?: Record<string, boolean>;
-    adapting?: Record<string, boolean>;
-  }>(),
+  defineProps<Props>(),
   {
     showTags: true,
     showAutoUpdate: false,

@@ -143,7 +143,10 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check as CheckIcon, Loader as LoaderIcon } from "@lucide/vue";
 import { typeBadgeClass } from "../../lib/ui/typeBadge";
-import type { LibraryCardEmits } from "../../components/library/libraryCardContracts";
+import type {
+  LibraryCardEmits,
+  LibraryCardSharedProps,
+} from "../../components/library/libraryCardContracts";
 
 const { t } = useI18n();
 
@@ -198,17 +201,15 @@ export interface LibraryPrimitive {
   tier?: "native" | "preview" | "in_dev";
 }
 
+interface Props extends LibraryCardSharedProps {
+  prim: LibraryPrimitive;
+  installed?: boolean;
+  installing?: boolean;
+}
+
 const props = withDefaults(
-  defineProps<{
-    prim: LibraryPrimitive;
-    badge: "modulo" | "community" | "preview";
-    showTags?: boolean;
-    showAutoUpdate?: boolean;
-    toggleLoading?: Record<string, boolean>;
-    adapting?: Record<string, boolean>;
-    installed?: boolean;
-    installing?: boolean;
-  }>(),
+  defineProps<Props>(),
+
   {
     showTags: true,
     showAutoUpdate: false,
