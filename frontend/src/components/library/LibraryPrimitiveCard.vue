@@ -93,7 +93,7 @@
     <div class="flex items-center gap-2 mt-auto">
       <button
         v-if="!installed"
-        :class="`${primaryActionButton} disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5`"
+        :class="`${primaryActionButton} ${disabledActionModifier} ${centerModifier}`"
         :disabled="installing"
         :aria-busy="installing"
         @click="$emit('install', prim)"
@@ -108,7 +108,7 @@
       </button>
       <button
         v-else
-        :class="`${secondaryActionButton} bg-muted text-muted-foreground disabled:cursor-not-allowed flex items-center justify-center gap-1.5`"
+        :class="`${secondaryActionButton} bg-muted text-muted-foreground disabled:cursor-not-allowed ${centerModifier}`"
         disabled
         data-testid="library-installed-button"
       >
@@ -129,7 +129,7 @@
       </button>
       <button
         v-else-if="prim.primitive_type === 'lifecycle_map'"
-        :class="`${primaryActionButton} disabled:opacity-50 disabled:cursor-not-allowed`"
+        :class="`${primaryActionButton} ${disabledActionModifier}`"
         :disabled="adapting[prim.id]"
         :aria-busy="adapting[prim.id]"
         @click="$emit('create-lifecycle-map', prim)"
@@ -162,6 +162,8 @@ const primaryActionButton =
   "flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60";
 const secondaryActionButton =
   "flex-1 px-3 py-2 border border-border text-sm font-medium rounded-lg";
+const disabledActionModifier = "disabled:opacity-50 disabled:cursor-not-allowed";
+const centerModifier = "flex items-center justify-center gap-1.5";
 
 export interface LibraryPrimitive {
   id: string;

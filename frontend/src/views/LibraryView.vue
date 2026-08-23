@@ -112,50 +112,21 @@
         role="tablist"
       >
         <button
+          v-for="tab in visibleSectionTabs"
+          :key="tab.key"
           type="button"
           role="tab"
-          :aria-selected="section === 'native'"
+          :aria-selected="section === tab.key"
           class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
           :class="
-            section === 'native'
+            section === tab.key
               ? 'border-primary text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           "
-          data-testid="library-section-native"
-          @click="switchSection('native')"
+          :data-testid="`library-section-${tab.key}`"
+          @click="switchSection(tab.key)"
         >
-          {{ $t("views.LibraryView.native_library") }}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="section === 'community'"
-          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
-          :class="
-            section === 'community'
-              ? 'border-primary text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          "
-          data-testid="library-section-community"
-          @click="switchSection('community')"
-        >
-          {{ $t("views.LibraryView.community_tab") }}
-        </button>
-        <button
-          v-if="hostedCommunityEnabled"
-          type="button"
-          role="tab"
-          :aria-selected="section === 'hosted'"
-          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
-          :class="
-            section === 'hosted'
-              ? 'border-primary text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          "
-          data-testid="library-section-hosted"
-          @click="switchSection('hosted')"
-        >
-          {{ $t("views.LibraryView.hosted_community_tab") }}
+          {{ $t(tab.labelKey) }}
         </button>
       </div>
 
@@ -183,20 +154,8 @@
       </Banner>
 
       <EmptyState
-        v-else-if="section === 'hosted' && hostedCommunityItems.length === 0"
-        :title="$t('views.LibraryView.hosted_community_empty')"
-      />
-      <EmptyState
-        v-else-if="section === 'community' && communityPrimitives.length === 0"
-        :title="$t('views.LibraryView.no_primitives_found')"
-      />
-      <EmptyState
-        v-else-if="
-          section === 'native' &&
-          nativePrimitives.length === 0 &&
-          previewPrimitives.length === 0
-        "
-        :title="$t('views.LibraryView.no_primitives_found')"
+        v-else-if="emptyStateTitle"
+        :title="emptyStateTitle ? $t(emptyStateTitle) : ''"
       />
 
       <LibraryPrimitiveGrid
@@ -272,7 +231,7 @@
       >
         <button
           :disabled="page <= 1"
-          class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
+          :class="pageButtonClass"
           @click="prevPage"
           data-testid="library-previous-page"
         >
@@ -288,7 +247,7 @@
         </span>
         <button
           :disabled="page >= Math.ceil(total / pageSize)"
-          class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
+          :class="pageButtonClass"
           @click="nextPage"
           data-testid="library-next-page"
         >
@@ -382,6 +341,32 @@ const planStore = usePlanStore();
 const hostedCommunityEnabled = computed(() =>
   planStore.featureEnabled("community_library"),
 );
+
+const sectionTabs = [
+  { key: "native" as const, labelKey: "views.LibraryView.native_library" },
+  { key: "community" as const, labelKey: "views.LibraryView.community_tab" },
+  { key: "hosted" as const, labelKey: "views.LibraryView.hosted_community_tab" },
+];
+const visibleSectionTabs = computed(() =>
+  sectionTabs.filter((t) => t.key !== "hosted" || hostedCommunityEnabled.value),
+);
+
+const emptyStateTitle = computed<string | null>(() => {
+  if (section.value === "hosted" && hostedCommunityItems.value.length === 0)
+    return "views.LibraryView.hosted_community_empty";
+  if (section.value === "community" && communityPrimitives.value.length === 0)
+    return "views.LibraryView.no_primitives_found";
+  if (
+    section.value === "native" &&
+    nativePrimitives.value.length === 0 &&
+    previewPrimitives.value.length === 0
+  )
+    return "views.LibraryView.no_primitives_found";
+  return null;
+});
+
+const pageButtonClass =
+  "px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors";
 
 const {
   loading,
