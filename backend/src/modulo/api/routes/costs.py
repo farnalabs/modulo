@@ -39,6 +39,7 @@ from modulo.db.crud.scheduled_report import (
 from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -99,6 +100,33 @@ def _read_billing_period(org: object | None) -> str:
 def _read_circuit_breaker(org: object | None) -> bool:
     value = _read_cost_control(org, "circuit_breaker_enabled", DEFAULT_CIRCUIT_BREAKER_ENABLED)
     return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
+def _apply_cost_control_updates(org: Organisation, req: "UpdateCostControlsRequest") -> None:
+    """Persist the budget and cost-control settings from ``req`` onto ``org``.
+
+    ``settings_json`` is a JSON column that may hold arbitrary shapes, so the
+    persisted cost-control settings are re-read defensively before merging.
+    """
+    if req.budget is not None:
+        org.daily_spend_limit = Decimal(str(req.budget))
+
+    updates: dict[str, Any] = {
+        "currency": req.currency,
+        "billing_period": req.billing_period,
+        "circuit_breaker_enabled": req.circuit_breaker_enabled,
+        "alert_thresholds": req.alert_thresholds,
+    }
+    if not any(v is not None for v in updates.values()):
+        return
+    settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
+    settings_dict = dict(settings_raw)
+    cc = dict(_cost_controls(org))
+    for key, value in updates.items():
+        if value is not None:
+            cc[key] = [float(t) for t in value] if key == "alert_thresholds" else value
+    settings_dict[COST_CONTROLS_KEY] = cc
+    org.settings_json = settings_dict
 
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
@@ -228,8 +256,10 @@ async def get_costs(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    components_by_team = buckets.get("components_by_team", {}) if isinstance(buckets, dict) else {}
-    annotations_by_team = buckets.get("annotations_by_team", {}) if isinstance(buckets, dict) else {}
+    if not isinstance(buckets, dict):
+        buckets = {}
+    components_by_team = buckets.get("components_by_team", {})
+    annotations_by_team = buckets.get("annotations_by_team", {})
     items = []
     for r in rows:
         bucket_key = "__org__" if group_by == "org" else r["entity_id"]
@@ -248,11 +278,11 @@ async def get_costs(
         period=period,
         group_by=group_by,
         items=items,
-        org_unassigned_components=buckets.get("org_unassigned_components") if isinstance(buckets, dict) else None,
-        legacy_total=buckets.get("legacy_total") if isinstance(buckets, dict) else None,
-        org_total=buckets.get("org_total") if isinstance(buckets, dict) else None,
-        org_run_count=buckets.get("org_run_count") if isinstance(buckets, dict) else None,
-        has_more=bool(buckets.get("has_more", False)) if isinstance(buckets, dict) else False,
+        org_unassigned_components=buckets.get("org_unassigned_components"),
+        legacy_total=buckets.get("legacy_total"),
+        org_total=buckets.get("org_total"),
+        org_run_count=buckets.get("org_run_count"),
+        has_more=bool(buckets.get("has_more", False)),
     )
 
 
@@ -423,7 +453,7 @@ class UpdateCostControlsRequest(BaseModel):
     @classmethod
     def _validate_alert_thresholds(cls, value: list[float] | None) -> list[float] | None:
         if value is None:
-            return value
+            return None
         if not value:
             raise ValueError("alert_thresholds must be a non-empty list of integers in 1..100")
         for threshold in value:
@@ -431,7 +461,7 @@ class UpdateCostControlsRequest(BaseModel):
                 raise ValueError("alert_thresholds values must be integers in 1..100")
             if int(threshold) != threshold or not 1 <= int(threshold) <= 100:
                 raise ValueError("alert_thresholds values must be integers in 1..100")
-        return value
+        return list(value)
 
 
 @router.get("/controls")
@@ -501,28 +531,7 @@ async def update_cost_controls(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-            if req.budget is not None:
-                org.daily_spend_limit = Decimal(str(req.budget))
-
-            if (
-                req.currency is not None
-                or req.billing_period is not None
-                or req.circuit_breaker_enabled is not None
-                or req.alert_thresholds is not None
-            ):
-                settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
-                settings_dict = dict(settings_raw)
-                cc = dict(_cost_controls(org))
-                if req.currency is not None:
-                    cc["currency"] = req.currency
-                if req.billing_period is not None:
-                    cc["billing_period"] = req.billing_period
-                if req.circuit_breaker_enabled is not None:
-                    cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
-                if req.alert_thresholds is not None:
-                    cc["alert_thresholds"] = [float(t) for t in req.alert_thresholds]
-                settings_dict[COST_CONTROLS_KEY] = cc
-                org.settings_json = settings_dict
+            _apply_cost_control_updates(org, req)
 
             await session.flush()
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
@@ -880,6 +889,55 @@ class AnomalyResponse(BaseModel):
     dismissed: bool
 
 
+def _build_rolling_anomalies(daily_spends: list[tuple[Any, float]]) -> list[dict[str, Any]]:
+    """Detect days whose spend exceeds 2x the rolling 7-day average."""
+    anomalies: list[dict[str, Any]] = []
+    for i, (run_date, spend) in enumerate(daily_spends[7:], start=7):
+        window = [s for _, s in daily_spends[i - 7 : i]]
+        avg = (sum(window) / len(window)) if window else 0.0
+        if avg and spend / avg > 2.0:
+            anomalies.append(
+                {
+                    "id": "",
+                    "anomaly_date": str(run_date),
+                    "pipeline_id": None,
+                    "amount": spend,
+                    "baseline": avg,
+                    "percent_above": round((spend / avg - 1.0) * 100, 2),
+                    "dismissed": False,
+                }
+            )
+    return anomalies
+
+
+def _merge_anomalies(anomalies: list[dict[str, Any]], stored: Any) -> list[dict[str, Any]]:
+    """Merge freshly detected anomalies with previously stored ones, keeping stored dismissals."""
+    stored_dict: dict[str, Any] = {}
+    for a in stored:
+        key = str(a.anomaly_date)
+        if key not in stored_dict:
+            stored_dict[key] = {
+                "id": str(a.id),
+                "anomaly_date": str(a.anomaly_date),
+                "pipeline_id": str(a.pipeline_id) if a.pipeline_id else None,
+                "amount": float(a.amount),
+                "baseline": float(a.baseline),
+                "percent_above": float(a.percent_above),
+                "dismissed": a.dismissed,
+            }
+
+    for a in anomalies:
+        key = a["anomaly_date"]
+        if key in stored_dict:
+            a["dismissed"] = stored_dict[key]["dismissed"]
+
+    seen_dates = {a["anomaly_date"] for a in anomalies}
+    for key, sa in stored_dict.items():
+        if key not in seen_dates:
+            anomalies.append(sa)
+    return anomalies
+
+
 @router.get("/anomalies")
 @handle_db_errors("costs.get_anomalies")
 async def get_anomalies(
@@ -914,59 +972,11 @@ async def get_anomalies(
             raw_rows = counts_result.all()
             daily_spends = [(r.run_date, float(str(r.daily_spend))) for r in raw_rows if r.daily_spend is not None]
 
-            anomalies: list[dict[str, Any]] = []
-            for i, (run_date, spend) in enumerate(daily_spends):
-                if i < 7:
-                    continue
-                window = [s for _, s in daily_spends[max(0, i - 7) : i]]
-                if not window:
-                    continue
-                avg = sum(window) / len(window)
-                if avg == 0:
-                    continue
-                ratio = spend / avg
-                if ratio > 2.0:
-                    anomalies.append(
-                        {
-                            "id": "",
-                            "anomaly_date": str(run_date),
-                            "pipeline_id": None,
-                            "amount": spend,
-                            "baseline": avg,
-                            "percent_above": round((ratio - 1.0) * 100, 2),
-                            "dismissed": False,
-                        }
-                    )
+            detected = _build_rolling_anomalies(daily_spends)
 
-            # Also return any previously stored anomalies
+            # Also merge previously stored anomalies (keeper of dismissals)
             stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
-            stored_dict: dict[str, Any] = {}
-            for a in stored:
-                key = str(a.anomaly_date)
-                if key not in stored_dict:
-                    stored_dict[key] = {
-                        "id": str(a.id),
-                        "anomaly_date": str(a.anomaly_date),
-                        "pipeline_id": str(a.pipeline_id) if a.pipeline_id else None,
-                        "amount": float(a.amount),
-                        "baseline": float(a.baseline),
-                        "percent_above": float(a.percent_above),
-                        "dismissed": a.dismissed,
-                    }
-
-            # Merge: use stored dismissed status, and include stored anomalies
-            seen_dates: set[str] = set()
-            for a in anomalies:  # type: ignore[assignment]
-                key = a["anomaly_date"]  # type: ignore[index]
-                seen_dates.add(key)
-                if key in stored_dict:
-                    a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
-
-            for key, sa in stored_dict.items():
-                if key not in seen_dates:
-                    anomalies.append(sa)
-
-            return [AnomalyResponse(**a) for a in anomalies]
+            return [AnomalyResponse(**a) for a in _merge_anomalies(detected, stored)]
     except ProgrammingError:
         _log.exception("get_anomalies ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(

@@ -905,10 +905,12 @@ _SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
 def _get_system_async_engine() -> AsyncEngine:
     """Engine for cross-org system crons using the modulo_system role.
 
-    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set.
-    In that fallback posture system crons run as modulo_app (NOBYPASSRLS), so
-    RLS-scoped reads return zero rows — a WARNING is logged. Provision
-    MODULO_SYSTEM_DATABASE_URL to use the modulo_system role (BYPASSRLS).
+    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
+    so deployments that haven't provisioned the system role still work. The
+    fallback runs system crons as modulo_app, which is NOBYPASSRLS (see
+    bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
+    RLS-scoped reads silently return zero rows — a warning is emitted to surface
+    that the system role is unprovisioned.
     """
     global _SYSTEM_ASYNC_ENGINE
     if _SYSTEM_ASYNC_ENGINE is None:
@@ -935,10 +937,13 @@ def _get_system_async_engine() -> AsyncEngine:
             )
         else:
             _log.warning(
-                "system_engine.fallback: MODULO_SYSTEM_DATABASE_URL not set — "
-                "system crons run as modulo_app (NOBYPASSRLS); RLS-scoped "
-                "reads return zero rows. Provision MODULO_SYSTEM_DATABASE_URL "
-                "to use the modulo_system role (BYPASSRLS)."
+                "saq_worker.system_engine_fallback",
+                extra={
+                    "reason": (
+                        "MODULO_SYSTEM_DATABASE_URL not set — system crons run as modulo_app "
+                        "(NOBYPASSRLS); RLS-scoped reads return zero rows"
+                    )
+                },
             )
             _SYSTEM_ASYNC_ENGINE = _get_async_engine()
     return _SYSTEM_ASYNC_ENGINE

@@ -232,19 +232,15 @@
     </div>
 
       <!-- Move to Folder dialog -->
-      <div
+      <dialog
+        ref="moveDialogRef"
         v-if="showMoveToFolder"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        open
+        class="fixed inset-0 z-50 m-auto flex w-full max-w-md items-center justify-center border border-border bg-card p-6 shadow-lg"
+        aria-modal="true"
+        :aria-label="$t('views.PipelineListView.move_to_folder')"
+        tabindex="-1"
       >
-        <div class="absolute inset-0 bg-black/50" @click="closeMoveToFolder" aria-hidden="true" />
-        <div
-          ref="moveDialogRef"
-          class="relative z-10 w-full max-w-md rounded-lg border bg-card p-6 shadow-lg"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="$t('views.PipelineListView.move_to_folder')"
-          tabindex="-1"
-        >
           <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.move_to_folder') }}</h3>
           <div class="space-y-3">
             <button
@@ -270,30 +266,25 @@
             {{ moveError }}
           </div>
           <div class="mt-4 flex justify-end gap-2">
-            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="closeMoveToFolder">
+            <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="closeMoveToFolder">
               {{ $t('common.cancel') }}
             </button>
             <Button :disabled="moving" @click="handleMoveToFolder">
               {{ moving ? $t('common.saving') : $t('common.save') }}
             </Button>
           </div>
-        </div>
-      </div>
+        </dialog>
 
       <!-- Rename dialog -->
-      <div
+      <dialog
+        ref="renameDialogRef"
         v-if="showRenameDialog"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        open
+        class="fixed inset-0 z-50 m-auto flex w-full max-w-md items-center justify-center border border-border bg-card p-6 shadow-lg"
+        aria-modal="true"
+        :aria-label="$t('views.PipelineListView.rename_pipeline')"
+        tabindex="-1"
       >
-        <div class="absolute inset-0 bg-black/50" @click="closeRename" aria-hidden="true" />
-        <div
-          ref="renameDialogRef"
-          class="relative z-10 w-full max-w-md rounded-lg border bg-card p-6 shadow-lg"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="$t('views.PipelineListView.rename_pipeline')"
-          tabindex="-1"
-        >
           <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.rename_pipeline') }}</h3>
           <div class="space-y-4">
             <div>
@@ -310,6 +301,7 @@
             </div>
             <div class="flex justify-end gap-2">
               <button
+                type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
                 @click="closeRename"
               >
@@ -320,23 +312,18 @@
               </Button>
             </div>
           </div>
-        </div>
-      </div>
+        </dialog>
 
       <!-- Delete confirmation dialog -->
-      <div
+      <dialog
+        ref="deleteDialogRef"
         v-if="showDeleteConfirm"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        open
+        class="fixed inset-0 z-50 m-auto flex w-full max-w-md items-center justify-center border border-border bg-card p-6 shadow-lg"
+        aria-modal="true"
+        :aria-label="$t('views.PipelineListView.delete_pipeline')"
+        tabindex="-1"
       >
-        <div class="absolute inset-0 bg-black/50" @click="closeDelete" aria-hidden="true" />
-        <div
-          ref="deleteDialogRef"
-          class="relative z-10 w-full max-w-md rounded-lg border bg-card p-6 shadow-lg"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="$t('views.PipelineListView.delete_pipeline')"
-          tabindex="-1"
-        >
           <h3 class="mb-4 text-lg font-semibold text-destructive">{{ $t('views.PipelineListView.delete_pipeline') }}</h3>
           <p class="mb-4 text-sm text-muted-foreground">
             Are you sure? This permanently deletes the pipeline and all its runs.
@@ -346,20 +333,21 @@
           </div>
           <div class="flex justify-end gap-2">
             <button
+              type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="closeDelete"
             >
               Cancel
             </button>
             <button
+              type="button"
               class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
               @click="handleDelete"
             >
               Delete
             </button>
           </div>
-        </div>
-      </div>
+        </dialog>
 
       <Menu ref="actionMenuRef" :model="actionMenuItems" popup />
   </div>
