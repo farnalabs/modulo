@@ -28,14 +28,14 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 
 ## Scanning Schedule
 
-- **Automated**: GitHub Actions workflow runs every Monday 06:00 UTC and on any PR touching dependency files.
-- **Manual**: `pip-audit backend/` and `cd frontend && pnpm audit` can be run locally at any time.
+- **Automated**: `pip-audit` runs in `.github/workflows/ci.yml` on every push to `main` and on each PR to `main`, and again in the deploy workflow (`.github/workflows/deploy.yml`). There is no scheduled weekly dependency scan.
+- **Manual**: `uv run pip-audit` (from `backend/`) and `cd frontend && pnpm audit` can be run locally at any time.
 
 ## How to Handle a False Positive
 
 1. **Verify**: Confirm the CVE does not apply in Modulo's deployment context (e.g., Windows-only vulnerability on Linux, feature not used).
 2. **Document**: Add a row to the approved exceptions table below with the CVE ID, affected package, reason, and reviewer.
-3. **Suppress**: Add the CVE ID to `pip-audit`'s `--ignore-vuln` list in the CI workflow, or add to `.safety-policy.yml` for Safety-based scanning.
+3. **Suppress**: Add the CVE ID to `pip-audit`'s `--ignore-vuln` list in the CI workflow. The repo uses `pip-audit` (not the `safety` tool), so there is no `.safety-policy.yml`.
 
 ### Approved CVE Override List
 
@@ -45,10 +45,10 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 
 ## Dependency Update Workflow
 
-1. Run `pip-audit backend/` and `cd frontend && pnpm audit` before any dependency change.
+1. Run `uv run pip-audit` (from `backend/`) and `cd frontend && pnpm audit` before any dependency change.
 2. Prefer patch-level updates within the same major version. Major version bumps require a PR with migration notes.
 3. Pin transitive dependencies only when they carry a CVE that cannot be resolved by updating the direct dependency.
-4. After updating, rerun the full test suite: `uv run pytest` and `cd frontend && npm test:unit`.
+4. After updating, rerun the full test suite: `uv run pytest` and `cd frontend && pnpm test:unit`.
 
 ## Previous Audit Findings
 
@@ -56,13 +56,13 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 
 | Package | From | To | CVE(s) Fixed |
 |---------|------|----|-------------|
-| langgraph | 0.2.28 | ≥1.0.10 | PYSEC-2026-83 / CVE-2026-28277 — RCE via msgpack checkpoint deserialization |
-| langgraph-checkpoint | 1.0.12 | ≥3.0.0 | CVE-2025-64439 — RCE via jsonplus deserialization |
-| langgraph-checkpoint | 1.0.12 | ≥4.0.0 | CVE-2026-27794 — RCE via pickle deserialization |
-| langchain-openai | 0.3.35 | ≥1.1.14 | PYSEC-2026-76 / CVE-2026-41488 — SSRF via TOCTOU in image URL fetch |
+| langgraph | 0.2.28 | ≥1.0.10 | PYSEC-2026-83 / CVE-2026-28277 – RCE via msgpack checkpoint deserialization |
+| langgraph-checkpoint | 1.0.12 | ≥3.0.0 | CVE-2025-64439 – RCE via jsonplus deserialization |
+| langgraph-checkpoint | 1.0.12 | ≥4.0.0 | CVE-2026-27794 – RCE via pickle deserialization |
+| langchain-openai | 0.3.35 | ≥1.1.14 | PYSEC-2026-76 / CVE-2026-41488 – SSRF via TOCTOU in image URL fetch |
 
 ### Frontend (June 2026)
 
 | Package | From | To | Advisory |
 |---------|------|----|----------|
-| esbuild | 0.27.7 | ≥0.28.1 | GHSA-g7r4-m6w7-qqqr — Windows dev server arbitrary file read (Low) |
+| esbuild | 0.27.7 | ≥0.28.1 | GHSA-g7r4-m6w7-qqqr – Windows dev server arbitrary file read (Low) |

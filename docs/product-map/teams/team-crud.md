@@ -36,7 +36,7 @@ status: covered
 - [x] Runner creates team → 403
 - [x] Viewer creates team → 403
 - [x] Unauthenticated request creates team → 401/403
-- [x] account_id FK to accounts.id with RESTRICT — deleting a user who created teams is blocked
+- [x] account_id FK to accounts.id with RESTRICT – deleting a user who created teams is blocked
 - [x] Response includes account_id field
 
 ### List teams
@@ -78,7 +78,7 @@ status: covered
 - [x] Team deletion with no owned resources → team record removed
 - [x] Cross-org isolation: deleting team in org A does not affect org B
 
-### Membership — Add member
+### Membership – Add member
 - [x] Admin adds user to team with valid role (viewer/runner/operator) → 201
 - [x] Admin adds user with role exceeding target user's org role → 422
 - [x] Team admin role not allowed for team membership (admin is org-only per 9.2)
@@ -90,20 +90,20 @@ status: covered
 - [x] Operator adds member → 403
 - [x] Unauthenticated request → 401/403
 
-### Membership — List members
+### Membership – List members
 - [x] Authenticated user lists team members → 200, paginated
 - [x] Team with no members returns empty items array
 - [x] Pagination parameters respected
 
-### Membership — Remove member
+### Membership – Remove member
 - [x] Admin removes member → 204
 - [x] membership_id does not belong to the specified team → 404
 - [x] Non-existent membership_id → 404
 - [x] Operator removes member → 403
 - [x] Unauthenticated request → 401/403
-- [x] Removing last admin from team — allowed (no admin-preservation guard)
+- [x] Removing the last operator from a team is blocked (409) – `_assert_not_last_operator` (teams.py:59-100) prevents leaving a team with no operator
 
-### Membership — Change role
+### Membership – Change role
 - [x] Admin changes member role via PATCH → 200, updated membership returned
 - [x] Membership not found → 404
 - [x] Team not found → 404
@@ -151,7 +151,7 @@ status: covered
 - [x] Admin delete team (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, Exception→500
 - [x] Admin list teams (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, Exception→500
 - [x] Admin create team duplicate name pre-check with `get_team_by_name` + integrity guard
-- [x] Audit event failures caught (non-fatal) on all team mutation routes — team operation completes regardless of audit success
+- [x] Audit event failures caught (non-fatal) on all team mutation routes – team operation completes regardless of audit success
 
 ### Backward compatibility / data migration
 - [x] Team entity is alpha-stage (no existing data to migrate)
@@ -161,42 +161,42 @@ status: covered
 
 ## Known Gaps
 
-- Membership add does not enforce privilege cap for non-admin grantors (PRD 9.3: a team operator can only grant roles up to their own team role — currently requires org admin)
-- ~~Notification endpoints not exposed through REST API (field exists in model, no route)~~ — RESOLVED 2026-08-17: team-scoped notification endpoints are fully manageable via the `/api/v1/notifications` CRUD (`team_id` on create/update/response) and the admin `/api/v1/admin/notifications` CRUD (create/update now accept `team_id` with RLS-scoped existence validation → 422 for unknown teams; responses echo it)
-- ~~Daily spend limit not exposed through REST API~~ — RESOLVED 2026-08-17 (verified): team `daily_spend_limit` is readable/writable via `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` in `api/routes/costs.py`
+- Membership add does not enforce privilege cap for non-admin grantors (PRD 9.3: a team operator can only grant roles up to their own team role – currently requires org admin)
+- ~~Notification endpoints not exposed through REST API (field exists in model, no route)~~ – RESOLVED 2026-08-17: team-scoped notification endpoints are fully manageable via the `/api/v1/notifications` CRUD (`team_id` on create/update/response) and the admin `/api/v1/admin/notifications` CRUD (create/update now accept `team_id` with RLS-scoped existence validation → 422 for unknown teams; responses echo it)
+- ~~Daily spend limit not exposed through REST API~~ – RESOLVED 2026-08-17 (verified): team `daily_spend_limit` is readable/writable via `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` in `api/routes/costs.py`
 - No integration tests for the membership privilege cap
-- RLS isolation test (`test_teams_isolated_between_orgs`) still skipped — uses SET_CONFIG directly instead of the app-level RLS helpers
+- RLS isolation test (`test_teams_isolated_between_orgs`) still skipped – uses SET_CONFIG directly instead of the app-level RLS helpers
 
 ## QA History
 
-### 2026-07-09 — Cross-cutting QA (improve-architecture index 281) — feat-teams-team-crud
+### 2026-07-09 – Cross-cutting QA (improve-architecture index 281) – feat-teams-team-crud
 
 **Lens:** Correctness, bugs, maintainability, SOLID/DRY, error handling, edge cases/resilience
 
-**Fixed (CRITICAL):** Admin team routes (`admin_create_team`, `admin_update_team`, `admin_delete_team`) in `admin.py` had no try/except error handling — `ProgrammingError`, `SQLAlchemyError`, `IntegrityError`, and Python-level errors (`TypeError`, `KeyError`, `ValueError`) propagated as raw 500 to CatchAllMiddleware. Added comprehensive guards (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, HTTPException→re-raise, Exception→500) to all 3 routes.
+**Fixed (CRITICAL):** Admin team routes (`admin_create_team`, `admin_update_team`, `admin_delete_team`) in `admin.py` had no try/except error handling – `ProgrammingError`, `SQLAlchemyError`, `IntegrityError`, and Python-level errors (`TypeError`, `KeyError`, `ValueError`) propagated as raw 500 to CatchAllMiddleware. Added comprehensive guards (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, HTTPException→re-raise, Exception→500) to all 3 routes.
 
-**Fixed (CRITICAL):** `admin_create_team` in `admin.py` missing duplicate name pre-check — creating a team with a duplicate name hit an uncaught IntegrityError (raw 500). Added `get_team_by_name` pre-check (409 Conflict) plus `except IntegrityError → 409` safety net.
+**Fixed (CRITICAL):** `admin_create_team` in `admin.py` missing duplicate name pre-check – creating a team with a duplicate name hit an uncaught IntegrityError (raw 500). Added `get_team_by_name` pre-check (409 Conflict) plus `except IntegrityError → 409` safety net.
 
 **Fixed (MAJOR):** `admin_list_teams` in `admin.py` returned 400 for non-admin users instead of 403. Changed to `HTTP_403_FORBIDDEN`.
 
-**Fixed (MAJOR):** `admin_list_teams` in `admin.py` had no `except SQLAlchemyError → 503` — connection/deadlock failures returned 500. Added the catch with structured logging.
+**Fixed (MAJOR):** `admin_list_teams` in `admin.py` had no `except SQLAlchemyError → 503` – connection/deadlock failures returned 500. Added the catch with structured logging.
 
-**Fixed (MAJOR):** `admin_update_team` and `admin_create_team` audit event blocks had no error handling — audit failures propagated after the team was already mutated. Added `except ProgrammingError`/`except SQLAlchemyError` catching.
+**Fixed (MAJOR):** `admin_update_team` and `admin_create_team` audit event blocks had no error handling – audit failures propagated after the team was already mutated. Added `except ProgrammingError`/`except SQLAlchemyError` catching.
 
 **All tests pass:** 30 API endpoint + 22 CRUD unit tests = 52/52 pass. No regressions.
 
-### 2026-07-09 — Cross-cutting QA (index 353) — feat-teams-team-crud
+### 2026-07-09 – Cross-cutting QA (index 353) – feat-teams-team-crud
 
 **Lens:** Correctness, maintainability, error handling, edge cases
 
-**Fixed (MAJOR):** Added `set_rls_user_context` calls to all 4 admin team routes in `admin.py` and their audit event blocks — `admin_create_team`, `admin_list_teams`, `admin_update_team`, `admin_delete_team`. Previously only `set_rls_org` was set, missing user identity context for RLS policies and tenant-filter listener.
+**Fixed (MAJOR):** Added `set_rls_user_context` calls to all 4 admin team routes in `admin.py` and their audit event blocks – `admin_create_team`, `admin_list_teams`, `admin_update_team`, `admin_delete_team`. Previously only `set_rls_org` was set, missing user identity context for RLS policies and tenant-filter listener.
 
-**Fixed (MINOR):** Flattened nested try/except in `admin_create_team` — inner `try/except ProgrammingError` was redundant with outer `except ProgrammingError`; consolidated and added `logger.exception` to the outer handler.
+**Fixed (MINOR):** Flattened nested try/except in `admin_create_team` – inner `try/except ProgrammingError` was redundant with outer `except ProgrammingError`; consolidated and added `logger.exception` to the outer handler.
 
 **All tests pass:** 30 API endpoint + 22 CRUD unit tests + 4 admin RLS context tests = 56/56 pass. No regressions.
 
-### 2026-08-17 — improve-architecture (feat-core-notifications cross-entry)
+### 2026-08-17 – improve-architecture (feat-core-notifications cross-entry)
 
 **RESOLVED 2 Known Gaps:**
-- **Notification endpoints not exposed through REST API** — the admin `/api/v1/admin/notifications` CRUD now accepts `team_id` on create/update (RLS-scoped existence validation → 422 `Unknown team id` for missing/soft-deleted/other-org teams, closing the FK-`IntegrityError`→503 rough edge), echoes `team_id` on every response, and the non-admin `/api/v1/notifications` CRUD already surfaced the field. 9 new endpoint tests in `test_admin_notifications_webhooks.py`.
-- **Daily spend limit not exposed through REST API** — verified resolved: `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` (`api/routes/costs.py:373`) reads/writes `Team.daily_spend_limit`.
+- **Notification endpoints not exposed through REST API** – the admin `/api/v1/admin/notifications` CRUD now accepts `team_id` on create/update (RLS-scoped existence validation → 422 `Unknown team id` for missing/soft-deleted/other-org teams, closing the FK-`IntegrityError`→503 rough edge), echoes `team_id` on every response, and the non-admin `/api/v1/notifications` CRUD already surfaced the field. 9 new endpoint tests in `test_admin_notifications_webhooks.py`.
+- **Daily spend limit not exposed through REST API** – verified resolved: `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` (`api/routes/costs.py:373`) reads/writes `Team.daily_spend_limit`.

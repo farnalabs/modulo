@@ -44,12 +44,12 @@ Supported platforms, minimum resources, and database backends for running Modulo
 | Database | Version | Status | Production Ready | Notes |
 |----------|---------|--------|-----------------|-------|
 | **PostgreSQL** | 16+ | **Supported** | **Yes** | Primary production database |
-| **SQLite** | 3.x | Compatible | **No** | Dev-only — no RLS, no advisory locks |
+| **SQLite** | 3.x | Compatible | **No** | Dev-only: no RLS, no advisory locks |
 
 ### PostgreSQL Requirements
 
 - **Version**: 16 or later
-- **Extensions**: none required — `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
+- **Extensions**: none required; `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
 - **Connection**: Async via `asyncpg` driver
 - **TLS**: `sslmode=require` recommended for production
 - **Schema**: Alembic-managed migrations run on startup
@@ -84,7 +84,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 
 | Deployment Type | Redis Required? | Reason |
 |----------------|-----------------|--------|
-| Single replica, single process | No | In-process fallbacks work |
+| Single replica, single process | **Yes** | Startup aborts if `REDIS_URL` is unset; used for event coordination, rate limiting, caching, and session state (defaults to `redis://localhost:6379/0`) |
 | Multiple replicas | **Yes** | SAQ worker coordination, distributed rate limiting |
 | Horizontal scaling | **Yes** | Cross-replica event broker, cron triggers |
 | Production with 2+ backend pods | **Yes** | See [`docs/deployment.md`](./deployment.md) §Scaling |
