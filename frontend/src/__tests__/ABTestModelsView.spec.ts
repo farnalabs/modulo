@@ -85,7 +85,7 @@ describe('ABTestModelsView variant comparison creator', () => {
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.findAll('[data-testid^="variant-builder-label-"]').length).toBe(2)
+    expect(wrapper.findAll('[data-testid^="variant-builder-label-"]')).toHaveLength(2)
     const firstRowIds = (wrapper.vm as unknown as { variants: Array<{ id: string }> }).variants.map(v => v.id)
     expect(new Set(firstRowIds).size).toBe(2)
     const variants = (wrapper.vm as unknown as { variants: Array<{ snapshotId: string | null }> }).variants
@@ -103,7 +103,7 @@ describe('ABTestModelsView variant comparison creator', () => {
     await wrapper.find('[data-testid="variant-builder-duplicate-0"]').trigger('click')
     await nextTick()
 
-    expect(vm.variants.length).toBe(2)
+    expect(vm.variants).toHaveLength(2)
     expect(vm.variants[1].id).not.toBe(originalId)
     expect(vm.variants[1].label).toBe(`${originalLabel} (copy)`)
     expect(vm.variants[1].snapshotId).toBe(vm.variants[0].snapshotId)
@@ -118,7 +118,7 @@ describe('ABTestModelsView variant comparison creator', () => {
     await nextTick()
 
     const vm = wrapper.vm as unknown as { variants: unknown[]; canFire: boolean }
-    expect(vm.variants.length).toBe(1)
+    expect(vm.variants).toHaveLength(1)
     expect(vm.canFire).toBe(false)
     expect(wrapper.find('[data-testid="variant-builder-min-two"]').exists()).toBe(true)
   })
@@ -137,7 +137,7 @@ describe('ABTestModelsView variant comparison creator', () => {
       await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     }
     await nextTick()
-    expect(vm.variants.length).toBe(10)
+    expect(vm.variants).toHaveLength(10)
     expect(wrapper.find('[data-testid="variant-builder-add"]').attributes('disabled')).toBeDefined()
   })
 
@@ -152,7 +152,7 @@ describe('ABTestModelsView variant comparison creator', () => {
     await wrapper.find('[data-testid="variant-builder-duplicate-0"]').trigger('click')
     await nextTick()
 
-    expect(vm.variants.length).toBe(10)
+    expect(vm.variants).toHaveLength(10)
     expect(wrapper.find('[data-testid="variant-builder-duplicate-0"]').attributes('disabled')).toBeDefined()
   })
 

@@ -108,7 +108,7 @@ describe('useRemyTabsStore', () => {
 
     ;(api.POST as any).mockResolvedValueOnce({ error: null, data: { id: 'session-1', session_number: 1 } })
     await tabs.addTab()
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     expect(tabs.tabs[0].sessionId).toBe('session-1')
     expect(tabs.tabs[0].tabId).not.toBe(originalTabId)
   })
@@ -119,9 +119,9 @@ describe('useRemyTabsStore', () => {
     store.activeSessionId = 'session-1'
     const tabs = useRemyTabsStore()
     tabs.reconcile()
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     await tabs.resumeTab('session-1')
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
   })
 
   it('closeTab removes a non-active tab and keeps the active session intact', () => {
@@ -131,10 +131,10 @@ describe('useRemyTabsStore', () => {
     store.activeSessionId = 'session-1'
     const tabs = useRemyTabsStore()
     tabs.reconcile()
-    expect(tabs.tabs.length).toBe(2)
+    expect(tabs.tabs).toHaveLength(2)
     const closing = tabs.tabs.find(t => t.tabId === 't2')!
     tabs.closeTab(closing.tabId)
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     expect(tabs.tabs[0].sessionId).toBe('session-1')
     expect(store.activeSessionId).toBe('session-1')
   })

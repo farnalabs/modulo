@@ -127,7 +127,7 @@ describe('SchemaEditorView', () => {
     })
     await flushPromises()
     const items = wrapper.findAll('[data-testid="schema-editor-list-item"]')
-    expect(items.length).toBe(2)
+    expect(items).toHaveLength(2)
     expect(items[1].text()).toContain('Deprecated')
   })
 
@@ -149,7 +149,7 @@ describe('SchemaEditorView', () => {
     await nextTick()
 
     const items = wrapper.findAll('[data-testid="schema-editor-list-item"]')
-    expect(items.length).toBe(1)
+    expect(items).toHaveLength(1)
     expect(items[0].text()).toContain('User Profile')
   })
 
@@ -197,20 +197,20 @@ describe('SchemaEditorView', () => {
     await nextTick()
 
     let fields = wrapper.findAll('[data-testid="schema-editor-field"]')
-    expect(fields.length).toBe(1)
+    expect(fields).toHaveLength(1)
 
     await addBtn.trigger('click')
     await nextTick()
 
     fields = wrapper.findAll('[data-testid="schema-editor-field"]')
-    expect(fields.length).toBe(2)
+    expect(fields).toHaveLength(2)
 
     const removeBtns = wrapper.findAll('[data-testid="schema-editor-field-remove"]')
     await removeBtns[0].trigger('click')
     await nextTick()
 
     fields = wrapper.findAll('[data-testid="schema-editor-field"]')
-    expect(fields.length).toBe(1)
+    expect(fields).toHaveLength(1)
   })
 
   it('renders JSON Schema preview', async () => {

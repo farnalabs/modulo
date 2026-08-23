@@ -239,8 +239,8 @@ describe('DashboardView', () => {
     expect(wrapper.findAll('[data-testid="trend-toggle-3"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-7"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-30"]')).toHaveLength(1)
-    expect(wrapper.findAll('[data-testid="trend-toggle-90"]').length).toBe(1)
-    expect(wrapper.findAll('[data-testid="trend-toggle-all"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-90"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-all"]')).toHaveLength(1)
   })
 
   it('fetches a period-scoped summary when a window is selected', async () => {
@@ -259,7 +259,7 @@ describe('DashboardView', () => {
     await flushPromises()
     await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('.animate-pulse').length).toBe(0)
+    expect(wrapper.findAll('.animate-pulse')).toHaveLength(0)
   })
 
   it('All-time option calls fetchSummary with no days', async () => {
@@ -381,7 +381,7 @@ describe('DashboardView', () => {
     // running / awaiting_human / idle have delta_pct null -> muted em-dash
     // fallback with the "no prior period data" tooltip; the rest keep arrows.
     const fallbacks = wrapper.findAll('[data-testid="stat-no-baseline"]')
-    expect(fallbacks.length).toBe(3)
+    expect(fallbacks).toHaveLength(3)
     expect(fallbacks[0].attributes('title')).toBe('No prior period data')
   })
 
@@ -442,7 +442,7 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     const runLinks = wrapper.findAll('a[href^="/runs/"]')
-    expect(runLinks.length).toBe(mockSummaryData.recent_runs.length)
+    expect(runLinks).toHaveLength(mockSummaryData.recent_runs.length)
     expect(runLinks[0].attributes('href')).toBe('/runs/run-1')
     expect(wrapper.findAll('a[href="/runs/run-4"]').length).toBe(1)
   })
