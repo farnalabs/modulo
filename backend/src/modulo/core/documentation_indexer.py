@@ -1,7 +1,9 @@
-"""Documentation indexer — builds a searchable index from docs/prd.md.
+"""Documentation indexer — builds a searchable index from the product manifest.
 
-At module load or on first call, indexes the PRD by ``##`` and ``###`` headings.
-Each index entry stores ``(heading_path, heading, first_paragraph)``.
+At module load or on first call, indexes the product surface by reading
+``frontend/src/manifest.yaml`` (the structured product manifest of routes/pages)
+that ships in the build. Each index entry stores
+``(heading_path, heading, first_paragraph)``.
 
 Search is case-insensitive keyword matching against heading + first paragraph.
 """
@@ -9,10 +11,13 @@ Search is case-insensitive keyword matching against heading + first paragraph.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
+
+import yaml
+
+from modulo.core.manifest import _load_manifest_yaml, get_manifest_path
 
 _log = logging.getLogger(__name__)
 
@@ -59,71 +64,76 @@ class DocumentationIndex:
         return "\n\n---\n\n".join(parts)
 
     @classmethod
-    def build(cls, prd_path: str | Path | None = None) -> DocumentationIndex:
-        path = Path(prd_path) if prd_path else Path(__file__).resolve().parents[4] / "docs" / "prd.md"
+    def build(cls, manifest_path: str | Path | None = None) -> DocumentationIndex:
+        path = Path(manifest_path) if manifest_path else get_manifest_path()
+
         if not path.exists():
-            _log.warning("PRD not found at %s — returning empty index", path)
+            _log.warning("Manifest not found at %s — returning empty index", path)
             return cls()
 
         try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError) as exc:
-            _log.error("Failed to read PRD at %s: %s", path, exc)
+            data = _load_manifest_yaml(path)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            _log.error("Failed to load manifest at %s: %s", path, exc)
             return cls()
 
-        return cls._parse(text)
+        if not isinstance(data, dict):
+            return cls()
 
-    @classmethod
-    def _parse(cls, text: str) -> DocumentationIndex:
+        routes = data.get("routes")
+        if not isinstance(routes, dict):
+            return cls()
+
         entries: list[DocEntry] = []
-        current_h2: str | None = None
-        current_h3: str | None = None
-
-        lines = text.splitlines()
-        i = 0
-        n = len(lines)
-
-        while i < n:
-            line = lines[i]
-            h2_match = re.match(r"^## (.+)$", line)
-            h3_match = re.match(r"^### (.+)$", line)
-
-            if h2_match:
-                current_h2 = h2_match.group(1).strip()
-                current_h3 = None
-                heading_path = current_h2
-                heading = current_h2
-                first_para = _extract_first_paragraph(lines, i + 1)
-                entries.append(DocEntry(heading_path=heading_path, heading=heading, first_paragraph=first_para))
-                i += 1
-            elif h3_match:
-                current_h3 = h3_match.group(1).strip()
-                heading_path = f"{current_h2} > {current_h3}" if current_h2 else current_h3
-                heading = current_h3
-                first_para = _extract_first_paragraph(lines, i + 1)
-                entries.append(DocEntry(heading_path=heading_path, heading=heading, first_paragraph=first_para))
-                i += 1
-            else:
-                i += 1
+        for route in sorted(routes.keys()):
+            value = routes[route]
+            if not isinstance(value, dict):
+                continue
+            entries.append(
+                DocEntry(
+                    heading_path=route,
+                    heading=_heading(route, value),
+                    first_paragraph=_summarise(value),
+                )
+            )
 
         return cls(entries=entries)
 
 
-def _extract_first_paragraph(lines: list[str], start: int) -> str:
-    current: list[str] = []
+def _as_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
-    for line in lines[start:]:
-        stripped = line.strip()
-        if not stripped:
-            if current:
-                return " ".join(current)
-            continue
-        if re.match(r"^#", stripped):
-            break
 
-        text = re.sub(r"\*\*(.+?)\*\*", r"\1", stripped)
-        text = re.sub(r"_\(.+?\)_", "", text)
-        text = text.strip("*_")
-        current.append(text)
+def _heading(route: str, entry: dict[Any, Any]) -> str:
+    breadcrumb = _as_str(entry.get("breadcrumb"))
+    if breadcrumb:
+        return breadcrumb
+    name = _as_str(entry.get("name"))
+    if name:
+        return name
+    return route
 
-    return " ".join(current) if current else ""
+
+def _summarise(entry: dict[Any, Any]) -> str:
+    name = _as_str(entry.get("name"))
+    parts: list[str] = [name] if name else []
+
+    if entry.get("type"):
+        parts.append(f"type={_as_str(entry['type'])}")
+    if entry.get("sidebar_group"):
+        parts.append(f"sidebar_group={_as_str(entry['sidebar_group'])}")
+    if entry.get("required_permissions"):
+        perms = entry["required_permissions"]
+        perms_str = ", ".join(_as_str(p) for p in perms) if isinstance(perms, (list, tuple)) else _as_str(perms)
+        parts.append(f"required_permissions={perms_str}")
+    if entry.get("visibility"):
+        parts.append(f"visibility={_as_str(entry['visibility'])}")
+
+    summary = " · ".join(parts)
+    if entry.get("deprecated"):
+        summary += " (deprecated)"
+    if _as_str(entry.get("visibility")) in ("private_preview", "in_dev"):
+        summary += " (dev-mode preview)"
+    return summary

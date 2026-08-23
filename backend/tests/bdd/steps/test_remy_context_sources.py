@@ -140,7 +140,7 @@ def build_system_prompt(request, ctx) -> None:
     for source_key, mode in merged.items():
         if mode == "tool":
             if source_key == "product_docs":
-                tool_lines.append("- search_documentation(query, section?) — Search product docs")
+                tool_lines.append("- search_documentation(query, section?) — Search product surface and navigation")
             elif source_key == "integration_status":
                 tool_lines.append("- get_integration_status() — Get connector health")
             elif source_key == "org_config":
