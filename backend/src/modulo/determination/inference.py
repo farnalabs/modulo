@@ -64,7 +64,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
 
     repo_names: list[str] = []
     pull_requests: list[dict[str, Any]] = []
-    issues: list[dict[str, Any]] = []
     issue_statuses: list[str] = []
     has_ci_config = False
     has_planning_stage = False
@@ -90,7 +89,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                             stale_pr_count += 1
 
             case "issues":
-                issues.extend(s.records)
                 for iss in s.records:
                     fields = iss.get("fields") or {}
                     status_obj = fields.get("status")

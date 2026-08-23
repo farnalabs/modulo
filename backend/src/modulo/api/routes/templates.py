@@ -157,22 +157,13 @@ async def create_pipeline_from_template_endpoint(
         edges: list[dict[str, Any]] = content.get("edges", [])
 
         agent_ids: dict[int, uuid.UUID] = {}
-        created_agents: list[dict[str, Any]] = []
-
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            for idx, agent_cfg in enumerate(agent_configs):
+            for idx, _agent_cfg in enumerate(agent_configs):
                 agent_id = uuid.uuid4()
                 agent_ids[idx] = agent_id
-                created_agents.append(
-                    {
-                        "id": str(agent_id),
-                        "name": agent_cfg.get("name", f"Agent {idx + 1}"),
-                        "description": agent_cfg.get("description", ""),
-                    }
-                )
 
             pipeline = await create_pipeline(
                 session,
