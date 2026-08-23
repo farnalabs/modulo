@@ -1,0 +1,782 @@
+name: "Merge: Queue"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: merge-queue
+  cancel-in-progress: false
+
+env:
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY }}
+
+jobs:
+  queue:
+    name: Merge queue -> main
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Cancel stale stuck runs (self-healing)
+        # A run that is in_progress with a job that never got picked up by a
+        # runner (startedAt: null) holds the merge-queue concurrency group lock
+        # (cancel-in-progress: false), blocking every later queue run. This sweep
+        # cancels such runs once they exceed ~10 minutes so THIS run can proceed.
+        # Best-effort: every subcommand below is guarded (2>/dev/null || echo/true)
+        # so the script always exits 0 and can never fail the queue run itself.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Sweeping for stale in-progress 'Merge: Queue' runs stuck with no started job..."
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - 600))
+          IN_PROGRESS=$(gh run list --workflow merge-queue.yml --status in_progress --limit 50 --json databaseId,createdAt 2>/dev/null || echo "[]")
+          CANDIDATES=$(echo "$IN_PROGRESS" | jq -r --argjson me "${{ github.run_id }}" '.[] | select(.databaseId != $me) | select(.createdAt != null) | @base64' 2>/dev/null || true)
+          for CAND in $CANDIDATES; do
+            RUN_ID=$(echo "$CAND" | base64 -d | jq -r '.databaseId' 2>/dev/null || echo "0")
+            CREATED=$(echo "$CAND" | base64 -d | jq -r '.createdAt' 2>/dev/null || echo "")
+            CREATED_TS=$(date -u -d "$CREATED" +%s 2>/dev/null || echo "$NOW")
+            echo "  Checking run #$RUN_ID (created $CREATED)..."
+            if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
+              echo "    Run #$RUN_ID is younger than 10 min - leaving it."
+              continue
+            fi
+            # Only cancel if at least one job is queued but never started
+            UNSTARTED=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
+            if [ "$UNSTARTED" -gt 0 ]; then
+              echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started for >10 min - cancelling."
+              gh run cancel "$RUN_ID" --repo ${{ github.repository }} 2>/dev/null && echo "    Cancelled run #$RUN_ID." || echo "    Cancel of #$RUN_ID failed (ignoring)."
+            else
+              echo "    Run #$RUN_ID has no unstarted jobs - leaving it."
+            fi
+          done
+          echo "Stuck-run sweep complete."
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.21.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Configure git
+        run: |
+          git config user.name "modulo-merge-bot"
+          git config user.email "bot@modulo.run"
+
+      - name: Check main CI status
+        id: check-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Checking main branch CI status..."
+          MAIN_SHA=$(git rev-parse main 2>/dev/null || echo "unknown")
+          CI_RUN=$(gh run list --workflow ci.yml --branch main --limit 1 --json conclusion,databaseId 2>/dev/null || echo "[]")
+          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"' 2>/dev/null || echo "unknown")
+          echo "Latest main CI run conclusion: $CI_CONCLUSION"
+          if [ "$CI_CONCLUSION" = "success" ]; then
+            echo "Main CI is green - proceeding with merge queue."
+            echo "main_ci_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Main CI is $CI_CONCLUSION - proceeding anyway."
+            echo "main_ci_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Clean up stale failed merge-queue branches
+        if: steps.check-ci.outputs.main_ci_ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Cleaning up stale merge-queue/failed branches (older than 7 days)..."
+          CUTOFF=$(date -d '7 days ago' +%s)
+          gh api repos/farnalabs/modulo/branches --paginate --jq '.[].name' | grep '^merge-queue/failed-' | while IFS= read -r branch; do
+            # Extract timestamp from branch name: merge-queue/failed-<timestamp>
+            BRANCH_TS=$(echo "$branch" | sed 's/^merge-queue\/failed-//')
+            if [ "$BRANCH_TS" -lt "$CUTOFF" ] 2>/dev/null; then
+              echo "  Deleting stale branch: $branch"
+              git push origin --delete "refs/heads/$branch" 2>/dev/null || true
+            fi
+          done
+          echo "Cleanup complete."
+
+      - name: Create merge-queue branch from main
+        run: |
+          git branch -D merge-queue 2>/dev/null || true
+          git checkout -b merge-queue
+          echo "merge-queue branch reset to main"
+
+      - name: Collect open PRs (oldest first, approved only)
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Fetching open PRs sorted by age..."
+          gh pr list --state open --json number,title,headRefName,createdAt --limit 50 2>&1 | \
+            jq 'sort_by(.createdAt)' > /tmp/all_prs.json
+          ALL_COUNT=$(jq 'length' /tmp/all_prs.json)
+          echo "Found $ALL_COUNT open PR(s)"
+
+          # Filter to only PRs approved by farnalabs or modulo-reviewbot
+          APPROVED_COUNT=0
+          echo "[]" > /tmp/prs.json
+
+          jq -c '.[]' /tmp/all_prs.json | while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+
+            echo -n "  PR #$NUM ($TITLE) -- "
+
+            # Check for approval reviews
+            APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
+
+            if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
+              echo "approved by $APPROVERS"
+
+              # Check CI status - only include PRs with passing CI
+              CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
+              CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
+              if [ "$CI_CONCLUSION" != "success" ]; then
+                echo "  skipping - CI not passing (latest: $CI_CONCLUSION)"
+              else
+                echo "$pr" >> /tmp/approved_prs.json
+                APPROVED_COUNT=$((APPROVED_COUNT + 1))
+              fi
+            else
+              echo "not approved yet -- skipping"
+            fi
+          done
+
+          # Combine approved PRs into the prs.json file
+          if [ -f /tmp/approved_prs.json ]; then
+            jq -s '.' /tmp/approved_prs.json > /tmp/prs.json
+          fi
+
+          PR_COUNT=$(jq 'length' /tmp/prs.json)
+          echo "Approved PRs ready for queue: $PR_COUNT"
+          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "all_count=$ALL_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Exit early if no approved PRs
+        if: steps.collect.outputs.pr_count == '0'
+        run: |
+          echo "No approved PRs to process."
+          echo "Total open: ${{ steps.collect.outputs.all_count }}, approved: 0"
+          echo "PRs need an APPROVED review from farnalabs or modulo-reviewbot."
+          exit 0
+
+      - name: Merge PRs into merge-queue (oldest first)
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          merged_prs=""
+          conflict_prs=""
+          noop_prs=""
+
+          while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+            REF=$(echo "$pr" | jq -r '.headRefName')
+
+            # Skip already-closed
+            PR_STATE=$(gh pr view "$NUM" --json state,closed 2>/dev/null) || true
+            if echo "$PR_STATE" | jq -e '.state == "CLOSED" or .closed == true' > /dev/null 2>&1; then
+              continue
+            fi
+
+            # Re-verify review decision immediately before queueing (TOCTOU guard, PR #535 incident)
+            REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
+            if [ "$REVIEW_DECISION" != "APPROVED" ]; then
+              echo "  skipping PR #$NUM - reviewDecision is '$REVIEW_DECISION' at queue time (must be APPROVED)"
+              continue
+            fi
+
+            echo ""
+            echo "=== PR #$NUM: $TITLE ==="
+
+            # Ensure clean working tree
+            git reset --hard HEAD 2>/dev/null || true
+            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
+
+            echo "Attempting squash-merge into merge-queue..."
+            if git merge --squash "pr-$NUM" 2>&1; then
+              # A no-op squash merge (nothing staged) means the PR's changes are already
+              # present in main/merge-queue (e.g. a duplicate PR merged earlier). Do NOT
+              # count it as merged: no commit was created, so the downstream
+              # 'git log main..merge-queue' would be empty and 'Merge source PRs' would
+              # fail under `set -e -o pipefail` when grep finds no PR number.
+              if git diff --cached --quiet; then
+                echo "PR #$NUM has no changes relative to merge-queue (already on main) -- recording as duplicate."
+                noop_prs="$noop_prs $NUM"
+              else
+                git commit -m "squash! Merge PR #$NUM: $TITLE"
+                echo "PR #$NUM merged successfully."
+                merged_prs="$merged_prs $NUM"
+              fi
+            else
+              git merge --abort 2>/dev/null || true
+              git reset --hard HEAD 2>/dev/null || true
+              echo "MERGE CONFLICT in PR #$NUM -- skipping."
+              conflict_prs="$conflict_prs $NUM"
+            fi
+          done < <(jq -c '.[]' /tmp/prs.json)
+
+          merged_prs=$(echo "$merged_prs" | xargs)
+          conflict_prs=$(echo "$conflict_prs" | xargs)
+          noop_prs=$(echo "$noop_prs" | xargs)
+
+          # Store PR numbers in files for later steps
+          echo "$merged_prs" > /tmp/merged_prs.txt
+          echo "$conflict_prs" > /tmp/conflict_prs.txt
+          echo "$noop_prs" > /tmp/noop_prs.txt
+
+          echo "merged_prs=$merged_prs" >> "$GITHUB_OUTPUT"
+          echo "conflict_prs=$conflict_prs" >> "$GITHUB_OUTPUT"
+          echo "noop_prs=$noop_prs" >> "$GITHUB_OUTPUT"
+          echo "merged_count=$(echo "$merged_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+          echo "conflict_count=$(echo "$conflict_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+          echo "noop_count=$(echo "$noop_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "=== Results ==="
+          echo "Merged: $merged_prs"
+          echo "Duplicates (no changes to merge): $noop_prs"
+          echo "Conflicts: $conflict_prs"
+
+      - name: Close duplicate PRs (changes already on main)
+        if: steps.merge.outputs.noop_count != '0' && steps.merge.outputs.noop_count != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
+            echo "  Closing duplicate PR #$NUM (changes already on main)..."
+            gh pr close "$NUM" --comment "Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review." 2>/dev/null || true
+          done
+
+      - name: Notify fixer of conflicts
+        if: steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "merge-conflict" \
+            --arg conflictPrs "$CONFLICTS" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of conflicts in PRs: $CONFLICTS"
+      - name: Detect migration-number collisions in merged PRs
+        if: steps.merge.outputs.merged_count != '0'
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+
+          MIG_DIR="backend/src/modulo/db/migrations/versions"
+          declare -A prefix_holder
+          collision_prs=""
+
+          # Seed the accumulated prefix set from main's current migration tree. Each
+          # migration file holds its numeric prefix (NNNN_name.py), so a PR that
+          # introduces a prefix already held by a DIFFERENT filename is a collision.
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            base=$(basename "$fname")
+            prefix="${base%%_*}"
+            [ -n "$prefix" ] && prefix_holder["$prefix"]="$base"
+          done < <(git ls-tree --name-only main -- "$MIG_DIR/" 2>/dev/null | grep '\.py$' || true)
+
+          # Process merged PRs oldest-first (same order as the squash-merge), so the
+          # accumulated set mirrors the migration tree immediately before each PR merged.
+          for NUM in $(cat /tmp/merged_prs.txt 2>/dev/null || echo ""); do
+            [ -z "$NUM" ] && continue
+            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" >/dev/null 2>&1 || true
+            if ! git rev-parse --verify -q "pr-$NUM" >/dev/null 2>&1; then
+              echo "  PR #$NUM branch unavailable -- skipping collision check"
+              continue
+            fi
+
+            echo "  PR #$NUM: checking migration-number collisions..."
+            while IFS=$'\t' read -r status path extra; do
+              [ -z "$path" ] && continue
+              case "$status" in
+                R*)
+                  # Rename: the old path releases its prefix, the new path claims its own.
+                  old_base=$(basename "$path")
+                  old_prefix="${old_base%%_*}"
+                  new_base=$(basename "$extra")
+                  new_prefix="${new_base%%_*}"
+                  [ -n "$old_prefix" ] && [ -n "${prefix_holder[$old_prefix]+x}" ] && [ "${prefix_holder[$old_prefix]}" = "$old_base" ] && unset 'prefix_holder[$old_prefix]'
+                  if [ -n "$new_prefix" ]; then
+                    if [ -n "${prefix_holder[$new_prefix]+x}" ]; then
+                      if [ "${prefix_holder[$new_prefix]}" != "$new_base" ]; then
+                        echo "    COLLISION: PR #$NUM adds $new_base, prefix $new_prefix already held by ${prefix_holder[$new_prefix]}"
+                        collision_prs="$collision_prs $NUM"
+                      fi
+                    else
+                      prefix_holder["$new_prefix"]="$new_base"
+                    fi
+                  fi
+                  ;;
+                D)
+                  # Deletion: release the prefix if this PR removed the file holding it.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  [ -n "$prefix" ] && [ -n "${prefix_holder[$prefix]+x}" ] && [ "${prefix_holder[$prefix]}" = "$base" ] && unset 'prefix_holder[$prefix]'
+                  ;;
+                *)
+                  # Addition or modification of a migration file. Only genuinely
+                  # NEW prefixes are added to the accumulated set — the existing
+                  # holder (main or an earlier-merged PR) stays authoritative so
+                  # a colliding PR does not steal the prefix and trigger false
+                  # positives on subsequent PRs that touch the original file.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  [ -z "$prefix" ] && continue
+                  if [ -n "${prefix_holder[$prefix]+x}" ]; then
+                    if [ "${prefix_holder[$prefix]}" != "$base" ]; then
+                      echo "    COLLISION: PR #$NUM adds $base, prefix $prefix already held by ${prefix_holder[$prefix]}"
+                      collision_prs="$collision_prs $NUM"
+                    fi
+                  else
+                    prefix_holder["$prefix"]="$base"
+                  fi
+                  ;;
+              esac
+            done < <(git diff --name-status main...pr-$NUM -- "$MIG_DIR" 2>/dev/null || true)
+          done
+
+          collision_prs=$(echo "$collision_prs" | xargs)
+          collision_count=0
+          if [ -n "$collision_prs" ]; then
+            collision_count=$(echo "$collision_prs" | wc -w)
+          fi
+
+          echo "$collision_prs" > /tmp/migration_collision_prs.txt
+          echo "migration_collision_count=$collision_count" >> "$GITHUB_OUTPUT"
+
+          if [ "$collision_count" -eq 0 ]; then
+            echo "No migration-number collisions detected."
+            exit 0
+          fi
+
+          echo "Migration-number collisions detected in PRs: $collision_prs"
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "migration-collision" \
+            --arg collisionPrs "$collision_prs" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of migration collisions in PRs: $collision_prs"
+      - name: Exit if nothing to merge
+        if: steps.merge.outputs.merged_count == '0'
+        run: |
+          echo "No PRs could be merged into queue. Exiting."
+          exit 0
+
+      - name: Push merge-queue branch (for reference)
+        if: steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          # Best-effort: GITHUB_TOKEN cannot carry the `workflows` permission, so
+          # pushing a merged branch that modifies .github/workflows/* is rejected.
+          # The reference branch is a debug aid only - a rejection must not abort
+          # the queue before the real gates (migration heads, backend, frontend) run.
+          if git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Reference push rejected (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission). Queue continues without a reference branch."
+          fi
+
+      - name: Initialize failure tracking
+        if: steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "" > /tmp/failure_description.txt
+
+      - name: Install backend deps
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Check migration heads (hard gate)
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          # Migration heads must be exactly 1 on the combined branch. Parallel PRs
+          # can each add a migration off the same base, creating multiple heads that
+          # only appear when combined. A multi-head chain breaks app startup
+          # (alembic upgrade head fails) so this is a hard merge gate.
+          uv run --no-build --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
+          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "::error::Alembic migration graph has $HEAD_COUNT heads (expected 1) on the merged branch. Parallel PRs added migrations off the same base without a merge point. Merge a migration-merge PR (like 0036_merge_all_heads) before proceeding."
+            echo "Migration heads check failed" >> /tmp/failure_description.txt
+            exit 1
+          fi
+          echo "Migration heads OK ($HEAD_COUNT head)"
+
+      - name: Backend lint + tests (parallel)
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          # Run lint tools in background, tests in foreground
+          uv run --no-build --no-sync ruff check . &
+          RUFF_PID=$!
+          uv run --no-build --no-sync mypy src/modulo/ &
+          MYPY_PID=$!
+          uv run --no-build --no-sync bandit -r src/modulo/ -ll &
+          BANDIT_PID=$!
+          uv run --no-build --no-sync ruff format --check . &
+          RUFF_FORMAT_PID=$!
+
+          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          TEST_EXIT=$?
+
+          # Collect lint results
+          LINT_FAIL=0
+          wait $RUFF_PID || LINT_FAIL=1
+          wait $MYPY_PID || LINT_FAIL=1
+          wait $BANDIT_PID || LINT_FAIL=1
+          wait $RUFF_FORMAT_PID || LINT_FAIL=1
+
+          # Report failures
+          if [ $LINT_FAIL -ne 0 ]; then
+            echo "Backend lint failed" >> /tmp/failure_description.txt
+          fi
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "Backend unit tests failed" >> /tmp/failure_description.txt
+          fi
+          if [ $LINT_FAIL -ne 0 ] || [ $TEST_EXIT -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Frontend checks
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run lint --quiet
+          pnpm run type-check
+          pnpm run test:unit
+          pnpm run build
+
+      - name: Capture frontend failures
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "Frontend checks failed" >> /tmp/failure_description.txt
+
+      # If CI passed -- merge source PRs
+      - name: Merge source PRs via gh pr merge
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Extract PR numbers from squash commits on merge-queue (oldest first)
+          PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac || true)
+          echo "Merging source PRs (in oldest-first order):"
+          echo "$PR_NUMS"
+
+          FAILED=""
+          for NUM in $PR_NUMS; do
+            echo "  Merging PR #$NUM..."
+
+            # Re-verify review decision immediately before merge (TOCTOU guard, PR #535 incident)
+            REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
+            if [ "$REVIEW_DECISION" != "APPROVED" ]; then
+              echo "  PR #$NUM reviewDecision is '$REVIEW_DECISION' -- skipping merge (stays open for next queue cycle)"
+              continue
+            fi
+
+            if gh pr merge --squash "$NUM" 2>&1; then
+              echo "    PR #$NUM merged --"
+              # Delete the PR's source branch right after a successful merge
+              # (best-effort: a delete failure must never fail the queue). Use the
+              # GitHub API to delete the remote ref -- gh pr merge --delete-branch
+              # would also try to delete the LOCAL branch, which is unreliable from
+              # a checkout on merge-queue. Never delete main, and never delete a
+              # branch for a fork PR: headRefName names the fork's branch, and
+              # deleting it on THIS repo could remove an unrelated branch here that
+              # happens to share the same name.
+              HEAD_REF=$(gh pr view "$NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
+              HEAD_REPO=$(gh pr view "$NUM" --json headRepositoryOwner --jq '.headRepositoryOwner.login' 2>/dev/null || echo "")
+              if [ -n "$HEAD_REF" ] && [ "$HEAD_REF" != "main" ] && [ "$HEAD_REPO" = "${{ github.repository_owner }}" ]; then
+                gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" 2>/dev/null && echo "    Deleted source branch $HEAD_REF for PR #$NUM" || echo "    Could not delete branch $HEAD_REF (may already be gone)"
+              fi
+            else
+              echo "    PR #$NUM failed to merge via gh -- will close with comment"
+              FAILED="$FAILED $NUM"
+            fi
+          done
+
+          # For any PRs that couldn't be merged via gh, close with a reference
+          for NUM in $FAILED; do
+            gh pr close "$NUM" --comment "Merged via merge queue (commit on main)." 2>/dev/null || true
+          done
+
+          echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
+
+      - name: Self-report merged PRs to Modulo (fail-open, best-effort)
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+        shell: bash
+        run: |
+          # FAR-145 follow-up (workflow self-report): the merge queue DISCOVERS the
+          # PRs it merges but never emitted work_item_refs, so the merge stage of a
+          # lifecycle-map journey (backend/src/modulo/core/lifecycle_map/) never
+          # advanced autonomously. This step emits a self-report payload matching
+          # the work-item-refs contract in self_report.py ({kind, ref, status?}
+          # entries — advisory operator claims that confirm/match existing journey
+          # rows only, never mint). The parser reads the payload's work_item_refs
+          # list directly (one of its recognised self-report keys).
+          #
+          # stage_id: "merge" names the lifecycle-map stage this workflow completes.
+          # The merge stage is EXTERNAL (a GitHub Actions workflow, not a Modulo
+          # pipeline), so it has no pipeline_id for the advancement service to
+          # resolve; the endpoint uses stage_id to advance the journey into it.
+          #
+          # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
+          # Modulo outage can NEVER fail the merge queue. The payload is always
+          # recorded in the log; the POST only fires when MODULO_SELF_REPORT_URL is
+          # configured. No such ingestion endpoint exists yet — see the follow-up
+          # ticket for the required API.
+          PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
+          [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to self-report."; exit 0; }
+
+          REFS="[]"
+          for NUM in $PR_NUMS; do
+            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+          done
+          PAYLOAD=$(jq -n --argjson refs "$REFS" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "merge-queue", stage_id: "merge", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"merge-queue","stage_id":"merge","work_item_refs":[]}'
+
+          echo "=== Modulo self-report payload (merged PRs) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - merged PRs recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD" 2>/dev/null \
+            && echo "Self-report delivered to Modulo." \
+            || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
+
+      - name: Close Linear tickets for merged PRs
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
+          [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to close."; exit 0; }
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::warning::LINEAR_API_KEY not configured - skipping Linear ticket close (fail-open)."
+            exit 0
+          fi
+
+          # Resolve the FAR team id once - the result is identical for every PR.
+          TEAM_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+            -d '{"query":"{ teams(first: 50) { nodes { id key } } }"}' \
+            | jq -r '.data.teams.nodes[] | select(.key == "FAR") | .id' 2>/dev/null || echo "")
+          if [ -z "$TEAM_ID" ]; then
+            echo "::warning::Could not resolve FAR team id - skipping Linear ticket close (fail-open)."
+            exit 0
+          fi
+
+          # Resolve the FAR team's "Done" workflow state by name instead of a
+          # hard-coded workspace UUID, so the close target can't silently drift.
+          DONE_STATE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+            -d "{\"query\":\"query(\$teamId: String!) { team(id: \$teamId) { states { nodes { id name } } } }\",\"variables\":{\"teamId\":\"$TEAM_ID\"}}" \
+            | jq -r '.data.team.states.nodes[] | select(.name == "Done") | .id' 2>/dev/null || echo "")
+          if [ -z "$DONE_STATE_ID" ]; then
+            echo "::warning::Could not resolve FAR 'Done' workflow state - skipping Linear ticket close (fail-open)."
+            exit 0
+          fi
+
+          for NUM in $PR_NUMS; do
+            TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
+            TICKET=$(echo "$TITLE" | grep -oP 'FAR-\d+' | head -1 || true)
+            if [ -z "$TICKET" ]; then
+              echo "PR #$NUM has no FAR-xxx ticket in title - skipping Linear close"
+              continue
+            fi
+            echo "Closing Linear ticket $TICKET for PR #$NUM"
+            # Resolve the exact issue by identifier filter (Linear's documented
+            # lookup) rather than scanning an arbitrary 100-issue window, which
+            # silently misses any ticket outside it.
+            ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+              -d "{\"query\":\"query(\$teamId: String!, \$identifier: String!) { team(id: \$teamId) { issues(first: 10, filter: { identifier: { eq: \$identifier } }) { nodes { id identifier state { name } } } } }\",\"variables\":{\"teamId\":\"$TEAM_ID\",\"identifier\":\"$TICKET\"}}" \
+              | jq -r '.data.team.issues.nodes[] | .id' 2>/dev/null || echo "")
+            if [ -z "$ISSUE_ID" ]; then
+              echo "::warning::Ticket $TICKET not found in Linear - skipping"
+              continue
+            fi
+            RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+              -d "{\"query\":\"mutation(\$id: String!, \$stateId: String!) { issueUpdate(id: \$id, input: { stateId: \$stateId }) { issue { id state { name } } } }\",\"variables\":{\"id\":\"$ISSUE_ID\",\"stateId\":\"$DONE_STATE_ID\"}}" \
+              | jq -r '.data.issueUpdate.issue.state.name' 2>/dev/null || echo "")
+            if [ -n "$RESULT" ]; then
+              echo "  $TICKET -> $RESULT"
+            else
+              echo "::warning::Failed to close $TICKET (fail-open)"
+            fi
+          done
+
+      - name: Delete branches whose PRs are already merged (defense-in-depth)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Defense-in-depth sweep: catch (a) branches whose PR was merged outside
+          # this queue run (e.g. manual merges) and (b) any branch whose delete
+          # failed in the per-PR step above. Every delete is best-effort so a
+          # failure can never fail the queue. Never delete main, and never delete
+          # a branch that is the head of an OPEN PR (a merged branch can be reused).
+          echo "Sweeping for branches whose PRs are already merged..."
+          # List merged PRs (paginated) and collect their head branches -- but only
+          # branches that live on THIS repo (skip fork PRs: a fork head ref may
+          # collide with an unrelated same-named branch here).
+          gh api "repos/${{ github.repository }}/pulls?state=closed&per_page=100&sort=updated&direction=desc" --paginate --jq '.[] | select(.merged_at != null) | select(.head.repo.id == .base.repo.id) | .head.ref' 2>/dev/null | sort -u > /tmp/merged_heads.txt || true
+          # Branches that still exist on origin
+          gh api "repos/${{ github.repository }}/branches" --paginate --jq '.[].name' 2>/dev/null | sort -u > /tmp/remote_branches.txt || true
+          # Open PR head refs -- never delete a branch an open PR points at
+          gh api "repos/${{ github.repository }}/pulls?state=open&per_page=100" --paginate --jq '.[].head.ref' 2>/dev/null | sort -u > /tmp/open_heads.txt || true
+          # Delete every branch that has a merged PR (guard each delete; never fail the queue)
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            [ "$branch" = "main" ] && continue
+            if grep -qx "$branch" /tmp/open_heads.txt 2>/dev/null; then
+              continue
+            fi
+            if grep -qx "$branch" /tmp/merged_heads.txt 2>/dev/null; then
+              gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$branch" 2>/dev/null && echo "  Deleted merged branch: $branch" || echo "  Could not delete $branch (may already be gone)"
+            fi
+          done < /tmp/remote_branches.txt
+          echo "Merged-branch sweep complete."
+
+      - name: Trigger main CI and deploy after merge
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Merges landed on main - dispatching CI and deploy workflows..."
+          gh workflow run ci.yml --ref main
+          gh workflow run deploy.yml --ref main
+          echo "Dispatched 'CI: Fast Validation' and 'Deploy: Staging + Prod' on main."
+
+      - name: Clean up remote merge-queue branch
+        if: success() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          git push origin --delete "refs/heads/${{ env.branch_ref }}" 2>/dev/null || true
+          echo "Cleaned up merge-queue remote branch."
+
+      # If CI failed or conflicts -- preserve for fixer
+      - name: Preserve merge-queue branch on CI failure
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          # Best-effort: same limitation as the reference push - GITHUB_TOKEN cannot
+          # push branches that modify .github/workflows/*. If the preserve push fails,
+          # the fixer still receives the notification (with the merged PRs), so the
+          # branch is a convenience, not a hard requirement.
+          if git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
+            echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+          else
+            echo "::warning::Could not preserve merge-queue branch (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission)."
+          fi
+
+      - name: Notify branch-fixer on CI failure
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+          MERGED=$(cat /tmp/merged_prs.txt 2>/dev/null || echo "")
+          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          FAILURE_DESC=$(cat /tmp/failure_description.txt 2>/dev/null || echo "CI check failed")
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "ci-failure" \
+            --arg branchName "${{ env.branch_ref }}" \
+            --arg merged_prs "$MERGED" \
+            --arg conflict_prs "$CONFLICTS" \
+            --arg failure_description "$FAILURE_DESC" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, failureDescription: $failure_description, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of CI failure"

@@ -444,3 +444,187 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+
+  notify-pr-failure:
+    name: Trigger Branch Fixer
+    # The `manual-delivery` label must only suppress the webhook dispatch step
+    # below, NOT the whole job: a job-level skip surfaces this check as
+    # "skipped" in the check-runs API, which the PR Reviewer flags as a
+    # non-green signal on every such PR. The check itself always reports
+    # success on pull_request events; the label guard lives on the dispatch
+    # step so it keeps its documented meaning ("do not auto-dispatch the
+    # Branch Fixer").
+    if: github.event_name == 'pull_request' && always()
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, gitleaks, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    permissions:
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Check retry limit
+        id: retry-check
+        if: (failure() || cancelled()) && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          PR_NUM="${{ github.event.pull_request.number }}"
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          # Count how many times the branch fixer has already pushed fix commits
+          # to this PR. Each successful fix produces exactly one commit with
+          # committer "modulo-branch-fixer".
+          FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
+            --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
+
+          echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUM} on '${BRANCH}' -- branch fixer has pushed $FIX_COUNT fix commit(s)."
+
+          if [ "$FIX_COUNT" -ge 3 ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
+            gh pr comment "$PR_NUM" --body "## Branch Fixer Exhausted
+
+            The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
+
+            The branch fixer will not retry again on this PR."
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Modulo Branch Fixer
+        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(cat << ENDJSON
+          {
+            "branchName": "${BRANCH}",
+            "prNumber": ${PR_NUM},
+            "runUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "failureDescription": "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})"
+          }
+          ENDJSON
+          )
+          echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
+          echo "Sending to Modulo Branch Fixer pipeline..."
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+          elif [ "$HTTP_CODE" = "429" ]; then
+            echo "::warning::Modulo Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
+          else
+            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+          fi
+
+      - name: Report Branch Fixer check status
+        if: success()
+        run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
+
+  notify-pr-review:
+    name: Trigger PR Reviewer
+    # Mirror the notify-pr-failure pattern above: a job-level `success()`
+    # surfaces this check as "skipped" in the check-runs API whenever any
+    # needed job fails or is cancelled (e.g. a runner outage), and the PR
+    # Reviewer flags that as a non-green signal. The check itself always
+    # reports success on pull_request events; the "only dispatch when all
+    # needed checks are green" logic lives on the webhook step below.
+    if: github.event_name == 'pull_request' && always()
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, gitleaks, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip PR Reviewer when head already reviewed or only merged since last review
+        id: review-check
+        if: success() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Guard the wiring: the dedup script is a no-op if the repo was not
+          # checked out (GitHub Actions runners start with an empty workspace),
+          # so the notify-pr-review job checks out the repo first. The
+          # deterministic path must fail LOUDLY, not fall through to the
+          # fail-open `|| echo "skip=false"` below, or a wiring bug silently
+          # dispatches every webhook and defeats the dedup feature.
+          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
+          # Fetch the PR's reviews and commits JSON, then run the versioned
+          # dedup decision script (.github/scripts/pr-review-dedup.py).
+          # The script handles multi-line bodies and pipe chars correctly
+          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
+          # fails open (dispatch) on any load error or ambiguous state.
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
+          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
+          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
+          cat /tmp/pr-dedup-err
+      - name: Send webhook to Modulo PR Review Agent
+        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          TIMESTAMP=$(date +%s)
+          PAYLOAD=$(cat << ENDJSON
+          {
+            "action": "check_run",
+            "repository": {"full_name": "${REPO}"},
+            "pull_request": {
+              "number": ${PR_NUMBER},
+              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
+            }
+          }
+          ENDJSON
+          )
+          BODY=$(echo "${PAYLOAD}")
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          echo "PR Reviewer notified"
+
+      - name: Report PR Reviewer check status
+        if: success()
+        run: echo "PR Reviewer trigger check passed (all required checks green, webhook sent or suppressed by manual-delivery label)."

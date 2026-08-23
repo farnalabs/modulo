@@ -1,0 +1,85 @@
+name: "Review: Modulo Agent"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
+      head_sha:
+        description: 'HEAD SHA of the PR'
+        required: false
+        default: ''
+        type: string
+      head_branch:
+        description: 'HEAD branch of the PR'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  trigger-modulo-review:
+    name: Trigger Modulo PR Review
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Set PR details
+        id: pr-details
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+            echo "head_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          else
+            PR_NUM="${{ inputs.pr_number }}"
+            REPO="${{ github.repository }}"
+            HEAD_SHA="${{ inputs.head_sha }}"
+            HEAD_BRANCH="${{ inputs.head_branch }}"
+            if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_BRANCH" ]; then
+              PR_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '{head_sha: .head.sha, head_branch: .head.ref}')
+              HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')
+              HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.head_branch')
+            fi
+            echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
+            echo "repo=${REPO}" >> $GITHUB_OUTPUT
+            echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+            echo "head_branch=${HEAD_BRANCH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send webhook to Modulo PR Review Agent
+        id: webhook
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          PR_NUMBER: ${{ steps.pr-details.outputs.pr_number }}
+          REPO: ${{ steps.pr-details.outputs.repo }}
+          SHA: ${{ steps.pr-details.outputs.head_sha }}
+          BRANCH: ${{ steps.pr-details.outputs.head_branch }}
+        run: |
+          TIMESTAMP=$(date +%s)
+          PAYLOAD=$(cat << ENDJSON
+          {
+            "action": "check_run",
+            "repository": {"full_name": "${REPO}"},
+            "pull_request": {
+              "number": ${PR_NUMBER},
+              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
+            }
+          }
+          ENDJSON
+          )
+          BODY=$(echo "${PAYLOAD}")
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+          curl -s -X POST "${MODULO_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}"
