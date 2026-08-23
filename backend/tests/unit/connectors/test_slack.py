@@ -413,10 +413,9 @@ async def test_write_message_http_error(connector):
     respx.post("https://slack.com/api/chat.postMessage").mock(
         return_value=httpx.Response(500, text="Server Error"),
     )
+    payload = ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"})
     with pytest.raises(ValueError, match="Slack API HTTP 500"):
-        await connector.write(
-            ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"}),
-        )
+        await connector.write(payload)
 
 
 # -- rate limiting (old-style direct raises via ValueError) --
@@ -427,8 +426,9 @@ async def test_query_channels_rate_limited(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(429, headers={"Retry-After": "0"}, text=""),
     )
+    query = ConnectorQuery(resource="channels")
     with pytest.raises(ValueError, match="Slack API HTTP"):
-        await connector.query(ConnectorQuery(resource="channels"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -436,8 +436,9 @@ async def test_query_users_rate_limited(connector):
     respx.get("https://slack.com/api/users.list").mock(
         return_value=httpx.Response(429, headers={"Retry-After": "0"}, text=""),
     )
+    query = ConnectorQuery(resource="users")
     with pytest.raises(ValueError, match="Slack API HTTP"):
-        await connector.query(ConnectorQuery(resource="users"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -445,10 +446,9 @@ async def test_query_messages_rate_limited(connector):
     respx.get("https://slack.com/api/conversations.history").mock(
         return_value=httpx.Response(429, headers={"Retry-After": "0"}, text=""),
     )
+    query = ConnectorQuery(resource="messages", filters={"channel": "C12345"})
     with pytest.raises(ValueError, match="Slack API HTTP"):
-        await connector.query(
-            ConnectorQuery(resource="messages", filters={"channel": "C12345"}),
-        )
+        await connector.query(query)
 
 
 @respx.mock
@@ -456,10 +456,9 @@ async def test_write_message_rate_limited(connector):
     respx.post("https://slack.com/api/chat.postMessage").mock(
         return_value=httpx.Response(429, headers={"Retry-After": "0"}, text=""),
     )
+    payload = ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"})
     with pytest.raises(ValueError, match="Slack API HTTP"):
-        await connector.write(
-            ConnectorPayload(resource="message", data={"channel": "C12345", "text": "Hello"}),
-        )
+        await connector.write(payload)
 
 
 # -- connector type --
