@@ -204,6 +204,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "redis_errors": 0,
     "deduped": 0,
     "nodeless_failed": 0,
+    "nodeless_redispatched": 0,
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
@@ -233,6 +234,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["redis_errors"] = stats.get("redis_errors", 0)
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
     _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
+    _dispatcher_reconcile_stats["nodeless_redispatched"] = stats.get("nodeless_redispatched", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
@@ -3255,6 +3257,39 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     return bool((datetime.now(UTC) - row.started_at).total_seconds() > age_minutes * 60)
 
 
+def _should_redispatch_nodeless(row: Any) -> bool:
+    """Decide whether a nodeless zombie should be RE-DISPATCHED (not terminal-failed).
+
+    A nodeless zombie executed ZERO nodes (no checkpoint, no node_token_usage,
+    no outputs_json), so re-dispatch is SAFE — there is nothing to
+    double-execute, and these pipelines only create PRs after a node runs.
+
+    Retry budgeting (FAR — nodeless safe re-dispatch):
+      * ``retry_policy`` present (non-empty) with ``"stall"`` in ``on``: honor the
+        ``max_retries`` budget. ``claim_count`` is 1 for the initial claim, so a
+        re-dispatch is allowed while ``claim_count <= max_retries`` (initial
+        attempt + up to ``max_retries`` retries).
+      * ``retry_policy`` absent/None OR an empty policy (the column defaults to
+        ``{}``): re-dispatch ONCE only, bounded by ``claim_count <= 1`` (the
+        original claim has not yet been re-dispatched).
+      * ``retry_policy`` present (non-empty) but WITHOUT ``"stall"`` in ``on``:
+        terminal-fail — never re-dispatch a nodeless zombie for a trigger it does
+        not cover.
+    """
+    retry_policy = getattr(row, "retry_policy", None)
+    if isinstance(retry_policy, dict) and retry_policy:
+        on = retry_policy.get("on") or []
+        if "stall" in on:
+            max_retries = int(retry_policy.get("max_retries", 0) or 0)
+            return bool(row.claim_count <= max_retries)
+        # A non-empty policy that does not cover "stall" must NOT re-dispatch a
+        # nodeless zombie — terminal-fail it.
+        return False
+    # No stall retry policy (or no/empty policy): re-dispatch exactly once
+    # (only the un-re-redispatched claim).
+    return bool(row.claim_count <= 1)
+
+
 async def _fail_nodeless_run(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Terminal-fail a claimed-but-nodeless zombie in the reconcile transaction.
 
@@ -3843,6 +3878,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         "redis_errors": 0,
         "deduped": 0,
         "nodeless_failed": 0,
+        "nodeless_redispatched": 0,
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
@@ -3878,6 +3914,7 @@ async def _reconcile_org(
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
+    from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run
 
     async with factory() as session, session.begin():
@@ -3914,7 +3951,10 @@ async def _reconcile_org(
                         Run.claim_count,
                         Run.dispatcher,
                         text("runs.enqueue_failed_at AS enqueue_failed_at"),
-                    ).where(
+                        Pipeline.retry_policy,
+                    )
+                    .join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+                    .where(
                         Run.organisation_id == org_id,
                         Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
                         re_dispatch_predicate,
@@ -4253,11 +4293,61 @@ async def _reconcile_one_row(
     row. ``summary`` and ``terminalized_run_ids`` are mutated in place.
     """
     if _is_nodeless_zombie_row(row, nodeless_window):
-        # Claimed-but-never-executed zombie: fail it directly,
-        # BEFORE the Redis job check — even a live SAQ job must
-        # not keep a nodeless run 'running'. Never re-dispatch
-        # (a re-dispatch could double-execute a live-but-stuck
-        # execute_run, and these pipelines create PRs).
+        # Claimed-but-never-executed zombie. A nodeless zombie ran ZERO nodes,
+        # so re-dispatch is SAFE (no double-execution; these pipelines only
+        # create PRs after a node runs). Re-dispatch it back to the queue
+        # (a fresh worker picks it up) instead of terminal-failing, bounded by
+        # retry_policy / claim_count. Only terminal-fail when re-dispatch is
+        # NOT warranted (retry budget exhausted) or the re-dispatch itself
+        # fails (fall back so the run is never left dangling).
+        if _should_redispatch_nodeless(row):
+            job_type = _reconcile_job_type(row.status)
+            key_suffix = uuid.uuid4().hex
+            try:
+                outcome, _ = await _re_enqueue_run(
+                    q.name,
+                    str(row.id),
+                    str(org_id),
+                    job_type,
+                    key_suffix=key_suffix,
+                )
+                if outcome == "enqueued":
+                    summary["nodeless_redispatched"] += 1
+                    _log.info(
+                        "dispatcher_reconcile.nodeless_redispatched run=%s org=%s",
+                        row.id,
+                        org_id,
+                    )
+                else:
+                    # deferred / deduped / enqueue_failed -> not an error, not a
+                    # terminal failure: let a later tick retry. Count as skipped
+                    # (the run stays 'running' / pending undispatched).
+                    summary["skipped"] += 1
+                    _log.warning(
+                        "dispatcher_reconcile: nodeless re-enqueue outcome=%s for run %s (deferring to later tick)",
+                        outcome,
+                        row.id,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                summary["redis_errors"] += 1
+                _log.exception("dispatcher_reconcile: nodeless re-enqueue failed for run %s", row.id)
+                await _ingest_saq_error(
+                    session,
+                    org_id,
+                    function="dispatcher_reconcile",
+                    message=f"dispatcher_reconcile: nodeless re-enqueue failed for run {row.id}",
+                    context={"run_id": str(row.id)},
+                )
+                # Fallback: terminal-fail so the run is never left dangling
+                # when re-dispatch is impossible.
+                await _fail_nodeless_run(session, row.id, org_id)
+                summary["nodeless_failed"] += 1
+                terminalized_run_ids.append((row.id, org_id))
+            return enqueue_failed_redispatched
+        # Re-dispatch not warranted (retry budget exhausted / policy excludes
+        # 'stall'): terminal-fail exactly as before.
         summary["nodeless_failed"] += 1
         await _fail_nodeless_run(session, row.id, org_id)
         # FAR-162 (P6'): the nodeless terminalizer writes a raw
