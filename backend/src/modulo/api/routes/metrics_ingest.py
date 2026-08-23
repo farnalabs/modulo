@@ -66,7 +66,32 @@ class MetricsEventBatchRequest(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _sanitize_route_template(route: str | None, request: Request) -> str:
+def _registered_path_templates(app: Any) -> set[str]:
+    """Collect every registered URL path template under *app*.
+
+    FastAPI 0.130+ stores included routers lazily as ``_IncludedRouter``
+    wrappers whose ``path`` attribute is ``None``, so a flat scan of
+    ``app.routes`` can no longer see route templates. Walk the nested router
+    tree so the sanitizer matches real templates instead of always returning
+    ``"unknown"``.
+    """
+    templates: set[str] = set()
+
+    def visit(routes: Any) -> None:
+        for r in routes:
+            original = getattr(r, "original_router", None)
+            if original is not None:
+                visit(getattr(original, "routes", ()))
+                continue
+            path = getattr(r, "path", None)
+            if isinstance(path, str):
+                templates.add(path)
+
+    visit(getattr(app, "routes", ()))
+    return templates
+
+
+def _sanitize_route_template(route: str | None, templates: set[str]) -> str:
     """Match *route* against the app's registered route templates.
 
     Returns the matched template string, or ``"unknown"`` when no match is
@@ -75,12 +100,7 @@ def _sanitize_route_template(route: str | None, request: Request) -> str:
     """
     if not route:
         return "unknown"
-    app = request.app
-    for r in app.routes:
-        template = getattr(r, "path", None)
-        if isinstance(template, str) and route == template:
-            return template
-    return "unknown"
+    return route if route in templates else "unknown"
 
 
 async def _api_error_count_today(
@@ -144,6 +164,7 @@ async def ingest_events(
             api_error_count = await _api_error_count_today(session, current_user.organisation_id)
 
             now = datetime.now(UTC)
+            registered_templates = _registered_path_templates(request.app)
             for event in req.events:
                 # api_error daily cap
                 if event.event_type == "api_error":
@@ -158,7 +179,7 @@ async def ingest_events(
                 # Sanitize route in api_error payloads
                 payload = dict(event.payload)
                 if event.event_type == "api_error" and "route" in payload:
-                    payload["route"] = _sanitize_route_template(payload["route"], request)
+                    payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
 
                 recorded_at = event.recorded_at or now
 
