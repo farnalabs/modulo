@@ -39,7 +39,7 @@
             <Button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" @click="createTeam">
               {{ creatingTeam ? 'Creating...' : 'Create' }}
             </Button>
-            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
+            <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
               Cancel
             </button>
           </div>
@@ -81,13 +81,13 @@
             </div>
           </div>
 
-          <div v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" role="region" :aria-label="$t('views.SettingsTeamsView.team_details', { name: team.name })">
+          <section v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" :aria-label="$t('views.SettingsTeamsView.team_details', { name: team.name })">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
               <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
               <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
               </Button>
-              <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
+              <button type="button" class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
                 Cancel
               </button>
             </div>
@@ -96,10 +96,10 @@
               <p class="text-sm font-medium text-destructive">Delete "{{ team.name }}"?</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsTeamsView.this_action_cannot_be_undone') }}</p>
               <div class="mt-3 flex items-center gap-2">
-                <button :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
+                <button type="button" :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
                   {{ deletingTeam ? 'Deleting...' : 'Delete' }}
                 </button>
-                <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-delete-cancel" @click="deleteConfirmTeamId = null; deleteError = null">
+                <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-delete-cancel" @click="deleteConfirmTeamId = null; deleteError = null">
                   Cancel
                 </button>
                 <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -207,7 +207,7 @@
 
             <h3 class="mb-3 mt-6 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsTeamsView.webhook_notifications') }}</h3>
             <TeamNotificationEndpoints :team-id="team.id" />
-          </div>
+          </section>
         </div>
       </div>
     </div>

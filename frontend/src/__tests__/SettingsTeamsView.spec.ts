@@ -89,7 +89,7 @@ describe('SettingsTeamsView', () => {
 
     const panel = wrapper.find('#settings-teams-panel-t1')
     expect(panel.exists()).toBe(true)
-    expect(panel.attributes('role')).toBe('region')
+    expect(panel.element.tagName).toBe('SECTION')
     expect(panel.attributes('aria-label')).toBe('Engineering details')
   })
 })
