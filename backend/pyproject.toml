@@ -215,7 +215,7 @@ exclude = ["migrations/"]
 mypy_path = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
+module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*", "e2b", "e2b.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

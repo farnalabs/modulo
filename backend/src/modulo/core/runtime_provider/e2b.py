@@ -65,7 +65,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         ``labels`` dict contains ``repo_url`` the repository is cloned into
         ``/home/user/repo`` and optionally checked out to ``repo_ref``.
         """
-        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox
 
         template_id = spec.image_ref.strip() if spec.image_ref else _DEFAULT_TEMPLATE_ID
         timeout = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
