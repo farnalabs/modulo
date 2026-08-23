@@ -3,7 +3,9 @@
 At module load or on first call, indexes the product surface by reading
 ``frontend/src/manifest.yaml`` (the structured product manifest of routes/pages)
 that ships in the build. Each index entry stores
-``(heading_path, heading, first_paragraph)``.
+``(heading_path, heading, first_paragraph, features)``, where ``features``
+carries the route's ``product_map`` ``feat-*`` references so the index is
+searchable by feature as well as by page text.
 
 Search is case-insensitive keyword matching against heading + first paragraph.
 """
@@ -27,6 +29,7 @@ class DocEntry:
     heading_path: str
     heading: str
     first_paragraph: str
+    features: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -94,10 +97,20 @@ class DocumentationIndex:
                     heading_path=route,
                     heading=_heading(route, value),
                     first_paragraph=_summarise(value),
+                    features=_features(value),
                 )
             )
 
         return cls(entries=entries)
+
+
+def _features(entry: dict[Any, Any]) -> list[str]:
+    product_map = entry.get("product_map")
+    if not product_map:
+        return []
+    if isinstance(product_map, (list, tuple)):
+        return [str(item).strip() for item in product_map if str(item).strip()]
+    return [str(product_map).strip()]
 
 
 def _as_str(value: Any) -> str:
@@ -130,6 +143,9 @@ def _summarise(entry: dict[Any, Any]) -> str:
         parts.append(f"required_permissions={perms_str}")
     if entry.get("visibility"):
         parts.append(f"visibility={_as_str(entry['visibility'])}")
+    features = _features(entry)
+    if features:
+        parts.append("product_map=" + ", ".join(features))
 
     summary = " · ".join(parts)
     if entry.get("deprecated"):

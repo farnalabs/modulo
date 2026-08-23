@@ -45,6 +45,34 @@ routes:
         deprecated: false
 """
 
+_MANIFEST_WITH_FEATURES = """\
+schema_version: 1
+features:
+    feat-pipelines:
+        description: Visual pipeline editor and node categories
+    feat-runs:
+        description: Run execution, history, and output diffs
+routes:
+    /pipelines:
+        name: pipeline-list
+        breadcrumb: Pipelines
+        type: list_page
+        product_map: [feat-pipelines]
+        deprecated: false
+    /runs:
+        name: runs-list
+        breadcrumb: Runs
+        type: list_page
+        product_map: feat-runs
+        deprecated: false
+    /orphan:
+        name: orphan
+        breadcrumb: Orphan
+        type: page
+        product_map:
+        deprecated: false
+"""
+
 
 class TestDocEntry:
     def test_holds_fields(self) -> None:
@@ -312,3 +340,27 @@ class TestBuild:
         index = DocumentationIndex.build()
         assert index.entries
         assert any(e.heading_path == "/pipelines" and e.heading == "Pipelines" for e in index.entries)
+
+    def test_build_parses_product_map_features(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(_MANIFEST_WITH_FEATURES, encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        by_path = {e.heading_path: e for e in index.entries}
+        assert by_path["/pipelines"].features == ["feat-pipelines"]
+        assert "product_map=feat-pipelines" in by_path["/pipelines"].first_paragraph
+        assert by_path["/runs"].features == ["feat-runs"]
+
+    def test_build_absent_product_map_yields_empty_features(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(_MANIFEST_WITH_FEATURES, encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        by_path = {e.heading_path: e for e in index.entries}
+        assert not by_path["/orphan"].features
+        assert "product_map=" not in by_path["/orphan"].first_paragraph
+
+    def test_search_matches_feature_reference(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(_MANIFEST_WITH_FEATURES, encoding="utf-8")
+        index = DocumentationIndex.build(manifest)
+        results = index.search("feat-pipelines")
+        assert [e.heading_path for e in results] == ["/pipelines"]

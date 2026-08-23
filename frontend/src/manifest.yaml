@@ -15,7 +15,7 @@ routes:
         name: dashboard
         breadcrumb: Dashboard
         parent:
-        product_map:
+        product_map: [feat-dashboard]
         sidebar_group: build
         sidebar_order: 1
         type: page
@@ -27,7 +27,7 @@ routes:
         name: analytics
         breadcrumb: Analytics
         parent: /
-        product_map:
+        product_map: [feat-analytics]
         sidebar_group: monitor
         sidebar_order: 7
         type: page
@@ -40,7 +40,7 @@ routes:
         name: oauth-authorize
         breadcrumb: Authorize
         parent:
-        product_map:
+        product_map: [feat-auth]
         sidebar_group:
         sidebar_order:
         type: page
@@ -52,7 +52,7 @@ routes:
         name: onboarding
         breadcrumb: Onboarding
         parent: /
-        product_map:
+        product_map: [feat-onboarding]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -64,7 +64,7 @@ routes:
         name: library-pipeline-wizard
         breadcrumb: Create Pipeline
         parent: /library
-        product_map:
+        product_map: [feat-library, feat-pipelines]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -78,7 +78,7 @@ routes:
         name: notifications
         breadcrumb: Notifications
         parent: /
-        product_map:
+        product_map: [feat-notifications]
         sidebar_group:
         sidebar_order:
         type: page
@@ -89,7 +89,7 @@ routes:
         name: pipeline-list
         breadcrumb: Pipelines
         parent: /
-        product_map:
+        product_map: [feat-pipelines]
         sidebar_group: build
         sidebar_order: 2
         type: list_page
@@ -101,7 +101,7 @@ routes:
         name: library
         breadcrumb: Library
         parent: /
-        product_map:
+        product_map: [feat-library]
         sidebar_group: build
         sidebar_order: 3
         type: list_page
@@ -112,7 +112,7 @@ routes:
         name: pipeline-copy
         breadcrumb: Copy Pipeline
         parent: /library
-        product_map:
+        product_map: [feat-pipelines]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -123,7 +123,7 @@ routes:
         name: runs-list
         breadcrumb: Runs
         parent: /
-        product_map:
+        product_map: [feat-runs]
         sidebar_group: build
         sidebar_order: 4
         type: list_page
@@ -134,7 +134,7 @@ routes:
         name: runs-diff
         breadcrumb: Output Diff
         parent: /
-        product_map:
+        product_map: [feat-runs]
         sidebar_group: monitor
         sidebar_order: 2
         type: page
@@ -145,7 +145,7 @@ routes:
         name: pipeline-editor
         breadcrumb: Pipeline Editor
         parent: /pipelines
-        product_map:
+        product_map: [feat-pipelines]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -159,7 +159,7 @@ routes:
         name: run-detail
         breadcrumb: Run Detail
         parent: /runs
-        product_map:
+        product_map: [feat-runs]
         sidebar_group: build
         sidebar_order: 8
         type: detail_page
@@ -173,7 +173,7 @@ routes:
         name: composite-editor
         breadcrumb: Composite Editor
         parent: /pipelines
-        product_map:
+        product_map: [feat-pipelines]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -187,7 +187,7 @@ routes:
         name: eval-editor
         breadcrumb: Evals
         parent: /
-        product_map:
+        product_map: [feat-evals]
         sidebar_group: improve
         sidebar_order: 1
         type: form_page
@@ -198,7 +198,7 @@ routes:
         name: eval-proposals-queue
         breadcrumb: Eval Proposals
         parent: /
-        product_map:
+        product_map: [feat-evals]
         sidebar_group: improve
         sidebar_order: 2
         type: list_page
@@ -209,7 +209,7 @@ routes:
         name: variant-compare
         breadcrumb: Variants
         parent: /
-        product_map:
+        product_map: [feat-variants]
         sidebar_group: improve
         sidebar_order: 3
         type: page
@@ -221,7 +221,7 @@ routes:
         name: variant-compare-detail
         breadcrumb: Variant Batch Compare
         parent: /variants/compare
-        product_map:
+        product_map: [feat-variants]
         sidebar_group: monitor
         sidebar_order: 5
         type: detail_page
@@ -235,7 +235,7 @@ routes:
         name: ab-test-models
         breadcrumb: AB Test Models
         parent: /
-        product_map:
+        product_map: [feat-variants]
         sidebar_group: improve
         sidebar_order: 4
         type: page
@@ -246,7 +246,7 @@ routes:
         name: schemas
         breadcrumb: Schemas
         parent: /
-        product_map:
+        product_map: [feat-schemas]
         sidebar_group: configure
         sidebar_order: 1
         type: list_page
@@ -258,7 +258,7 @@ routes:
         name: schema-editor
         breadcrumb: Schema Editor
         parent: /schemas
-        product_map:
+        product_map: [feat-schemas]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -272,7 +272,7 @@ routes:
         name: schema-infer
         breadcrumb: Schema Inference
         parent: /schemas
-        product_map:
+        product_map: [feat-schemas]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -283,7 +283,7 @@ routes:
         name: admin-remy
         breadcrumb: Remy Config
         parent: /
-        product_map:
+        product_map: [feat-remy]
         sidebar_group: configure
         sidebar_order: 10
         type: form_page
@@ -295,7 +295,7 @@ routes:
         name: settings-remy
         breadcrumb: Remy Skills
         parent: /
-        product_map:
+        product_map: [feat-remy]
         sidebar_group: configure
         sidebar_order: 11
         type: form_page
@@ -307,7 +307,7 @@ routes:
         name: settings-teams
         breadcrumb: Teams
         parent: /
-        product_map:
+        product_map: [feat-teams]
         sidebar_group: admin
         sidebar_order: 2
         type: list_page
@@ -318,7 +318,7 @@ routes:
         name: settings-sso
         breadcrumb: SSO
         parent: /
-        product_map:
+        product_map: [feat-sso]
         sidebar_group: admin
         sidebar_order: 5
         type: form_page
@@ -329,7 +329,7 @@ routes:
         name: settings-license
         breadcrumb: License
         parent: /
-        product_map:
+        product_map: [feat-license]
         sidebar_group: system
         sidebar_order: 1
         type: form_page
@@ -339,7 +339,7 @@ routes:
         name: settings-mcp
         breadcrumb: MCP
         parent: /
-        product_map:
+        product_map: [feat-mcp]
         sidebar_group: configure
         sidebar_order: 4
         type: form_page
@@ -350,7 +350,7 @@ routes:
         name: settings-triggers
         breadcrumb: Triggers
         parent: /
-        product_map:
+        product_map: [feat-triggers]
         sidebar_group: configure
         sidebar_order: 6
         type: form_page
@@ -361,7 +361,7 @@ routes:
         name: settings-guardrails
         breadcrumb: Guardrails
         parent: /
-        product_map:
+        product_map: [feat-guardrails]
         sidebar_group: configure
         sidebar_order: 5
         type: form_page
@@ -372,7 +372,7 @@ routes:
         name: settings-runtime-config
         breadcrumb: Runtime Config
         parent: /
-        product_map:
+        product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 7
         type: form_page
@@ -383,7 +383,7 @@ routes:
         name: settings-rate-limits
         breadcrumb: Rate Limits
         parent: /
-        product_map:
+        product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 8
         type: form_page
@@ -394,7 +394,7 @@ routes:
         name: settings-hitl-review
         breadcrumb: HITL Review
         parent: /
-        product_map:
+        product_map: [feat-hitl]
         sidebar_group: monitor
         sidebar_order: 6
         type: page
@@ -406,7 +406,7 @@ routes:
         name: settings-observability
         breadcrumb: Observability
         parent: /
-        product_map:
+        product_map: [feat-observability]
         sidebar_group: system
         sidebar_order: 9
         type: form_page
@@ -418,7 +418,7 @@ routes:
         name: settings-error-forwarders
         breadcrumb: Error Forwarders
         parent: /
-        product_map:
+        product_map: [feat-observability]
         sidebar_group: system
         sidebar_order: 2
         type: form_page
@@ -429,7 +429,7 @@ routes:
         name: settings-email
         breadcrumb: Email
         parent: /
-        product_map:
+        product_map: [feat-notifications]
         sidebar_group: system
         sidebar_order: 3
         type: form_page
@@ -440,7 +440,7 @@ routes:
         name: settings-monitoring
         breadcrumb: Browser Monitoring
         parent: /
-        product_map:
+        product_map: [feat-observability]
         sidebar_group: monitor
         sidebar_order: 4
         type: form_page
@@ -451,7 +451,7 @@ routes:
         name: admin-users
         breadcrumb: Users
         parent: /
-        product_map:
+        product_map: [feat-teams]
         sidebar_group: admin
         sidebar_order: 1
         type: list_page
@@ -462,7 +462,7 @@ routes:
         name: admin-org
         breadcrumb: Organization
         parent: /
-        product_map:
+        product_map: [feat-org]
         sidebar_group: admin
         sidebar_order: 3
         type: form_page
@@ -473,7 +473,7 @@ routes:
         name: admin-audit
         breadcrumb: Audit Log
         parent: /
-        product_map:
+        product_map: [feat-audit]
         sidebar_group: admin
         sidebar_order: 6
         type: list_page
@@ -484,7 +484,7 @@ routes:
         name: admin-costs
         breadcrumb: Costs
         parent: /
-        product_map:
+        product_map: [feat-costs]
         sidebar_group: monitor
         sidebar_order: 5
         type: page
@@ -496,7 +496,7 @@ routes:
         name: admin-costs-limits
         breadcrumb: Spend Limits
         parent: /admin/costs
-        product_map:
+        product_map: [feat-costs]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -507,7 +507,7 @@ routes:
         name: admin-costs-controls
         breadcrumb: Cost Controls
         parent: /admin/costs
-        product_map:
+        product_map: [feat-costs]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -518,7 +518,7 @@ routes:
         name: admin-costs-components
         breadcrumb: Cost Components
         parent: /admin/costs
-        product_map:
+        product_map: [feat-costs]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -529,7 +529,7 @@ routes:
         name: admin-connectors
         breadcrumb: Connectors
         parent: /
-        product_map:
+        product_map: [feat-connectors]
         sidebar_group: configure
         sidebar_order: 7
         type: list_page
@@ -540,7 +540,7 @@ routes:
         name: admin-model-backends
         breadcrumb: Model Backends
         parent: /
-        product_map:
+        product_map: [feat-model-backends]
         sidebar_group: configure
         sidebar_order: 3
         type: list_page
@@ -551,7 +551,7 @@ routes:
         name: admin-node-categories
         breadcrumb: Node Categories
         parent: /
-        product_map:
+        product_map: [feat-pipelines]
         sidebar_group: admin
         sidebar_order: 7
         type: list_page
@@ -562,7 +562,7 @@ routes:
         name: admin-feature-flags
         breadcrumb: Feature Flags
         parent: /
-        product_map:
+        product_map: [feat-org]
         sidebar_group: system
         sidebar_order: 4
         type: list_page
@@ -573,7 +573,7 @@ routes:
         name: admin-housekeeping
         breadcrumb: Housekeeping
         parent: /
-        product_map:
+        product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 6
         type: page
@@ -584,7 +584,7 @@ routes:
         name: admin-environments
         breadcrumb: Run Environments
         parent: /
-        product_map:
+        product_map: [feat-environments, feat-runtime]
         sidebar_group: admin
         sidebar_order: 9
         type: list_page
@@ -595,7 +595,7 @@ routes:
         name: admin-parameter-schemas
         breadcrumb: Parameter Schemas
         parent: /
-        product_map:
+        product_map: [feat-schemas]
         sidebar_group: configure
         sidebar_order: 2
         type: list_page
@@ -606,7 +606,7 @@ routes:
         name: admin-run-retention
         breadcrumb: Run Retention
         parent: /
-        product_map:
+        product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 5
         type: form_page
@@ -617,7 +617,7 @@ routes:
         name: admin-sandbox-concurrency
         breadcrumb: Sandbox Concurrency
         parent: /
-        product_map:
+        product_map: [feat-runtime, feat-environments]
         sidebar_group: configure
         sidebar_order: 9
         type: form_page
@@ -628,7 +628,7 @@ routes:
         name: admin-views
         breadcrumb: Saved Views
         parent: /
-        product_map:
+        product_map: [feat-dashboard]
         sidebar_group: admin
         sidebar_order: 8
         type: list_page
@@ -639,7 +639,7 @@ routes:
         name: admin-errors
         breadcrumb: Error Dashboard
         parent: /
-        product_map:
+        product_map: [feat-observability]
         sidebar_group: monitor
         sidebar_order: 1
         type: list_page
@@ -650,7 +650,7 @@ routes:
         name: admin-error-detail
         breadcrumb: Error Detail
         parent: /admin/errors
-        product_map:
+        product_map: [feat-observability]
         sidebar_group: admin
         sidebar_order: 2
         type: detail_page
@@ -664,7 +664,7 @@ routes:
         name: admin-notification-delivery
         breadcrumb: Notification Log
         parent: /
-        product_map:
+        product_map: [feat-notifications]
         sidebar_group: monitor
         sidebar_order: 3
         type: list_page
@@ -675,7 +675,7 @@ routes:
         name: admin-product-analytics
         breadcrumb: Product Analytics
         parent: /
-        product_map:
+        product_map: [feat-product-analytics]
         sidebar_group:
         sidebar_order:
         type: page
@@ -686,7 +686,7 @@ routes:
         name: admin-system-config
         breadcrumb: System Config
         parent: /
-        product_map:
+        product_map: [feat-system-config]
         sidebar_group:
         sidebar_order:
         type: page
@@ -697,7 +697,7 @@ routes:
         name: admin-system-orgs
         breadcrumb: Organisations
         parent: /
-        product_map:
+        product_map: [feat-system-orgs]
         sidebar_group:
         sidebar_order:
         type: page
@@ -708,7 +708,7 @@ routes:
         name: admin-plugins
         breadcrumb: Plugins
         parent: /
-        product_map:
+        product_map: [feat-plugins]
         sidebar_group: admin
         sidebar_order: 4
         type: list_page
@@ -719,7 +719,7 @@ routes:
         name: lifecycle-maps
         breadcrumb: Lifecycle Maps
         parent: /
-        product_map:
+        product_map: [feat-lifecycle-maps]
         sidebar_group: build
         sidebar_order: 5
         type: list_page
@@ -731,7 +731,7 @@ routes:
         name: lifecycle-map-editor
         breadcrumb: Lifecycle Map Editor
         parent: /lifecycle-maps
-        product_map:
+        product_map: [feat-lifecycle-maps]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -745,7 +745,7 @@ routes:
         name: feedback-inbox
         breadcrumb: Feedback Inbox
         parent: /
-        product_map:
+        product_map: [feat-feedback]
         sidebar_group: admin
         sidebar_order: 10
         type: list_page
@@ -757,7 +757,7 @@ routes:
         name: lifecycle-map-detail
         breadcrumb: Lifecycle Map
         parent: /lifecycle-maps
-        product_map:
+        product_map: [feat-lifecycle-maps]
         sidebar_group:
         sidebar_order:
         type: detail_page
@@ -771,7 +771,7 @@ routes:
         name: environment-profiles
         breadcrumb: Environment Profiles
         parent: /
-        product_map:
+        product_map: [feat-environments]
         sidebar_group: configure
         sidebar_order: 8
         type: list_page
@@ -783,7 +783,7 @@ routes:
         name: environment-profiles-new
         breadcrumb: New Profile
         parent: /environment-profiles
-        product_map:
+        product_map: [feat-environments]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -794,7 +794,7 @@ routes:
         name: environment-profiles-edit
         breadcrumb: Edit Profile
         parent: /environment-profiles
-        product_map:
+        product_map: [feat-environments]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -808,7 +808,7 @@ routes:
         name: my-profile
         breadcrumb: My Profile
         parent: /
-        product_map:
+        product_map: [feat-auth]
         sidebar_group:
         sidebar_order:
         type: page
@@ -819,7 +819,7 @@ routes:
         name: ModelBackendSetup
         breadcrumb: Complete Setup
         parent: /
-        product_map:
+        product_map: [feat-model-backends]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -833,7 +833,7 @@ routes:
         name: remy-only
         breadcrumb: Remy
         parent: /
-        product_map:
+        product_map: [feat-remy]
         sidebar_group:
         sidebar_order:
         type: page
@@ -853,6 +853,73 @@ elements:
         label: Add Skill
         dynamic_testid: false
 
+features:
+    feat-auth:
+        description: OAuth authorization, sessions, and user profile
+    feat-analytics:
+        description: Reporting and analytics over runs, costs, and facts
+    feat-audit:
+        description: Audit trail and audit log
+    feat-connectors:
+        description: External tool connectors
+    feat-costs:
+        description: Cost tracking, spend limits, cost controls, and cost components
+    feat-dashboard:
+        description: Home dashboard, metrics overview, and saved views
+    feat-environments:
+        description: Environment profiles and run environments
+    feat-evals:
+        description: Evaluation editor and proposal queue
+    feat-feedback:
+        description: Feedback inbox
+    feat-guardrails:
+        description: Guardrail policies
+    feat-hitl:
+        description: Human-in-the-loop approval gates and review
+    feat-library:
+        description: Reusable pipeline templates and the template library
+    feat-license:
+        description: Feature licensing and plan tiers
+    feat-lifecycle-maps:
+        description: Lifecycle maps and stage workflows
+    feat-mcp:
+        description: Model Context Protocol tool configuration
+    feat-model-backends:
+        description: Model backend management and setup
+    feat-notifications:
+        description: Notifications, email delivery, and notification logs
+    feat-observability:
+        description: Error dashboard, monitoring, and observability exports
+    feat-onboarding:
+        description: First-run onboarding wizard for new users and organizations
+    feat-org:
+        description: Organization settings and feature flags
+    feat-pipelines:
+        description: Visual pipeline editor, composite editor, and node categories
+    feat-plugins:
+        description: Plugin registry
+    feat-product-analytics:
+        description: Product usage and adoption analytics for system administrators
+    feat-remy:
+        description: Remy assistant configuration and skills
+    feat-runs:
+        description: Run execution, history, detail, and output diffs
+    feat-runtime:
+        description: Runtime configuration, rate limits, retention, and sandbox concurrency
+    feat-schemas:
+        description: Typed JSON schemas, schema editor, inference, and parameter schemas
+    feat-sso:
+        description: Single sign-on (SSO)
+    feat-system-config:
+        description: System-level configuration administration
+    feat-system-orgs:
+        description: System-level organization administration
+    feat-teams:
+        description: Users, teams, and role-based access
+    feat-triggers:
+        description: Manual, webhook, and scheduled triggers
+    feat-variants:
+        description: Variant comparison and AB test models
 sidebar_groups:
     build:
         label: BUILD
