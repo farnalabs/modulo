@@ -361,13 +361,13 @@ def _failure_event_matches(
     """``failure`` event matches a failed outcome, excluding hang deaths.
 
     A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
-    hung" in ``error_detail`` �?" re-dispatching would burn a full node timeout
+    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
     with zero recovery probability, so it is excluded from ``"failure"`` retries.
     """
     if (
         "failure" not in event_set
         or final_status != "failed"
-        # Timeout is a distinct event �?" a "failure"-only policy must not retry
+        # Timeout is a distinct event — a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         or code in ("node_timeout", "TimeoutError", "executor_stalled")
         or mapped in ("node.timeout", "node.runaway", "agent.stall")
