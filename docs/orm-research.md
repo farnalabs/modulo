@@ -1,11 +1,11 @@
-# ORM Research — Async, Multi-Backend, UUID/JSON/RLS
+# ORM Research – Async, Multi-Backend, UUID/JSON/RLS
 
 > Compiled: 26 June 2026
 > Sources: PyPI JSON API, GitHub REST API, ORM documentation
 
 ---
 
-## 1. SQLAlchemy 2.0/2.1 — Async + MariaDB
+## 1. SQLAlchemy 2.0/2.1 – Async + MariaDB
 
 ### Version & Status
 
@@ -25,7 +25,7 @@
 
 | Driver | MariaDB compatible? | Status |
 |---|---|---|
-| **aiomysql** | Partial — `aiomysql` is technically a MySQL driver. It works with MariaDB if you stick to MySQL-compatible features. **Not officially tested or supported** by the aiomysql project for MariaDB. |
+| **aiomysql** | Partial – `aiomysql` is technically a MySQL driver. It works with MariaDB if you stick to MySQL-compatible features. **Not officially tested or supported** by the aiomysql project for MariaDB. |
 | **asyncmy** | Rejected: GHSA-qhqw-rrw9-25rm affects every released version through 0.2.11 with no patched release. |
 | **asyncpg** | PostgreSQL only. No relation to MariaDB. |
 | **aiosqlite** | SQLite only. |
@@ -34,17 +34,17 @@
 - Character set handling differs (utf8mb4 vs utf8)
 - `information_schema` queries can return different results
 - JSON column type handling differs
-- UUID type support is absent in both MySQL and MariaDB (they have no native UUID column type — you store as CHAR(32/36) or BINARY(16))
+- UUID type support is absent in both MySQL and MariaDB (they have no native UUID column type – you store as CHAR(32/36) or BINARY(16))
 - MariaDB 10.7+ has a native `UUID` data type, but `aiomysql` doesn't know about it
 
 **Verdict:** If you need async MariaDB, you are in uncharted territory. SQLAlchemy 2.0's async extension (`create_async_engine`) supports `aiomysql`, but it is not tested against MariaDB. `asyncmy` is excluded because it has no release patched for GHSA-qhqw-rrw9-25rm. Expect subtle breakage with JSON, UUID, and connection pooling.
 
 ### Can you use the same models across asyncpg, aiomysql, aiosqlite with just a connection string change?
 
-**Yes — mostly.** SQLAlchemy 2.0's declarative models are backend-agnostic at the model definition level:
+**Yes – mostly.** SQLAlchemy 2.0's declarative models are backend-agnostic at the model definition level:
 
 ```python
-# Same model file — just swap the connection string
+# Same model file – just swap the connection string
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -97,7 +97,7 @@ engine = create_async_engine("mysql+aiomysql://user:pass@host/db")
 | **SQLAlchemy UUID cross-backend** | Native UUID | CHAR(32) | CHAR(32) | CHAR(32)/BLOB |
 | **Native JSON** | JSONB | JSON | JSON | TEXT |
 | **RLS** | Yes | No | No | No |
-| **One-line swap** | — | Mostly | Risky | Mostly |
+| **One-line swap** | – | Mostly | Risky | Mostly |
 
 ---
 
@@ -131,7 +131,7 @@ However:
 - `UUIDType` predates SQLAlchemy 2.0's built-in `Uuid` type.
 - With SQLAlchemy 2.0's native `Uuid` type (added in 2.0.23), `sqlalchemy-utils` is mostly redundant for UUID.
 - `sqlalchemy-utils` also provides `JSONType`, `EmailType`, `IPAddressType`, `PasswordType`, `PhoneNumber`, `TimezoneType`, etc.
-- The package is in **maintenance mode** — many of its features have been superseded by SQLAlchemy 2.0 native types or separate libraries.
+- The package is in **maintenance mode** – many of its features have been superseded by SQLAlchemy 2.0 native types or separate libraries.
 
 ---
 
@@ -159,7 +159,7 @@ However:
 | **GINO** | 1.0.1 | 2022 (last commit) | ✅ (native, PG-only) | PG only (asyncpg) | 2,802 | 55 | 🚫 **Abandoned** (last commit Feb 2022) | ❌ | ✅ (JSONB only) | ❌ | 🚫 PG only |
 | **Peewee** | 4.1.0 | 2026 | ✅ | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite) | 11,984 | 0 | ✅ Active | ⚠️ | ⚠️ | ❌ | ✅ |
 
-*Django 5.0+ has async ORM support but it's shallow — individual queries run via sync-to-async wrappers, not a true async driver stack.
+*Django 5.0+ has async ORM support but it's shallow – individual queries run via sync-to-async wrappers, not a true async driver stack.
 
 ### Detailed Per-ORM Notes
 
@@ -173,26 +173,26 @@ However:
 - Async via `create_async_engine()` with the `[asyncio]` extra.
 - **RLS**: No built-in abstraction. You must use `Session.execute(text("SET ..."))` or PostgreSQL advisory locks manually.
 - **Gotcha**: MariaDB + aiomysql is unsupported territory. Use with extreme caution.
-- **Alembic** for migrations — mature, well-documented.
+- **Alembic** for migrations – mature, well-documented.
 
 #### Peewee (4.1.0)
 - Single Python file. Minimal dependencies.
-- Async via `playhouse.pwasyncio` — provides `AsyncPostgresqlDatabase`, `AsyncMySQLDatabase`, `AsyncSqliteDatabase`.
+- Async via `playhouse.pwasyncio` – provides `AsyncPostgresqlDatabase`, `AsyncMySQLDatabase`, `AsyncSqliteDatabase`.
 - UUID field stores as `VARCHAR` on non-PG backends.
 - JSON field stores as `TEXT` on SQLite.
-- **Zero open issues** — author is very responsive.
+- **Zero open issues** – author is very responsive.
 - **Gotcha**: The async layer is newer and less battle-tested. Some edge cases with connection pooling.
 
 #### SQLModel (0.0.39)
 - Thin layer over SQLAlchemy 2.0 + Pydantic.
-- **18K stars** — very popular because of FastAPI.
-- Async support comes entirely from SQLAlchemy 2.0 — same engine, same session patterns.
+- **18K stars** – very popular because of FastAPI.
+- Async support comes entirely from SQLAlchemy 2.0 – same engine, same session patterns.
 - Model definitions use Python type annotations (`id: int = Field(primary_key=True)`).
 - **Gotchas**:
   - Still at version 0.0.x (pre-1.0). Breaking changes expected.
   - Tied to specific SQLAlchemy versions (`>=2.0.14,<2.1.0`).
   - The `session.exec()` pattern is SQLModel-specific, not standard SQLAlchemy.
-  - No native UUID field type — you drop down to SQLAlchemy's `Uuid` mapped_column.
+  - No native UUID field type – you drop down to SQLAlchemy's `Uuid` mapped_column.
   - Pydantic v2+ compatibility was rocky for a while.
 
 #### Tortoise ORM (1.1.7)
@@ -200,10 +200,10 @@ However:
 - Supports PG, MySQL, SQLite, MSSQL, Oracle.
 - Has `UUIDField` as a built-in field type.
 - Has `JSONField` for JSON columns.
-- Connection string swap: `sqlite://`, `postgres://`, `mysql://` — same models.
+- Connection string swap: `sqlite://`, `postgres://`, `mysql://` – same models.
 - Built-in migration system (Aerich-like CLI).
 - **Gotchas**:
-  - 519 open issues — project may be understaffed for its popularity.
+  - 519 open issues – project may be understaffed for its popularity.
   - Default branch is `develop`, not `main`.
   - Schema generation in production requires migration tool (built-in, but not as mature as Alembic).
   - Query API is Django-like (double-underscore filters), not SQLAlchemy-like.
@@ -228,12 +228,12 @@ However:
 - Supports PG, MySQL, SQLite, MSSQL.
 - Has `UUIDField`, `JSONField`.
 - Built-in Alembic-based migrations.
-- **Very few open issues** (3) — but also very few stars (434). Small community.
+- **Very few open issues** (3) – but also very few stars (434). Small community.
 - **Gotcha**: Young project (started 2023). May have undiscovered edge cases.
 
 #### Django ORM (6.0.6)
 - **Most popular Python ORM by far** (88K stars).
-- Async support in 5.0+ is still shallow — ORM queries run via `asgiref.sync.sync_to_async`. Not true async DB drivers.
+- Async support in 5.0+ is still shallow – ORM queries run via `asgiref.sync.sync_to_async`. Not true async DB drivers.
 - Standalone usage is possible but awkward (requires `django.setup()`, `DJANGO_SETTINGS_MODULE`).
 - Multi-backend: change `DATABASES` setting.
 - UUID: `UUIDField` (native PG, CHAR(32) elsewhere).
@@ -270,7 +270,7 @@ import uuid
 class Item(Base):
     __tablename__ = "items"
 
-    # Cross-backend UUID — stores as CHAR(32) on MySQL/SQLite, native UUID on PG
+    # Cross-backend UUID – stores as CHAR(32) on MySQL/SQLite, native UUID on PG
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
 
     # Or force string-based UUID (works everywhere)

@@ -32,12 +32,12 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 ## 2. Environment Configuration
 
 - [ ] All required env vars are set (see [`docs/configuration-reference.md`](./configuration-reference.md))
-- [ ] `SECRET_KEY` is 32+ random bytes — not a default or placeholder
+- [ ] `SECRET_KEY` is 32+ random bytes, not a default or placeholder
 - [ ] `FERNET_KEY` is a valid 44-char base64 Fernet key
 - [ ] `DATABASE_URL` points to the production database
 - [ ] `REDIS_URL` is set (for multi-replica deployments)
 - [ ] `MODULO_PUBLIC_URL` matches the production domain
-- [ ] `CORS_ORIGINS` lists exact production origins — no wildcards, no trailing slashes
+- [ ] `CORS_ORIGINS` lists exact production origins, with no wildcards and no trailing slashes
 - [ ] `MODULO_LOG_LEVEL` is set to `INFO` (not `DEBUG`)
 - [ ] `MODULO_TELEMETRY_ENABLED` is set appropriately for data residency requirements
 - [ ] `MODULO_USERS` uses bcrypt-hashed passwords and is **not** committed to git
@@ -48,11 +48,11 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 
 - [ ] **TLS configuration** verified with `sslscan` or `nmap --script ssl-enum-ciphers`
 - [ ] **Security headers** present in response (CSP, HSTS, XFO, X-Content-Type-Options, Referrer-Policy)
-- [ ] **CORS** verified — no wildcard, correct origins, no trailing slashes
+- [ ] **CORS** verified: no wildcard, correct origins, no trailing slashes
 - [ ] **CSRF protection** enabled on all state-changing endpoints
 - [ ] **Row-Level Security** is enabled on all tenant-scoped tables
   - RLS test suite passes: `uv run pytest tests/unit/test_rls.py -v`
-- [ ] **Secrets** are injected via environment — not hardcoded in any file or committed to git
+- [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs (Trivy scan)
 - [ ] **Containers** run as non-root user
 - [ ] **Read-only root filesystem** enabled for backend containers

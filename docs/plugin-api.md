@@ -18,7 +18,7 @@ Plugin package          Modulo Core
     │                       │  ModelBackendBase instance
 ```
 
-Plugins are **discovered at startup** — all builder functions are loaded from installed packages and cached in-memory. At runtime, the `ConnectorHub` and `ModelBackendHub` first check their built-in types, then fall back to the plugin registry for any type they do not recognise.
+Plugins are **discovered at startup**: all builder functions are loaded from installed packages and cached in-memory. At runtime, the `ConnectorHub` and `ModelBackendHub` first check their built-in types, then fall back to the plugin registry for any type they do not recognise.
 
 ### Entry point groups
 
@@ -121,7 +121,7 @@ Verifies that the plugin's distribution package is still importable via `importl
 from modulo.core.plugin_registry import get_plugin_registry
 ```
 
-The module-level `get_plugin_registry()` returns a lazily-initialised singleton. All consumers — the API layer, `ConnectorHub`, `ModelBackendHub` — share the same instance.
+The module-level `get_plugin_registry()` returns a lazily-initialised singleton. All consumers (the API layer, `ConnectorHub`, `ModelBackendHub`) share the same instance.
 
 ### REST API
 
@@ -132,7 +132,7 @@ Two authenticated endpoints expose plugin information:
 | `GET` | `/api/v1/plugins` | List all discovered plugins with health status |
 | `GET` | `/api/v1/plugins/{plugin_id}/health` | Health check for a single plugin |
 
-Both require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API — see [Installation](#installation).
+Both require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API; see [Installation](#installation).
 
 ## How plugins interact with Modulo
 
@@ -151,7 +151,7 @@ case _:
 
 ### ModelBackendHub fallback
 
-Identical pattern — match the built-in providers (OpenAI, Anthropic, DeepSeek, Grok, Ollama, and others), then fall through to the plugin registry:
+Identical pattern: match the built-in providers (OpenAI, Anthropic, DeepSeek, Grok, Ollama, and others), then fall through to the plugin registry:
 
 ```python
 # pseudocode from model_backend_hub/__init__.py
@@ -207,7 +207,7 @@ class MyConnector(ConnectorBase):
 
 ### Step 2: Write a builder function
 
-The entry point must point to a **builder function** — not a class directly. The builder receives configuration and credentials and returns an instance:
+The entry point must point to a **builder function**, not a class directly. The builder receives configuration and credentials and returns an instance:
 
 ```python
 # my_plugin/__init__.py
@@ -243,7 +243,7 @@ Add your package to the deployment's dependencies (see [Installation](#installat
 A complete plugin that adds a "Slack notify" connector type:
 
 ```python
-"""modulo-connector-slack — Slack notification connector for Modulo."""
+"""modulo-connector-slack – Slack notification connector for Modulo."""
 
 from modulo.connectors.base import (
     ConnectorBase,
@@ -307,7 +307,7 @@ slack_notify = "modulo_connector_slack:build_slack_connector"
 
 ### Build-time only
 
-Modulo uses **build-time plugin installation** through v2. Plugins are added to the deployment's `pyproject.toml` or `requirements.txt` and the container (or Python environment) is rebuilt. Runtime `pip install` is explicitly disallowed — it is a supply-chain security risk and incompatible with read-only Docker containers.
+Modulo uses **build-time plugin installation** through v2. Plugins are added to the deployment's `pyproject.toml` or `requirements.txt` and the container (or Python environment) is rebuilt. Runtime `pip install` is explicitly disallowed; it is a supply-chain security risk and incompatible with read-only Docker containers.
 
 **Self-hosted deployments:**
 
@@ -348,7 +348,7 @@ RUN pip install modulo-connector-slack==0.1.0
 If a plugin package is removed from the environment between restarts:
 
 - `ConnectorInstances` referencing the missing type still exist in the database.
-- When the connector is built at run time, the build fails with `ValueError("Unknown connector type: …")` — the run is blocked.
+- When the connector is built at run time, the build fails with `ValueError("Unknown connector type: …")`, so the run is blocked.
 - Existing completed runs are unaffected (they execute against immutable snapshots).
 - The Plugins admin view shows each plugin's package health as Active/Inactive.
 - Resolution: reinstall the package or migrate affected instances to a different type.
