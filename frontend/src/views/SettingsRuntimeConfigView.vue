@@ -68,6 +68,7 @@
                 <div class="flex items-center gap-2">
                   <code class="text-sm font-mono">********</code>
                   <button
+                    type="button"
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
@@ -95,6 +96,7 @@
                 <div class="flex items-center gap-2">
                   <code class="text-sm font-mono text-muted-foreground">********</code>
                   <button
+                    type="button"
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
@@ -112,6 +114,7 @@
                 <div class="flex items-center gap-2">
                   <code class="text-sm text-muted-foreground">********</code>
                   <button
+                    type="button"
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
@@ -132,6 +135,7 @@
 
             <td class="px-4 py-3">
               <button
+                type="button"
                 v-if="isEdited(entry.key)"
                 class="text-sm text-primary hover:underline"
                 data-testid="settings-runtime-config-apply"
@@ -141,6 +145,7 @@
                 {{ $t('views.SettingsRuntimeConfigView.apply') }}
               </button>
               <button
+                type="button"
                 v-if="entry.override_value"
                 class="ml-2 text-sm text-destructive hover:underline"
                 data-testid="settings-runtime-config-reset"

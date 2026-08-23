@@ -160,6 +160,7 @@
                 {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
               </Button>
                 <button
+                  type="button"
                   v-if="editingEvalId"
                   data-testid="eval-editor-cancel"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -220,6 +221,7 @@
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
                   <button
+                    type="button"
                     data-testid="eval-editor-edit"
                     :aria-label="$t('common.edit')"
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
@@ -229,6 +231,7 @@
                     <Pencil class="h-4 w-4" aria-hidden="true" />
                   </button>
                   <button
+                    type="button"
                     v-if="deletingEvalId !== ev.id"
                     data-testid="eval-editor-delete"
                     :aria-label="$t('common.delete')"
@@ -240,6 +243,7 @@
                   </button>
                   <div v-else class="flex items-center gap-1">
                     <button
+                      type="button"
                       :disabled="deleting"
                       data-testid="eval-editor-confirm-delete"
                       class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
@@ -248,6 +252,7 @@
                       {{ deleting ? $t('common.deleting') : $t('common.confirm') }}
                     </button>
                     <button
+                      type="button"
                       data-testid="eval-editor-cancel-delete"
                       class="rounded px-2 py-1 text-xs font-medium hover:bg-accent"
                       @click="deletingEvalId = null"

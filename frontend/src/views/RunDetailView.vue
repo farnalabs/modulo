@@ -705,16 +705,15 @@
             :aria-label="$t('views.RunDetailGuardrailSummary.input_payload')"
           />
           <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
-          <div
+          <output
             v-if="overrideMessage"
             :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
-            role="status"
-            aria-live="polite"
-            class="text-sm font-medium"
+            :aria-label="overrideMessage.text"
+            class="block text-sm font-medium"
             :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
           >
             {{ overrideMessage.text }}
-          </div>
+          </output>
         </div>
         <template #footer>
           <div class="flex justify-end">
@@ -993,8 +992,9 @@ const shareSummary = computed(() => {
   const total = nodeEntries.value.length
   const tokens = totalTokens.value?.toLocaleString() ?? '—'
   const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
+  const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
   return [
-    `Run: ${r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)}`,
+    `Run: ${runNumber}`,
     `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
     `Status: ${r.status}`,
     `Nodes: ${completed}/${total}`,
@@ -1075,9 +1075,14 @@ function githubRefId(item: WorkItemRef): string {
 function getPrUrl(item: WorkItemRef): string | null {
   const kind = (item.kind || '').toLowerCase()
   const ref = (item.ref || '').trim()
-  const m = ref.match(/^([^/\s]+)\/([^/\s]+)#(.+)$/)
-  if (!m) return null
-  const [, owner, repo, id] = m
+  const hashIndex = ref.indexOf('#')
+  if (hashIndex <= 0) return null
+  const slashIndex = ref.indexOf('/')
+  if (slashIndex <= 0 || slashIndex >= hashIndex) return null
+  const owner = ref.slice(0, slashIndex)
+  const repo = ref.slice(slashIndex + 1, hashIndex)
+  const id = ref.slice(hashIndex + 1)
+  if (!owner || !repo || !id || /\s/.test(owner) || /\s/.test(repo) || repo.includes('/')) return null
   if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
   if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
   return `https://github.com/${owner}/${repo}`
@@ -1220,7 +1225,7 @@ const runTimestamps = computed(() => {
 
 function formatTimestamp(dateStr: string): string {
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '—'
+  if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleString(locale.value, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
@@ -1699,24 +1704,7 @@ async function fetchLiveOutput(runId: string) {
     const nextStates = { ...liveNodeStates.value }
     let maxSeq = liveOutputSeq.value
     for (const evt of events) {
-      if (!evt || typeof evt.seq !== 'number') continue
-      if (evt.event_type === 'node.stdout_chunk' && evt.payload?.node_id) {
-        const nodeId = evt.payload.node_id
-        next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
-      }
-      if (evt.event_type === 'node.stderr_chunk' && evt.payload?.node_id) {
-        const nodeId = evt.payload.node_id
-        next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
-      }
-      if (evt.event_type === 'node_started' && evt.payload?.node_id) {
-        nextStates[evt.payload.node_id] = 'running'
-      }
-      if (evt.event_type === 'node_completed' && evt.payload?.node_id) {
-        nextStates[evt.payload.node_id] = 'completed'
-      }
-      if (evt.event_type === 'node_failed' && evt.payload?.node_id) {
-        nextStates[evt.payload.node_id] = 'failed'
-      }
+      if (!applyLiveEvent(evt, next, nextStates)) continue
       if (evt.seq > maxSeq) maxSeq = evt.seq
     }
     liveOutput.value = next
@@ -1726,6 +1714,28 @@ async function fetchLiveOutput(runId: string) {
     // Live output is best-effort — polling must never break the page.
     console.warn('Failed to fetch live run output', e)
   }
+}
+
+function applyLiveEvent(
+  evt: RunChunkEvent,
+  liveOutputRef: Record<string, string>,
+  liveNodeStatesRef: Record<string, 'running' | 'completed' | 'failed'>,
+): boolean {
+  if (!evt || typeof evt.seq !== 'number') return false
+  const nodeId = evt.payload?.node_id
+  if (!nodeId) return true
+  if (evt.event_type === 'node.stdout_chunk' || evt.event_type === 'node.stderr_chunk') {
+    liveOutputRef[nodeId] = (liveOutputRef[nodeId] ?? '') + (evt.payload?.chunk ?? '')
+    return true
+  }
+  if (evt.event_type === 'node_started') {
+    liveNodeStatesRef[nodeId] = 'running'
+  } else if (evt.event_type === 'node_completed') {
+    liveNodeStatesRef[nodeId] = 'completed'
+  } else if (evt.event_type === 'node_failed') {
+    liveNodeStatesRef[nodeId] = 'failed'
+  }
+  return true
 }
 
 function startPolling(runId: string) {
