@@ -43,12 +43,14 @@ def derive_system_database_url(runtime_url: str) -> str:
     Swaps the username to ``modulo_system``, preserving the password (so
     bootstrap_role.py can create the role with the same credential), the
     host/port, the scheme, and any query params. Returns an empty string
-    when the netloc has no ``@`` separator.
+    when the netloc has no ``@`` separator or the userinfo has no password
+    — in both cases the caller falls back to modulo_app rather than risking
+    a modulo_system role created with a credential that cannot match.
     """
     parts = urlsplit(runtime_url)
     userinfo, sep, hostport = parts.netloc.rpartition("@")
-    if sep:
-        new_userinfo = f"modulo_system:{userinfo.partition(':')[2]}" if ":" in userinfo else "modulo_system"
+    if sep and ":" in userinfo:
+        new_userinfo = f"modulo_system:{userinfo.partition(':')[2]}"
         parts = parts._replace(netloc=f"{new_userinfo}@{hostport}")
         return urlunsplit(parts)
     return ""
@@ -109,6 +111,12 @@ def main() -> None:
         system_url = fix_database_url(system_url)
     elif runtime_url:
         system_url = derive_system_database_url(runtime_url)
+        if not system_url:
+            print(
+                "WARNING: cannot derive MODULO_SYSTEM_DATABASE_URL (DATABASE_URL has no password) "
+                "— system crons will fall back to modulo_app",
+                flush=True,
+            )
 
     if system_url:
         os.environ["MODULO_SYSTEM_DATABASE_URL"] = system_url

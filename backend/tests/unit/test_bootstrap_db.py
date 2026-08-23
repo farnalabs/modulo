@@ -41,10 +41,10 @@ def bootstrap_db():
             "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/modulo",
             "postgresql+asyncpg://modulo_system:p%40ss@db.internal:5432/modulo",
         ),
-        # no password, username only
+        # no password — cannot derive a matching modulo_system credential
         (
             "postgresql+asyncpg://modulo@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo_system@db.internal:5432/modulo",
+            "",
         ),
         # query-string preserved unchanged
         (
@@ -64,6 +64,14 @@ def test_derive_system_database_url_swaps_username(
     expected: str,
 ) -> None:
     assert bootstrap_db.derive_system_database_url(runtime_url) == expected
+
+
+def test_derive_system_database_url_empty_without_password(bootstrap_db) -> None:
+    # A passwordless DATABASE_URL cannot produce a modulo_system URL: the
+    # derived URL would carry no credential, so bootstrap_role.py would create
+    # the role with a random password that never matches. Return "" so the
+    # caller falls back to modulo_app instead of wiring a broken role.
+    assert bootstrap_db.derive_system_database_url("postgresql+asyncpg://modulo@db.internal:5432/modulo") == ""
 
 
 @pytest.mark.parametrize(
