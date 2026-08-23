@@ -59,7 +59,7 @@ describe('useRemyTabsStore', () => {
     store.activeSessionId = 'session-9'
     const tabs = useRemyTabsStore()
     tabs.reconcile()
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     expect(tabs.tabs[0].sessionId).toBe('session-9')
     expect(store.activeSessionId).toBe('session-9')
   })
@@ -71,12 +71,12 @@ describe('useRemyTabsStore', () => {
     const tabs = useRemyTabsStore()
     tabs.reconcile()
     const seeded = tabs.tabs
-    expect(seeded.length).toBe(1)
+    expect(seeded).toHaveLength(1)
     expect(seeded[0].sessionId).toBe('session-1')
 
     await new Promise(resolve => setTimeout(resolve, 0))
     const stored = JSON.parse(localStorage.getItem('remy-only-tabs') || '[]')
-    expect(stored.length).toBe(1)
+    expect(stored).toHaveLength(1)
     expect(stored[0].sessionId).toBe('session-1')
 
     setActivePinia(createPinia())
@@ -92,7 +92,7 @@ describe('useRemyTabsStore', () => {
     const tabs = useRemyTabsStore()
     const session = await tabs.addTab()
     expect(session?.id).toBe('session-new')
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     expect(tabs.tabs[0].sessionId).toBe('session-new')
     expect(store.activeSessionId).toBe('session-new')
   })
@@ -103,7 +103,7 @@ describe('useRemyTabsStore', () => {
     store.activeSessionId = 'session-1'
     const tabs = useRemyTabsStore()
     tabs.reconcile()
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     const originalTabId = tabs.tabs[0].tabId
 
     ;(api.POST as any).mockResolvedValueOnce({ error: null, data: { id: 'session-1', session_number: 1 } })
