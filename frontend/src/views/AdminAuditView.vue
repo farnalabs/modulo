@@ -6,6 +6,7 @@
       <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')" />
       <div class="flex items-center gap-2">
         <button
+          type="button"
           :disabled="verifying"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
           data-testid="admin-audit-verify-chain"
@@ -14,6 +15,7 @@
           {{ verifying ? $t('views.AdminAuditView.verifying') : $t('views.AdminAuditView.verify_chain') }}
         </button>
         <button
+          type="button"
           :disabled="exporting"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
           data-testid="admin-audit-export-csv"
@@ -22,6 +24,7 @@
           {{ exporting ? $t('views.AdminAuditView.exporting') : $t('views.AdminAuditView.export_csv') }}
         </button>
         <button
+          type="button"
           :disabled="exportingJsonl"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
           data-testid="admin-audit-export-jsonl"
@@ -125,6 +128,7 @@
           {{ $t('views.AdminAuditView.apply_filters') }}
         </Button>
         <button
+          type="button"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
           data-testid="admin-audit-reset"
           @click="resetFilters"
@@ -188,13 +192,8 @@
               v-for="event in events"
               :key="event.id"
               class="cursor-pointer transition-colors hover:bg-muted/30"
-              role="button"
-              tabindex="0"
               :data-testid="'admin-audit-event-row-' + event.id"
-              :aria-label="'Expand event ' + event.id"
               @click="toggleExpand(event.id)"
-              @keydown.enter="toggleExpand(event.id)"
-              @keydown.space.prevent="toggleExpand(event.id)"
             >
               <td class="table-cell whitespace-nowrap">
                 {{ formatTimestamp(event.created_at) }}
@@ -218,17 +217,26 @@
               </td>
               <td class="table-cell max-w-xs truncate text-muted-foreground" v-tooltip.top="{ value: summarize(event), showDelay: 300 }">{{ summarize(event) }}</td>
               <td class="table-cell text-xs text-muted-foreground">
-                <svg
-                  class="h-4 w-4 transition-transform"
-                  :class="{ 'rotate-180': expandedId === event.id }"
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
+                <button
+                  type="button"
+                  class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :aria-label="'Expand event ' + event.id"
+                  :data-testid="'admin-audit-event-expand-' + event.id"
+                  @click.stop="toggleExpand(event.id)"
                 >
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
+                  <svg
+                    class="h-4 w-4 transition-transform"
+                    :class="{ 'rotate-180': expandedId === event.id }"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
               </td>
             </tr>
             <tr v-if="expandedId">
@@ -261,6 +269,7 @@
 
       <div class="flex items-center justify-between">
         <button
+          type="button"
           :disabled="!prevCursor"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-previous"
@@ -272,6 +281,7 @@
           {{ $t('views.AdminAuditView.page_of_total', { page: currentPage, count: events.length, total: total }) }}
         </span>
         <button
+          type="button"
           :disabled="!nextCursor"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-next"
