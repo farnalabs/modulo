@@ -2866,6 +2866,7 @@ export default {
       "group_improve": "IMPROVE",
       "group_system": "SYSTEM",
       "item_dashboard": "Dashboard",
+      "item_analytics": "Analytics",
       "item_notifications": "Notifications",
       "item_my_pipelines": "Pipelines",
       "item_library": "Library",

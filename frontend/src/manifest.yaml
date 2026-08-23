@@ -843,6 +843,16 @@ routes:
         exact: true
 
 elements:
+    /:
+      - testid: dashboard-title
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-eval-rate
+        type: link
+        dynamic_testid: false
+      - testid: dashboard-token-spend
+        type: link
+        dynamic_testid: false
     /admin/audit:
       - testid: admin-audit-verify-chain
         type: button
@@ -1278,6 +1288,22 @@ elements:
         dynamic_testid: false
       - testid: admin-plugins-expand
         type: button
+        dynamic_testid: false
+    /admin/product-analytics:
+      - testid: last-dump
+        type: element
+        dynamic_testid: false
+      - testid: dump-count-total
+        type: element
+        dynamic_testid: false
+      - testid: consent-level
+        type: element
+        dynamic_testid: false
+      - testid: instance-enabled
+        type: element
+        dynamic_testid: false
+      - testid: enforcement-enabled
+        type: element
         dynamic_testid: false
     /admin/remy:
       - testid: remy-providers
@@ -1721,6 +1747,19 @@ elements:
       - testid: notifications-next-page
         type: button
         dynamic_testid: false
+    /oauth/authorize:
+      - testid: oauth-consent-login
+        type: button
+        dynamic_testid: false
+      - testid: oauth-consent-client-name
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-scope
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-approve
+        type: button
+        dynamic_testid: false
     /onboarding:
       - testid: onboarding-wizard-create-connector
         type: link
@@ -1949,6 +1988,37 @@ elements:
         dynamic_testid: false
       - testid: copy-wizard-back-error
         type: button
+        dynamic_testid: false
+    /remy:
+      - testid: remy-only-view
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-return-home
+        type: button
+        dynamic_testid: false
+      - testid: remy-only-banner
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-tab-bar
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-new-tab
+        type: button
+        dynamic_testid: false
+      - testid: remy-only-subtab-bar
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-empty
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-no-active
+        type: element
+        dynamic_testid: false
+      - testid: remy-only-chat
+        type: element
         dynamic_testid: false
     /runs:
       - testid: runs-list-aggregate-cost
