@@ -5,12 +5,9 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -- group role is not recognised by the plugin, but the titlebar is keyboard-accessible via the arrow-key handlers -->
+    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -- the titlebar is keyboard-accessible via the arrow-key handlers -->
     <div
       class="remy-titlebar"
-      role="group"
-      tabindex="0"
-      :aria-label="$t('components.remy.RemyPanel.move_panel')"
       @mousedown="startDrag"
       @keydown.up="handleTitlebarArrowKey($event, 0, -1)"
       @keydown.down="handleTitlebarArrowKey($event, 0, 1)"
@@ -33,8 +30,8 @@
           />
         </template>
         <template v-else>
-          <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-            class="text-sm font-semibold truncate cursor-pointer hover:opacity-80"
+          <button type="button"
+            class="text-sm font-semibold truncate cursor-pointer hover:opacity-80 bg-transparent border-0 p-0 text-left"
             :title="$t('components.remy.RemyPanel.click_to_rename')"
             @click.stop="startEditName"
             @dblclick.stop="startEditName"
@@ -46,13 +43,14 @@
               {{ $t('components.remy.RemyPanel.session_label') }} {{ store.activeSession.session_number ? '#' + store.activeSession.session_number : shortId(store.activeSession.id) }}
             </template>
             <template v-else>{{ $t('components.remy.RemyPanel.remy') }}</template>
-          </span>
+          </button>
         </template>
         <span v-if="store.isStreaming" class="remy-pulse-dot" />
       </div>
       <div class="flex items-center gap-1">
         <button
           v-if="store.activeSessionId && store.messages.length > 0"
+          type="button"
           class="remy-titlebar-btn"
           @click="exportTranscript"
           title="Export Transcript"
@@ -66,6 +64,7 @@
         </button>
         <button
           v-if="store.activeSessionId"
+          type="button"
           class="remy-titlebar-btn"
           @click="store.resetSessionPermissions()"
           title="Reset Permissions"

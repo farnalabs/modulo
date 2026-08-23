@@ -46,23 +46,22 @@
           <span class="remy-turn-label">{{ msg.content }}</span>
           <div class="remy-turn-line" />
         </div>
-        <div
+        <section
           v-else-if="isAnalyticsChartMessage(msg)"
           class="remy-analytics-card"
-          role="region"
           :aria-label="$t('components.remy.RemyChat.analytics_chart_title')"
           data-testid="remy-analytics-card"
         >
           <div class="remy-analytics-header">
             <span class="remy-analytics-title">{{ $t('components.remy.RemyChat.analytics_chart_title') }}</span>
-            <div
+            <fieldset
               class="remy-analytics-measures"
-              role="group"
               :aria-label="$t('components.remy.RemyChat.analytics_measure_label')"
             >
               <button
                 v-for="m in analyticsMeasures"
                 :key="m.value"
+                type="button"
                 class="remy-measure-btn"
                 :class="{ active: analyticsMeasureFor(msg) === m.value }"
                 :aria-pressed="analyticsMeasureFor(msg) === m.value"
@@ -70,7 +69,7 @@
               >
                 {{ $t(m.labelKey) }}
               </button>
-            </div>
+            </fieldset>
           </div>
           <AnalyticsChart
             :series="analyticsSeriesFor(msg)"
@@ -85,12 +84,12 @@
           >
             {{ $t('components.remy.RemyChat.view_full_analytics') }} <span aria-hidden="true">→</span>
           </a>
-        </div>
+        </section>
         <div
           v-else-if="msg.role === 'tool_result' && msg.tool_results_json"
           class="remy-tool-card"
         >
-          <button class="remy-tool-header" @click="toggleToolExpand(msg.id)">
+          <button type="button" class="remy-tool-header" @click="toggleToolExpand(msg.id)">
             <span class="remy-tool-name">?? Tool Called: {{ (msg.tool_results_json as ToolResult).tool_name }}</span>
             <span class="tool-badge" :class="(msg.tool_results_json as ToolResult).success ? 'success' : 'failed'">
               {{ (msg.tool_results_json as ToolResult).success ? 'Completed' : 'Failed' }}
@@ -141,6 +140,7 @@
               class="remy-msg-actions"
             >
               <button
+                type="button"
                 class="remy-copy-btn"
                 @click="copyMessage(msg.content ?? '')"
                 title="Copy"
@@ -947,6 +947,9 @@ function renderMarkdown(text: string): string {
 }
 .remy-analytics-measures {
   @apply flex items-center gap-1 flex-wrap;
+  border: 0;
+  margin: 0;
+  padding: 0;
 }
 .remy-measure-btn {
   @apply rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors;

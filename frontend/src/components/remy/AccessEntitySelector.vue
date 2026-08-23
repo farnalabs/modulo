@@ -20,6 +20,7 @@
         <button
           v-for="entity in filteredEntities"
           :key="entity.id"
+          type="button"
           class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent transition-colors"
           @mousedown.prevent="select(entity)"
         >
@@ -59,6 +60,7 @@
             </td>
             <td class="px-3 py-2 text-right">
               <button
+                type="button"
                 class="rounded p-1 text-muted-foreground hover:text-destructive transition-colors"
                 :aria-label="`Remove ${displayLabel(entity)}`"
                 :title="`Remove ${displayLabel(entity)}`"
@@ -81,7 +83,7 @@ import { ref, computed, onUnmounted } from 'vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
-  entities: Array<Record<string, any>>
+  entities?: Array<Record<string, any>>
   labelField: string
   descriptionField?: string
   placeholder?: string

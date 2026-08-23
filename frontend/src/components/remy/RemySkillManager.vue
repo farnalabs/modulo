@@ -82,6 +82,7 @@
           </div>
           <div class="flex gap-1 shrink-0">
             <button
+              type="button"
               class="remy-skill-action"
               @click="editSkill(skill)"
               title="Edit"
@@ -105,6 +106,7 @@
               </svg>
             </button>
             <button
+              type="button"
               class="remy-skill-action text-destructive hover:bg-destructive/10"
               @click="deleteSkill(skill.id)"
               title="Delete"

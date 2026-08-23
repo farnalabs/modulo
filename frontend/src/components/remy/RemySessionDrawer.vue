@@ -41,6 +41,7 @@
       <button
         v-for="session in store.sortedSessions"
         :key="session.id"
+        type="button"
         class="remy-session-item w-full text-left"
         :class="{ active: session.id === store.activeSessionId }"
         @click="selectSession(session.id)"
@@ -50,6 +51,7 @@
             {{ session.name || `Session ${session.session_number ? '#' + session.session_number : shortId(session.id)}` }}
           </span>
           <button
+            type="button"
             class="remy-session-delete shrink-0"
             @click.stop="handleDelete(session.id)"
             title="Delete"
@@ -126,7 +128,7 @@ function formatTime(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   const ts = d.getTime();
-  if (isNaN(ts)) return iso;
+  if (Number.isNaN(ts)) return iso;
   const now = new Date();
   const diffMs = now.getTime() - ts;
   const diffMin = Math.floor(diffMs / 60000);
