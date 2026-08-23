@@ -234,8 +234,10 @@ async def list_oidc_providers(
     seeder migrates env-var providers). When ``org_id`` is ``None`` the lookup
     is org-agnostic, which the pre-auth login flow relies on. The stored
     ``client_secret`` is encrypted, so it is decrypted with the Fernet key.
+    Disabled providers (``enabled = False``) are excluded — toggling a provider
+    off in the admin UI must remove it from the login page and the auth flow.
     """
-    conditions = [SsoProvider.provider_type == "oidc"]
+    conditions = [SsoProvider.provider_type == "oidc", SsoProvider.enabled.is_(True)]
     if org_id is not None:
         conditions.append(SsoProvider.organisation_id == org_id)
     result = await session.execute(select(SsoProvider).where(*conditions).order_by(SsoProvider.created_at))
@@ -257,11 +259,13 @@ async def resolve_oidc_provider_org(session: AsyncSession, provider_id: str) -> 
     The pre-auth callback route uses this to scope the provider lookup to the
     provider's own organisation. Returns ``None`` when the provider is not in
     the DB (i.e. it is configured purely via ``MODULO_OIDC_PROVIDERS``).
+    Disabled providers are excluded, matching ``list_oidc_providers``.
     """
     result = await session.execute(
         select(SsoProvider)
         .where(
             SsoProvider.provider_type == "oidc",
+            SsoProvider.enabled.is_(True),
             SsoProvider.name == provider_id,
         )
         .order_by(SsoProvider.created_at)
@@ -326,12 +330,19 @@ async def oidc_process_callback(
     session: AsyncSession,
     redirect_uri: str,
     org_id: uuid.UUID | None = None,
+    provider_session: AsyncSession | None = None,
 ) -> dict[str, str]:
     """Exchange auth code for tokens, JIT provision account, return JWT pair.
 
     When ``org_id`` is provided the provider is resolved from the DB
     ``sso_providers`` table first (falling back to the env var when the DB has
     no OIDC providers), and JIT provisioning targets that org.
+
+    ``provider_session`` carries the DB provider lookup when it must run on a
+    different session than ``session``: the OIDC callback is pre-auth, so the
+    ``sso_providers`` read runs on the ``modulo_system`` session (BYPASSRLS)
+    via ``provider_session``, while JIT provisioning and token issuance stay on
+    ``session`` (the app role with RLS scoping).
     """
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
@@ -343,7 +354,12 @@ async def oidc_process_callback(
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
     providers = _parse_oidc_providers(settings)
     if org_id is not None:
-        db_providers = await list_oidc_providers(session, org_id=org_id, fernet_key=settings.fernet_key)
+        lookup_session = provider_session if provider_session is not None else session
+        if provider_session is not None:
+            async with lookup_session.begin():
+                db_providers = await list_oidc_providers(lookup_session, org_id=org_id, fernet_key=settings.fernet_key)
+        else:
+            db_providers = await list_oidc_providers(lookup_session, org_id=org_id, fernet_key=settings.fernet_key)
         if db_providers:
             providers = db_providers
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)

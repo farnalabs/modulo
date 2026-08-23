@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
@@ -30,6 +30,49 @@ _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["sso"])
+
+_SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
+
+
+def _get_system_async_engine() -> AsyncEngine:
+    """Async engine bound to the ``modulo_system`` role (BYPASSRLS).
+
+    Mirrors ``modulo.core.saq_worker._get_system_async_engine`` — the API layer
+    cannot import that module (it would transitively import LangGraph, which the
+    ``api-does-not-import-langgraph-directly`` import-linter contract forbids).
+    Falls back to the shared engine when ``MODULO_SYSTEM_DATABASE_URL`` is not
+    set, matching the worker posture.
+    """
+    global _SYSTEM_ASYNC_ENGINE
+    if _SYSTEM_ASYNC_ENGINE is None:
+        settings = get_settings()
+        if settings.modulo_system_database_url:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                settings.modulo_system_database_url,
+                pool_pre_ping=True,
+                connect_args={"ssl": False, "statement_cache_size": 0},
+            )
+        else:
+            from modulo.db.session import get_shared_engine
+
+            _SYSTEM_ASYNC_ENGINE = get_shared_engine()
+    return _SYSTEM_ASYNC_ENGINE
+
+
+def _new_system_session_factory() -> Any:
+    """Session factory bound to the ``modulo_system`` role (BYPASSRLS).
+
+    Pre-auth SSO provider lookups run on this session: the caller has no RLS
+    context yet, so reading ``sso_providers`` with the app role evaluates the
+    ``rls_org_isolation`` policy against an unset ``app.organisation_id`` and
+    returns zero rows. The ``modulo_system`` role bypasses RLS, which is what
+    the pre-auth routes need for org-agnostic provider discovery.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(_get_system_async_engine(), expire_on_commit=False, autobegin=False)
 
 
 def _frontend_url(settings: Settings) -> str:
@@ -59,15 +102,16 @@ class SsoProvidersResponse(BaseModel):
 async def sso_providers(
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled.
 
     OIDC providers come from the DB ``sso_providers`` table (admin UI) first,
     falling back to ``MODULO_OIDC_PROVIDERS`` for env-var-only deployments.
+    This is a pre-auth route, so the provider lookup runs on the system session
+    (``modulo_system`` role, BYPASSRLS) — the caller has no RLS context.
     """
     try:
-        async with session.begin():
+        async with _new_system_session_factory()() as session, session.begin():
             oidc_providers = await list_oidc_providers(session, org_id=None, fernet_key=settings.fernet_key)
         if not oidc_providers:
             oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
@@ -102,20 +146,20 @@ async def oidc_login(
     request: Request,
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
 ) -> Any:
     """Redirect the user to the OIDC provider's authorization page.
 
     Providers configured via the admin UI (the DB ``sso_providers`` table) are
     resolved first; providers from ``MODULO_OIDC_PROVIDERS`` remain supported
     as a fallback for env-var-only deployments. This is a pre-auth route, so
-    the DB lookup is org-agnostic.
+    the DB lookup is org-agnostic and runs on the system session (``modulo_system``
+    role, BYPASSRLS) — the caller has no RLS context.
     """
     public_url = settings.modulo_public_url.rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
-        async with session.begin():
+        async with _new_system_session_factory()() as session, session.begin():
             auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri, session=session, org_id=None)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
@@ -157,9 +201,20 @@ async def oidc_callback(
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
-        async with session.begin():
-            org_id = await resolve_oidc_provider_org(session, provider)
-            tokens = await oidc_process_callback(code, state, settings, session, redirect_uri, org_id=org_id)
+        system_factory = _new_system_session_factory()
+        async with system_factory() as system_session:
+            async with system_session.begin():
+                org_id = await resolve_oidc_provider_org(system_session, provider)
+            async with session.begin():
+                tokens = await oidc_process_callback(
+                    code,
+                    state,
+                    settings,
+                    session,
+                    redirect_uri,
+                    org_id=org_id,
+                    provider_session=system_session,
+                )
     except ValueError as exc:
         _log.warning(
             "OIDC callback failed for provider %s: %s",

@@ -95,6 +95,21 @@ def _override_settings(**kwargs: str | bool) -> None:
     )
 
 
+def _fake_system_factory(session: AsyncMock) -> MagicMock:
+    """Return a fake ``async_sessionmaker`` whose ``()`` yields ``session``.
+
+    Mirrors the route's ``async with _new_system_session_factory()() as session``
+    usage: calling the factory produces an async context manager that resolves
+    to ``session``, and ``session.begin()`` (an ``AsyncMock``) supports ``async with``.
+    """
+    factory = MagicMock()
+    cm = AsyncMock()
+    cm.__aenter__.return_value = session
+    cm.__aexit__.return_value = False
+    factory.return_value = cm
+    return factory
+
+
 # ---------------------------------------------------------------------------
 # State signing
 # ---------------------------------------------------------------------------
@@ -192,7 +207,14 @@ class TestJitProvisioning:
 
 class TestSsoProvidersEndpoint:
     def test_returns_oidc_providers(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]):
+        system_session = AsyncMock(spec=AsyncSession)
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+        ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         body = resp.json()
@@ -202,27 +224,43 @@ class TestSsoProvidersEndpoint:
         assert body["saml"] is False
 
     def test_returns_db_providers_first(self, client: TestClient) -> None:
+        system_session = AsyncMock(spec=AsyncSession)
         db_providers = [
             {"provider_id": "okta", "client_id": "c", "client_secret": "s", "discovery_url": "u"},
         ]
-        with patch(
-            "modulo.api.routes.sso.list_oidc_providers",
-            new_callable=AsyncMock,
-            return_value=db_providers,
-        ) as mock_list:
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch(
+                "modulo.api.routes.sso.list_oidc_providers",
+                new_callable=AsyncMock,
+                return_value=db_providers,
+            ) as mock_list,
+        ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         body = resp.json()
         assert body["oidc"] == [{"provider_id": "okta"}]
         mock_list.assert_awaited_once()
+        list_args, _ = mock_list.await_args
+        assert list_args[0] is system_session
 
     def test_saml_enabled_with_license(self, client: TestClient) -> None:
+        system_session = AsyncMock(spec=AsyncSession)
         _override_settings(
             modulo_license_key="license-123",
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
         )
-        with patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]):
+        with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(system_session),
+            ),
+            patch("modulo.api.routes.sso.list_oidc_providers", new_callable=AsyncMock, return_value=[]),
+        ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
@@ -716,6 +754,24 @@ def _make_db_row(
     return row
 
 
+def _statement_filters_on_enabled(stmt: object) -> bool:
+    """True when the given select statement constrains the ``enabled`` column.
+
+    ``list_oidc_providers`` / ``resolve_oidc_provider_org`` exclude disabled
+    providers via a WHERE clause on ``SsoProvider.enabled``. Unit tests use a
+    mocked session, so the SQL itself is never executed — this inspects the
+    statement that would be sent to prove the filter is present.
+    """
+    where = getattr(stmt, "whereclause", None)
+    if where is None:
+        return False
+    for cond in where.get_children():
+        left = getattr(cond, "left", None)
+        if left is not None and getattr(left, "name", "") == "enabled":
+            return True
+    return False
+
+
 class TestListOidcProviders:
     async def test_resolves_provider_with_decrypted_secret(self) -> None:
         from modulo.auth.sso import list_oidc_providers
@@ -777,6 +833,19 @@ class TestListOidcProviders:
 
         assert providers[0]["client_secret"] == "plaintext-secret"
 
+    async def test_excludes_disabled_providers(self) -> None:
+        from modulo.auth.sso import list_oidc_providers
+
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.scalars().all.return_value = []
+        session.execute.return_value = result
+
+        await list_oidc_providers(session, org_id=None, fernet_key=_FERNET_KEY)
+
+        stmt = session.execute.await_args.args[0]
+        assert _statement_filters_on_enabled(stmt)
+
 
 class TestResolveOidcProviderOrg:
     async def test_returns_org_of_db_provider(self) -> None:
@@ -801,6 +870,19 @@ class TestResolveOidcProviderOrg:
         session.execute.return_value = result
 
         assert await resolve_oidc_provider_org(session, "env-only-provider") is None
+
+    async def test_excludes_disabled_provider(self) -> None:
+        from modulo.auth.sso import resolve_oidc_provider_org
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        await resolve_oidc_provider_org(session, "okta")
+
+        stmt = session.execute.await_args.args[0]
+        assert _statement_filters_on_enabled(stmt)
 
 
 class TestOidcGetAuthorizeUrlDb:
@@ -1364,6 +1446,10 @@ class TestOidcCallbackEndpointExtended:
         )
 
         with (
+            patch(
+                "modulo.api.routes.sso._new_system_session_factory",
+                return_value=_fake_system_factory(AsyncMock(spec=AsyncSession)),
+            ),
             patch("modulo.api.routes.sso.resolve_oidc_provider_org", new_callable=AsyncMock) as mock_resolve,
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
