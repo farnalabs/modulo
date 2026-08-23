@@ -5,7 +5,7 @@ import RunErrorTag from '../components/shared/RunErrorTag.vue'
 describe('RunErrorTag', () => {
   it('renders the i18n label for a known dotted code', () => {
     const wrapper = mount(RunErrorTag, { props: { code: 'agent.stall' } })
-    expect(wrapper.text()).toBe('Agent stalled')
+    expect(wrapper.text()).toBe('Worker claimed run but dispatched no node (recovered by re-dispatch)')
   })
 
   it('falls back to Unknown error for an unknown code', () => {

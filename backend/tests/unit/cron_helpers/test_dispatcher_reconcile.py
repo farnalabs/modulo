@@ -101,6 +101,8 @@ def _run_row(
     error_code: str | None = None,
     dispatcher: str | None = "saq",
     enqueue_failed_at: Any = None,
+    claim_count: int = 1,
+    retry_policy: Any = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     return SimpleNamespace(
@@ -117,6 +119,8 @@ def _run_row(
         error_code=error_code,
         dispatcher=dispatcher,
         enqueue_failed_at=enqueue_failed_at,
+        claim_count=claim_count,
+        retry_policy=retry_policy,
     )
 
 
@@ -359,22 +363,112 @@ class TestReconcilePredicateMatrix:
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_running_nodeless_fresh_heartbeat_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_running_nodeless_fresh_heartbeat_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A claimed-but-nodeless zombie (running + FRESH heartbeat + zero node
-        output after the nodeless window) is terminal-failed, never re-dispatched.
-        The fresh heartbeat keeps it invisible to the stale branch — that is the
-        primary hang mechanism this branch closes."""
+        output after the nodeless window) is now RE-DISPATCHED (not terminal-failed):
+        a nodeless zombie executed ZERO nodes, so re-dispatch is safe and recovers
+        the run instead of permanently losing it. With no retry_policy, the default
+        is a single re-dispatch (claim_count == 1)."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
         )
-        assert summary["nodeless_failed"] == 1
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
         assert summary["repaired"] == 0
+        reenqueue.assert_awaited_once()
+        # A running nodeless zombie re-dispatches as execute_run.
+        assert reenqueue.await_args.args[3] == "execute_run"
+        ingest.assert_not_awaited()
+        # A re-dispatched (non-terminal) run is NOT given a compensating fact.
+        session.record_facts.assert_not_awaited()
+
+    async def test_running_nodeless_second_attempt_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a retry_policy, re-dispatch is bounded to a single attempt.
+        Once claim_count has advanced past 1 (already re-dispatched once), the
+        run is terminal-failed so it is never left dangling in a re-dispatch loop."""
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=2)],
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["nodeless_redispatched"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
-        # FAR-162 (P6'): the nodeless-failed run gets a compensating daily fact,
-        # like every other dispatcher_reconcile terminalizer.
         session.record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
+
+    async def test_running_nodeless_retry_policy_stall_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """retry_policy with 'stall' in 'on' honors max_retries: a run within the
+        retry budget (claim_count <= max_retries) is re-dispatched."""
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    RUN_RUNNING,
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    claim_count=2,
+                    retry_policy={"on": ["stall"], "max_retries": 3},
+                )
+            ],
+        )
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+
+    async def test_running_nodeless_retry_policy_excludes_stall_terminal_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """retry_policy that does NOT include 'stall' in 'on' must NOT re-dispatch
+        a nodeless zombie — it is terminal-failed."""
+        summary, reenqueue, _, _, _, session = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    RUN_RUNNING,
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    retry_policy={"on": ["timeout"], "max_retries": 3},
+                )
+            ],
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["nodeless_redispatched"] == 0
+        reenqueue.assert_not_awaited()
+        session.record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
+
+    async def test_running_nodeless_redispatch_failure_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If the re-dispatch itself raises (Redis unreachable / enqueue error),
+        the run falls back to terminal-fail so it is never left dangling."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)])]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+        reenqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+        with (
+            patch.object(ch, "_open_system_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", reenqueue),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+            patch.object(ch, "_awaiting_human_has_committed_decision", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock) as record_facts,
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ch.dispatcher_reconcile()
+        assert summary["nodeless_failed"] == 1
+        assert summary["nodeless_redispatched"] == 0
+        reenqueue.assert_awaited_once()
+        ingest.assert_awaited()  # fallback alerts on the enqueue failure
+        record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
 
     @pytest.mark.asyncio
     async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
