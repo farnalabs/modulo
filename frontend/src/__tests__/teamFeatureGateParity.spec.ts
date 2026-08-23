@@ -21,10 +21,12 @@ const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'modulo', 'core'
 
 /**
  * Known acceptable exceptions — backend-only features with no UI surface:
- *   - scim            : SCIM provisioning is API-only (no UI)
- *   - external_secrets: configured via connector/API, no dedicated UI page yet
+ *   - scim              : SCIM provisioning is API-only (no UI)
+ *   - external_secrets  : configured via connector/API, no dedicated UI page yet
+ *   - pipeline_diff_rollback: gates the snapshot diff/rollback REST endpoints
+ *     only (no dedicated UI surface yet)
  */
-const BACKEND_ONLY_EXCEPTIONS = new Set(['scim', 'external_secrets'])
+const BACKEND_ONLY_EXCEPTIONS = new Set(['scim', 'external_secrets', 'pipeline_diff_rollback'])
 
 /**
  * Known acceptable exceptions — frontend-gated team features with no backend

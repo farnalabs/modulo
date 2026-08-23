@@ -23,7 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission, require_team_membership_or_admin
+from modulo.api.dependencies import (
+    get_db_session,
+    require_feature,
+    require_permission,
+    require_team_membership_or_admin,
+)
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
@@ -2131,7 +2136,10 @@ async def tag_snapshot_endpoint(
     return _snapshot_to_response(snapshot)
 
 
-@router.post("/{pipeline_id}/snapshots/{snapshot_id}/rollback")
+@router.post(
+    "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
+    dependencies=[require_feature("pipeline_diff_rollback")],
+)
 @handle_db_errors("pipelines.rollback_snapshot")
 async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -2213,7 +2221,10 @@ async def delete_snapshot_endpoint(
         )
 
 
-@router.post("/{pipeline_id}/snapshots/diff")
+@router.post(
+    "/{pipeline_id}/snapshots/diff",
+    dependencies=[require_feature("pipeline_diff_rollback")],
+)
 @handle_db_errors("pipelines.diff_snapshots")
 async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,

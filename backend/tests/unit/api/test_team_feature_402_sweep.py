@@ -110,6 +110,7 @@ TEAM_ROUTES: list[tuple[str, str, str]] = [
     ("analytics_page", "get", "/api/v1/analytics/query"),
     ("error_tracking", "get", "/api/v1/errors"),
     ("email_config", "get", f"/api/v1/admin/org/{_DUMMY_UUID}/email-settings"),
+    ("pipeline_diff_rollback", "post", f"/api/v1/pipelines/{_DUMMY_UUID}/snapshots/diff"),
 ]
 
 

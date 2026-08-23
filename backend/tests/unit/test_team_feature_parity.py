@@ -40,7 +40,6 @@ KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = {
     "audit_crypto_chain",
     "community_registry",
     "prompt_optimization",
-    "pipeline_diff_rollback",
     "schema_union_types",
     "migration_cli",
 }
