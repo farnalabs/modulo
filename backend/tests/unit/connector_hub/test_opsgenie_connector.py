@@ -103,8 +103,9 @@ async def test_query_alert(connector):
 
 
 async def test_query_alert_missing_id(connector):
+    query = ConnectorQuery(resource="alert")
     with pytest.raises(ValueError, match="'id' in filters"):
-        await connector.query(ConnectorQuery(resource="alert"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +176,9 @@ async def test_query_on_calls(connector):
 
 
 async def test_query_on_calls_missing_schedule_id(connector):
+    query = ConnectorQuery(resource="on_calls")
     with pytest.raises(ValueError, match="'schedule_id' in filters or cursor"):
-        await connector.query(ConnectorQuery(resource="on_calls"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +187,9 @@ async def test_query_on_calls_missing_schedule_id(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="invalid")
     with pytest.raises(ValueError, match="Unsupported Opsgenie resource"):
-        await connector.query(ConnectorQuery(resource="invalid"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +228,9 @@ async def test_write_alert_unwrapped_response_returns_empty(connector):
 
 
 async def test_write_alert_missing_message(connector):
+    payload = ConnectorPayload(resource="alert", data={})
     with pytest.raises(ValueError, match="'message' in data"):
-        await connector.write(ConnectorPayload(resource="alert", data={}))
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +251,9 @@ async def test_write_alert_acknowledge(connector):
 
 
 async def test_write_alert_acknowledge_missing_id(connector):
+    payload = ConnectorPayload(resource="alert_acknowledge", data={})
     with pytest.raises(ValueError, match="'id' in data"):
-        await connector.write(ConnectorPayload(resource="alert_acknowledge", data={}))
+        await connector.write(payload)
 
 
 @respx.mock

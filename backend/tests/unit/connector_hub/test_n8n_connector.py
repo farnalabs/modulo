@@ -96,8 +96,9 @@ async def test_query_workflow(connector):
 
 
 async def test_query_workflow_missing_id(connector):
+    query = ConnectorQuery(resource="workflow")
     with pytest.raises(ValueError, match="'id' filter"):
-        await connector.query(ConnectorQuery(resource="workflow"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +125,9 @@ async def test_query_execution(connector):
 
 
 async def test_query_execution_missing_id(connector):
+    query = ConnectorQuery(resource="execution")
     with pytest.raises(ValueError, match="'id' filter"):
-        await connector.query(ConnectorQuery(resource="execution"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +160,9 @@ async def test_query_credential(connector):
 
 
 async def test_query_credential_missing_id(connector):
+    query = ConnectorQuery(resource="credential")
     with pytest.raises(ValueError, match="'id' filter"):
-        await connector.query(ConnectorQuery(resource="credential"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -184,8 +187,9 @@ async def test_query_nodes(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="invalid_resource")
     with pytest.raises(ValueError, match="Unsupported n8n resource"):
-        await connector.query(ConnectorQuery(resource="invalid_resource"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +208,9 @@ async def test_write_workflow(connector):
 
 
 async def test_write_workflow_missing_name(connector):
+    payload = ConnectorPayload(resource="workflow", data={})
     with pytest.raises(ValueError, match="'name' in data"):
-        await connector.write(ConnectorPayload(resource="workflow", data={}))
+        await connector.write(payload)
 
 
 # ---------------------------------------------------------------------------

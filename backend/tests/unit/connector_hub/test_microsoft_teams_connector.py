@@ -95,8 +95,9 @@ async def test_query_team(connector):
 
 
 async def test_query_team_missing_team_id(connector):
+    query = ConnectorQuery(resource="team")
     with pytest.raises(ValueError, match="'team_id' in filters"):
-        await connector.query(ConnectorQuery(resource="team"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +114,9 @@ async def test_query_channels(connector):
 
 
 async def test_query_channels_missing_team_id(connector):
+    query = ConnectorQuery(resource="channels")
     with pytest.raises(ValueError, match="'team_id' in filters"):
-        await connector.query(ConnectorQuery(resource="channels"))
+        await connector.query(query)
 
 
 @respx.mock
@@ -128,8 +130,9 @@ async def test_query_channel(connector):
 
 
 async def test_query_channel_missing_filters(connector):
+    query = ConnectorQuery(resource="channel", filters={"team_id": "t1"})
     with pytest.raises(ValueError, match="'team_id' and 'channel_id' in filters"):
-        await connector.query(ConnectorQuery(resource="channel", filters={"team_id": "t1"}))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +151,9 @@ async def test_query_messages(connector):
 
 
 async def test_query_messages_missing_filters(connector):
+    query = ConnectorQuery(resource="messages", filters={"team_id": "t1"})
     with pytest.raises(ValueError, match="'team_id' and 'channel_id' in filters"):
-        await connector.query(ConnectorQuery(resource="messages", filters={"team_id": "t1"}))
+        await connector.query(query)
 
 
 @respx.mock
@@ -176,8 +180,9 @@ async def test_query_members(connector):
 
 
 async def test_query_members_missing_team_id(connector):
+    query = ConnectorQuery(resource="members")
     with pytest.raises(ValueError, match="'team_id' in filters"):
-        await connector.query(ConnectorQuery(resource="members"))
+        await connector.query(query)
 
 
 @respx.mock
