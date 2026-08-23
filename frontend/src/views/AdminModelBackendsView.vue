@@ -161,13 +161,14 @@
                     </span>
                   </td>
                   <td class="table-cell font-mono text-xs">{{ backend.model_id }}</td>
-                  <td class="table-cell text-muted-foreground">{{ backend.display_name }}</td>
+                  <td class="table-cell text-muted-foreground">{{ backend.display_name || '\u2014' }}</td>
                   <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                       :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
                     >
                       <span
+                        aria-hidden="true"
                         class="h-1.5 w-1.5 rounded-full"
                         :class="backend.has_credentials ? 'bg-success' : 'bg-muted-foreground'"
                       />
