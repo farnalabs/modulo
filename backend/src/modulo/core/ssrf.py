@@ -119,8 +119,8 @@ def _resolve_all_sync(host: str) -> list[str]:
     result: list[str] = []
     for _fam, _typ, _proto, _canon, sockaddr in addrinfos:
         ip_str = sockaddr[0]
-        assert isinstance(ip_str, str)
-        result.append(ip_str)
+        if isinstance(ip_str, str):  # O-safe: assert would vanish under python -O
+            result.append(ip_str)
     return result
 
 
@@ -134,8 +134,8 @@ async def _resolve_all_async(host: str) -> list[str]:
     result: list[str] = []
     for _fam, _typ, _proto, _canon, sockaddr in addrinfos:
         ip_str = sockaddr[0]
-        assert isinstance(ip_str, str)
-        result.append(ip_str)
+        if isinstance(ip_str, str):  # O-safe: assert would vanish under python -O
+            result.append(ip_str)
     return result
 
 

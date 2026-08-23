@@ -584,32 +584,9 @@ class JiraConnector(ConnectorBase):
                 )
                 return {"issue_key": issue_key, "transitioned": True}
             case "attachment":
-                if "issue_key" not in payload.data:
-                    raise ValueError("Jira attachment requires 'issue_key' in data")
-                issue_key = payload.data["issue_key"]
-                if "filename" not in payload.data:
-                    raise ValueError("Jira attachment requires 'filename' in data")
-                content = payload.data.get("content")
-                file_content = payload.data.get("file")
-                if content is None and file_content is None:
-                    raise ValueError("Jira attachment requires 'content' or 'file' in data")
-                if content is not None and file_content is not None:
-                    raise ValueError("Jira attachment must provide exactly one of 'content' or 'file'")
-                filename = payload.data["filename"]
-                if content is not None:
-                    raw = content if isinstance(content, bytes) else str(content).encode("utf-8")
-                else:
-                    raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
-                mime_type = payload.data.get("mime_type", _OCTET_STREAM)
-                r = await self._call_api(
-                    "POST",
-                    f"/issue/{issue_key}/attachments",
-                    files={"file": (filename, raw, mime_type)},
-                    headers={"X-Atlassian-Token": "no-check"},
-                )
-                body = await self._parse_json(r)
-                attachments = body if isinstance(body, list) else [body]
-                return {"issue_key": issue_key, "attachments": attachments}
+                uploaded = await self._upload_attachment(payload.data)
+                attachments = uploaded if isinstance(uploaded, list) else [uploaded]
+                return {"issue_key": payload.data["issue_key"], "attachments": attachments}
             case _:
                 raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
 
@@ -617,9 +594,10 @@ class JiraConnector(ConnectorBase):
         """Upload a file as an issue attachment via the Jira attachments API.
 
         Accepts ``issue_key`` + ``filename`` plus exactly one of ``content``
-        (str) or ``file`` (bytes/str). Optional extra keys (e.g. ``comment``)
-        are passed through as multipart form fields. Sends the
-        ``X-Atlassian-Token: no-check`` header Jira requires for attachment
+        (str) or ``file`` (bytes/str). Optional ``mime_type`` sets the upload
+        content type (defaults to octet-stream). Optional extra keys
+        (e.g. ``comment``) are passed through as multipart form fields. Sends
+        the ``X-Atlassian-Token: no-check`` header Jira requires for attachment
         uploads to bypass XSRF protection.
         """
         if "issue_key" not in data:
@@ -636,8 +614,11 @@ class JiraConnector(ConnectorBase):
             raise ValueError("Jira issue attachment must provide exactly one of 'content' or 'file'")
         raw = content if content is not None else file_content
         raw_bytes = raw.encode("utf-8") if isinstance(raw, str) else raw
-        files: dict[str, Any] = {"file": (filename, raw_bytes, _OCTET_STREAM)}
-        form_data = {k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file")}
+        mime_type = data.get("mime_type") or _OCTET_STREAM
+        files: dict[str, Any] = {"file": (filename, raw_bytes, mime_type)}
+        form_data = {
+            k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file", "mime_type")
+        }
         r = await self._call_api(
             "POST",
             f"/issue/{issue_key}/attachments",
