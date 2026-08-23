@@ -1,6 +1,6 @@
 line-length = 120
 target-version = "py312"
-exclude = ["*.feature", "node_modules", ".git", "__pycache__", "*.egg-info"]
+exclude = ["*.feature", "node_modules", ".git", "__pycache__", "*.egg-info", ".semgrep/tests/"]
 
 [lint]
 select = [
