@@ -8,6 +8,7 @@ import pytest
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.rating import (
     CopyToAdaptError,
+    DuplicateRatingError,
     RatingCooldownError,
     SelfRatingError,
     get_rating_aggregate,
@@ -120,6 +121,30 @@ class TestSelfRatingGuard:
             account_id=user_id,
         )
         assert isinstance(result, PrimitiveRating)
+
+
+class TestDuplicateRatingGuard:
+    async def test_blocks_duplicate_rating(self, mock_session):
+        """A user cannot rate a primitive they have already rated."""
+        user_id = uuid.uuid4()
+        prim = MagicMock(spec=LibraryPrimitive)
+        prim.account_id = uuid.uuid4()
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = prim
+        count_1 = MagicMock()
+        count_1.scalar_one.return_value = 1  # a rating already exists
+
+        _given_execute(mock_session, result, count_1)
+
+        with pytest.raises(DuplicateRatingError, match="already rated"):
+            await submit_rating(
+                mock_session,
+                org_id=uuid.uuid4(),
+                primitive_id=uuid.uuid4(),
+                thumbs_up=True,
+                account_id=user_id,
+            )
 
 
 class TestCooldownGuard:

@@ -435,19 +435,25 @@ async def test_fetch_published_community_applies_search_filter():
     org_id = uuid.uuid4()
     session.info = {}
 
+    captured_stmt = None
+
     async def _execute(stmt, *args: object, **kwargs: object) -> MagicMock:
         from modulo.core.library_service import _COMMUNITY_PRIMITIVES
 
+        nonlocal captured_stmt
+        captured_stmt = stmt
         return MagicMock(scalars=MagicMock(return_value=_COMMUNITY_PRIMITIVES))
 
     session.execute = AsyncMock(side_effect=_execute)
 
     result = await _fetch_published_community_from_db(session, org_id, search="  French  ")
 
-    # Search is applied to the SQL statement — the mock ignores it, but the
-    # function must still return the query's rows.
     from modulo.core.library_service import _COMMUNITY_PRIMITIVES as EXPECTED
 
+    assert captured_stmt is not None
+    compiled = str(captured_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "%French%" in compiled, "search term must be applied to the SQL statement"
+    assert "%  French  %" not in compiled, "search term must be stripped before use"
     assert result == EXPECTED
 
 

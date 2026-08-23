@@ -3,6 +3,8 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from modulo.core.library_service import (
     _MODULO_PRIMITIVES,
     _filter_modulo,
@@ -72,10 +74,11 @@ def _mock_session() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-async def test_list_primitives_filters_composite_type():
+@pytest.mark.parametrize("org_slug", ["test-composite", "my-composite"])
+async def test_list_primitives_filters_and_merges_composite_type(org_slug: str):
     session = _mock_session()
     org_id = uuid.uuid4()
-    org_composite = _fake_primitive()
+    org_composite = _fake_primitive(primitive_type="composite", slug=org_slug)
     org_page: PageResult = PageResult(items=[org_composite], total=1, page=1, page_size=20)
 
     with (
@@ -91,31 +94,9 @@ async def test_list_primitives_filters_composite_type():
     mock_list.assert_awaited_once()
     call_kwargs = mock_list.call_args.kwargs
     assert call_kwargs["primitive_type"] == "composite"
-    assert {p.slug for p in result.items} == {org_composite.slug, *_EXPECTED_COMPOSITE_SLUGS}
+    assert {p.slug for p in result.items} == {org_slug, *_EXPECTED_COMPOSITE_SLUGS}
     assert all(p.primitive_type == "composite" for p in result.items)
-
-
-async def test_list_primitives_composite_passes_filter_downstream():
-    session = _mock_session()
-    org_id = uuid.uuid4()
-    composite_prim = _fake_primitive(primitive_type="composite", slug="my-composite")
-    org_page: PageResult = PageResult(items=[composite_prim], total=1, page=1, page_size=20)
-
-    with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "modulo.core.library_service.list_library_primitives",
-            new_callable=AsyncMock,
-            return_value=org_page,
-        ) as mock_list,
-    ):
-        result = await list_primitives(session, org_id, primitive_type="composite")
-
-    mock_list.assert_awaited_once()
-    call_kwargs = mock_list.call_args.kwargs
-    assert call_kwargs["primitive_type"] == "composite"
-    assert {p.slug for p in result.items} == {composite_prim.slug, *_EXPECTED_COMPOSITE_SLUGS}
-    assert result.items[0].slug == "my-composite"
+    assert result.items[0].slug == org_slug
 
 
 # ---------------------------------------------------------------------------
@@ -140,48 +121,6 @@ async def test_get_composite_primitive():
 
     assert result is composite
     assert result.primitive_type == "composite"
-
-
-# ---------------------------------------------------------------------------
-# Composite content_json structure validation
-# ---------------------------------------------------------------------------
-
-
-def test_composite_content_json_contains_expected_fields():
-    content = {
-        "name": "My Composite",
-        "description": "A parameterizable sub-pipeline",
-        "sub_pipeline_graph_json": {"nodes": [{"id": "agent-1"}], "edges": []},
-        "parameter_ports_json": [
-            {"name": "model", "type": "string", "required": True},
-        ],
-        "input_schema_id": str(uuid.uuid4()),
-        "output_schema_id": str(uuid.uuid4()),
-    }
-
-    assert "name" in content
-    assert "description" in content
-    assert "sub_pipeline_graph_json" in content
-    assert "parameter_ports_json" in content
-    assert "input_schema_id" in content
-    assert "output_schema_id" in content
-    assert isinstance(content["sub_pipeline_graph_json"], dict)
-    assert isinstance(content["parameter_ports_json"], list)
-
-
-def test_composite_content_json_optional_fields():
-    content = {
-        "name": "Minimal Composite",
-        "description": "",
-        "sub_pipeline_graph_json": {"nodes": [], "edges": []},
-        "parameter_ports_json": [],
-        "input_schema_id": None,
-        "output_schema_id": None,
-    }
-
-    assert content["input_schema_id"] is None
-    assert content["output_schema_id"] is None
-    assert not content["parameter_ports_json"]
 
 
 # ---------------------------------------------------------------------------
