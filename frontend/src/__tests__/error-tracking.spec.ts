@@ -117,22 +117,24 @@ describe('ErrorTracker', () => {
       }, { timeout: 5000 })
     })
 
-    it('captures errors via window.onunhandledrejection', async () => {
+    it('captures errors via window.onunhandledrejection', (ctx) => {
       if (typeof PromiseRejectionEvent === 'undefined') {
-        return // jsdom does not implement PromiseRejectionEvent
-      }
-      window.fetch = mockFetch as unknown as typeof fetch
-      const tracker = createErrorTracker()
-      const captureError = vi.spyOn(tracker, 'captureError')
-      window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
-        reason: new Error('promise rejected'),
-        promise: Promise.resolve(),
-      }))
+        // jsdom does not implement PromiseRejectionEvent
+        ctx.skip()
+      } else {
+        window.fetch = mockFetch as unknown as typeof fetch
+        const tracker = createErrorTracker()
+        const captureError = vi.spyOn(tracker, 'captureError')
+        window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
+          reason: new Error('promise rejected'),
+          promise: Promise.resolve(),
+        }))
 
-      expect(captureError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'promise rejected' }),
-        { type: 'unhandled_promise_rejection' },
-      )
+        expect(captureError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: 'promise rejected' }),
+          { type: 'unhandled_promise_rejection' },
+        )
+      }
     })
   })
 
@@ -277,7 +279,7 @@ describe('BreadcrumbCollector', () => {
     }
 
     const crumbs = collector.getBreadcrumbs()
-    expect(crumbs.length).toBe(50)
+    expect(crumbs).toHaveLength(50)
     expect(crumbs[0].data.index).toBe(10)
 
     collector.stopAutoCapture()
@@ -288,10 +290,10 @@ describe('BreadcrumbCollector', () => {
     collector.startAutoCapture()
 
     collector.add('navigation', { action: 'test' })
-    expect(collector.getBreadcrumbs().length).toBe(1)
+    expect(collector.getBreadcrumbs()).toHaveLength(1)
 
     collector.clear()
-    expect(collector.getBreadcrumbs().length).toBe(0)
+    expect(collector.getBreadcrumbs()).toHaveLength(0)
 
     collector.stopAutoCapture()
   })
@@ -302,7 +304,7 @@ describe('BreadcrumbCollector', () => {
     collector.startAutoCapture()
 
     collector.add('navigation', { action: 'test' })
-    expect(collector.getBreadcrumbs().length).toBe(0)
+    expect(collector.getBreadcrumbs()).toHaveLength(0)
 
     collector.stopAutoCapture()
   })

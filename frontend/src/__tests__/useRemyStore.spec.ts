@@ -43,7 +43,7 @@ describe('useRemyStore', () => {
     const store = useRemyStore()
     store.activeSessionId = 'session-1'
     store.appendToken('Hello')
-    expect(store.messages.length).toBe(1)
+    expect(store.messages).toHaveLength(1)
     expect(store.messages[0].role).toBe('assistant')
     expect(store.messages[0].content).toBe('Hello')
   })
@@ -53,7 +53,7 @@ describe('useRemyStore', () => {
     store.activeSessionId = 'session-1'
     store.appendToken('Hello')
     store.appendToken(' World')
-    expect(store.messages.length).toBe(1)
+    expect(store.messages).toHaveLength(1)
     expect(store.messages[0].content).toBe('Hello World')
   })
 
@@ -70,14 +70,14 @@ describe('useRemyStore', () => {
       token_count: null, parent_id: null, created_at: new Date().toISOString(),
     })
     store.removeLastUserMessage()
-    expect(store.messages.length).toBe(2) // last is assistant, not removed
+    expect(store.messages).toHaveLength(2) // last is assistant, not removed
     store.messages.push({
       id: '3', session_id: 's1', role: 'user',
       content: 'bye', tool_calls_json: null, tool_results_json: null,
       token_count: null, parent_id: null, created_at: new Date().toISOString(),
     })
     store.removeLastUserMessage()
-    expect(store.messages.length).toBe(2) // last user removed
+    expect(store.messages).toHaveLength(2) // last user removed
   })
 
   it('appendToolCall adds a tool_result message', () => {
@@ -86,7 +86,7 @@ describe('useRemyStore', () => {
     store.appendToolCall({
       tool_call_id: 'tc-1', tool_name: 'test', success: true,
     })
-    expect(store.messages.length).toBe(1)
+    expect(store.messages).toHaveLength(1)
     expect(store.messages[0].role).toBe('tool_result')
     expect(store.messages[0].content).toContain('completed')
   })
