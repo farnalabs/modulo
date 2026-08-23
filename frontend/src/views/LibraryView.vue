@@ -24,27 +24,7 @@
               @click="showTypeDropdown = !showTypeDropdown"
               data-testid="library-type-filter-button"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <line x1="4" y1="21" x2="4" y2="14" />
-                <line x1="4" y1="10" x2="4" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="12" />
-                <line x1="12" y1="8" x2="12" y2="3" />
-                <line x1="20" y1="21" x2="20" y2="16" />
-                <line x1="20" y1="12" x2="20" y2="3" />
-                <line x1="1" y1="14" x2="7" y2="14" />
-                <line x1="9" y1="8" x2="15" y2="8" />
-                <line x1="17" y1="16" x2="23" y2="16" />
-              </svg>
+              <FilterIcon class="h-3.5 w-3.5" />
               {{ $t("views.LibraryView.all_types") }}
               <span
                 v-if="selectedTypes.length > 0"
@@ -271,9 +251,10 @@ import LibraryPrimitiveCard from "../components/library/LibraryPrimitiveCard.vue
 import LibraryPrimitiveGrid from "../components/library/LibraryPrimitiveGrid.vue";
 import { useDataFetch } from "../composables/useDataFetch";
 import { formatApiError } from "../lib/api/formatError";
+import { runApiCall } from "../lib/api/runApiCall";
 import { api } from "../lib/api/client";
 import { useI18n } from "vue-i18n";
-import { X as XIcon } from "@lucide/vue";
+import { X as XIcon, Filter as FilterIcon } from "@lucide/vue";
 import { usePlanStore } from "../stores/planStore";
 import type { LibraryPrimitive } from "../components/library/LibraryPrimitiveCard.vue";
 import type { CommunityLibraryEntry } from "../lib/api/communityLibrary";
@@ -446,21 +427,19 @@ const successMessage = ref<string | null>(null);
 let clearSuccessTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 async function loadHostedCommunity(): Promise<void> {
-  hostedLoading.value = true;
-  hostedError.value = null;
-  try {
-    const { data, error: err } = await api.GET("/api/v1/libraries/community");
-    if (err) {
-      hostedError.value = formatApiError(err);
-      return;
-    }
-    const payload = data as { items?: CommunityLibraryEntry[] } | undefined;
-    hostedCommunityItems.value = payload?.items ?? [];
-  } catch (e) {
-    hostedError.value = formatApiError(e);
-  } finally {
-    hostedLoading.value = false;
-  }
+  await runApiCall({
+    setLoading: (v) => {
+      hostedLoading.value = v;
+    },
+    setError: (m) => {
+      hostedError.value = m;
+    },
+    call: () => api.GET("/api/v1/libraries/community"),
+    onSuccess: (data) => {
+      const payload = data as { items?: CommunityLibraryEntry[] } | undefined;
+      hostedCommunityItems.value = payload?.items ?? [];
+    },
+  });
 }
 
 function toLibraryPrimitive(entry: CommunityLibraryEntry): LibraryPrimitive {
@@ -481,19 +460,19 @@ async function installHostedEntry(entry: CommunityLibraryEntry): Promise<void> {
   installingIds.value[entry.id] = true;
   hostedError.value = null;
   successMessage.value = null;
-  try {
-    const { data, error: err } = await api.POST(
-      "/api/v1/libraries/community/{entry_id}/install",
-      {
+  await runApiCall({
+    setLoading: (v) => {
+      installingIds.value[entry.id] = v;
+    },
+    setError: (m) => {
+      hostedError.value = m;
+    },
+    call: () =>
+      api.POST("/api/v1/libraries/community/{entry_id}/install", {
         params: { path: { entry_id: entry.id } },
         body: {},
-      },
-    );
-    if (err) {
-      hostedError.value = formatApiError(err);
-      return;
-    }
-    if (data) {
+      }),
+    onSuccess: (_data) => {
       entry.installed = true;
       successMessage.value = t("views.LibraryView.install_success", {
         name: entry.slug,
@@ -502,12 +481,8 @@ async function installHostedEntry(entry: CommunityLibraryEntry): Promise<void> {
       clearSuccessTimeoutId = setTimeout(() => {
         successMessage.value = null;
       }, 4000);
-    }
-  } catch (e) {
-    hostedError.value = formatApiError(e);
-  } finally {
-    installingIds.value[entry.id] = false;
-  }
+    },
+  });
 }
 
 function viewHostedEntry(entry: CommunityLibraryEntry) {

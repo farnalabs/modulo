@@ -97,10 +97,10 @@ import Button from "primevue/button";
 import PageHeader from "../components/shared/PageHeader.vue";
 import Banner from "../components/shared/Banner.vue";
 import { api } from "../lib/api/client";
-import { formatApiError } from "../lib/api/formatError";
 import { typeBadgeClass } from "../lib/ui/typeBadge";
 import type { CommunityLibraryEntry } from "../lib/api/communityLibrary";
 import { formatDateShort } from "../lib/formatDate";
+import { runApiCall } from "../lib/api/runApiCall";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -127,27 +127,23 @@ async function loadEntry(): Promise<void> {
     error.value = t("views.LibraryCommunityDetail.missing_entry_id");
     return;
   }
-  loading.value = true;
-  error.value = null;
-  try {
-    const { data, error: err } = await api.GET(
-      "/api/v1/libraries/community/{entry_id}",
-      {
+  await runApiCall({
+    setLoading: (v) => {
+      loading.value = v;
+    },
+    setError: (m) => {
+      error.value = m;
+    },
+    call: () =>
+      api.GET("/api/v1/libraries/community/{entry_id}", {
         params: { path: { entry_id: id } },
-      },
-    );
-    if (err) {
-      error.value = formatApiError(err);
-      return;
-    }
-    entry.value = data
-      ? (data as unknown as CommunityLibraryEntry)
-      : null;
-  } catch (e) {
-    error.value = formatApiError(e);
-  } finally {
-    loading.value = false;
-  }
+      }),
+    onSuccess: (data) => {
+      entry.value = data
+        ? (data as unknown as CommunityLibraryEntry)
+        : null;
+    },
+  });
 }
 
 onMounted(() => {
