@@ -13,9 +13,11 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
+    list_oidc_providers,
     oidc_get_authorize_url,
     oidc_process_callback,
     parse_oidc_providers,
+    resolve_oidc_provider_org,
     saml_get_auth_url,
     saml_process_response,
 )
@@ -57,17 +59,25 @@ class SsoProvidersResponse(BaseModel):
 async def sso_providers(
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
 ) -> SsoProvidersResponse:
-    """List configured SSO providers (OIDC) and whether SAML is enabled."""
+    """List configured SSO providers (OIDC) and whether SAML is enabled.
+
+    OIDC providers come from the DB ``sso_providers`` table (admin UI) first,
+    falling back to ``MODULO_OIDC_PROVIDERS`` for env-var-only deployments.
+    """
     try:
-        oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
+        async with session.begin():
+            oidc_providers = await list_oidc_providers(session, org_id=None, fernet_key=settings.fernet_key)
+        if not oidc_providers:
+            oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
         saml_enabled = (
             settings.modulo_saml_enabled
             and bool(settings.modulo_license_key)
             and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
         )
         return SsoProvidersResponse(
-            oidc=[OidcProviderInfo(**p) for p in oidc_providers],
+            oidc=[OidcProviderInfo(provider_id=p["provider_id"]) for p in oidc_providers],
             saml=saml_enabled,
         )
     except HTTPException:
@@ -92,13 +102,21 @@ async def oidc_login(
     request: Request,
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
 ) -> Any:
-    """Redirect the user to the OIDC provider's authorization page."""
+    """Redirect the user to the OIDC provider's authorization page.
+
+    Providers configured via the admin UI (the DB ``sso_providers`` table) are
+    resolved first; providers from ``MODULO_OIDC_PROVIDERS`` remain supported
+    as a fallback for env-var-only deployments. This is a pre-auth route, so
+    the DB lookup is org-agnostic.
+    """
     public_url = settings.modulo_public_url.rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
-        auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri)
+        async with session.begin():
+            auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri, session=session, org_id=None)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except HTTPException:
@@ -140,7 +158,8 @@ async def oidc_callback(
 
     try:
         async with session.begin():
-            tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
+            org_id = await resolve_oidc_provider_org(session, provider)
+            tokens = await oidc_process_callback(code, state, settings, session, redirect_uri, org_id=org_id)
     except ValueError as exc:
         _log.warning(
             "OIDC callback failed for provider %s: %s",

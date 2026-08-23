@@ -83,7 +83,9 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
     request = _make_callback_request()
     fake = _AutobeginAwareSession()
 
-    async def fake_process_callback(code: str, state: str, s: Settings, session: object, redirect_uri: str) -> dict:
+    async def fake_process_callback(
+        code: str, state: str, s: Settings, session: object, redirect_uri: str, org_id: object | None = None
+    ) -> dict:
         assert isinstance(session, _AutobeginAwareSession)
         await session.execute(MagicMock())
         return {"access_token": "at", "refresh_token": "rt"}
