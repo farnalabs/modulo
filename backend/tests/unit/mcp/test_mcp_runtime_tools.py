@@ -1047,6 +1047,80 @@ class TestCopyLibraryPrimitive(_AuthContext):
         assert result == {"error": "not_found", "primitive_id": primitive_id}
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_community_entry")
+    @patch("modulo.api.mcp_server.install_community_entry")
+    @patch("modulo.api.mcp_server.library_copy_to_adapt")
+    @patch("modulo.api.mcp_server._session")
+    async def test_hosted_catalog_fallback_installs_when_local_missing(
+        self,
+        mock_session: AsyncMock,
+        mock_library_copy: AsyncMock,
+        mock_install: AsyncMock,
+        mock_get_entry: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        # A non-local primitive id falls through library_copy_to_adapt's
+        # LookupError into the FAR-363 hosted community catalog fallback.
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_library_copy.side_effect = LookupError("missing")
+
+        primitive_id = str(uuid.uuid4())
+        mock_get_entry.return_value = {
+            "id": primitive_id,
+            "slug": "hosted-primitive",
+            "version": "1.0",
+            "type": "agent",
+        }
+        installed = MagicMock()
+        installed.id = uuid.uuid4()
+        installed.name = "Hosted Primitive"
+        installed.slug = "hosted-primitive"
+        mock_install.return_value = installed
+
+        result = await copy_library_primitive(primitive_id=primitive_id)
+
+        mock_get_entry.assert_awaited_once_with(mock_sesh, primitive_id)
+        mock_install.assert_awaited_once()
+        assert result["status"] == "installed"
+        assert result["primitive_id"] == str(installed.id)
+        assert result["name"] == "Hosted Primitive"
+        assert result["slug"] == "hosted-primitive"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_community_entry")
+    @patch("modulo.api.mcp_server.install_community_entry")
+    @patch("modulo.api.mcp_server.library_copy_to_adapt")
+    @patch("modulo.api.mcp_server._session")
+    async def test_hosted_catalog_fallback_already_installed(
+        self,
+        mock_session: AsyncMock,
+        mock_library_copy: AsyncMock,
+        mock_install: AsyncMock,
+        mock_get_entry: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_library_copy.side_effect = LookupError("missing")
+
+        primitive_id = str(uuid.uuid4())
+        mock_get_entry.return_value = {
+            "id": primitive_id,
+            "slug": "hosted-primitive",
+            "version": "1.0",
+            "type": "agent",
+        }
+        mock_install.side_effect = ValueError("already installed")
+
+        result = await copy_library_primitive(primitive_id=primitive_id)
+
+        mock_get_entry.assert_awaited_once_with(mock_sesh, primitive_id)
+        assert result["error"] == "already_installed"
+        assert result["primitive_id"] == primitive_id
+        assert result["slug"] == "hosted-primitive"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.library_copy_to_adapt")
     @patch("modulo.api.mcp_server._session")
     async def test_success_returns_copied_shape(

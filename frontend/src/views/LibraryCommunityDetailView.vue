@@ -19,13 +19,11 @@
         {{ $t("views.LibraryCommunityDetail.loading") }}
       </div>
 
-      <Banner
+      <ErrorAlert
         v-else-if="error"
-        variant="error"
+        :message="error"
         data-testid="library-community-detail-error"
-      >
-        {{ error }}
-      </Banner>
+      />
 
       <div
         v-else-if="entry"
@@ -69,7 +67,7 @@ import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import Button from "primevue/button";
 import PageHeader from "../components/shared/PageHeader.vue";
-import Banner from "../components/shared/Banner.vue";
+import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { api } from "../lib/api/client";
 import { typeBadgeClass } from "../lib/ui/typeBadge";
 import type { CommunityLibraryEntry } from "../lib/api/communityLibrary";

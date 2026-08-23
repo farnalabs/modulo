@@ -125,13 +125,11 @@
         {{ $t("views.LibraryView.loading") }}
       </div>
 
-      <Banner
+      <ErrorAlert
         v-else-if="error || (section === 'hosted' && hostedError)"
-        variant="error"
+        :message="section === 'hosted' ? hostedError : error"
         data-testid="library-error"
-      >
-        {{ section === "hosted" ? hostedError : error }}
-      </Banner>
+      />
 
       <EmptyState
         v-else-if="emptyStateTitle"
@@ -192,18 +190,18 @@
           badge="community"
           :installed="entry.installed"
           :installing="!!installingIds[entry.id]"
+          hide-create-actions
           @install="installHostedEntry(entry)"
           @view-details="viewHostedEntry(entry)"
         />
       </div>
 
-      <Banner
+      <ErrorAlert
         v-if="successMessage"
         variant="success"
+        :message="successMessage"
         data-testid="library-success-message"
-      >
-        {{ successMessage }}
-      </Banner>
+      />
 
       <div
         v-if="total > pageSize"
@@ -240,7 +238,7 @@ import Button from "primevue/button";
 import PageHeader from "../components/shared/PageHeader.vue";
 import FilterBar from "../components/shared/FilterBar.vue";
 import EmptyState from "../components/shared/EmptyState.vue";
-import Banner from "../components/shared/Banner.vue";
+import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import LibraryPrimitiveCard from "../components/library/LibraryPrimitiveCard.vue";
 import LibraryPrimitiveGrid from "../components/library/LibraryPrimitiveGrid.vue";
 import { useDataFetch } from "../composables/useDataFetch";
@@ -616,6 +614,16 @@ onMounted(() => {
   const typeParam = route.query.type;
   if (typeof typeParam === "string" && typeParam) {
     selectedTypes.value = [typeParam];
+  }
+  const sectionParam = route.query.section;
+  if (
+    typeof sectionParam === "string" &&
+    (sectionParam === "native" ||
+      sectionParam === "community" ||
+      sectionParam === "hosted") &&
+    (sectionParam !== "hosted" || hostedCommunityEnabled.value)
+  ) {
+    section.value = sectionParam;
   }
   document.addEventListener("mousedown", onClickOutside);
   if (section.value === "hosted") {

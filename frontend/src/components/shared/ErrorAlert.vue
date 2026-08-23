@@ -1,11 +1,9 @@
 <template>
-  <div
-    class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
-  >
+  <div :class="classes">
     <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
     <p v-else>{{ message }}</p>
     <button
-      v-if="onRetry && retryable !== false"
+      v-if="variant === 'error' && onRetry && retryable !== false"
       class="ml-2 underline"
       @click="onRetry"
     >
@@ -28,6 +26,7 @@ import { computed } from 'vue'
 import { isProblemDetail, type ProblemDetail } from '../../lib/api/formatError'
 
 const props = defineProps<{
+  variant?: 'error' | 'success'
   message?: string | ProblemDetail
   onRetry?: () => void
   retryable?: boolean
@@ -35,6 +34,11 @@ const props = defineProps<{
   dismissLabel?: string
 }>()
 
+const classes = computed(() =>
+  props.variant === 'success'
+    ? 'rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-emerald-600'
+    : 'rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive',
+)
 const isProblem = computed(() => props.message && isProblemDetail(props.message))
 const problem = computed(() => isProblem.value ? props.message as ProblemDetail : null)
 </script>

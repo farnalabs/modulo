@@ -9,7 +9,6 @@ install endpoint maps the helper's ``ValueError`` messages to HTTP statuses.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from uuid import UUID
@@ -27,13 +26,13 @@ from modulo.api.routes.library import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service.community import (
+    _fetch_blob,
     get_community_entry,
     install_community_entry,
     list_community_entries,
 )
-from modulo.core.library_sync import LibraryClient, get_cached_manifest
+from modulo.core.library_sync import get_cached_manifest
 from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.settings import get_settings
 
 router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-library"])
 
@@ -95,21 +94,14 @@ async def get_entry(
     content: Any = None
     content_sha256 = entry.get("content_sha256")
     if isinstance(content_sha256, str) and content_sha256:
-        settings = get_settings()
-        client = LibraryClient(
-            endpoint=settings.modulo_library_endpoint,
-            root_public_key_pem=settings.modulo_library_root_public_key,
-            timeout_seconds=settings.modulo_library_sync_timeout_seconds,
-        )
+        # Reuse the same verified blob fetch path as install so the detail view
+        # and the copy/install flow share one trust boundary (hash verification
+        # plus JSON-object validation) for identical content.
         try:
-            blob = await client.fetch_blob(content_sha256)
-            if blob is not None:
-                content = json.loads(blob.decode("utf-8"))
+            content = await _fetch_blob(content_sha256)
         except Exception:
             _log.exception("community_library.get_entry_blob")
             content = None
-        finally:
-            await client.close()
     result = dict(entry)
     result["content"] = content
     return result

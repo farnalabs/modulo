@@ -77,6 +77,7 @@
 
     <div class="flex items-center gap-2 mt-auto">
       <button
+        type="button"
         v-if="!installed"
         :class="`${primaryActionButton} ${disabledActionModifier} ${centerModifier}`"
         :disabled="installing"
@@ -103,8 +104,9 @@
       <button
         type="button"
         v-if="
-          prim.primitive_type === 'pipeline_template' ||
-          prim.primitive_type === 'composite'
+          !hideCreateActions &&
+          (prim.primitive_type === 'pipeline_template' ||
+            prim.primitive_type === 'composite')
         "
         :class="primaryActionButton"
         @click="$emit('create-pipeline', prim)"
@@ -113,7 +115,7 @@
         {{ $t("views.LibraryView.create_pipeline") }}
       </button>
       <button
-        v-else-if="prim.primitive_type === 'lifecycle_map'"
+        v-else-if="!hideCreateActions && prim.primitive_type === 'lifecycle_map'"
         :class="`${primaryActionButton} ${disabledActionModifier}`"
         :disabled="adapting[prim.id]"
         :aria-busy="adapting[prim.id]"
@@ -205,6 +207,7 @@ interface Props extends LibraryCardSharedProps {
   prim: LibraryPrimitive;
   installed?: boolean;
   installing?: boolean;
+  hideCreateActions?: boolean;
 }
 
 const props = withDefaults(
@@ -217,6 +220,7 @@ const props = withDefaults(
     adapting: () => ({}),
     installed: false,
     installing: false,
+    hideCreateActions: false,
   },
 );
 
