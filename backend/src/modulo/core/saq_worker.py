@@ -441,6 +441,27 @@ async def resume_run(
 # ---------------------------------------------------------------------------
 
 
+async def _dispatch_created_run(result: dict[str, Any], *, org_id: str, log_context: str) -> dict[str, Any]:
+    """Dispatch a run the fire job just created, sharing the dispatch path.
+
+    Called only when a fire helper reports successful creation with a run id;
+    attaches the dispatch outcome and the enqueued job id to ``result``. The
+    ``dispatch_run`` import stays lazy, matching the surrounding worker jobs.
+    """
+    from modulo.core.dispatch import dispatch_run
+
+    if result.get("status") == "fired" and result.get("run_id"):
+        try:
+            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
+            result["dispatch"] = outcome
+            result["job_id"] = job_id
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("%s: dispatch failed for run %s", log_context, result["run_id"])
+    return result
+
+
 async def fire_cron_trigger(
     ctx: dict[str, Any],
     *,
@@ -452,7 +473,6 @@ async def fire_cron_trigger(
 ) -> dict[str, Any]:
     """Per-item cron fire job — fire + dispatch the created run (SAQ)."""
     from modulo.core import cron_helpers as _ch
-    from modulo.core.dispatch import dispatch_run
 
     result = await _ch.fire_cron_trigger(
         trigger_id=uuid.UUID(trigger_id),
@@ -461,16 +481,7 @@ async def fire_cron_trigger(
         cron_expression=cron_expression,
         snapshot_id=uuid.UUID(snapshot_id) if snapshot_id else None,
     )
-    if result.get("status") == "fired" and result.get("run_id"):
-        try:
-            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
-            result["dispatch"] = outcome
-            result["job_id"] = job_id
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_cron_trigger: dispatch failed for run %s", result["run_id"])
-    return result
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_cron_trigger")
 
 
 async def fire_polling_trigger(
@@ -485,7 +496,6 @@ async def fire_polling_trigger(
 ) -> dict[str, Any]:
     """Per-item polling fire job — fire + dispatch the created run (SAQ)."""
     from modulo.core import cron_helpers as _ch
-    from modulo.core.dispatch import dispatch_run
 
     result = await _ch.fire_polling_trigger(
         trigger_id=uuid.UUID(trigger_id),
@@ -495,16 +505,7 @@ async def fire_polling_trigger(
         poll_query=poll_query,
         condition_expression=condition_expression,
     )
-    if result.get("status") == "fired" and result.get("run_id"):
-        try:
-            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
-            result["dispatch"] = outcome
-            result["job_id"] = job_id
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_polling_trigger: dispatch failed for run %s", result["run_id"])
-    return result
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
 async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
