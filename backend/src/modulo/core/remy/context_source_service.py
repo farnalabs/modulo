@@ -37,7 +37,7 @@ _BUILTIN_SOURCE_METADATA: dict[str, dict[str, str]] = {
     },
     "product_docs": {
         "name": "Product Docs",
-        "description": "Product documentation, guides, and reference materials",
+        "description": "Product surface and navigation from the product manifest",
     },
     "integration_status": {
         "name": "Integration Status",

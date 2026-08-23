@@ -31,7 +31,7 @@ _DELIMITER = "---"
 
 # Tool descriptions for built-in context sources with tool mode
 _TOOL_DESCRIPTIONS: dict[str, str] = {
-    "product_docs": "search_documentation(query, section?) — Search product docs, FAQ, how-to guides",
+    "product_docs": "search_documentation(query, section?) — Search product surface and navigation",
     "integration_status": "get_integration_status() — Get connector and model backend health",
     "org_config": "get_org_config(section?) — Get org settings and feature flags",
     "feature_overview": "get_available_features() — Get feature availability by plan tier",
