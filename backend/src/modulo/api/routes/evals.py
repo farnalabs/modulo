@@ -835,6 +835,55 @@ async def compare_evals(
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> dict[str, Any]:
     """Compare eval results between two runs side by side."""
+    run_a, run_b, results_a, results_b = await _fetch_compare_evals(req, session, principal)
+
+    eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
+    eval_defs = {}
+    if eval_ids:
+        eval_defs = await _fetch_eval_definitions(eval_ids, session, principal)
+
+    results_by_eval_a: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_a}
+    results_by_eval_b: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_b}
+
+    compared: list[dict[str, Any]] = []
+    for eid in sorted(eval_ids):
+        ra = results_by_eval_a.get(eid)
+        rb = results_by_eval_b.get(eid)
+        edef = eval_defs.get(eid)
+        result_a = _compare_result_payload(ra)
+        result_b = _compare_result_payload(rb)
+        compared.append(
+            {
+                "eval_id": str(eid),
+                "eval_name": edef.name if edef else "unknown",
+                "node_id": _compare_node_id(ra, rb),
+                "result_a": result_a,
+                "result_b": result_b,
+                "delta": round(_compare_score(result_a) - _compare_score(result_b), 4),
+            }
+        )
+
+    return {
+        "run_a": {
+            "id": str(run_a.id),
+            "created_at": _iso_or_none(run_a.created_at),
+            "variant_name": "A",
+        },
+        "run_b": {
+            "id": str(run_b.id),
+            "created_at": _iso_or_none(run_b.created_at),
+            "variant_name": "B",
+        },
+        "results": compared,
+    }
+
+
+async def _fetch_compare_evals(
+    req: "CompareEvalsRequest",
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> tuple[Any, Any, Any, Any]:
+    """Load both comparison runs plus their non-guardrail eval results."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -887,6 +936,7 @@ async def compare_evals(
                 .scalars()
                 .all()
             )
+            return run_a, run_b, results_a, results_b
     except HTTPException:
         raise
     except IntegrityError:
@@ -915,101 +965,80 @@ async def compare_evals(
             detail="An unexpected error occurred while comparing eval results.",
         ) from None
 
-    eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
-    eval_defs = {}
-    if eval_ids:
-        try:
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                await set_rls_user_context(session, principal.account_id, principal.org_role)
-                defs_rows = (
-                    (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids))))
-                    .scalars()
-                    .all()
-                )
-                eval_defs = {d.id: d for d in defs_rows}
-        except HTTPException:
-            raise
-        except IntegrityError:
-            _log.exception(_CODE_EVALS_COMPARE_EVALS)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=MSG_RESOURCE_ALREADY_EXISTS,
-            ) from None
-        except ProgrammingError:
-            _log.exception(_CODE_EVALS_COMPARE_EVALS)
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail=MSG_FEATURE_NOT_AVAILABLE,
-            ) from None
-        except SQLAlchemyError:
-            _log.exception(_CODE_EVALS_COMPARE_EVALS)
-            _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=MSG_DB_OPERATION_FAILED,
-            ) from None
-        except Exception:
-            _log.exception("evals.compare_evals_second_block_error", extra={"org_id": str(principal.organisation_id)})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred while comparing eval results.",
-            ) from None
 
-    results_by_eval_a: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_a}
-    results_by_eval_b: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_b}
+async def _fetch_eval_definitions(
+    eval_ids: set[uuid.UUID],
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> dict[uuid.UUID, Any]:
+    """Load the eval definitions referenced by the compared results."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            defs_rows = (
+                (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
+            )
+            return {d.id: d for d in defs_rows}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVALS_COMPARE_EVALS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_COMPARE_EVALS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_COMPARE_EVALS)
+        _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception("evals.compare_evals_second_block_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while comparing eval results.",
+        ) from None
 
-    compared: list[dict[str, Any]] = []
-    all_eval_ids = sorted(eval_ids)
-    for eid in all_eval_ids:
-        ra = results_by_eval_a.get(eid)
-        rb = results_by_eval_b.get(eid)
-        edef = eval_defs.get(eid)
-        result_a = (
-            {
-                "passed": ra.passed if ra else False,
-                "score": ra.score if ra else None,
-                "detail": ra.detail if ra else None,
-            }
-            if ra
-            else None
-        )
-        result_b = (
-            {
-                "passed": rb.passed if rb else False,
-                "score": rb.score if rb else None,
-                "detail": rb.detail if rb else None,
-            }
-            if rb
-            else None
-        )
-        score_a = result_a["score"] if result_a and result_a["score"] is not None else 0.0
-        score_b = result_b["score"] if result_b and result_b["score"] is not None else 0.0
-        delta = round(score_a - score_b, 4)
-        compared.append(
-            {
-                "eval_id": str(eid),
-                "eval_name": edef.name if edef else "unknown",
-                "node_id": str(ra.node_id) if ra and ra.node_id else str(rb.node_id) if rb and rb.node_id else None,
-                "result_a": result_a,
-                "result_b": result_b,
-                "delta": delta,
-            }
-        )
 
+def _compare_result_payload(result: Any) -> dict[str, Any] | None:
+    """Serialise one eval result, or ``None`` when the run has no result for the eval."""
+    if result is None:
+        return None
     return {
-        "run_a": {
-            "id": str(run_a.id),
-            "created_at": run_a.created_at.isoformat() if run_a.created_at else None,
-            "variant_name": "A",
-        },
-        "run_b": {
-            "id": str(run_b.id),
-            "created_at": run_b.created_at.isoformat() if run_b.created_at else None,
-            "variant_name": "B",
-        },
-        "results": compared,
+        "passed": result.passed,
+        "score": result.score,
+        "detail": result.detail,
     }
+
+
+def _compare_score(result: dict[str, Any] | None) -> float:
+    """Return the numeric score of a serialised eval result, defaulting to zero."""
+    if result is not None and result.get("score") is not None:
+        return float(result["score"])
+    return 0.0
+
+
+def _compare_node_id(ra: Any, rb: Any) -> str | None:
+    """Return the first available node id across the A/B results."""
+    if ra is not None and ra.node_id:
+        return str(ra.node_id)
+    if rb is not None and rb.node_id:
+        return str(rb.node_id)
+    return None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """Return an ISO-formatted timestamp, or ``None`` when absent."""
+    return value.isoformat() if value else None
 
 
 # ---------------------------------------------------------------------------

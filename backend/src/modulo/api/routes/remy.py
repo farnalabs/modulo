@@ -502,48 +502,53 @@ def _check_nogo(tool_name: str, args: dict[str, Any], page_context: str) -> bool
     return False
 
 
-def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
-    """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
-    # 0. No-go zone check (highest priority)
-    if _check_nogo(tool_name, args, page_context) and config.permission_mode == "full_auto":
-        return "disabled"
-
-    # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
+def _tool_allowlist_disabled(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> bool:
+    """True when the tool's selector/page is outside the configured allowlists."""
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
         selector = args.get("selector", "") or args.get("data-testid", "")
-        if (
-            not any(allowed in selector for allowed in config.allowed_selectors)
-            and config.permission_mode == "full_auto"
-        ):
-            return "disabled"
-
+        if not any(allowed in selector for allowed in config.allowed_selectors):
+            return True
     if config.allowed_page_patterns and tool_name == "navigate":
         path = args.get("path", "")
-        if (
-            not any(pattern in path for pattern in config.allowed_page_patterns)
-            and config.permission_mode == "full_auto"
-        ):
-            return "disabled"
+        if not any(pattern in path for pattern in config.allowed_page_patterns):
+            return True
+    return False
 
-    # 1. Per-tool user override
-    overrides = config.tool_permissions or {}
-    if tool_name in overrides:
-        return overrides[tool_name]
 
-    # 2. Mode-based defaults
+def _default_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> str:
+    """Resolve the mode-based default permission for a tool, excluding user overrides.
+
+    Returns ``always_allowed`` or ``requires_approval``.
+    """
     mode = config.permission_mode
     if mode == "locked_down":
-        base = "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
-    elif mode == "full_auto":
-        base = "always_allowed"
+        return "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
+    if mode == "full_auto":
         raw_confidence = args.get("confidence", 1.0)
         confidence = raw_confidence if isinstance(raw_confidence, int | float) else 1.0
         if confidence < config.auto_execute_threshold:
             return "requires_approval"
-    else:
-        base = "requires_approval" if tool_name == "press" else "always_allowed"
+        return "always_allowed"
+    return "requires_approval" if tool_name == "press" else "always_allowed"
 
-    # 3. Destructive pattern override (applies regardless of mode)
+
+def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
+    """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
+    # No-go zone + allowlist enforcement (highest priority, full-auto only)
+    if config.permission_mode == "full_auto" and (
+        _check_nogo(tool_name, args, page_context) or _tool_allowlist_disabled(config, tool_name, args)
+    ):
+        return "disabled"
+
+    # Per-tool user override
+    overrides = config.tool_permissions or {}
+    if tool_name in overrides:
+        return overrides[tool_name]
+
+    # Mode-based defaults
+    base = _default_tool_permission(config, tool_name, args)
+
+    # Destructive pattern override (applies regardless of mode)
     if base == "always_allowed" and tool_name in WRITE_TOOLS:
         selector = args.get("selector", "")
         if _has_destructive_pattern(selector):
@@ -1181,6 +1186,80 @@ async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
     )
 
 
+async def _stream_approved_commands(
+    ctx: "_StreamContext",
+    config: Any,
+    approved_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    flow: "_UiToolFlow",
+) -> AsyncGenerator[str, None]:
+    """Yield the approved UI commands and their results as SSE events.
+
+    Appends executed tool results to ``tool_results`` and sets
+    ``flow.should_break`` when the loop must exit (rate limited or cancelled
+    by the user).
+    """
+    if not approved_calls:
+        return
+
+    # Rate limiter check before yielding commands
+    rate_limiter = _rate_limiters.get(ctx.session_id_str)
+    if rate_limiter is None:
+        rate_limiter = ActionRateLimiter(
+            max_actions=config.rate_limit_max_actions,
+            window_seconds=config.rate_limit_window_seconds,
+        )
+        _rate_limiters[ctx.session_id_str] = rate_limiter
+    if not rate_limiter.check():
+        yield (
+            _SSE_ERROR_PREFIX
+            + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
+            + "\n\n"
+        )
+        flow.should_break = True
+        return
+
+    yield f"event: ui_command_batch\ndata: {
+        json.dumps(
+            {
+                'commands': approved_calls,
+            }
+        )
+    }\n\n"
+
+    registry = _get_registry()
+    event = asyncio.Event()
+    _pending_ui_results[ctx.session_id_str] = event
+    try:
+        results = await _wait_for_ui_command_results(registry, ctx.session_id_str, event)
+    finally:
+        _pending_ui_results.pop(ctx.session_id_str, None)
+
+    if len(approved_calls) != len(results):
+        logger.warning(
+            "remy.ui_result_length_mismatch",
+            extra={"approved": len(approved_calls), "results": len(results)},
+        )
+    for tr in _merge_ui_command_results(approved_calls, results):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    if results and all(r.get("error") == "cancelled_by_user" for r in results):
+        skipped = len(results)
+        s = "s" if skipped != 1 else ""
+        summary = f"Action cancelled by user. {skipped} action{s} skipped."
+        yield f"event: abort_summary\ndata: {
+            json.dumps(
+                {
+                    'completed': 0,
+                    'skipped': skipped,
+                    'summary': summary,
+                }
+            )
+        }\n\n"
+        flow.should_break = True
+
+
 async def _stream_ui_tool_flow(
     ctx: _StreamContext,
     ui_tool_calls: list[dict[str, Any]],
@@ -1239,64 +1318,8 @@ async def _stream_ui_tool_flow(
             await _await_permission_decision(registry, ctx.session_id_str, req_id, pending_permission_calls, page_path)
         )
 
-    if approved_calls:
-        # Rate limiter check before yielding commands
-        rate_limiter = _rate_limiters.get(ctx.session_id_str)
-        if rate_limiter is None:
-            rate_limiter = ActionRateLimiter(
-                max_actions=config.rate_limit_max_actions,
-                window_seconds=config.rate_limit_window_seconds,
-            )
-            _rate_limiters[ctx.session_id_str] = rate_limiter
-        if not rate_limiter.check():
-            yield (
-                _SSE_ERROR_PREFIX
-                + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
-                + "\n\n"
-            )
-            flow.should_break = True
-            return
-
-        yield f"event: ui_command_batch\ndata: {
-            json.dumps(
-                {
-                    'commands': approved_calls,
-                }
-            )
-        }\n\n"
-
-        registry = _get_registry()
-        event = asyncio.Event()
-        _pending_ui_results[ctx.session_id_str] = event
-        try:
-            results = await _wait_for_ui_command_results(registry, ctx.session_id_str, event)
-        finally:
-            _pending_ui_results.pop(ctx.session_id_str, None)
-
-        if len(approved_calls) != len(results):
-            logger.warning(
-                "remy.ui_result_length_mismatch",
-                extra={"approved": len(approved_calls), "results": len(results)},
-            )
-        for tr in _merge_ui_command_results(approved_calls, results):
-            tool_results.append(tr)
-            yield _sse_tool_call_event(tr)
-
-        if results and all(r.get("error") == "cancelled_by_user" for r in results):
-            skipped = len(results)
-            s = "s" if skipped != 1 else ""
-            summary = f"Action cancelled by user. {skipped} action{s} skipped."
-            yield f"event: abort_summary\ndata: {
-                json.dumps(
-                    {
-                        'completed': 0,
-                        'skipped': skipped,
-                        'summary': summary,
-                    }
-                )
-            }\n\n"
-            flow.should_break = True
-            return
+    async for event in _stream_approved_commands(ctx, config, approved_calls, tool_results, flow):
+        yield event
 
 
 # ── Session endpoints ────────────────────────────────────────────────────
@@ -1456,7 +1479,11 @@ async def create_session(
         ) from None
 
 
-@router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.get_session")
 async def get_session(
     session_id: uuid.UUID,
@@ -1495,7 +1522,11 @@ async def get_session(
         ) from None
 
 
-@router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.rename_session")
 async def rename_session(
     session_id: uuid.UUID,
@@ -1534,7 +1565,11 @@ async def rename_session(
         ) from None
 
 
-@router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.delete_session")
 async def delete_session(
     session_id: uuid.UUID,
@@ -1592,7 +1627,11 @@ async def delete_session(
 # ── Message endpoints ────────────────────────────────────────────────────
 
 
-@router.get("/sessions/{session_id}/messages", status_code=status.HTTP_200_OK)
+@router.get(
+    "/sessions/{session_id}/messages",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.list_messages")
 async def list_messages(
     session_id: uuid.UUID,
@@ -1648,7 +1687,11 @@ async def list_messages(
         ) from None
 
 
-@router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sessions/{session_id}/messages",
+    status_code=status.HTTP_201_CREATED,
+    responses={404: {"description": "Session not found"}},
+)
 @handle_db_errors("remy.append_message")
 async def append_message(
     session_id: uuid.UUID,
@@ -1700,7 +1743,143 @@ async def append_message(
 # ── Streaming endpoint ───────────────────────────────────────────────────
 
 
-@router.post("/sessions/{session_id}/stream")
+async def _stream_backend_tokens(
+    backend: Any,
+    langchain_messages: list[Any],
+    tools_param: Any,
+    request: Request,
+    tool_call_buffers: dict[int, dict[str, Any]],
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Stream one LLM turn's tokens as SSE events, tracking content in ``state``.
+
+    Sets ``state["disconnected"]`` when the client disconnects mid-stream.
+    """
+    state["full_content"] = ""
+    async for chunk in backend.stream(langchain_messages, tools=tools_param):
+        if await request.is_disconnected():
+            state["disconnected"] = True
+            return
+        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
+            state["full_content"] += chunk.content
+            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+            _accumulate_tool_call_chunks(chunk, tool_call_buffers)
+
+
+async def _stream_tool_events(
+    ui_tool_calls: list[dict[str, Any]],
+    mcp_tool_calls: list[dict[str, Any]],
+    ctx: _StreamContext,
+    tool_results: list[dict[str, Any]],
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Execute one turn's tool calls, yielding SSE events.
+
+    Sets ``state["should_break"]`` when the UI permission flow asks the agentic
+    loop to exit (cancelled by the user / rate limited).
+    """
+    async for tr in _run_mcp_tool_calls(mcp_tool_calls, ctx.req, ctx.mcp_base_url):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
+    ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
+
+    async for tr in _run_manifest_calls(manifest_calls, ctx.req):
+        tool_results.append(tr)
+        yield _sse_tool_call_event(tr)
+
+    if ui_tool_calls:
+        flow = _UiToolFlow()
+        async for event in _stream_ui_tool_flow(ctx, ui_tool_calls, tool_results, flow):
+            yield event
+        state["should_break"] = flow.should_break
+
+
+def _append_turn_messages(
+    langchain_messages: list[Any],
+    full_content: str,
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+) -> None:
+    """Append the assistant message and tool results to the conversation for the next turn."""
+    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
+    for tr in tool_results:
+        langchain_messages.append(
+            ToolMessage(
+                content=_tool_result_content(tr),
+                tool_call_id=tr["tool_call_id"],
+            )
+        )
+
+
+def _ping_event_if_due(state: dict[str, Any]) -> str | None:
+    """Return a keepalive ping event when one is due, updating the last-ping timestamp."""
+    now = _time.monotonic()
+    if now - state["last_ping_at"] < 15:
+        return None
+    state["last_ping_at"] = now
+    return "event: ping\ndata: {}\n\n"
+
+
+async def _run_stream_loop(
+    ctx: _StreamContext,
+    request: Request,
+    backend: Any,
+    langchain_messages: list[Any],
+    parent_msg_id: uuid.UUID | None,
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Multi-turn agentic loop: stream tokens, execute tools, persist, ping."""
+    while True:
+        tool_call_buffers: dict[int, dict[str, Any]] = {}
+        tools_param = await _build_stream_tools_param(backend, ctx)
+
+        async for event in _stream_backend_tokens(
+            backend, langchain_messages, tools_param, request, tool_call_buffers, state
+        ):
+            yield event
+        if state["disconnected"]:
+            return
+
+        tool_calls = _reconstruct_tool_calls(tool_call_buffers)
+        if not tool_calls:
+            # LLM done — save assistant message and exit loop
+            state["msg_id"] = await _finalise_stream_assistant_message(ctx, state["full_content"], parent_msg_id)
+            return
+
+        # Separate UI vs MCP tool calls
+        ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
+        mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
+
+        tool_results: list[dict[str, Any]] = []
+        async for event in _stream_tool_events(ui_tool_calls, mcp_tool_calls, ctx, tool_results, state):
+            yield event
+        if state["should_break"]:
+            return
+
+        # Add to conversation for next LLM turn, then persist
+        _append_turn_messages(langchain_messages, state["full_content"], tool_calls, tool_results)
+        state["msg_id"] = await _persist_assistant_and_tool_messages(
+            ctx, state["full_content"], tool_calls, tool_results, parent_msg_id
+        )
+
+        # Ping keepalive if idle
+        ping = _ping_event_if_due(state)
+        if ping is not None:
+            yield ping
+
+
+@router.post(
+    "/sessions/{session_id}/stream",
+    responses={
+        404: {"description": "Session not found"},
+        403: {"description": "Forbidden"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
 @handle_db_errors("remy.stream_chat")
 async def stream_chat(
     session_id: uuid.UUID,
@@ -1743,8 +1922,6 @@ async def stream_chat(
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
         msg_id: str | None = None
-        last_ping_at = _time.monotonic()
-        parent_msg_id: uuid.UUID | None = None
         try:
             async with AsyncSession(session.bind, autobegin=False) as db_session:
                 ctx = _StreamContext(db_session, principal, session_id, req, settings, chat_session)
@@ -1760,81 +1937,17 @@ async def stream_chat(
                 if backend is None:
                     yield f"event: error\ndata: {json.dumps({'detail': MSG_UNEXPECTED_ERROR})}\n\n"
                     return
-                langchain_messages = init.messages
-                parent_msg_id = init.parent_msg_id
 
-                # ── Agentic loop ────────────────────────────────────────
-                while True:
-                    full_content = ""
-                    tool_call_buffers: dict[int, dict[str, Any]] = {}
-
-                    tools_param = await _build_stream_tools_param(backend, ctx)
-
-                    async for chunk in backend.stream(langchain_messages, tools=tools_param):
-                        if await request.is_disconnected():
-                            return
-                        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
-                            full_content += chunk.content
-                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
-                            _accumulate_tool_call_chunks(chunk, tool_call_buffers)
-
-                    if await request.is_disconnected():
-                        return
-
-                    tool_calls = _reconstruct_tool_calls(tool_call_buffers)
-
-                    if not tool_calls:
-                        # LLM done — save assistant message and exit loop
-                        msg_id = await _finalise_stream_assistant_message(ctx, full_content, parent_msg_id)
-                        break
-
-                    # Separate UI vs MCP tool calls
-                    ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
-                    mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
-
-                    tool_results: list[dict[str, Any]] = []
-
-                    # Execute MCP tools
-                    async for tr in _run_mcp_tool_calls(mcp_tool_calls, req, ctx.mcp_base_url):
-                        tool_results.append(tr)
-                        yield _sse_tool_call_event(tr)
-
-                    # Handle get_manifest calls server-side
-                    manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
-                    ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
-
-                    async for tr in _run_manifest_calls(manifest_calls, req):
-                        tool_results.append(tr)
-                        yield _sse_tool_call_event(tr)
-
-                    # Handle UI tools (permission flow / disabled errors)
-                    if ui_tool_calls:
-                        flow = _UiToolFlow()
-                        async for event in _stream_ui_tool_flow(ctx, ui_tool_calls, tool_results, flow):
-                            yield event
-                        if flow.should_break:
-                            break
-
-                    # Add to conversation for next LLM turn
-                    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
-                    for tr in tool_results:
-                        langchain_messages.append(
-                            ToolMessage(
-                                content=_tool_result_content(tr),
-                                tool_call_id=tr["tool_call_id"],
-                            )
-                        )
-
-                    # Save to DB
-                    msg_id = await _persist_assistant_and_tool_messages(
-                        ctx, full_content, tool_calls, tool_results, parent_msg_id
-                    )
-
-                    # Ping keepalive if idle
-                    now = _time.monotonic()
-                    if now - last_ping_at >= 15:
-                        yield "event: ping\ndata: {}\n\n"
-                        last_ping_at = now
+                state: dict[str, Any] = {
+                    "disconnected": False,
+                    "full_content": "",
+                    "should_break": False,
+                    "msg_id": None,
+                    "last_ping_at": _time.monotonic(),
+                }
+                async for event in _run_stream_loop(ctx, request, backend, init.messages, init.parent_msg_id, state):
+                    yield event
+                msg_id = state["msg_id"]
 
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
