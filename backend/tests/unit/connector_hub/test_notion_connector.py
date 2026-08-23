@@ -117,8 +117,9 @@ async def test_query_database(connector):
 
 
 async def test_query_database_missing_id(connector):
+    query = ConnectorQuery(resource="database")
     with pytest.raises(ValueError, match="'database_id' filter"):
-        await connector.query(ConnectorQuery(resource="database"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +158,9 @@ async def test_query_pages_with_filter_and_sorts(connector):
 
 
 async def test_query_pages_missing_database_id(connector):
+    query = ConnectorQuery(resource="pages")
     with pytest.raises(ValueError, match="'database_id' filter"):
-        await connector.query(ConnectorQuery(resource="pages"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +180,9 @@ async def test_query_page(connector):
 
 
 async def test_query_page_missing_id(connector):
+    query = ConnectorQuery(resource="page")
     with pytest.raises(ValueError, match="'page_id' filter"):
-        await connector.query(ConnectorQuery(resource="page"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +202,9 @@ async def test_query_blocks(connector):
 
 
 async def test_query_blocks_missing_block_id(connector):
+    query = ConnectorQuery(resource="blocks")
     with pytest.raises(ValueError, match="'block_id' filter"):
-        await connector.query(ConnectorQuery(resource="blocks"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +239,9 @@ async def test_query_users_with_cursor(connector):
 
 
 async def test_query_unsupported_resource(connector):
+    query = ConnectorQuery(resource="unknown")
     with pytest.raises(ValueError, match="Unsupported Notion resource"):
-        await connector.query(ConnectorQuery(resource="unknown"))
+        await connector.query(query)
 
 
 # ---------------------------------------------------------------------------
