@@ -35,6 +35,17 @@ class EvalDefinition(OrgScoped):
     failure_behaviour: Mapped[str] = mapped_column(String(10), nullable=False, server_default="warn")
     pass_threshold: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # First-class grouping (FAR-374 Phase 1). Backfilled from ``suite_id`` by
+    # migration 0126. ``suite_id`` is retained (present but deprecated) as the
+    # legacy source of truth for read-back during the transition; new code must
+    # resolve grouping through ``eval_suite_id``. Do NOT write to both in
+    # parallel — that creates a dual source of truth.
+    eval_suite_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("eval_suites.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )

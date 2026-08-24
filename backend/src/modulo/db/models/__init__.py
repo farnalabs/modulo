@@ -14,6 +14,7 @@ from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.journey import Journey
@@ -91,6 +92,7 @@ __all__ = [
     "ErrorNotificationRule",
     "EvalDefinition",
     "EvalResult",
+    "EvalSuite",
     "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",

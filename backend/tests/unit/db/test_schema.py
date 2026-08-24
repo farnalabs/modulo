@@ -21,6 +21,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "error_notification_rules",
         "eval_definitions",
         "eval_results",
+        "eval_suites",
         "feature_flag_catalog",
         "feedback_records",
         "hitl_claims",

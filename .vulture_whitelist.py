@@ -123,6 +123,10 @@ __all__ = [
     "_parse_saml_datetime",
     "_require_runner",
     "build_tool_definitions_for_text",
+    # --- FAR-374 Phase 1 eval-suite feature flag (referenced by tests; production
+    #     callers that read it land in later phases, so vulture cannot see a
+    #     prod call site yet) ---
+    "eval_maturity_enabled",
     # --- CRUD functions referenced only by tests ---
     "delete_composite_template",
     "upsert_daily_run_count",

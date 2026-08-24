@@ -36,6 +36,16 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
+        "name": "eval_maturity",
+        "description": (
+            "Generic eval suite/dataset maturity model (FAR-374). Gates the new "
+            "EvalSuite entity, endpoints, and UI behind a flag so the legacy "
+            "suite_id behaviour is untouched until explicitly enabled."
+        ),
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
         "name": "webhook_trigger",
         "description": "Trigger pipelines via incoming webhooks",
         "tier_id": "community",

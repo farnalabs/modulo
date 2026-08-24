@@ -41,6 +41,15 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
+        name="eval_maturity",
+        description=(
+            "Generic eval suite/dataset maturity model (FAR-374). Gates the new "
+            "EvalSuite entity, endpoints, and UI behind a flag so the legacy "
+            "suite_id behaviour is untouched until explicitly enabled."
+        ),
+        tier="community",
+    ),
+    FeatureFlag(
         name="webhook_trigger",
         description="Trigger pipelines via incoming webhooks",
         tier="community",
@@ -731,6 +740,30 @@ class FeatureFlagRegistry:
 
 
 _registry: FeatureFlagRegistry | None = None
+
+
+def eval_maturity_enabled(plan: PlanContext | None) -> bool:
+    """Fail-closed read of the ``eval_maturity`` flag (FAR-374).
+
+    Returns ``False`` whenever the flag cannot be resolved — on a missing plan
+    context, a raised error, or any uncertainty. Callers MUST treat ``False`` as
+    "use the legacy ``suite_id`` behaviour"; this guarantees we never route to
+    the new EvalSuite path on error.
+
+    Snapshot this value once at the start of a run/request (not per call): every
+    call site that touches EvalSuite grouping should read it a single time and
+    thread the boolean through, so a mid-run flag flip cannot split a single
+    operation across legacy/new behaviour.
+    """
+    if plan is None:
+        return False
+    try:
+        return bool(plan.feature_enabled("eval_maturity"))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("eval_maturity flag read failed; failing closed to legacy path")
+        return False
 
 
 def get_registry() -> FeatureFlagRegistry:
