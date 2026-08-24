@@ -30,12 +30,8 @@ class PipelineEdge(OrgScoped):
         nullable=False,
         index=True,
     )
-    source_node_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
-    )
-    target_node_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
-    )
+    source_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+    target_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     edge_type: Mapped[str] = mapped_column(String(15), nullable=False, server_default="normal")
     # MutableDict.as_mutable(JSON): in-place gate-config mutations are tracked
     # as dirty (hitl-gate-removal-guard-plan.md v19 §3 item 7 — defense in

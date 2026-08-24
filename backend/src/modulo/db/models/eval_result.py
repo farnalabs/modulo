@@ -16,7 +16,7 @@ class EvalResult(OrgScoped):
         nullable=False,
         index=True,
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True)
+    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     eval_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("eval_definitions.id", ondelete="CASCADE"),

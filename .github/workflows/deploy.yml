@@ -280,6 +280,7 @@ jobs:
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
             if fly deploy --app staging-modulo --config fly.staging.toml \
+              --auto-rollback \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
@@ -531,20 +532,8 @@ jobs:
             echo "healthz not ready yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
             sleep "$INTERVAL_SEC"
           done
-          echo "::error::staging.modulo.run did not become healthy after deploy - rolling back to last complete release"
-          LAST_GOOD=$(fly releases --app staging-modulo --json 2>/dev/null | python3 -c 'import json,sys
-          try:
-              rels=json.load(sys.stdin)
-          except Exception:
-              rels=[]
-          comp=[r.get("ImageRef","") for r in rels if r.get("Status")=="complete"]
-          print(comp[0] if comp else "")')
-          if [ -z "$LAST_GOOD" ]; then
-            echo "::error::No complete release found to roll back to - manual intervention required (FAR-400)."
-            exit 1
-          fi
-          echo "Rolling back staging-modulo to $LAST_GOOD"
-          fly deploy --app staging-modulo --image "$LAST_GOOD"
+          echo "::error::staging.modulo.run did not become healthy after deploy - rolling back to previous release"
+          fly releases rollback staging-modulo
           sleep 30
           if curl -fsS -m 10 https://staging.modulo.run/healthz/ready >/dev/null 2>&1; then
             echo "Rollback restored service."
@@ -709,6 +698,7 @@ jobs:
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
             if fly deploy --app app-modulo --config fly.toml \
+              --auto-rollback \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
@@ -907,20 +897,8 @@ jobs:
             echo "healthz not ready yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
             sleep "$INTERVAL_SEC"
           done
-          echo "::error::app.modulo.run did not become healthy after deploy - rolling back to last complete release"
-          LAST_GOOD=$(fly releases --app app-modulo --json 2>/dev/null | python3 -c 'import json,sys
-          try:
-              rels=json.load(sys.stdin)
-          except Exception:
-              rels=[]
-          comp=[r.get("ImageRef","") for r in rels if r.get("Status")=="complete"]
-          print(comp[0] if comp else "")')
-          if [ -z "$LAST_GOOD" ]; then
-            echo "::error::No complete release found to roll back to - manual intervention required (FAR-400)."
-            exit 1
-          fi
-          echo "Rolling back app-modulo to $LAST_GOOD"
-          fly deploy --app app-modulo --image "$LAST_GOOD"
+          echo "::error::app.modulo.run did not become healthy after deploy - rolling back to previous release"
+          fly releases rollback app-modulo
           sleep 30
           if curl -fsS -m 10 https://app.modulo.run/healthz/ready >/dev/null 2>&1; then
             echo "Rollback restored service."

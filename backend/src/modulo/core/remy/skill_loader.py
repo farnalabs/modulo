@@ -90,10 +90,10 @@ class SkillLoader:
             return []
 
     async def get_org_skills(self, org_id: uuid.UUID) -> list[SkillEntry]:
-        return await self._get_skills(organisation_id=org_id, user_id=None)
+        return await self._get_skills(organisation_id=org_id, account_id=None)
 
     async def get_user_skills(self, user_id: uuid.UUID) -> list[SkillEntry]:
-        return await self._get_skills(user_id=user_id, organisation_id=None)
+        return await self._get_skills(account_id=user_id, organisation_id=None)
 
     def _append_skills_block(self, parts: list[str], skills: list[SkillEntry], heading: str) -> None:
         if not skills:

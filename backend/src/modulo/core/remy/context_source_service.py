@@ -76,12 +76,12 @@ class RemyContextSourceService:
         if user_id is None:
             stmt = select(RemyContextSource).where(
                 RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id.is_(None),
+                RemyContextSource.account_id.is_(None),
             )
         else:
             stmt = select(RemyContextSource).where(
                 RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id == user_id,
+                RemyContextSource.account_id == user_id,
             )
         result = await self._session.execute(stmt)
         rows = list(result.scalars())
@@ -124,7 +124,7 @@ class RemyContextSourceService:
                 .where(
                     RemyContextSource.organisation_id == org_id,
                     RemyContextSource.source_key == source_key,
-                    RemyContextSource.user_id.is_(None),
+                    RemyContextSource.account_id.is_(None),
                 )
                 .with_for_update()
             )
@@ -134,7 +134,7 @@ class RemyContextSourceService:
                 .where(
                     RemyContextSource.organisation_id == org_id,
                     RemyContextSource.source_key == source_key,
-                    RemyContextSource.user_id == user_id,
+                    RemyContextSource.account_id == user_id,
                 )
                 .with_for_update()
             )
@@ -147,7 +147,7 @@ class RemyContextSourceService:
                 RemyContextSource(
                     id=uuid.uuid4(),
                     organisation_id=org_id,
-                    user_id=user_id,
+                    account_id=user_id,
                     source_key=source_key,
                     source_mode=source_mode,
                 )
@@ -163,7 +163,7 @@ class RemyContextSourceService:
     async def reset_user_overrides(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
         stmt = sa_delete(RemyContextSource).where(
             RemyContextSource.organisation_id == org_id,
-            RemyContextSource.user_id == user_id,
+            RemyContextSource.account_id == user_id,
         )
         await self._session.execute(stmt)
         await self._session.flush()

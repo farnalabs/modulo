@@ -11,7 +11,8 @@ class RemySkill(Base):
     __tablename__ = "remy_skills"
     __table_args__ = (
         CheckConstraint(
-            "(organisation_id IS NOT NULL AND user_id IS NULL) OR (organisation_id IS NULL AND user_id IS NOT NULL)",
+            "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
+            "(organisation_id IS NULL AND account_id IS NOT NULL)",
             name="ck_remy_skills_owner",
         ),
     )
@@ -23,7 +24,7 @@ class RemySkill(Base):
         nullable=True,
         index=True,
     )
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=True,
