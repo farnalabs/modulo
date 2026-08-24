@@ -1,6 +1,6 @@
 export interface ChatSession {
   id: string
-  user_id: string
+  account_id: string
   name: string | null
   session_number: number | null
   provider: string

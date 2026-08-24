@@ -51,7 +51,7 @@ vi.mock('@/components/remy/RemySessionDrawer.vue', () => ({
 function makeSession(id: string, name: string) {
   return {
     id,
-    user_id: 'user-1',
+    account_id: 'user-1',
     name,
     session_number: 1,
     provider: 'anthropic',
