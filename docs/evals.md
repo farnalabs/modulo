@@ -124,3 +124,42 @@ loudly (it never silently passes) — see `run_human_eval_set`.
 `llm_judge` evals require a resolved judge callable (a *different* model backend
 than the one under test, where possible). `human_set` evals require no model —
 they are pure Python.
+
+## Managed eval input corpus (`EvalDataset` / `EvalCase`) — FAR-375 Phase 2
+
+The original "task-type breadth" gap was never about comparing models — it was
+about a **repeatable, managed input corpus** an eval suite can re-run. Phase 2
+is the **data layer** for that corpus (FAR-375). It is standalone: it does not
+depend on `EvalSuite` (Phase 1) and adds no endpoints, UI, or run-execution
+logic (those are Phase 3).
+
+* **`EvalDataset`** — a named, versioned, org- (or team-) scoped header for a
+  corpus. One active name per org; soft-delete only (`deleted_at` /
+  `deleted_by`).
+* **`EvalCase`** — a single repeatable input. `input_payload` is the canonical
+  payload store (mirrors `webhook_payloads.raw_payload`); `expected_output` is an
+  optional reference answer; `input_hash` is SHA-256 of the payload for dedupe
+  and audit. A case references its dataset with `ON DELETE RESTRICT`, so a
+  referenced dataset can never be hard-removed.
+
+Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
+
+* **Storage is data-only.** `input_payload` is stored verbatim and returned
+  verbatim — even when it contains prompt-injection strings it is never altered
+  or executed. Phase 3 owns the boundary enforcement (LLM-judge + SUT paths)
+  that prevents the payload from becoming instructions; Phase 2 guarantees only
+  *storage-as-data*.
+* **Decoupled from Run retention.** The corpus stores its own payload, so
+  repeatable re-runs survive Run pruning.
+* **Soft-delete + org-scoped RLS.** Both tables carry `ENABLE` + `FORCE ROW
+  LEVEL SECURITY` with a `rls_org_isolation` policy, owned by `modulo_migrate`.
+* **Empty dataset is a no-op at run time.** `validate_dataset_has_cases` returns
+  a count of active cases so Phase 3 can refuse to run an empty dataset.
+* **Housekeeping.** `purge_soft_deleted_eval_cases` hard-deletes soft-deleted
+  cases past a retention cutoff (cases have no dependents). Dataset
+  hard-delete/purge is intentionally withheld here — the "referenced by a
+  SuiteRun" guard lands in Phase 3.
+
+> Note: this document is the source of truth for the eval data layer while
+> `docs/prd.md` is being revised; any PRD section describing an "eval dataset"
+> concept must match the entities and guarantees above.
