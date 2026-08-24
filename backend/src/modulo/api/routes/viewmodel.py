@@ -227,7 +227,7 @@ async def me(
         ) from None
 
     return MeResponse(
-        user=UserInfo(username=current_user.username),
+        user=None,
         org=OrganisationInfo(
             org_id=current_user.organisation_id,
             org_name="Modulo",
