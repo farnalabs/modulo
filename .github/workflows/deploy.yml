@@ -280,6 +280,7 @@ jobs:
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
             if fly deploy --app staging-modulo --config fly.staging.toml \
+              --auto-rollback \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
@@ -507,6 +508,40 @@ jobs:
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
 
+      - name: Post-deploy health gate (rollback if app not serving)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Defense-in-depth beyond --auto-rollback: verify the app is actually
+          # serving end-to-end. If /healthz/ready never returns 200, roll back to
+          # the previous release so prod is never left down (the 2026-08-23 outage
+          # left prod in a 'started' but connection-refused state for ~7h - FAR-400).
+          TIMEOUT_MIN=10
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            if curl -fsS -m 10 https://staging.modulo.run/healthz/ready >/dev/null 2>&1; then
+              echo "staging.modulo.run /healthz/ready OK (attempt ${attempt})"
+              exit 0
+            fi
+            echo "healthz not ready yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::staging.modulo.run did not become healthy after deploy - rolling back to previous release"
+          fly releases rollback staging-modulo
+          sleep 30
+          if curl -fsS -m 10 https://staging.modulo.run/healthz/ready >/dev/null 2>&1; then
+            echo "Rollback restored service."
+            exit 0
+          fi
+          echo "::error::Rollback did not restore service - manual intervention required (FAR-400)."
+          exit 1
+
       - name: Clean up stray machines (no process group)
         shell: bash
         env:
@@ -663,6 +698,7 @@ jobs:
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
             if fly deploy --app app-modulo --config fly.toml \
+              --auto-rollback \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
@@ -835,6 +871,40 @@ jobs:
             sleep "$INTERVAL_SEC"
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
+          exit 1
+
+      - name: Post-deploy health gate (rollback if app not serving)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Defense-in-depth beyond --auto-rollback: verify the app is actually
+          # serving end-to-end. If /healthz/ready never returns 200, roll back to
+          # the previous release so prod is never left down (the 2026-08-23 outage
+          # left prod in a 'started' but connection-refused state for ~7h - FAR-400).
+          TIMEOUT_MIN=10
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            if curl -fsS -m 10 https://app.modulo.run/healthz/ready >/dev/null 2>&1; then
+              echo "app.modulo.run /healthz/ready OK (attempt ${attempt})"
+              exit 0
+            fi
+            echo "healthz not ready yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::app.modulo.run did not become healthy after deploy - rolling back to previous release"
+          fly releases rollback app-modulo
+          sleep 30
+          if curl -fsS -m 10 https://app.modulo.run/healthz/ready >/dev/null 2>&1; then
+            echo "Rollback restored service."
+            exit 0
+          fi
+          echo "::error::Rollback did not restore service - manual intervention required (FAR-400)."
           exit 1
 
       - name: Clean up stray machines (no process group)

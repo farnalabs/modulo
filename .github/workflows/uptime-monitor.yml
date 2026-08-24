@@ -1,0 +1,51 @@
+name: "Prod uptime monitor"
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check-prod-health:
+    name: Check app.modulo.run health
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Probe /healthz/ready
+        id: probe
+        shell: bash
+        run: |
+          for i in $(seq 1 6); do
+            if curl -fsS -m 10 https://app.modulo.run/healthz/ready >/dev/null 2>&1; then
+              echo "app.modulo.run healthy"
+              exit 0
+            fi
+            echo "probe $i failed - retrying in 10s"
+            sleep 10
+          done
+          echo "::error::app.modulo.run is DOWN (uptime monitor - FAR-400)"
+          exit 1
+
+      - name: Open Linear ticket on outage
+        if: failure()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          # Fail-open: only file a Linear ticket when a key is configured.
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts)."
+            exit 0
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BODY=$(jq -n --arg ts "$TS" '{
+            query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+            variables: { i: {
+              teamId: "ae855baf-6439-4980-97fb-38da80129485",
+              title: "OUTAGE: app.modulo.run down (uptime monitor)",
+              description: ("Automated uptime monitor detected app.modulo.run/healthz/ready failing at " + $ts + ". Investigate Fly app status + recent deploys (FAR-400).")
+            } }
+          }')
+          curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$BODY" || echo "::warning::Failed to create Linear ticket"
