@@ -4318,17 +4318,17 @@ async def _reconcile_nodeless_repair(
     if _should_redispatch_nodeless(row):
         job_type = _reconcile_job_type(row.status)
         key_suffix = uuid.uuid4().hex
-        return await _redispatch_nodeless(
+        await _redispatch_nodeless(
             session,
             q,
             org_id,
             row,
             job_type,
             key_suffix,
-            enqueue_failed_redispatched,
             summary,
             terminalized_run_ids,
         )
+        return enqueue_failed_redispatched
     # Re-dispatch not warranted (retry budget exhausted / policy excludes
     # 'stall'): terminal-fail exactly as before.
     summary["nodeless_failed"] += 1
@@ -4348,16 +4348,16 @@ async def _redispatch_nodeless(
     row: Any,
     job_type: str,
     key_suffix: str,
-    enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-) -> int:
+) -> None:
     """Re-dispatch ONE nodeless zombie; terminal-fail when the enqueue fails.
 
     A failed re-enqueue terminal-fails the run so it is never left dangling
     (the fallback). A deferred/deduped/enqueue_failed outcome is counted as
     skipped — not an error, not a terminal failure — so a later tick retries.
-    Returns the (possibly updated) enqueue-failed counter. Extracted from
+    Returns ``None`` — the branch always fully handles the row, so the caller
+    passes its enqueue-failed counter through unchanged. Extracted from
     ``_reconcile_one_row`` (complexity bound).
     """
     try:
@@ -4385,7 +4385,7 @@ async def _redispatch_nodeless(
         await _fail_nodeless_run(session, row.id, org_id)
         summary["nodeless_failed"] += 1
         terminalized_run_ids.append((row.id, org_id))
-        return enqueue_failed_redispatched
+        return
     if outcome == "enqueued":
         summary["nodeless_redispatched"] += 1
         _log.info(
@@ -4403,7 +4403,6 @@ async def _redispatch_nodeless(
             outcome,
             row.id,
         )
-    return enqueue_failed_redispatched
 
 
 async def _reconcile_one_row(
