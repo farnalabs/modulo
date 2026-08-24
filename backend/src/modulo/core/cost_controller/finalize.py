@@ -1452,32 +1452,51 @@ async def finalize_cost(
         return
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
+    # The build + main status write run inside a SAVEPOINT so a transaction-
+    # aborting DBAPI error (deadlock / serialization / lock-not-available /
+    # statement-timeout) rolls back to a HEALTHY outer transaction before the
+    # fallback below. Without this, the ``except`` handler issues
+    # ``_fallback_write`` on an ABORTED transaction, and its fenced
+    # ``update_run_status`` raises InFailedSQLTransactionError (the intermittent
+    # ``test_conformance_run_completes`` flake under the parallel ``-n 2``
+    # deploy run). Rollback-to-savepoint (not whole-tx) preserves any other
+    # pending writes in the caller's transaction and honours the caller's
+    # ``session.begin()`` contract.
     try:
-        built = await _build_enriched_state(
-            session,
-            run,
-            merged_usage,
-            merged_outputs,
-            merged_telemetry,
-            node_type_map,
-            is_terminal,
-        )
-        # FAR-104 — per-agent token budget enforcement (TERMINAL-ONLY, atomic).
-        # Runs AFTER the run's token usage is derived (SERVER-measured entries)
-        # and BEFORE the status write, so the ``budget_exceeded`` status +
-        # error message land in the SAME ``update_run_status`` call. Cancelled
-        # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
-        status, error_code, error_detail = await _apply_agent_budget_override(
-            session, run, built.enriched, is_terminal, status, error_code, error_detail
-        )
-        await _write_finalized_run(
-            session,
-            run_id,
-            merged_outputs,
-            merged_telemetry,
-            built,
-            _TerminalWrite(status, error_code, error_detail, claim_token),
-        )
+        savepoint = await session.begin_nested()
+        try:
+            built = await _build_enriched_state(
+                session,
+                run,
+                merged_usage,
+                merged_outputs,
+                merged_telemetry,
+                node_type_map,
+                is_terminal,
+            )
+            # FAR-104 — per-agent token budget enforcement (TERMINAL-ONLY, atomic).
+            # Runs AFTER the run's token usage is derived (SERVER-measured entries)
+            # and BEFORE the status write, so the ``budget_exceeded`` status +
+            # error message land in the SAME ``update_run_status`` call. Cancelled
+            # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
+            status, error_code, error_detail = await _apply_agent_budget_override(
+                session, run, built.enriched, is_terminal, status, error_code, error_detail
+            )
+            await _write_finalized_run(
+                session,
+                run_id,
+                merged_outputs,
+                merged_telemetry,
+                built,
+                _TerminalWrite(status, error_code, error_detail, claim_token),
+            )
+        except asyncio.CancelledError:
+            await savepoint.rollback()
+            raise
+        except Exception:
+            await savepoint.rollback()
+            raise
+        await savepoint.commit()
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1486,6 +1505,9 @@ async def finalize_cost(
         # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
         # inside the never-fail fallback envelope: an agent-budget breach still
         # terminalizes ``budget_exceeded`` even when the component build failed.
+        # The fallback write runs on the HEALTHY outer transaction (the savepoint
+        # above already rolled the aborted state back) so it can never raise
+        # InFailedSQLTransactionError on the fenced status write.
         status, error_code, error_detail = await _apply_agent_budget_override(
             session, run, merged_usage, is_terminal, status, error_code, error_detail
         )
