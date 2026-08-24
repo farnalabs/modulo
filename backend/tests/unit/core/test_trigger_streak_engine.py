@@ -302,7 +302,7 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        assert heads == ["0132_agent_connector_report_soft_delete_audit"], f"expected a single head, got {heads}"
+        assert heads == ["0135_status_check_constraints"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

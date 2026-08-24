@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_HEAD_MIGRATION_NAME = "0132_agent_connector_report_soft_delete_audit"
+_HEAD_MIGRATION_NAME = "0135_status_check_constraints"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

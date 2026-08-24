@@ -20,6 +20,10 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
             "tier IN ('native', 'preview', 'in_dev')",
             name="ck_connector_instances_tier",
         ),
+        CheckConstraint(
+            "status IN ('active', 'disabled')",
+            name="ck_connector_instances_status",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
