@@ -188,6 +188,17 @@ def _is_valid_pr_url(url: str) -> bool:
     return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
+def _child_dicts(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every immediate dict-valued descendant of *item* (list elements included)."""
+    nested: list[dict[str, Any]] = []
+    for value in item.values():
+        if isinstance(value, dict):
+            nested.append(value)
+        elif isinstance(value, list):
+            nested.extend(v for v in value if isinstance(v, dict))
+    return nested
+
+
 def _extract_pr_url_from_node(node_value: Any) -> str:
     """The first VALID ``pr_url`` anywhere in a node's stored return.
 
@@ -211,11 +222,7 @@ def _extract_pr_url_from_node(node_value: Any) -> str:
             raw = item.get("pr_url")
             if isinstance(raw, str) and _is_valid_pr_url(raw):
                 return raw.strip()
-            for value in item.values():
-                if isinstance(value, dict):
-                    nxt.append(value)
-                elif isinstance(value, list):
-                    nxt.extend(v for v in value if isinstance(v, dict))
+            nxt.extend(_child_dicts(item))
         if not nxt:
             break
         stack = nxt
@@ -230,6 +237,49 @@ def _node_id_union(outputs_json: Any, telemetry_json: Any) -> set[str]:
     if isinstance(telemetry_json, dict):
         node_ids.update(str(k) for k in telemetry_json)
     return node_ids
+
+
+def _collect_node_run_pr_urls(
+    outputs_json: Any,
+    telemetry_json: Any,
+    seen: set[str],
+    urls: list[str],
+) -> None:
+    """Collect valid pr_urls from each node's stored return + telemetry value."""
+    for node_id in sorted(_node_id_union(outputs_json, telemetry_json)):
+        url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+        telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
+        if telemetry_value is not None:
+            telemetry_url = _extract_pr_url_from_node(telemetry_value)
+            if telemetry_url and telemetry_url not in seen:
+                seen.add(telemetry_url)
+                urls.append(telemetry_url)
+
+
+def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str]) -> None:
+    """Collect a single FAR-188 raw-output marker's ``pr_url`` if valid + unseen."""
+    if not isinstance(marker, dict):
+        return
+    marker_url = marker.get("pr_url")
+    if not isinstance(marker_url, str) or not marker_url.strip():
+        return
+    stripped = marker_url.strip()
+    if not _is_valid_pr_url(stripped):
+        return
+    if stripped not in seen:
+        seen.add(stripped)
+        urls.append(stripped)
+
+
+def _collect_marker_pr_urls(raw_output_markers: Any, seen: set[str], urls: list[str]) -> None:
+    """Collect valid pr_urls keyed by ANY attempt-key in the run's markers."""
+    if not isinstance(raw_output_markers, dict):
+        return
+    for marker in raw_output_markers.values():
+        _collect_marker_pr_url(marker, seen, urls)
 
 
 def collect_pr_urls(
@@ -250,31 +300,8 @@ def collect_pr_urls(
     seen: set[str] = set()
     urls: list[str] = []
 
-    for node_id in sorted(_node_id_union(outputs_json, telemetry_json)):
-        url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
-        if url and url not in seen:
-            seen.add(url)
-            urls.append(url)
-        telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
-        if telemetry_value is not None:
-            telemetry_url = _extract_pr_url_from_node(telemetry_value)
-            if telemetry_url and telemetry_url not in seen:
-                seen.add(telemetry_url)
-                urls.append(telemetry_url)
-
-    if isinstance(raw_output_markers, dict):
-        for marker in raw_output_markers.values():
-            if not isinstance(marker, dict):
-                continue
-            marker_url = marker.get("pr_url")
-            if not isinstance(marker_url, str) or not marker_url.strip():
-                continue
-            stripped = marker_url.strip()
-            if not _is_valid_pr_url(stripped):
-                continue
-            if stripped not in seen:
-                seen.add(stripped)
-                urls.append(stripped)
+    _collect_node_run_pr_urls(outputs_json, telemetry_json, seen, urls)
+    _collect_marker_pr_urls(raw_output_markers, seen, urls)
     return urls
 
 
@@ -656,6 +683,64 @@ async def classify_and_persist_run(
 # --- reconciliation sweep ---------------------------------------------------
 
 
+async def _reconcile_classify_run(
+    session_factory: Callable[[], Any],
+    run: Any,
+    org_id: UUID | None,
+) -> str:
+    """Re-read + classify a single terminal run, returning its summary bucket.
+
+    Runs in a fresh transaction under the org's RLS context; locks the row
+    (``with_for_update``) so a concurrent re-terminalization serializes behind
+    the persist instead of racing it. Returns one of ``"classified"`` /
+    ``"unclassified"`` / ``"errors"`` (or ``"skipped"`` when the row is gone or
+    already classified) — matching ``reconcile_missing_classifications``'s
+    summary keys.
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.run import Run
+    from modulo.db.rls import set_rls_org
+
+    try:
+        async with session_factory() as session, session.begin():
+            if org_id is not None:
+                await set_rls_org(session, org_id)
+            fresh = (
+                await asyncio.wait_for(
+                    session.execute(
+                        select(Run).where(Run.id == run.id).with_for_update().execution_options(populate_existing=True)
+                    ),
+                    timeout=_CLASSIFICATION_WRITE_TIMEOUT_SECONDS,
+                )
+            ).scalar_one_or_none()
+            if fresh is None or fresh.run_classification is not None:
+                # Already classified (or row gone) — idempotent skip.
+                return "skipped"
+            await classify_and_persist_run(session, fresh)
+            # The classification write bypasses the ORM identity map (a separate
+            # UPDATE) — re-read the column to count the verdict.
+            await asyncio.wait_for(
+                session.refresh(fresh, ["run_classification"]),
+                timeout=_CLASSIFICATION_WRITE_TIMEOUT_SECONDS,
+            )
+            if fresh.run_classification is not None:
+                value = str(fresh.run_classification.get("value") or RunClassificationValue.unclassified.value)
+                if value == RunClassificationValue.unclassified.value:
+                    return "unclassified"
+                # delivered / no_delivery / excluded — any real record.
+                return "classified"
+            return "errors"
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
+        _log.warning("classification.sweep_timeout run=%s", run.id)
+        return "errors"
+    except Exception:
+        _log.exception("classification.sweep_failed run=%s", run.id)
+        return "errors"
+
+
 async def reconcile_missing_classifications(
     session_factory: Callable[[], Any],
     *,
@@ -710,49 +795,7 @@ async def reconcile_missing_classifications(
             summary["scanned"] += 1
             if time.monotonic() > deadline:
                 break
-            try:
-                async with session_factory() as session, session.begin():
-                    if org_id is not None:
-                        await set_rls_org(session, org_id)
-                    fresh = (
-                        await asyncio.wait_for(
-                            session.execute(
-                                select(Run)
-                                .where(Run.id == run.id)
-                                # Lock the row so a concurrent re-terminalization
-                                # serializes behind this transaction instead of
-                                # racing the persist below (FIX 5).
-                                .with_for_update()
-                                .execution_options(populate_existing=True)
-                            ),
-                            timeout=_CLASSIFICATION_WRITE_TIMEOUT_SECONDS,
-                        )
-                    ).scalar_one_or_none()
-                    if fresh is None or fresh.run_classification is not None:
-                        # Already classified (or row gone) — idempotent skip.
-                        continue
-                    await classify_and_persist_run(session, fresh)
-                    # The classification write bypasses the ORM identity map
-                    # (a separate UPDATE) — re-read the column to count the verdict.
-                    await asyncio.wait_for(
-                        session.refresh(fresh, ["run_classification"]),
-                        timeout=_CLASSIFICATION_WRITE_TIMEOUT_SECONDS,
-                    )
-                    if fresh.run_classification is not None:
-                        value = str(fresh.run_classification.get("value") or RunClassificationValue.unclassified.value)
-                        if value == RunClassificationValue.unclassified.value:
-                            summary["unclassified"] += 1
-                        else:
-                            # delivered / no_delivery / excluded — any real record.
-                            summary["classified"] += 1
-                    else:
-                        summary["errors"] += 1
-            except asyncio.CancelledError:
-                raise
-            except TimeoutError:
-                summary["errors"] += 1
-                _log.warning("classification.sweep_timeout run=%s", run.id)
-            except Exception:
-                summary["errors"] += 1
-                _log.exception("classification.sweep_failed run=%s", run.id)
+            verdict = await _reconcile_classify_run(session_factory, run, org_id)
+            if verdict in ("classified", "unclassified", "errors"):
+                summary[verdict] += 1
     return summary

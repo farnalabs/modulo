@@ -414,6 +414,58 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Override: aput — encrypt and write with org_id
     # ------------------------------------------------------------------
 
+    async def _aput_write_with_retry(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: Any,
+        parent_checkpoint_id: Any,
+        encrypted_checkpoint: str,
+        metadata: CheckpointMetadata,
+    ) -> None:
+        """Write the checkpoint UPSERT, retrying once on a connection drop.
+
+        2-attempt retry on a connection-drop OperationalError, mirroring the
+        previous inline logic: the drop typically fires at CURSOR ACQUIRE inside
+        ``_cursor`` (or the execute), so the WHOLE ``async with self._cursor()``
+        block is wrapped. Reconnect is bounded by
+        ``_RECONNECT_TIMEOUT_SECONDS``; a timed-out reconnect re-raises the
+        ORIGINAL OperationalError (never a bare timeout).
+        """
+        for _attempt in range(2):
+            try:
+                async with self._cursor() as cur:
+                    await cur.execute(
+                        self.UPSERT_CHECKPOINTS_SQL,
+                        (
+                            self._org_id,
+                            thread_id,
+                            checkpoint_ns,
+                            checkpoint_id,
+                            parent_checkpoint_id,
+                            encrypted_checkpoint,
+                            json.dumps(metadata, default=str),
+                        ),
+                    )
+                return
+            except Exception as exc:
+                is_conn_drop = type(exc).__name__ == "OperationalError"
+                if _attempt == 0 and is_conn_drop and self._conn_string:
+                    _log.warning(
+                        "checkpoint.aput_retry",
+                        extra={"error": str(exc)[:300]},
+                    )
+                    try:
+                        await self._reconnect()
+                    except TimeoutError:
+                        # A reconnect that hung past the budget must not surface
+                        # as a bare timeout replacing the real error — re-raise
+                        # the ORIGINAL OperationalError.
+                        raise exc from None
+                    continue
+                raise
+
     async def aput(  # type: ignore[override]
         self,
         config: dict[str, Any],
@@ -447,52 +499,21 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
         encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 
-        # 2-attempt retry on a connection-drop OperationalError, mirroring
-        # aput_writes: the drop typically fires at CURSOR ACQUIRE inside
-        # _cursor, so the WHOLE ``async with self._cursor()`` block is wrapped,
-        # not just cur.execute. Reconnect is bounded by
-        # _RECONNECT_TIMEOUT_SECONDS; a timed-out reconnect re-raises the
-        # ORIGINAL OperationalError (never a bare timeout).
-        result = {
+        await self._aput_write_with_retry(
+            thread_id=thread_id,
+            checkpoint_ns=checkpoint_ns,
+            checkpoint_id=checkpoint_id,
+            parent_checkpoint_id=parent_checkpoint_id,
+            encrypted_checkpoint=encrypted_checkpoint,
+            metadata=metadata,
+        )
+        return {
             "configurable": {
                 "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "checkpoint_id": checkpoint_id,
             }
         }
-        for _attempt in range(2):
-            try:
-                async with self._cursor() as cur:
-                    await cur.execute(
-                        self.UPSERT_CHECKPOINTS_SQL,
-                        (
-                            self._org_id,
-                            thread_id,
-                            checkpoint_ns,
-                            checkpoint_id,
-                            parent_checkpoint_id,
-                            encrypted_checkpoint,
-                            json.dumps(metadata, default=str),
-                        ),
-                    )
-                return result
-            except Exception as exc:
-                is_conn_drop = type(exc).__name__ == "OperationalError"
-                if _attempt == 0 and is_conn_drop and self._conn_string:
-                    _log.warning(
-                        "checkpoint.aput_retry",
-                        extra={"error": str(exc)[:300]},
-                    )
-                    try:
-                        await self._reconnect()
-                    except TimeoutError:
-                        # A reconnect that hung past the budget must not surface
-                        # as a bare timeout replacing the real error — re-raise
-                        # the ORIGINAL OperationalError.
-                        raise exc from None
-                    continue
-                raise
-        return result
 
     # ------------------------------------------------------------------
     # Override: aput_writes — write with org_id
