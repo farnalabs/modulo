@@ -32,4 +32,6 @@ class LifecycleMap(SoftDeleteMixin, OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )

@@ -8,9 +8,9 @@ from modulo.db.models.base import OrgScoped
 
 class ChatSession(OrgScoped):
     __tablename__ = "chat_sessions"
-    __table_args__ = (UniqueConstraint("account_id", "session_number", name="uq_chat_sessions_user_session_number"),)
+    __table_args__ = (UniqueConstraint("user_id", "session_number", name="uq_chat_sessions_user_session_number"),)
 
-    account_id: Mapped[uuid.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,

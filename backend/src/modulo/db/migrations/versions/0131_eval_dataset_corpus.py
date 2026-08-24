@@ -102,6 +102,17 @@ def upgrade() -> None:
         migrate_role = False
         app_role = False
 
+    # Idempotency (FAR-374 deploy fix): this migration may be re-run on a DB where
+    # ``alembic upgrade heads`` already created the corpus tables and only the
+    # ``alembic_version`` marker was rewound (e.g. the eval-suite migration test's
+    # restore-upgrade, or a head-conflict repair). ``CREATE TABLE IF NOT EXISTS``
+    # below makes the DDL re-runnable; the ownership assertion must only run for
+    # tables THIS run actually created — a pre-existing corpus table is already
+    # owned by the prior run, and asserting against it again via a NOLOGIN role
+    # would false-fail.
+    datasets_created = not (pg and sa.inspect(bind).has_table("eval_datasets"))
+    cases_created = not (pg and sa.inspect(bind).has_table("eval_cases"))
+
     if pg and migrate_role:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
@@ -121,6 +132,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_eval_datasets_visibility"),
+        if_not_exists=True,
     )
 
     op.create_table(
@@ -139,39 +151,47 @@ def upgrade() -> None:
         # RESTRICT: a referenced dataset can never be hard-deleted.
         sa.ForeignKeyConstraint(["dataset_id"], ["eval_datasets.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
+        if_not_exists=True,
     )
 
     if pg and migrate_role:
         op.execute("RESET ROLE")
-        _assert_owner_is_migrate(bind, "eval_datasets")
-        _assert_owner_is_migrate(bind, "eval_cases")
+        if datasets_created:
+            _assert_owner_is_migrate(bind, "eval_datasets")
+        if cases_created:
+            _assert_owner_is_migrate(bind, "eval_cases")
 
-    # Indexes (active-only uniqueness) + FK lookup helpers.
-    op.create_index("ix_eval_datasets_organisation_id", "eval_datasets", ["organisation_id"])
-    op.create_index("ix_eval_datasets_owner_team_id", "eval_datasets", ["owner_team_id"])
+    # Indexes (active-only uniqueness) + FK lookup helpers. if_not_exists makes
+    # the set re-runnable when the tables already exist on disk.
+    op.create_index("ix_eval_datasets_organisation_id", "eval_datasets", ["organisation_id"], if_not_exists=True)
+    op.create_index("ix_eval_datasets_owner_team_id", "eval_datasets", ["owner_team_id"], if_not_exists=True)
     op.create_index(
         "uq_eval_datasets_org_name_active",
         "eval_datasets",
         ["organisation_id", "name"],
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
+        if_not_exists=True,
     )
 
-    op.create_index("ix_eval_cases_organisation_id", "eval_cases", ["organisation_id"])
-    op.create_index("ix_eval_cases_dataset_id", "eval_cases", ["dataset_id"])
-    op.create_index("ix_eval_cases_input_hash", "eval_cases", ["input_hash"])
+    op.create_index("ix_eval_cases_organisation_id", "eval_cases", ["organisation_id"], if_not_exists=True)
+    op.create_index("ix_eval_cases_dataset_id", "eval_cases", ["dataset_id"], if_not_exists=True)
+    op.create_index("ix_eval_cases_input_hash", "eval_cases", ["input_hash"], if_not_exists=True)
     op.create_index(
         "uq_eval_cases_dataset_hash_active",
         "eval_cases",
         ["dataset_id", "input_hash"],
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
+        if_not_exists=True,
     )
 
     if pg:
         for table in _TABLES:
             op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
             op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+            # DROP-then-CREATE keeps this re-runnable (CREATE POLICY has no IF NOT EXISTS).
+            op.execute(f"DROP POLICY IF EXISTS rls_org_isolation ON {table}")
             op.execute(f"CREATE POLICY rls_org_isolation ON {table} USING ({_ORG_SCOPE})")
         if app_role:
             for table in _TABLES:

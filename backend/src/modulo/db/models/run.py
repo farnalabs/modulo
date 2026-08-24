@@ -244,7 +244,9 @@ class Run(OrgScoped):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
-    variant_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    variant_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("variant_groups.id", ondelete="SET NULL"), nullable=True
+    )
     # FAR-332 batch-scoped variant comparison (migration 0118). Every run fired
     # together in one ``run_variant_batch`` shares the same ``batch_id``; the
     # compare route loads runs purely by batch_id (never a live group), so

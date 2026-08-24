@@ -15,7 +15,7 @@ def _mock_source_row(
     row = MagicMock(spec=RemyContextSource)
     row.id = uuid.uuid4()
     row.organisation_id = org_id
-    row.account_id = user_id
+    row.user_id = user_id
     row.source_key = source_key
     row.source_mode = source_mode
     return row
@@ -123,7 +123,7 @@ class TestRemyContextSourceServiceSetUserOverride:
         assert "FOR UPDATE" in compiled
         assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
         assert "remy_context_sources.source_key = 'product_docs'" in compiled
-        assert f"remy_context_sources.account_id = '{user_id.hex}'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
 
     async def test_set_user_override_inserts_new_row_when_missing(
         self,
@@ -138,7 +138,7 @@ class TestRemyContextSourceServiceSetUserOverride:
         added = mock_session.add.call_args[0][0]
         assert isinstance(added, RemyContextSource)
         assert added.organisation_id == org_id
-        assert added.account_id == user_id
+        assert added.user_id == user_id
         assert added.source_key == "product_docs"
         assert added.source_mode == "always_on"
         mock_session.flush.assert_awaited_once()
@@ -205,7 +205,7 @@ class TestRemyContextSourceServiceSetOrgDefault:
         assert "FOR UPDATE" in compiled
         assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
         assert "remy_context_sources.source_key = 'product_docs'" in compiled
-        assert "remy_context_sources.account_id IS NULL" in compiled
+        assert "remy_context_sources.user_id IS NULL" in compiled
 
     async def test_set_org_default_scopes_to_null_user(
         self,
@@ -219,7 +219,7 @@ class TestRemyContextSourceServiceSetOrgDefault:
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
         assert "remy_context_sources.source_key = 'product_docs'" in compiled
-        assert "remy_context_sources.account_id IS NULL" in compiled
+        assert "remy_context_sources.user_id IS NULL" in compiled
         assert "FOR UPDATE" in compiled
 
     async def test_set_org_default_rejects_invalid_mode(
@@ -271,7 +271,7 @@ class TestRemyContextSourceServiceQueries:
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
-        assert f"remy_context_sources.account_id = '{user_id.hex}'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
 
     def test_build_effective_items_marks_overrides(self) -> None:
         service = RemyContextSourceService.__new__(RemyContextSourceService)
@@ -316,5 +316,5 @@ class TestRemyContextSourceServiceResetUserOverrides:
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "DELETE FROM remy_context_sources" in compiled
         assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
-        assert f"remy_context_sources.account_id = '{user_id.hex}'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
         mock_session.flush.assert_awaited_once()

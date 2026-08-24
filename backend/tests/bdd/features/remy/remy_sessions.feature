@@ -10,7 +10,7 @@ Feature: Remy Chat Sessions
     When I create a remy session with provider "anthropic" and model "claude-sonnet-4-20250514"
     Then the response status is 201
     And the response contains a session with provider "anthropic"
-    And the session has an account_id
+    And the session has a user_id
     And the session has a context_window_tokens of 200000
 
   Scenario: List user's sessions shows most recent first

@@ -225,7 +225,7 @@ async def create_user_skill(
             skill = RemySkill(
                 id=uuid.uuid4(),
                 organisation_id=None,
-                account_id=current_user.account_id,
+                user_id=current_user.account_id,
                 name=req.name,
                 description=req.description,
                 triggers=req.triggers,

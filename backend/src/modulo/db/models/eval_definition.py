@@ -28,7 +28,9 @@ class EvalDefinition(OrgScoped):
         nullable=False,
         index=True,
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    node_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -56,4 +58,6 @@ class EvalDefinition(OrgScoped):
     # admin-only purge step actually removes soft-deleted rows. Live binding
     # (``load_pipeline_guardrail_rows``) excludes soft-deleted rows.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )

@@ -11,8 +11,7 @@ class RemyContextSource(Base):
     __tablename__ = "remy_context_sources"
     __table_args__ = (
         CheckConstraint(
-            "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-            "(organisation_id IS NULL AND account_id IS NOT NULL)",
+            "(organisation_id IS NOT NULL AND user_id IS NULL) OR (organisation_id IS NULL AND user_id IS NOT NULL)",
             name="ck_remy_context_sources_owner",
         ),
         CheckConstraint(
@@ -21,7 +20,7 @@ class RemyContextSource(Base):
         ),
         UniqueConstraint(
             "organisation_id",
-            "account_id",
+            "user_id",
             "source_key",
             name="uq_remy_context_sources_key",
         ),
@@ -33,7 +32,7 @@ class RemyContextSource(Base):
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=True,
     )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=True,

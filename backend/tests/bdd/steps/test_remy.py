@@ -931,10 +931,10 @@ def response_has_session_provider(provider: str, request) -> None:
     assert data.get("provider") == provider
 
 
-@then("the session has an account_id")
-def session_has_account_id(request) -> None:
+@then("the session has a user_id")
+def session_has_user_id(request) -> None:
     data = request.node._resp.json()
-    assert "account_id" in data
+    assert "user_id" in data
 
 
 @then(parsers.parse("the session has a context_window_tokens of {tokens:d}"))

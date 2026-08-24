@@ -149,7 +149,7 @@ async def _run_stream(
     account_id = uuid.uuid4()
     organisation_id = uuid.uuid4()
     chat_session = SimpleNamespace(
-        account_id=account_id,
+        user_id=account_id,
         context_window_tokens=200_000,
         name="Existing session",
     )

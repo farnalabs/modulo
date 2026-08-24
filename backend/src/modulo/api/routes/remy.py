@@ -232,7 +232,7 @@ class UiCommandResultsBatch(BaseModel):
 def _serialise_session(s: ChatSession, message_count: int = 0) -> dict[str, Any]:
     return {
         "id": str(s.id),
-        "account_id": str(s.account_id),
+        "user_id": str(s.user_id),
         "name": s.name,
         "session_number": s.session_number,
         "provider": s.provider,
@@ -442,7 +442,7 @@ async def _get_owned_session(
     db: AsyncSession,
 ) -> ChatSession:
     chat_session = await db.get(ChatSession, session_id)
-    if chat_session is None or chat_session.account_id != principal.account_id:
+    if chat_session is None or chat_session.user_id != principal.account_id:
         raise HTTPException(status_code=404, detail=_MSG_SESSION_NOT_FOUND)
     return chat_session
 
@@ -1336,13 +1336,13 @@ async def list_sessions(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            total_q = select(func.count(ChatSession.id)).where(ChatSession.account_id == principal.account_id)
+            total_q = select(func.count(ChatSession.id)).where(ChatSession.user_id == principal.account_id)
             total_result = await session.execute(total_q)
             total = total_result.scalar() or 0
 
             q = (
                 select(ChatSession)
-                .where(ChatSession.account_id == principal.account_id)
+                .where(ChatSession.user_id == principal.account_id)
                 .order_by(ChatSession.updated_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
@@ -1439,7 +1439,7 @@ async def create_session(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             max_sn = await session.execute(
                 select(func.coalesce(func.max(ChatSession.session_number), 0)).where(
-                    ChatSession.account_id == principal.account_id
+                    ChatSession.user_id == principal.account_id
                 )
             )
             next_session_number = (max_sn.scalar() or 0) + 1
@@ -1448,7 +1448,7 @@ async def create_session(
 
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
-                account_id=principal.account_id,
+                user_id=principal.account_id,
                 name=req.name,
                 provider=provider,
                 model=model,

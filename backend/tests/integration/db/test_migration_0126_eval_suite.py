@@ -1,6 +1,6 @@
-"""Integration test for migration 0126_eval_suite_entity (FAR-374 Phase 1).
+"""Integration test for migration 0130_eval_suite_entity (FAR-374 Phase 1).
 
-Runs the real Alembic ``upgrade``/``downgrade`` of revision 0126 against a live
+Runs the real Alembic ``upgrade``/``downgrade`` of revision 0130 against a live
 Postgres (testcontainers) and verifies:
 
   * the ``eval_suites`` table is created with RLS enabled + FORCEd and the

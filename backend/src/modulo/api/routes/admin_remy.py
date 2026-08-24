@@ -305,7 +305,7 @@ async def _get_org_skill(
     org_id: uuid.UUID,
 ) -> RemySkill:
     skill = await session.get(RemySkill, skill_id)
-    if skill is None or skill.organisation_id != org_id or skill.account_id is not None:
+    if skill is None or skill.organisation_id != org_id or skill.user_id is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Skill not found",
@@ -339,7 +339,7 @@ async def list_org_skills(
                 select(RemySkill)
                 .where(
                     RemySkill.organisation_id == principal.organisation_id,
-                    RemySkill.account_id.is_(None),
+                    RemySkill.user_id.is_(None),
                 )
                 .order_by(RemySkill.created_at.desc())
             )
@@ -380,7 +380,7 @@ async def create_org_skill(
             skill = RemySkill(
                 id=uuid.uuid4(),
                 organisation_id=principal.organisation_id,
-                account_id=None,
+                user_id=None,
                 name=req.name,
                 description=req.description,
                 triggers=req.triggers,
@@ -591,7 +591,7 @@ async def reset_org_context_sources(
             result = await session.execute(
                 select(RemyContextSource).where(
                     RemyContextSource.organisation_id == principal.organisation_id,
-                    RemyContextSource.account_id.is_(None),
+                    RemyContextSource.user_id.is_(None),
                 )
             )
             rows = list(result.scalars())
@@ -628,7 +628,7 @@ async def get_user_skills(session: AsyncSession, user_id: uuid.UUID, org_id: uui
         select(RemySkill)
         .where(
             or_(
-                RemySkill.account_id == user_id,
+                RemySkill.user_id == user_id,
                 RemySkill.organisation_id == org_id,
             )
         )
@@ -639,7 +639,7 @@ async def get_user_skills(session: AsyncSession, user_id: uuid.UUID, org_id: uui
 
 async def get_user_skill_or_404(session: AsyncSession, user_id: uuid.UUID, skill_id: uuid.UUID) -> RemySkill:
     skill = await session.get(RemySkill, skill_id)
-    if skill is None or skill.account_id != user_id or skill.organisation_id is not None:
+    if skill is None or skill.user_id != user_id or skill.organisation_id is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Skill not found",
