@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Agent(OrgScoped):
+class Agent(SoftDeleteMixin, OrgScoped):
     __tablename__ = "agents"
     __table_args__ = (
         ForeignKeyConstraint(
@@ -62,4 +62,13 @@ class Agent(OrgScoped):
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
