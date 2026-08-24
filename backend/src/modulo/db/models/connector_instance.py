@@ -5,10 +5,10 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import OrgScoped
 
 
-class ConnectorInstance(SoftDeleteMixin, OrgScoped):
+class ConnectorInstance(OrgScoped):
     __tablename__ = "connector_instances"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_connector_instances_visibility"),
@@ -19,10 +19,6 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "tier IN ('native', 'preview', 'in_dev')",
             name="ck_connector_instances_tier",
-        ),
-        CheckConstraint(
-            "status IN ('active', 'disabled')",
-            name="ck_connector_instances_status",
         ),
     )
 
@@ -40,12 +36,3 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )

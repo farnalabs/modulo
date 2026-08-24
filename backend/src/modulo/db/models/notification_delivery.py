@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -9,12 +9,6 @@ from modulo.db.models.base import OrgScoped
 
 class NotificationDeliveryLog(OrgScoped):
     __tablename__ = "notification_delivery_log"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('delivered', 'failed', 'dead_lettered')",
-            name="ck_notification_delivery_log_status",
-        ),
-    )
 
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     endpoint_id: Mapped[uuid.UUID | None] = mapped_column(

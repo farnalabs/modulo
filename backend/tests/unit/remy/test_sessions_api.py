@@ -42,7 +42,7 @@ def _make_chat_session(created: dict[str, Any]) -> Any:
         created.update(kwargs)
         inst = MagicMock()
         inst.id = uuid.uuid4()
-        inst.user_id = USER_ID
+        inst.account_id = USER_ID
         inst.name = kwargs.get("name")
         inst.session_number = kwargs.get("session_number", 1)
         inst.provider = kwargs.get("provider")

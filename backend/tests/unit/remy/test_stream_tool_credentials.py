@@ -120,7 +120,7 @@ async def test_stream_without_api_keys_preserves_tool_control_flow(
     account_id = uuid.uuid4()
     organisation_id = uuid.uuid4()
     chat_session = SimpleNamespace(
-        user_id=account_id,
+        account_id=account_id,
         context_window_tokens=200_000,
         name="Existing session",
     )

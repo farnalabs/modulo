@@ -13,7 +13,7 @@ class TestChatSession:
         cols = Base.metadata.tables["chat_sessions"].c
         assert "id" in cols
         assert "organisation_id" in cols
-        assert "user_id" in cols
+        assert "account_id" in cols
         assert "name" in cols
         assert "provider" in cols
         assert "model" in cols
@@ -25,8 +25,8 @@ class TestChatSession:
     def test_is_org_scoped(self) -> None:
         assert issubclass(ChatSession, OrgScoped)
 
-    def test_user_id_not_null(self) -> None:
-        col = Base.metadata.tables["chat_sessions"].c["user_id"]
+    def test_account_id_not_null(self) -> None:
+        col = Base.metadata.tables["chat_sessions"].c["account_id"]
         assert not col.nullable
 
     def test_provider_not_null(self) -> None:
@@ -126,7 +126,7 @@ class TestRemySkill:
         cols = Base.metadata.tables["remy_skills"].c
         assert "id" in cols
         assert "organisation_id" in cols
-        assert "user_id" in cols
+        assert "account_id" in cols
         assert "name" in cols
         assert "description" in cols
         assert "triggers" in cols
@@ -142,8 +142,8 @@ class TestRemySkill:
         col = Base.metadata.tables["remy_skills"].c["organisation_id"]
         assert col.nullable
 
-    def test_user_id_nullable(self) -> None:
-        col = Base.metadata.tables["remy_skills"].c["user_id"]
+    def test_account_id_nullable(self) -> None:
+        col = Base.metadata.tables["remy_skills"].c["account_id"]
         assert col.nullable
 
     def test_active_defaults_true(self) -> None:
@@ -174,7 +174,7 @@ class TestRemySkill:
         )
         sql = str(check.sqltext)
         assert "organisation_id IS NOT NULL" in sql
-        assert "user_id IS NOT NULL" in sql
+        assert "account_id IS NOT NULL" in sql
 
     def test_owner_check_rejects_both_set(self) -> None:
         table = Base.metadata.tables["remy_skills"]
@@ -183,4 +183,4 @@ class TestRemySkill:
         )
         sql = str(check.sqltext)
         assert "OR" in sql
-        assert "organisation_id IS NULL AND user_id IS NOT NULL" in sql or "user_id IS NOT NULL" in sql
+        assert "organisation_id IS NULL AND account_id IS NOT NULL" in sql or "account_id IS NOT NULL" in sql

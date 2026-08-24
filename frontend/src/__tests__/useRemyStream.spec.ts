@@ -48,7 +48,7 @@ describe('useRemyStream', () => {
     store.sessions = [
       {
         id: 'session-1',
-        account_id: 'user-1',
+        user_id: 'user-1',
         name: 'Test Session',
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',

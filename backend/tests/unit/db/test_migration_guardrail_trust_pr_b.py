@@ -38,7 +38,7 @@ def _script() -> ScriptDirectory:
 class TestGuardrailTrustMigration:
     def test_head_is_single_chain(self) -> None:
         heads = _script().get_heads()
-        assert heads == ["0135_status_check_constraints"], f"expected a single head, got {heads}"
+        assert heads == ["0136_rename_remy_user_id_to_account_id"], f"expected a single head, got {heads}"
 
     def test_0116_down_revision_is_0115_notification_preferences(self) -> None:
         source = _source()

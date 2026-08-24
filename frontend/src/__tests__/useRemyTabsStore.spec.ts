@@ -26,7 +26,7 @@ vi.mock('../composables/useUiCommandExecutor', () => ({
 function makeSession(id: string, name: string) {
   return {
     id,
-    account_id: 'user-1',
+    user_id: 'user-1',
     name,
     session_number: 1,
     provider: 'anthropic',

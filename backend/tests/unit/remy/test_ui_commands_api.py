@@ -64,7 +64,7 @@ def client():
     mock_session.begin = MagicMock(return_value=begin_cm)
     chat_session = MagicMock()
     chat_session.id = SESSION_ID
-    chat_session.user_id = USER_ID
+    chat_session.account_id = USER_ID
     mock_session.get = AsyncMock(return_value=chat_session)
     scalar_result = MagicMock()
     scalar_result.scalar = MagicMock(return_value=None)
@@ -93,7 +93,7 @@ def mock_session_ownership():
 
     chat_session = MagicMock()
     chat_session.id = SESSION_ID
-    chat_session.user_id = USER_ID
+    chat_session.account_id = USER_ID
     session.get = AsyncMock(return_value=chat_session)
 
     with (
@@ -298,7 +298,7 @@ class TestUiCommandResultsEndpoint:
         mock_session_inst.begin = MagicMock(return_value=begin_cm)
         other_user_session = MagicMock()
         other_user_session.id = other_session_id
-        other_user_session.user_id = uuid.uuid4()
+        other_user_session.account_id = uuid.uuid4()
         mock_session_inst.get = AsyncMock(return_value=other_user_session)
         mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=None)))
 
@@ -354,7 +354,7 @@ class TestResetPermissionsEndpoint:
         mock_session_inst.begin = MagicMock(return_value=begin_cm)
         other_session = MagicMock()
         other_session.id = other_session_id
-        other_session.user_id = uuid.uuid4()
+        other_session.account_id = uuid.uuid4()
         mock_session_inst.get = AsyncMock(return_value=other_session)
         mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=None)))
 
