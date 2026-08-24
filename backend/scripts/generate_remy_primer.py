@@ -1,7 +1,8 @@
 """Auto-generate the product primer Markdown for Remy's system prompt.
 
 Reads:
-  - docs/prd.md §5 (glossary) — key concepts and one-line definitions
+  - docs/prd.md §5 (glossary, OPTIONAL/legacy) — if present, key concepts and one-line
+     definitions; otherwise the built-in glossary is used
   - frontend/src/manifest.yaml — sidebar groups, route names
   - Live DB counts — pipelines, connectors, model backends
   - Live user/org profile — display_name, role, org_name, plan_name
@@ -48,7 +49,7 @@ def _safe_output_path(path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 1.  Glossary parsing — PRD §5
+# 1. Glossary parsing - PRD §5 (optional; falls back to built-in glossary)
 # ---------------------------------------------------------------------------
 
 _GLOSSARY_TERMS: dict[str, str] = {
@@ -89,7 +90,10 @@ _KEY_CONCEPTS = [
 
 
 def _load_prd_glossary(prd_path: Path) -> dict[str, str]:
-    """Parse §5 glossary table from prd.md and return {term: definition}."""
+    """Parse the §5 glossary table from an OPTIONAL prd.md at docs/prd.md (legacy).
+
+    If absent, returns the built-in glossary (_GLOSSARY_TERMS).
+    """
     if not prd_path.exists():
         return dict(_GLOSSARY_TERMS)
 
@@ -393,6 +397,7 @@ async def generate_primer(
     project_root = backend_dir.parent  # project root
 
     # Glossary
+    # Optional legacy PRD glossary at docs/prd.md; falls back to built-in _GLOSSARY_TERMS if missing.
     prd_path = project_root / "docs" / "prd.md"
     glossary = _load_prd_glossary(prd_path)
 
