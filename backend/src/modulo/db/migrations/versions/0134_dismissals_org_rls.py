@@ -55,7 +55,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0134_dismissals_org_rls"
-down_revision: str | None = "0129_runs_json_to_jsonb"
+down_revision: str | None = "0133_run_evidence_rls"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
