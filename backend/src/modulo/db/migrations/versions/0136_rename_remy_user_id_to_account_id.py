@@ -1,7 +1,7 @@
 """Rename remy ``user_id`` FK columns to ``account_id`` (FK -> ``accounts.id``).
 
 Revision ID: 0136_rename_remy_user_id_to_account_id
-Revises: 0135_status_check_constraints
+Revises: 0131_eval_dataset_corpus
 Create Date: 2026-08-24
 
 The three Remy tables (``chat_sessions``, ``remy_skills``, ``remy_context_sources``)
@@ -33,7 +33,7 @@ from __future__ import annotations
 from alembic import op
 
 revision: str = "0136_rename_remy_user_id_to_account_id"
-down_revision: str | None = "0135_status_check_constraints"
+down_revision: str | None = "0131_eval_dataset_corpus"
 branch_labels: str | None = None
 depends_on: str | None = None
 
