@@ -226,7 +226,7 @@ def step_migrate_plan(request, client):
     source_def = getattr(request.node, "_source_def", {})
     target_def = getattr(request.node, "_target_def", {})
 
-    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_audit_append:
+    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append:
         request.node._audit_append = mock_audit_append
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
@@ -330,7 +330,7 @@ def step_audit_event_recorded_dry_run(event_type: str, request):
     assert mock_append is not None, "append_audit_event was not patched for this scenario"
     call = mock_append.await_args
     assert call.kwargs.get("event_type") == event_type, f"Expected event_type {event_type}, got {call.kwargs}"
-    payload = call.kwargs.get("payload_json") or {}
+    payload = call.kwargs.get("payload") or {}
     assert payload.get("dry_run") is True, f"Expected dry_run=True in payload, got {payload}"
 
 
@@ -353,7 +353,7 @@ def _call_migrate(request, client, dry_run: bool = False, data_override: dict | 
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.get_schema") as mock_get_schema,
         patch("modulo.api.routes.schemas._get_latest_version") as mock_latest,
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_audit_append,
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append,
     ):
         request.node._audit_append = mock_audit_append
 

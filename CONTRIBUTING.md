@@ -211,7 +211,7 @@ modulo/
 ├── docs/
 │   ├── prd.md                    # Product requirements document
 │   ├── adr/                      # Architecture decision records
-│   ├── product-map/              # Feature graph entries
+│   ├── product-map/              # Feature graph entries (see product-map/README.md)
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
@@ -453,7 +453,10 @@ exist in the devtools tooling repo.
 2. Run the test suites and lint checks relevant to your change (see
    [Testing](#testing) and [Coding Standards](#coding-standards))
 3. Verify coverage thresholds are met
-4. Update the product map entry for any feature changes (see the product map)
+4. Update the product map entry for any feature changes (see the product map — the
+   feature graph lives in `docs/product-map/`, keyed by the `features:` registry and
+   route `product_map` refs in `frontend/src/manifest.yaml`; see
+   `docs/product-map/README.md`)
 5. Update the PRD if your change introduces new behaviour
 
 ### Review requirements

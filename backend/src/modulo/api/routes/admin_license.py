@@ -94,15 +94,13 @@ def _resolve_license_key(raw_key: str) -> LicenseStatusResponse | None:
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
-    """Resolve the effective license, checking org-level, then system-level (env var), then in-memory."""
-    # 1. Org-level license key
+    """Resolve the effective license, checking org-level, then in-memory, then system-level (env var)."""
     if org is not None:
         org_key = org.settings_json.get("license_key") if org.settings_json else None
         resolved = _resolve_license_key(str(org_key) if org_key else "")
         if resolved is not None:
             return resolved
 
-    # 2. In-memory store (from POST /admin/license)
     lic = get_license()
     if lic is not None:
         return _license_status(lic)
@@ -230,19 +228,12 @@ async def issue_license(
     When ``email`` is provided, the license key is also emailed to the customer
     via a background task so this request stays fast.
     """
-    try:
-        license_key = generate_team_license(
-            req.org_name,
-            term_months=req.term_months,
-            features=req.features if req.features is not None else TEAM_FEATURES,
-            private_key_hex=settings.modulo_license_private_key or None,
-        )
-    except ValueError as exc:
-        logger.exception("license.issue_generation_failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
+    license_key = generate_team_license(
+        req.org_name,
+        term_months=req.term_months,
+        features=req.features if req.features is not None else TEAM_FEATURES,
+        private_key_hex=settings.modulo_license_private_key or None,
+    )
 
     validation = parse_and_verify(license_key)
     if not validation.valid or validation.license_data is None:

@@ -46,7 +46,7 @@
                 </div>
               </td>
               <td class="px-4 py-3">
-                <button
+                <button type="button"
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
                   :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
                   :disabled="!!skillToggling[skill.id]"
@@ -61,7 +61,7 @@
               </td>
               <td class="px-4 py-3 text-right">
                 <div class="flex items-center justify-end gap-1">
-                  <button
+                  <button type="button"
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     :aria-label="$t('views.AdminRemyView.edit_skill')"
                     :title="$t('views.AdminRemyView.edit_skill')"
@@ -71,7 +71,7 @@
                       <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                     </svg>
                   </button>
-                  <button
+                  <button type="button"
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
                     :aria-label="$t('views.AdminRemyView.delete_skill')"
                     :title="$t('components.remy.RemySkillDialog.delete_skill')"

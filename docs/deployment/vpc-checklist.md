@@ -15,7 +15,7 @@
   - verify: `docker compose -f docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
   - expected: no output
 - [ ] **No OTel config saved in database** (if DB was migrated from non-VPC env)
-  - verify: query `otel_config` table — `otlp_endpoint` should be empty string
+  - verify: query `otel_config` table – `otlp_endpoint` should be empty string
 - [ ] **LangSmith tracing is disabled** per-org in settings UI
   - verify: check observability settings page shows "disabled"
 
@@ -24,12 +24,12 @@
 - [ ] **No ConnectorInstance targets an external URL**
   - verify: `GET /api/v1/connectors` returns empty list, or each entry's `base_url` points to VPC-internal services
 - [ ] **No ModelBackend uses external API endpoints**
-  - verify: Anthropic/OpenAI model backends cannot reach `api.anthropic.com` or `api.openai.com` without internet access — confirm no model backends are configured, or they point to VPC-internal model serving endpoints
+  - verify: Anthropic/OpenAI model backends cannot reach `api.anthropic.com` or `api.openai.com` without internet access – confirm no model backends are configured, or they point to VPC-internal model serving endpoints
 
 ## 3. Webhooks & Notifications
 
 - [ ] **All webhook URLs point to VPC-internal endpoints**
-  - verify: `GET /api/v1/admin/notifications` — ensure every `url` field is an internal address (`https://internal-alb.*`, VPC-internal hostnames, etc.)
+  - verify: `GET /api/v1/admin/notifications` – ensure every `url` field is an internal address (`https://internal-alb.*`, VPC-internal hostnames, etc.)
 - [ ] **No external webhook delivery logs show successful deliveries**
   - verify: check notification delivery log for external URLs
 
@@ -50,7 +50,7 @@
 
 ## 6. Container image security
 
-- [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) — not Docker Hub
+- [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) – not Docker Hub
   - verify: `docker compose -f docker-compose.prod.yml config | grep image`
   - expected: all images from internal registry URL
 

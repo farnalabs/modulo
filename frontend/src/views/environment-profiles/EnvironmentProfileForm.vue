@@ -1,7 +1,7 @@
 <template>
   <div class="page-wide">
     <header class="flex items-center gap-3 mb-6">
-      <button
+      <button type="button"
         class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         data-testid="envprofile-form-back"
         :aria-label="'Back to environment profiles'"

@@ -28,7 +28,7 @@
               <Button data-testid="schema-editor-save" :disabled="saving || !isValid" @click="saveSchema">
                 {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
               </Button>
-              <button
+              <button type="button"
                 data-testid="schema-editor-cancel"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                 @click="cancelEditing"

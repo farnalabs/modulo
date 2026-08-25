@@ -348,7 +348,7 @@
 
     <div v-if="currentStep < 6" class="flex items-center justify-between">
       <div>
-        <button
+        <button type="button"
           v-if="currentStep > 0"
           data-testid="onboarding-wizard-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -358,7 +358,7 @@
         </button>
       </div>
       <div class="flex items-center gap-3">
-        <button
+        <button type="button"
           v-if="currentStep > 0 && currentStep < 5"
           data-testid="onboarding-wizard-skip-to-end"
           class="text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

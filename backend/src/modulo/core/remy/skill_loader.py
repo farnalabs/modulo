@@ -193,23 +193,17 @@ class SkillLoader:
     def _filter_always_on(self, skills: list[SkillEntry]) -> list[SkillEntry]:
         return [s for s in skills if s.source_mode is None or s.source_mode == "always_on"]
 
-    async def build_system_prompt(
-        self,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-        page_context: str | None = None,
-        system_prompt_override: str | None = None,
-        include_ui_tools_text: bool = False,
-    ) -> str:
+    async def _load_config(self, org_id: uuid.UUID) -> RemyConfig | None:
         config_service = self._config_service or RemyConfigService(self._session)
         try:
-            config = await config_service.get_config(org_id)
+            return await config_service.get_config(org_id)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Failed to load Remy config for org %s", org_id)
-            config = None
+            return None
 
+    async def _load_ctx_sources(self, org_id: uuid.UUID, user_id: uuid.UUID) -> dict[str, str]:
         ctx_service = self._ctx_service or RemyContextSourceService(self._session)
         try:
             effective = await ctx_service.get_effective_config(org_id, user_id)
@@ -218,26 +212,43 @@ class SkillLoader:
         except Exception:
             logger.exception("Failed to load context source config for org %s", org_id)
             effective = None
+        return effective.context_sources if effective else {}
 
-        ctx_sources: dict[str, str] = effective.context_sources if effective else {}
+    @staticmethod
+    def _append_if_present(parts: list[str], section: str | None) -> None:
+        if section:
+            parts.append(section)
+
+    async def _append_ui_tools_text(self, parts: list[str], include_ui_tools_text: bool) -> None:
+        if not (include_ui_tools_text and self._ui_tools_text_fn):
+            return
+        try:
+            tools_text = self._ui_tools_text_fn()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to build UI tools text")
+            return
+        if tools_text:
+            parts.extend([tools_text, "- Before navigating, call get_manifest() to learn page structure and elements."])
+
+    async def build_system_prompt(
+        self,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        page_context: str | None = None,
+        system_prompt_override: str | None = None,
+        include_ui_tools_text: bool = False,
+    ) -> str:
+        config = await self._load_config(org_id)
+        ctx_sources = await self._load_ctx_sources(org_id, user_id)
 
         parts: list[str] = []
 
-        base = self._build_config_section(config, system_prompt_override)
-        if base:
-            parts.append(base)
-
-        guidance = self._build_guidance_section(config)
-        if guidance:
-            parts.append(guidance)
-
-        overview = self._build_overview_section(config, ctx_sources)
-        if overview:
-            parts.append(overview)
-
-        page_ctx = self._build_page_context_section(ctx_sources, page_context)
-        if page_ctx:
-            parts.append(page_ctx)
+        self._append_if_present(parts, self._build_config_section(config, system_prompt_override))
+        self._append_if_present(parts, self._build_guidance_section(config))
+        self._append_if_present(parts, self._build_overview_section(config, ctx_sources))
+        self._append_if_present(parts, self._build_page_context_section(ctx_sources, page_context))
 
         parts.append(
             f"{_SECTION_BEHAVIOR}\n\n"
@@ -248,15 +259,13 @@ class SkillLoader:
         )
 
         profile = await self._build_profile_section(org_id, user_id, ctx_sources)
-        if profile:
-            parts.append(profile)
+        self._append_if_present(parts, profile)
 
         org_skills = await self.get_org_skills(org_id)
         user_skills = await self.get_user_skills(user_id)
 
         tool_section = self._build_knowledge_tools_section(org_skills + user_skills, ctx_sources)
-        if tool_section:
-            parts.append(tool_section)
+        self._append_if_present(parts, tool_section)
 
         always_on_org = self._filter_always_on(org_skills)
         self._append_skills_block(parts, always_on_org, _SECTION_ORG_SKILLS)
@@ -264,18 +273,7 @@ class SkillLoader:
         always_on_user = self._filter_always_on(user_skills)
         self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
 
-        if include_ui_tools_text and self._ui_tools_text_fn:
-            try:
-                tools_text = self._ui_tools_text_fn()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Failed to build UI tools text")
-                tools_text = None
-            if tools_text:
-                parts.extend(
-                    [tools_text, "- Before navigating, call get_manifest() to learn page structure and elements."]
-                )
+        await self._append_ui_tools_text(parts, include_ui_tools_text)
 
         return "\n\n".join(parts)
 

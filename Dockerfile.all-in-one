@@ -19,10 +19,11 @@ ENV UV_LINK_MODE=copy \
     HOME=/tmp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends nginx supervisor postgresql-client libcap2-bin
+    apt-get update && apt-get install -y --no-install-recommends libcap2-bin nginx postgresql-client supervisor
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/pip pip install --only-binary :all: uv==0.11.13
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --only-binary :all: uv==0.11.13
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --frozen --no-install-project
 COPY backend/src ./src

@@ -18,11 +18,11 @@ echo "=== Release: single-migrator bootstrap + migrations ==="
 # Fix DATABASE_URL and create alembic_version (same as entrypoint).
 python3 /app/deploy/fly/bootstrap_db.py
 
-if [ -f /tmp/database_url.env ]; then
+if [[ -f /tmp/database_url.env ]]; then
   export DATABASE_URL="$(cat /tmp/database_url.env)"
 fi
 
-if [ -f /tmp/database_admin_url.env ]; then
+if [[ -f /tmp/database_admin_url.env ]]; then
   export DATABASE_ADMIN_URL="$(cat /tmp/database_admin_url.env)"
 fi
 
@@ -40,7 +40,7 @@ for attempt in $(seq 1 3); do
     echo "  WARNING: migrations failed (attempt $attempt/3) -- retrying in 5s"
     sleep 5
 done
-if [ "$MIGRATIONS_OK" -ne 1 ]; then
+if [[ "$MIGRATIONS_OK" -ne 1 ]]; then
     echo "FATAL: release migrations failed after 3 attempts" >&2
     exit 1
 fi

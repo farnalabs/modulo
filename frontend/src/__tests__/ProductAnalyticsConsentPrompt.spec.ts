@@ -14,7 +14,7 @@ vi.mock('vue-i18n', () => ({
 vi.mock('primevue/button', () => ({
   default: {
     name: 'Button',
-    template: '<button @click="$emit(\'click\')"><slot /></button>',
+    template: '<button type="button" @click="$emit(\'click\')"><slot /></button>',
     emits: ['click'],
   },
 }))

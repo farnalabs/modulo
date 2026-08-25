@@ -1,12 +1,12 @@
-# Deployment Journeys — Three Paths to Running Modulo
+# Deployment Journeys – Three Paths to Running Modulo
 
 Modulo supports three distinct deployment scenarios. Every user starts on one
-path and can graduate to the next as their needs grow — all three use the same
+path and can graduate to the next as their needs grow – all three use the same
 codebase, same Docker images, same RuntimeProvider ABC.
 
 ---
 
-## 1. Entirely Local — Dev & Solo Evaluation
+## 1. Entirely Local – Dev & Solo Evaluation
 
 **Who it's for:** solo developers, evaluation, local testing before staging.
 
@@ -34,7 +34,7 @@ or run more than 2 agents in parallel.
 
 ---
 
-## 2. New Cloud Deployment — No Existing Infrastructure
+## 2. New Cloud Deployment – No Existing Infrastructure
 
 **Who it's for:** solo devs or small teams who want a production-like instance
 without managing servers or databases.
@@ -78,18 +78,18 @@ A `fly.toml` template is in `deploy/fly/`.
 
 ### Option B: Railway
 
-Same pattern — Docker image + managed Postgres + Redis via Railway's dashboard.
+Same pattern – Docker image + managed Postgres + Redis via Railway's dashboard.
 Set the same env vars in the Railway dashboard.
 
 ### How agents run
 
 By default, agents run **in-process** via `LocalRuntimeProvider`. The app
 container runs them as subprocesses, capped at 2 concurrent. No sandbox,
-no isolation, no scaling — but it's free and works immediately.
+no isolation, no scaling – but it's free and works immediately.
 
 **To add sandboxed agents:** set `MODULO_E2B_API_KEY` as an env var and restart.
 The `RuntimeProviderHub` auto-detects the key and makes E2B available for
-profiles that request it. Existing pipelines continue to work unchanged —
+profiles that request it. Existing pipelines continue to work unchanged –
 the ABC hides the backend.
 
 ### Limits
@@ -107,7 +107,7 @@ or want to deploy on your own infrastructure (Docker Compose / VM).
 
 ---
 
-## 3. Existing Infrastructure — Integrate With What You Have
+## 3. Existing Infrastructure – Integrate With What You Have
 
 **Who it's for:** teams that run their own infrastructure (Docker Compose,
 Podman, VMs), have a VPC, use AWS/GCP, have compliance requirements (SOC 2,
@@ -150,7 +150,7 @@ is a config change, not a code change.
 
 ### Team features already available
 
-These are not future plans — they are built and tested today:
+These are not future plans – they are built and tested today:
 
 - **SSO**: OIDC (Google, GitHub, Okta, any IdP) + SAML 2.0
 - **Team RBAC**: team-scoped resources, operator/runner/viewer roles,
@@ -166,7 +166,7 @@ These are not future plans — they are built and tested today:
 - **Backup/DR**: `modulo backup` / `modulo restore` CLI, full DR procedure
 - **Secrets backends**: Fernet (default), Vault, AWS Secrets Manager
 
-### When you need modulo-cloud (V3 — not yet built)
+### When you need modulo-cloud (V3 – not yet built)
 
 A hosted SaaS wrapping Modulo core, adding multi-org billing, subdomain
 routing, and a public community library registry. Only needed if/when
@@ -186,7 +186,7 @@ you want to offer Modulo as a service to external teams.
                                    │
                                    ▼
                         ┌──────────────────────┐
-                        │  Cloud — New Infra    │
+                        │  Cloud – New Infra    │
                         │  (Fly.io / Railway)   │
                         │  ~2 in-process agents │
                         │  + opt-in E2B for     │
@@ -208,7 +208,7 @@ need the bottom tier. The code and config are identical across all three.
 
 ### Supporting resources
 
-- [System Requirements](./system-requirements.md) — minimum resources, supported databases
-- [Configuration Reference](./configuration-reference.md) — all environment variables
-- [Upgrade Process](./upgrade-process.md) — upgrading existing deployments
-- [Public Launch Checklist](./public-launch-checklist.md) — production readiness verification
+- [System Requirements](./system-requirements.md) – minimum resources, supported databases
+- [Configuration Reference](./configuration-reference.md) – all environment variables
+- [Upgrade Process](./upgrade-process.md) – upgrading existing deployments
+- [Public Launch Checklist](./public-launch-checklist.md) – production readiness verification

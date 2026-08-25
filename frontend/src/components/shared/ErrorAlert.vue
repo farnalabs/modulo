@@ -4,7 +4,7 @@
   >
     <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
     <p v-else>{{ message }}</p>
-    <button
+    <button type="button"
       v-if="onRetry && retryable !== false"
       class="ml-2 underline"
       @click="onRetry"

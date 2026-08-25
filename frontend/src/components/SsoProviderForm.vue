@@ -3,7 +3,7 @@
     <div>
       <span class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.provider_type') }}</span>
       <div class="flex gap-2">
-        <button
+        <button type="button"
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
           :class="
             data.provider_type === 'oidc'
@@ -23,7 +23,7 @@
         >
           {{ $t('components.SsoProviderForm.oidc_label') }}
         </button>
-        <button
+        <button type="button"
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
           :class="
             data.provider_type === 'saml'
@@ -241,7 +241,7 @@
       <Button :disabled="!data.name.trim() || saving" @click="$emit('submit')">
         {{ saving ? savingLabel : submitLabel }}
       </Button>
-      <button
+      <button type="button"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
         @click="$emit('cancel')"
       >
