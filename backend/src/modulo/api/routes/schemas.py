@@ -797,6 +797,133 @@ class SchemaInferResponse(BaseModel):
     rare_fields: list[str] = Field(default_factory=list)
 
 
+def _safe_create_secrets_backend(settings: Settings, log_key: str, error_detail: str) -> Any:
+    """Create the secrets backend, mapping failures to a 500 HTTP response."""
+    try:
+        return create_secrets_backend(fernet_key=settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(log_key)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail,
+        ) from None
+
+
+async def _infer_definition(
+    ci: Any,
+    req: SchemaInferRequest,
+    secrets_backend: Any,
+    mbs: Any,
+) -> tuple[list[Any], Any, dict[str, Any]]:
+    """Sample connector records and infer a JSON Schema via the LLM backend."""
+    async with ConnectorHub(secrets_backend=secrets_backend) as ch:
+        try:
+            await ch.initialise([ci])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("schemas.infer.connector_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise connector for sampling.",
+            ) from None
+        try:
+            async with asyncio.timeout(30.0):
+                records = await ch.sample(
+                    connector_id=req.connector_instance_id,
+                    resource=req.sample_query.resource,
+                    filters=req.sample_query.filters,
+                    limit=req.sample_query.limit,
+                )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Connector sampling timed out after 30s",
+            ) from None
+        except Exception:
+            logger.exception("schemas.infer.sampling_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to sample connector data.",
+            ) from None
+
+    async with ModelBackendHub() as mh:
+        try:
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("schemas.infer.backend_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise model backend for inference.",
+            ) from None
+        if not mh.backend_ids:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No model backends available for inference.",
+            )
+        first_backend_id = next(iter(mh.backend_ids))
+        try:
+            backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("schemas.infer.backend_get_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Selected model backend is unavailable.",
+            ) from None
+
+        service = SchemaInferenceService(backend, connector_type=ci.connector_type_id)
+        try:
+            definition_json = await service.infer(records)
+        except SchemaInferenceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Schema inference failed: {exc}",
+            ) from exc
+    return records, first_backend_id, definition_json
+
+
+async def _append_inference_audit(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: SchemaInferRequest,
+    ci: Any,
+    records: list[Any],
+    first_backend_id: Any,
+) -> None:
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="schema_inference_completed",
+                actor_user_id=principal.account_id,
+                resource_type="connector_instance",
+                resource_id=req.connector_instance_id,
+                payload_json={
+                    "connector_name": ci.name,
+                    "connector_type": ci.connector_type_id,
+                    "resource": req.sample_query.resource,
+                    "sample_count": len(records),
+                    "model_backend_id": str(first_backend_id),
+                },
+            )
+    except ProgrammingError:
+        logger.exception("schemas.infer_schema_endpoint")
+        logger.warning("Audit event not recorded — schema inference table missing")
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.infer.audit_failed")
+
+
 @router.post("/infer")
 @handle_db_errors("schemas.infer_schema_endpoint")
 async def infer_schema_endpoint(
@@ -870,118 +997,20 @@ async def infer_schema_endpoint(
             detail="Schema inference failed due to an unexpected error.",
         ) from None
 
-    try:
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("schemas.infer.secrets_backend")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to initialize secrets backend for schema inference.",
-        ) from None
+    secrets_backend = _safe_create_secrets_backend(
+        settings,
+        "schemas.infer.secrets_backend",
+        "Failed to initialize secrets backend for schema inference.",
+    )
 
-    async with ConnectorHub(secrets_backend=secrets_backend) as ch:
-        try:
-            await ch.initialise([ci])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.infer.connector_init_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to initialise connector for sampling.",
-            ) from None
-        try:
-            async with asyncio.timeout(30.0):
-                records = await ch.sample(
-                    connector_id=req.connector_instance_id,
-                    resource=req.sample_query.resource,
-                    filters=req.sample_query.filters,
-                    limit=req.sample_query.limit,
-                )
-        except TimeoutError:
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Connector sampling timed out after 30s",
-            ) from None
-        except Exception:
-            logger.exception("schemas.infer.sampling_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to sample connector data.",
-            ) from None
-
-    async with ModelBackendHub() as mh:
-        try:
-            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.infer.backend_init_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to initialise model backend for inference.",
-            ) from None
-        if not mh.backend_ids:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No model backends available for inference.",
-            )
-        first_backend_id = next(iter(mh.backend_ids))
-        try:
-            backend = await mh.get(first_backend_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.infer.backend_get_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Selected model backend is unavailable.",
-            ) from None
-
-        service = SchemaInferenceService(backend, connector_type=ci.connector_type_id)
-        try:
-            definition_json = await service.infer(records)
-        except SchemaInferenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Schema inference failed: {exc}",
-            ) from exc
+    records, first_backend_id, definition_json = await _infer_definition(ci, req, secrets_backend, mbs)
 
     suggestion_name = f"Inferred from {ci.name}"
     suggestion_description = (
         f"Auto-inferred schema from {ci.name} ({req.sample_query.resource}, {len(records)} samples)"
     )
 
-    try:
-        try:
-            async with session.begin():
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="schema_inference_completed",
-                    actor_user_id=principal.account_id,
-                    resource_type="connector_instance",
-                    resource_id=req.connector_instance_id,
-                    payload_json={
-                        "connector_name": ci.name,
-                        "connector_type": ci.connector_type_id,
-                        "resource": req.sample_query.resource,
-                        "sample_count": len(records),
-                        "model_backend_id": str(first_backend_id),
-                    },
-                )
-        except ProgrammingError:
-            logger.exception("schemas.infer_schema_endpoint")
-            logger.warning("Audit event not recorded — schema inference table missing")
-
-    except HTTPException:
-        raise
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("schemas.infer.audit_failed")
+    await _append_inference_audit(session, principal, req, ci, records, first_backend_id)
 
     return SchemaInferResponse(
         definition_json=definition_json,
@@ -1004,6 +1033,87 @@ class SchemaGenerateRequest(BaseModel):
 
 class SchemaGenerateResponse(BaseModel):
     definition_json: dict[str, Any]
+
+
+async def _generate_definition(
+    req: SchemaGenerateRequest,
+    secrets_backend: Any,
+    mbs: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Generate a JSON Schema draft via the LLM backend."""
+    async with ModelBackendHub() as mh:
+        try:
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("schemas.generate.backend_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise model backend for generation.",
+            ) from None
+        if not mh.backend_ids:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No model backends available for generation.",
+            )
+        first_backend_id = next(iter(mh.backend_ids))
+        try:
+            backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("schemas.generate.backend_get_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Selected model backend is unavailable.",
+            ) from None
+
+        service = SchemaGenerationService(backend)
+        try:
+            definition_json = await service.generate(
+                description=req.description,
+                examples=req.examples or None,
+            )
+        except SchemaGenerationError as exc:
+            logger.exception("schemas.generate.failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Schema generation failed: {exc}",
+            ) from exc
+    return first_backend_id, definition_json
+
+
+async def _append_generation_audit(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: SchemaGenerateRequest,
+    first_backend_id: Any,
+) -> None:
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="schema_generation_completed",
+                actor_user_id=principal.account_id,
+                resource_type="schema",
+                resource_id=None,
+                payload_json={
+                    "description_length": len(req.description),
+                    "example_count": len(req.examples),
+                    "model_backend_id": str(first_backend_id),
+                },
+            )
+    except ProgrammingError:
+        logger.exception("schemas.generate_schema_endpoint")
+        logger.warning("Audit event not recorded — schema generation table missing")
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.generate.audit_failed")
 
 
 @router.post("/generate")
@@ -1059,84 +1169,15 @@ async def generate_schema_endpoint(
             detail="Schema generation failed due to an unexpected error.",
         ) from None
 
-    try:
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("schemas.generate.secrets_backend")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to initialize secrets backend for schema generation.",
-        ) from None
+    secrets_backend = _safe_create_secrets_backend(
+        settings,
+        "schemas.generate.secrets_backend",
+        "Failed to initialize secrets backend for schema generation.",
+    )
 
-    async with ModelBackendHub() as mh:
-        try:
-            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.generate.backend_init_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to initialise model backend for generation.",
-            ) from None
-        if not mh.backend_ids:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No model backends available for generation.",
-            )
-        first_backend_id = next(iter(mh.backend_ids))
-        try:
-            backend = await mh.get(first_backend_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.generate.backend_get_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Selected model backend is unavailable.",
-            ) from None
+    first_backend_id, definition_json = await _generate_definition(req, secrets_backend, mbs)
 
-        service = SchemaGenerationService(backend)
-        try:
-            definition_json = await service.generate(
-                description=req.description,
-                examples=req.examples or None,
-            )
-        except SchemaGenerationError as exc:
-            logger.exception("schemas.generate.failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Schema generation failed: {exc}",
-            ) from exc
-
-    try:
-        try:
-            async with session.begin():
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="schema_generation_completed",
-                    actor_user_id=principal.account_id,
-                    resource_type="schema",
-                    resource_id=None,
-                    payload_json={
-                        "description_length": len(req.description),
-                        "example_count": len(req.examples),
-                        "model_backend_id": str(first_backend_id),
-                    },
-                )
-        except ProgrammingError:
-            logger.exception("schemas.generate_schema_endpoint")
-            logger.warning("Audit event not recorded — schema generation table missing")
-
-    except HTTPException:
-        raise
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("schemas.generate.audit_failed")
+    await _append_generation_audit(session, principal, req, first_backend_id)
 
     return SchemaGenerateResponse(definition_json=definition_json)
 
@@ -1160,6 +1201,65 @@ class SchemaMigrationResponse(BaseModel):
 class SchemaMigrationPlanRequest(BaseModel):
     from_definition: dict[str, Any]
     to_definition: dict[str, Any]
+
+
+async def _load_migration_versions(
+    session: AsyncSession,
+    req: SchemaMigrationRequest,
+) -> tuple[Any, Any]:
+    """Fetch and validate the source/target schema versions for a migration."""
+    from_schema = await get_schema(session, req.from_schema_id)
+    if from_schema is None:
+        raise HTTPException(status_code=404, detail="Source schema not found")
+    from_sv = await _get_latest_version(session, req.from_schema_id)
+    if from_sv is None:
+        raise HTTPException(status_code=404, detail="Source schema has no versions")
+
+    to_schema = await get_schema(session, req.to_schema_id)
+    if to_schema is None:
+        raise HTTPException(status_code=404, detail="Target schema not found")
+    to_sv = await _get_latest_version(session, req.to_schema_id)
+    if to_sv is None:
+        raise HTTPException(status_code=404, detail="Target schema has no versions")
+    return from_sv, to_sv
+
+
+async def _append_migration_audit(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: SchemaMigrationRequest,
+    plan: Any,
+    dry_run: bool,
+) -> None:
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="schema_migration_completed",
+                actor_user_id=principal.account_id,
+                resource_type="schema",
+                resource_id=req.to_schema_id,
+                payload_json={
+                    "from_schema_id": str(req.from_schema_id),
+                    "to_schema_id": str(req.to_schema_id),
+                    "dry_run": dry_run,
+                    "field_additions": len(plan.field_additions),
+                    "field_removals": len(plan.field_removals),
+                    "type_changes": len(plan.type_changes),
+                    "renames": len(plan.renames),
+                },
+            )
+    except ProgrammingError:
+        logger.exception("schemas.migrate_audit")
+        logger.warning("Audit event not recorded — schema migration table missing")
+    except HTTPException as exc:
+        logger.debug("schemas.migrate.audit_http_error", extra={"detail": exc.detail})
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.migrate.audit_failed")
 
 
 @router.post(
@@ -1191,19 +1291,7 @@ async def migrate_data_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            from_schema = await get_schema(session, req.from_schema_id)
-            if from_schema is None:
-                raise HTTPException(status_code=404, detail="Source schema not found")
-            from_sv = await _get_latest_version(session, req.from_schema_id)
-            if from_sv is None:
-                raise HTTPException(status_code=404, detail="Source schema has no versions")
-
-            to_schema = await get_schema(session, req.to_schema_id)
-            if to_schema is None:
-                raise HTTPException(status_code=404, detail="Target schema not found")
-            to_sv = await _get_latest_version(session, req.to_schema_id)
-            if to_sv is None:
-                raise HTTPException(status_code=404, detail="Target schema has no versions")
+            from_sv, to_sv = await _load_migration_versions(session, req)
     except IntegrityError:
         logger.exception("schemas.migrate_data_endpoint")
         raise HTTPException(
@@ -1253,37 +1341,7 @@ async def migrate_data_endpoint(
         "renames": plan.renames,
     }
 
-    try:
-        try:
-            async with session.begin():
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="schema_migration_completed",
-                    actor_user_id=principal.account_id,
-                    resource_type="schema",
-                    resource_id=req.to_schema_id,
-                    payload_json={
-                        "from_schema_id": str(req.from_schema_id),
-                        "to_schema_id": str(req.to_schema_id),
-                        "dry_run": dry_run,
-                        "field_additions": len(plan.field_additions),
-                        "field_removals": len(plan.field_removals),
-                        "type_changes": len(plan.type_changes),
-                        "renames": len(plan.renames),
-                    },
-                )
-        except ProgrammingError:
-            logger.exception("schemas.migrate_audit")
-            logger.warning("Audit event not recorded — schema migration table missing")
-
-    except HTTPException as exc:
-        logger.debug("schemas.migrate.audit_http_error", extra={"detail": exc.detail})
-        raise
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("schemas.migrate.audit_failed")
+    await _append_migration_audit(session, principal, req, plan, dry_run)
 
     if dry_run:
         plan_dict["dry_run"] = True

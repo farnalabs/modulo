@@ -19814,7 +19814,6 @@ export interface operations {
             query?: {
                 format?: string;
                 offset?: number;
-                limit?: number;
                 dimension?: components["schemas"]["AnalyticsDimension"] | null;
                 trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
                 status?: components["schemas"]["AnalyticsStatus"] | null;
@@ -19823,6 +19822,7 @@ export interface operations {
                 folder_id?: string | null;
                 date_from?: string | null;
                 date_to?: string | null;
+                limit?: number;
                 _fresh?: boolean;
             };
             header?: never;
