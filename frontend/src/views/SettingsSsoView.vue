@@ -59,7 +59,7 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <button
+                <button type="button"
                   :disabled="testingId === provider.id"
                   class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
                   data-testid="settings-sso-test"
@@ -68,7 +68,7 @@
                 >
                   {{ testingId === provider.id ? $t('views.SettingsSsoView.testing') : $t('views.SettingsSsoView.test') }}
                 </button>
-                <button
+                <button type="button"
                   class="rounded p-1 text-muted-foreground hover:bg-accent"
                   data-testid="settings-sso-edit"
                   :aria-label="$t('views.SettingsSsoView.edit_provider')"
@@ -125,7 +125,7 @@
                 <Button :disabled="deleting" severity="danger" data-testid="settings-sso-delete-confirm" @click="deleteProvider(provider.id)">
                   {{ deleting ? $t('views.SettingsSsoView.deleting') : $t('views.SettingsSsoView.delete') }}
                 </Button>
-                <button
+                <button type="button"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   data-testid="settings-sso-delete-cancel"
                   @click="deleteConfirmProviderId = null"

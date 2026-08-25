@@ -6,7 +6,7 @@
           {{ $t("views.AnalyticsView.timespan") }}
         </p>
         <div class="flex flex-wrap gap-1">
-          <button
+          <button type="button"
             v-for="t in timespans"
             :key="t.value"
             :data-testid="`analytics-timespan-${t.value}`"
@@ -39,7 +39,7 @@
               {{ $t("views.AnalyticsView.group_by_hour") }}
             </button>
           </template>
-          <button
+          <button type="button"
             v-else
             v-for="g in groupByOptions"
             :key="g.value"
@@ -62,7 +62,7 @@
           {{ $t("views.AnalyticsView.measure") }}
         </p>
         <div class="flex flex-wrap gap-1">
-          <button
+          <button type="button"
             v-for="m in measures"
             :key="m.value"
             :data-testid="`analytics-measure-${m.value}`"

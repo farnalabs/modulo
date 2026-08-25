@@ -29,7 +29,7 @@
           >
             No results found
           </div>
-          <button
+          <button type="button"
             v-for="(item, idx) in filteredItems"
             :key="item.path + item.label"
             :class="[

@@ -3,7 +3,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
-        <button
+        <button type="button"
           class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
           @click="router.push({ name: 'library' })"
           data-testid="library-wizard-back"
@@ -140,7 +140,7 @@
           <Button :disabled="creating" class="px-6 py-2.5" @click="createPipeline" data-testid="library-wizard-create">
             {{ creating ? $t('views.LibraryPipelineWizard.creating') : $t('views.LibraryPipelineWizard.create_pipeline') }}
           </Button>
-          <button
+          <button type="button"
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="router.push({ name: 'library' })"
             data-testid="library-wizard-cancel"

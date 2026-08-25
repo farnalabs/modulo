@@ -15,7 +15,7 @@
           <option :value="30">Last 30 days</option>
           <option :value="90">Last 90 days</option>
         </select>
-        <button
+        <button type="button"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm hover:bg-accent"
           @click="loadData"
           :disabled="loading"
