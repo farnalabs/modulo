@@ -6,16 +6,17 @@ URLs:
     POST   /api/v1/evals/compare      — side-by-side comparison of two runs
     GET    /api/v1/evals/coverage     — eval coverage map for a pipeline
     POST   /api/v1/evals/from-run     — create eval definition from run data
+    PUT    /api/v1/evals/suites/{suite_id}/alerting — configure regression alerting (admin only)
 """
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,10 +25,21 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval_engine.suite_run import (
+    EVAL_LEADERBOARD_DEFAULT_DAYS,
+    EVAL_LEADERBOARD_MAX_DAYS,
+    aggregate_eval_leaderboard,
+    bucket_eval_timeseries,
+    build_eval_leaderboard_query,
+    build_eval_pipelines_query,
+    build_eval_timeseries_query,
+    summarise_eval_timeseries,
+)
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -43,8 +55,12 @@ _CODE_EVALS_DELETE_EVAL_DEFINITION = "evals.delete_eval_definition"
 _CODE_EVALS_LIST_RUN_EVALS = "evals.list_run_evals"
 _CODE_EVALS_COMPARE_EVALS = "evals.compare_evals"
 _CODE_EVALS_CREATE_EVAL_RUN = "evals.create_eval_from_run"
+_CODE_EVALS_LEADERBOARD = "evals.leaderboard"
+_CODE_EVALS_TIMESERIES = "evals.timeseries"
+_CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
+_MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 
 
 _log = logging.getLogger(__name__)
@@ -79,6 +95,10 @@ class EvalDefinitionResponse(BaseModel):
     failure_behaviour: str
     pass_threshold: float | None = None
     suite_id: str | None = None
+    # Eval-definition version (FAR-382): additive/optional, defaults to 1 so
+    # existing clients that don't read it keep working unchanged.
+    version: int = 1
+    pre_version_raw: dict[str, Any] | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
 
 
@@ -99,7 +119,22 @@ def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
         "pass_threshold": eval_def.pass_threshold,
         "suite_id": eval_def.suite_id,
         "account_id": str(eval_def.account_id),
+        "version": getattr(eval_def, "version", 1),
+        "pre_version_raw": getattr(eval_def, "pre_version_raw", None),
     }
+
+
+def _stamp_eval_definition_version(eval_def: EvalDefinition) -> None:
+    """Bump the eval-definition version and snapshot the pre-edit config.
+
+    FAR-382: an edit to an eval definition is a version-scoped event. The prior
+    config is captured into ``pre_version_raw`` before mutation so a reversal is
+    reconstructable, then ``version`` is incremented. A v1->v2 rubric change is
+    therefore explicit — an ``EvalResult`` stamped with v1 never looks like a
+    regression against a v2-scoped result.
+    """
+    eval_def.pre_version_raw = {"config_json": eval_def.config_json}
+    eval_def.version = (eval_def.version or 1) + 1
 
 
 def _validate_guardrail_request(
@@ -172,7 +207,30 @@ class EvalDefinitionListResponse(BaseModel):
     page_size: int
 
 
-# ---------------------------------------------------------------------------
+class EvalSuiteAlertingRequest(BaseModel):
+    """Per-suite regression alerting configuration (FAR-379)."""
+
+    # Rolling N-run baseline window used when resolving the comparison baseline:
+    # ``N`` forms the baseline from the N most-recent completed same-tuple prior
+    # runs; NULL keeps the single-latest baseline. The window controls HOW MANY
+    # prior runs form the baseline, never WHETHER to compare or alert — a NULL
+    # window does NOT disable alerting.
+    baseline_window: int | None = Field(None, ge=1)
+    # Pass-rate drop threshold (fraction 0..1) the observed drop must exceed.
+    # NULL defers entirely to the Phase 3 ``regressed`` detection flag.
+    minimum_delta: float | None = Field(None, ge=0.0, le=1.0)
+    # Silence window (minutes) between regression alerts for a suite. NULL = no
+    # time-based rate limit (idempotency on suite_run_id still applies).
+    cooldown: int | None = Field(None, ge=0)
+
+
+class EvalSuiteAlertingResponse(BaseModel):
+    suite_id: uuid.UUID
+    baseline_window: int | None
+    minimum_delta: float | None
+    cooldown: int | None
+
+
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -239,6 +297,7 @@ async def create_eval_definition(
                 pass_threshold=req.pass_threshold,
                 suite_id=req.suite_id,
                 account_id=principal.account_id,
+                version=1,
             )
             session.add(eval_def)
             await session.flush()
@@ -469,6 +528,299 @@ async def eval_coverage(
     }
 
 
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/leaderboard  (must be before /evals/{eval_id} to avoid
+# the literal "leaderboard" segment being parsed as a {eval_id} uuid)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/evals/leaderboard",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_LEADERBOARD)
+async def eval_leaderboard(
+    group_by: str = Query("pipeline", pattern="^(pipeline|node|agent)$"),
+    days: int = Query(EVAL_LEADERBOARD_DEFAULT_DAYS, ge=1, le=EVAL_LEADERBOARD_MAX_DAYS),
+    eval_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    node_id: uuid.UUID | None = None,
+    model_backend_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> dict[str, Any]:
+    """Return a per-axis leaderboard ranked by aggregate pass-rate (FAR-378).
+
+    A pure read-model over the ``SuiteRun``/``eval_results`` data. The axis is
+    ``pipeline`` | ``node`` | ``agent`` (the model backend that produced the
+    output). Pass-rate is computed from the ``passed`` boolean ONLY — raw
+    ``score`` is never compared across differing ``eval_type``; each axis entry
+    carries a per-``eval_type`` partition (``by_type``) so a mixed-type suite is
+    never ranked on a raw score. Org-scoped: every query carries the explicit
+    ``organisation_id`` predicate.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            statement, params = build_eval_leaderboard_query(
+                org_id=principal.organisation_id,
+                group_by=group_by,
+                days=days,
+                eval_id=eval_id,
+                pipeline_id=pipeline_id,
+                node_id=node_id,
+                model_backend_id=model_backend_id,
+            )
+            rows = (await session.execute(text(statement), params)).all()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVALS_LEADERBOARD)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_LEADERBOARD)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_LEADERBOARD)
+        _log.warning("evals.leaderboard_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception("evals.leaderboard_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while computing the eval leaderboard.",
+        ) from None
+
+    entries = aggregate_eval_leaderboard(rows, group_by=group_by)
+    return {"group_by": group_by, "days": days, "entries": entries}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/{eval_id}/timeseries
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/evals/{eval_id}/timeseries",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_TIMESERIES)
+async def eval_timeseries(
+    eval_id: uuid.UUID,
+    days: int = Query(EVAL_LEADERBOARD_DEFAULT_DAYS, ge=1, le=EVAL_LEADERBOARD_MAX_DAYS),
+    pipeline_id: uuid.UUID | None = None,
+    node_id: uuid.UUID | None = None,
+    model_backend_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> dict[str, Any]:
+    """Return a day-bucketed pass-rate time-series for a single eval (FAR-378).
+
+    Zeros the day grid from the window start through today so the series is
+    continuous; an absent day is emitted with ``total=0`` and ``pass_rate=None``
+    (never ``0.0``). Carries a cross-pipeline rollup (``pipelines``) and a
+    window ``summary``. Pass-rate is computed from ``passed`` only, partitioned
+    by ``eval_type``.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            eval_def = (
+                await session.execute(
+                    select(EvalDefinition).where(
+                        EvalDefinition.id == eval_id,
+                        EvalDefinition.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if eval_def is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+
+            statement, params = build_eval_timeseries_query(
+                org_id=principal.organisation_id,
+                eval_id=eval_id,
+                days=days,
+                pipeline_id=pipeline_id,
+                node_id=node_id,
+                model_backend_id=model_backend_id,
+            )
+            rows = (await session.execute(text(statement), params)).all()
+
+            pipeline_statement, pipeline_params = build_eval_pipelines_query(
+                org_id=principal.organisation_id,
+                eval_id=eval_id,
+                days=days,
+                node_id=node_id,
+                model_backend_id=model_backend_id,
+            )
+            pipeline_rows = (await session.execute(text(pipeline_statement), pipeline_params)).all()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVALS_TIMESERIES)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_TIMESERIES)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_TIMESERIES)
+        _log.warning("evals.timeseries_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception("evals.timeseries_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while computing the eval time-series.",
+        ) from None
+
+    since = datetime.now(UTC) - timedelta(days=days)
+    buckets = bucket_eval_timeseries(rows, since=since)
+    summary = summarise_eval_timeseries(buckets)
+    pipelines = [
+        {"pipeline_id": str(r.pipeline_id), "pipeline_name": r.pipeline_name}
+        for r in pipeline_rows
+        if r.pipeline_id is not None
+    ]
+    return {
+        "eval_id": str(eval_id),
+        "eval_name": eval_def.name,
+        "days": days,
+        "buckets": buckets,
+        "summary": summary,
+        "pipelines": pipelines,
+    }
+
+
+@router.put(
+    "/evals/suites/{suite_id}/alerting",
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_SUITE_ALERTING)
+async def update_suite_alerting(
+    suite_id: uuid.UUID,
+    req: EvalSuiteAlertingRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+) -> EvalSuiteAlertingResponse:
+    """Configure regression alerting for an eval suite (FAR-379).
+
+    Admin only. Sets the suite's ``baseline_window`` / ``minimum_delta`` /
+    ``cooldown`` so the Alerting layer knows WHEN and HOW OFTEN to page: a
+    regression must exceed ``minimum_delta``, and after it fires the suite is
+    silent for ``cooldown`` minutes. ``baseline_window`` controls how many of
+    the most-recent completed same-tuple prior runs form the comparison baseline
+    (``N`` — a rolling N-run baseline; NULL — single-latest). A NULL
+    ``baseline_window`` does NOT disable alerting: the window widens the baseline
+    but whether to alert is always governed by the comparison result and
+    ``minimum_delta``. Additive/non-breaking — every field is optional, and NULL
+    clears that field.
+
+    The suite is looked up org-scoped (a cross-org suite can never be
+    configured). NULL values are persisted as NULL, wiping the config.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval suites")
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            suite = (
+                await session.execute(
+                    select(EvalSuite).where(
+                        EvalSuite.id == suite_id,
+                        EvalSuite.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if suite is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_SUITE_NOT_FOUND)
+
+            updates = req.model_dump(exclude_unset=True)
+            for key in ("baseline_window", "minimum_delta", "cooldown"):
+                if key in updates:
+                    setattr(suite, key, updates[key])
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVALS_SUITE_ALERTING)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Update would violate a constraint.",
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_SUITE_ALERTING)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_SUITE_ALERTING)
+        _log.warning("evals.suite_alerting_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception("evals.suite_alerting_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating eval suite alerting.",
+        ) from None
+
+    return EvalSuiteAlertingResponse(
+        suite_id=suite.id,
+        baseline_window=suite.baseline_window,
+        minimum_delta=float(suite.minimum_delta) if suite.minimum_delta is not None else None,
+        cooldown=suite.cooldown,
+    )
+
+
 @router.get("/evals/{eval_id}")
 @handle_db_errors(_CODE_EVALS_GET_EVAL_DEFINITION)
 async def get_eval_definition(
@@ -557,6 +909,10 @@ async def update_eval_definition(
                 failure_behaviour=new_behaviour,
                 config_json=new_config,
             )
+            # FAR-382 versioning: snapshot the raw pre-edit config so a reversal
+            # is reconstructable, then bump the version — a rubric/config change
+            # is an explicitly version-scoped event, never a silent regression.
+            _stamp_eval_definition_version(eval_def)
             for key, value in updates.items():
                 setattr(eval_def, key, value)
             await session.flush()
@@ -916,6 +1272,7 @@ async def _fetch_compare_evals(
                     await session.execute(
                         select(EvalResult).where(
                             EvalResult.run_id == req.run_id_a,
+                            EvalResult.organisation_id == principal.organisation_id,
                             non_guardrail_eval_results_clause(),
                         )
                     )
@@ -929,6 +1286,7 @@ async def _fetch_compare_evals(
                     await session.execute(
                         select(EvalResult).where(
                             EvalResult.run_id == req.run_id_b,
+                            EvalResult.organisation_id == principal.organisation_id,
                             non_guardrail_eval_results_clause(),
                         )
                     )
@@ -977,7 +1335,16 @@ async def _fetch_eval_definitions(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             defs_rows = (
-                (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
+                (
+                    await session.execute(
+                        select(EvalDefinition).where(
+                            EvalDefinition.id.in_(eval_ids),
+                            EvalDefinition.organisation_id == principal.organisation_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
             )
             return {d.id: d for d in defs_rows}
     except HTTPException:
@@ -1170,6 +1537,7 @@ async def create_eval_from_run(
                 config_json=config_json,
                 failure_behaviour="warn",
                 account_id=principal.account_id,
+                version=1,
             )
             session.add(eval_def)
             await session.flush()

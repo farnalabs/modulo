@@ -1687,6 +1687,7 @@ class PipelineExecutor:
                         failure_behaviour=e.failure_behaviour,
                         pass_threshold=e.pass_threshold,
                         suite_id=e.suite_id,
+                        version=e.version,
                     )
                 )
         return eval_defs_by_node
@@ -1759,6 +1760,7 @@ class PipelineExecutor:
                                 run_id=run_id,
                                 node_id=node_uuid,
                                 eval_id=eval_def.id,
+                                eval_definition_version=eval_def.version,
                                 passed=eval_result.passed,
                                 score=eval_result.score,
                                 detail=eval_result.detail,

@@ -1928,6 +1928,7 @@ async def _persist_gate_eval_results(
                             run_id=_run_id,
                             node_id=node_uuid,
                             eval_id=eval_def.id,
+                            eval_definition_version=eval_def.version,
                             passed=eval_result.passed,
                             score=eval_result.score,
                             detail=eval_result.detail,
