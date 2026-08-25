@@ -32,17 +32,21 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+          INPUT_HEAD_BRANCH: ${{ inputs.head_branch }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
             echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
-            echo "head_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+            echo "head_branch=${HEAD_REF}" >> $GITHUB_OUTPUT
           else
-            PR_NUM="${{ inputs.pr_number }}"
+            PR_NUM="${INPUT_PR_NUMBER}"
             REPO="${{ github.repository }}"
-            HEAD_SHA="${{ inputs.head_sha }}"
-            HEAD_BRANCH="${{ inputs.head_branch }}"
+            HEAD_SHA="${INPUT_HEAD_SHA}"
+            HEAD_BRANCH="${INPUT_HEAD_BRANCH}"
             if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_BRANCH" ]; then
               PR_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '{head_sha: .head.sha, head_branch: .head.ref}')
               HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')

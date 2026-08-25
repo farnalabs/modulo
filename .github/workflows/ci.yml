@@ -73,7 +73,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen # NOSONAR: deps pinned via committed backend/uv.lock; uv honors the frozen lockfile and installs from PyPI (trusted)
       - name: Run unit tests with coverage
         shell: bash
         run: ../.github/scripts/coverage-thresholds.sh
@@ -132,7 +132,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen # NOSONAR: deps pinned via committed backend/uv.lock; uv honors the frozen lockfile and installs from PyPI (trusted)
       - name: Detect changed integration test files
         id: changed
         shell: bash
@@ -281,7 +281,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install backend deps
         working-directory: backend
-        run: uv sync --frozen
+        run: uv sync --frozen # NOSONAR: deps pinned via committed backend/uv.lock; uv honors the frozen lockfile and installs from PyPI (trusted)
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         shell: bash
@@ -351,7 +351,7 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
-          uv sync --frozen
+          uv sync --frozen # NOSONAR: deps pinned via committed backend/uv.lock; uv honors the frozen lockfile and installs from PyPI (trusted)
           uv run --no-build --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
           HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
           if [ "$HEAD_COUNT" -ne 1 ]; then
@@ -439,7 +439,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen # NOSONAR: deps pinned via committed backend/uv.lock; uv honors the frozen lockfile and installs from PyPI (trusted)
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
@@ -467,9 +467,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           PR_NUM="${{ github.event.pull_request.number }}"
-          BRANCH="${{ github.event.pull_request.head.ref }}"
 
           # Count how many times the branch fixer has already pushed fix commits
           # to this PR. Each successful fix produces exactly one commit with
