@@ -142,14 +142,28 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     integration test uses, cascading into spurious ``eval_suite_id does not
     exist`` failures across the suite. Give this test its own database so the
     shared schema is never touched.
+
+    The isolated database is provisioned from ``template0`` (guaranteed empty)
+    rather than the default ``template1``. ``migrations/env.py`` overrides the
+    alembic ``sqlalchemy.url`` with ``DATABASE_URL``/``DATABASE_ADMIN_URL`` from
+    the environment, so we point those vars at the isolated database here —
+    otherwise ``command.upgrade`` would run against the shared session database
+    and the migrations that create tables such as ``library_sync_state`` would
+    collide with the already-applied schema (DuplicateTable).
     """
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     db_name = f"eval_suite_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        # template0 is always present and empty, so the new database starts
+        # with no inherited tables regardless of template1's state.
+        await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
 
     iso_url = _swap_db_name(db_url, db_name)
+    # Ensure env.py's DATABASE_URL / DATABASE_ADMIN_URL override resolves to this
+    # isolated database, not the shared session database.
+    monkeypatch.setenv("DATABASE_URL", iso_url)
+    monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
         await conn.execute(
