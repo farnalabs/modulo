@@ -76,7 +76,7 @@
             <p class="text-xs text-muted-foreground">{{ action.description }}</p>
           </div>
 
-          <button
+          <button type="button"
             v-if="!action.completed && !action.skipped"
             class="shrink-0 text-xs text-muted-foreground hover:text-foreground underline"
             @click.stop="handleSkip(action)"
@@ -90,7 +90,7 @@
           {{ store.error }}
         </div>
         <div class="flex items-center justify-between pt-3 mt-1 border-t">
-          <button
+          <button type="button"
             v-if="store.actions.some(a => !a.completed && !a.skipped)"
             class="text-xs text-muted-foreground hover:text-foreground underline"
             @click="handleDismiss"
@@ -98,7 +98,7 @@
           >
             Dismiss
           </button>
-          <button
+          <button type="button"
             class="text-xs text-primary hover:underline"
             @click="handleSeed"
             data-testid="onboarding-seed-examples"

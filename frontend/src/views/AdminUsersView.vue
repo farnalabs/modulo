@@ -85,7 +85,7 @@
       </table>
 
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 py-4 border-t border-border">
-        <button
+        <button type="button"
           :disabled="page <= 1"
           data-testid="admin-users-previous"
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
@@ -96,7 +96,7 @@
         <span class="text-sm text-muted-foreground">
           Page {{ page }} of {{ Math.ceil(total / pageSize) }}
         </span>
-        <button
+        <button type="button"
           :disabled="page >= Math.ceil(total / pageSize)"
           data-testid="admin-users-next"
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"

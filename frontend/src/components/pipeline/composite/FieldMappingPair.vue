@@ -116,7 +116,7 @@ function removeMapping(sourceKey: string) {
             <path d="m12 5 7 7-7 7" />
           </svg>
           <span class="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{{ target }}</span>
-          <button
+          <button type="button"
             class="ml-1 shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
             @click="removeMapping(source)"
           >

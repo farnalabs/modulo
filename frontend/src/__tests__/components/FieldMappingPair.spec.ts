@@ -8,7 +8,7 @@ vi.mock('../../components/ui/button/Button.vue', () => ({
   default: {
     name: 'Button',
     props: ['variant', 'size', 'disabled'],
-    template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+    template: '<button type="button" :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
   },
 }))
 

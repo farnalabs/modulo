@@ -172,7 +172,7 @@
       </div>
 
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
-        <button
+        <button type="button"
           :disabled="page <= 1"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="prevPage"
@@ -183,7 +183,7 @@
         <span class="px-4 py-2 text-sm text-muted-foreground">
           {{ $t('views.LibraryView.page_of', { page: page, total: Math.ceil(total / pageSize) }) }}
         </span>
-        <button
+        <button type="button"
           :disabled="page >= Math.ceil(total / pageSize)"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="nextPage"

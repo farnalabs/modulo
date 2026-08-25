@@ -111,7 +111,7 @@ describe('team feature backend <-> frontend parity', () => {
     const match = text.match(/KNOWN_UNENFORCED_TEAM_FLAGS[^=]*=\s*\{([^}]*)\}/)
     expect(match).not.toBeNull()
     const backendKnown = new Set(
-      (match![1].match(/"([a-z_]+)"/g) ?? []).map((s) => s.replace(/"/g, '')),
+      (match![1].match(/"([a-z_]+)"/g) ?? []).map((s) => s.replaceAll('"', '')),
     )
     for (const f of FRONTEND_ONLY_EXCEPTIONS) {
       // A frontend-only exception must either be tracked in the backend's

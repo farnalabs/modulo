@@ -237,7 +237,7 @@
         v-if="showSlashMenu"
         class="remy-slash-menu"
       >
-        <button
+        <button type="button"
           v-for="(cmd, idx) in filteredSlashCommands"
           :key="cmd.command"
           class="remy-slash-item"
@@ -396,9 +396,9 @@ const slashCommands: SlashCommand[] = [
 const styledInput = computed(() => {
   if (!inputText.value) return ''
   return inputText.value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
 })
 
 const showSlashMenu = ref(false)
@@ -626,7 +626,7 @@ const userInitial = computed(() => {
 
 function friendlySelector(sel: string): string {
   const m = sel.match(/\[data-testid="([^"]+)"\]/)
-  return m ? m[1].replace(/-/g, ' ') : sel
+  return m ? m[1].replaceAll('-', ' ') : sel
 }
 
 function describeArgs(tool: { name: string; args: Record<string, unknown> }): string {
@@ -707,7 +707,7 @@ function copyMessage(text: string) {
 }
 
 function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
 
 function renderMarkdown(text: string): string {

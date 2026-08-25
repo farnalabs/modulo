@@ -140,7 +140,7 @@ async function checkNoHorizontalOverflow(page: Page) {
       culprits = Array.from(document.querySelectorAll('*'))
         .slice(0, 200)
         .filter(el => {
-          const w = parseFloat(getComputedStyle(el).width)
+          const w = Number.parseFloat(getComputedStyle(el).width)
           return !Number.isNaN(w) && w > vw
         })
         .slice(0, 10)
@@ -357,7 +357,7 @@ async function checkInputFontSize(page: Page) {
     for (const el of Array.from(document.querySelectorAll('input, select, textarea'))) {
       const htmlEl = el as HTMLElement
       if (htmlEl.offsetParent === null) continue
-      const size = parseFloat(getComputedStyle(htmlEl).fontSize)
+      const size = Number.parseFloat(getComputedStyle(htmlEl).fontSize)
       if (!Number.isNaN(size) && size < 16) {
         found.push(`<${htmlEl.tagName.toLowerCase()}> ${size}px class="${typeof htmlEl.className === 'string' ? htmlEl.className.slice(0, 60) : ''}"`)
       }

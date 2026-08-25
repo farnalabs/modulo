@@ -24,6 +24,11 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 const success = ref(false);
 
+const primaryLabel = computed(() => {
+  if (loading.value) return "Processing...";
+  return step.value < 4 ? "Next" : "Publish";
+});
+
 // Step 1: Name & Description
 const name = ref("");
 const description = ref("");
@@ -269,7 +274,7 @@ function goToLibrary() {
           </div>
         </div>
         <div class="flex justify-end gap-2">
-          <button
+          <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
             @click="emit('close')"
           >
@@ -291,7 +296,7 @@ function goToLibrary() {
 
       <!-- Navigation -->
       <div v-if="!success" class="mt-6 flex justify-between">
-        <button
+        <button type="button"
           v-if="step > 1"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
           @click="prevStep"
@@ -299,12 +304,12 @@ function goToLibrary() {
           Back
         </button>
         <div v-else />
-        <button
+        <button type="button"
           :disabled="!canProceed || loading"
           class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
           @click="nextStep"
         >
-          {{ loading ? "Processing..." : step < 4 ? "Next" : "Publish" }}
+          {{ primaryLabel }}
         </button>
       </div>
     </div>

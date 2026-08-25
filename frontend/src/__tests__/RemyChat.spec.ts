@@ -17,7 +17,7 @@ vi.mock('@/lib/api/client', () => ({
 
 vi.mock('@/stores/planStore', () => ({
   usePlanStore: vi.fn(() => ({
-    featureEnabled: vi.fn((name: string) => (name === 'remy_ui_driving' ? true : false)),
+    featureEnabled: vi.fn((name: string) => name === 'remy_ui_driving'),
   })),
 }))
 
