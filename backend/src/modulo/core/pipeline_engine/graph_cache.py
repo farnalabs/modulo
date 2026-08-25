@@ -15,6 +15,7 @@ kept for correctness if compilation becomes async in the future.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import uuid
 from collections import OrderedDict, defaultdict
@@ -223,6 +224,7 @@ def make_loop_counter_fn(loop_key: str) -> Any:
     async def _counter_node(state: dict[str, Any]) -> dict[str, Any]:
         counts = dict(state.get("_iteration_counts") or {})
         counts[loop_key] = int(counts.get(loop_key, 0)) + 1
+        await asyncio.sleep(0)
         return {"_iteration_counts": counts}
 
     _counter_node.__name__ = f"loop_counter_{loop_key}"
@@ -366,48 +368,29 @@ def _add_node_to_graph(
 
     connector_binding = node_def.get("connector_binding")
 
+    node_fn: Any
     if node_type == "sandbox_agent":
-        graph.add_node(
-            node_id,
-            make_sandbox_agent_fn(
-                node_def,
-                timeout=timeout,
-                session_factory=session_factory,
-                single_sandbox_node=single_sandbox_node,
-            ),
+        node_fn = make_sandbox_agent_fn(
+            node_def,
+            timeout=timeout,
+            session_factory=session_factory,
+            single_sandbox_node=single_sandbox_node,
         )
-    elif node_type == "agent" and node_def.get("agent_id"):
-        graph.add_node(
-            node_id,
-            make_node_fn(
-                node_def,
-                role=role,
-                timeout=timeout,
-                max_input_length=max_input_length,
-                token_budget=token_budget,
-            ),
-        )
-    elif connector_binding:
-        graph.add_node(
-            node_id,
-            make_connector_fn(node_def, timeout=timeout),
-        )
+    elif connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
+        node_fn = make_connector_fn(node_def, timeout=timeout)
     elif node_type == "manual":
-        graph.add_node(
-            node_id,
-            make_manual_node_fn(node_def, timeout=timeout),
-        )
+        node_fn = make_manual_node_fn(node_def, timeout=timeout)
     else:
-        graph.add_node(
-            node_id,
-            make_node_fn(
-                node_def,
-                role=role,
-                timeout=timeout,
-                max_input_length=max_input_length,
-                token_budget=token_budget,
-            ),
+        # agent nodes (with or without a frozen agent_id) and connector nodes
+        # without a binding default to the general agent node factory.
+        node_fn = make_node_fn(
+            node_def,
+            role=role,
+            timeout=timeout,
+            max_input_length=max_input_length,
+            token_budget=token_budget,
         )
+    graph.add_node(node_id, node_fn)
 
 
 def _build_reject_targets(edges: list[dict[str, Any]]) -> dict[str, str]:

@@ -311,7 +311,7 @@ def _stall_event_matches(event_set: set[Any], final_status: str, code: str, mapp
 def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
     """``timeout`` event matches a node.timeout / node.runaway code."""
     return "timeout" in event_set and (
-        code in ("node_timeout", "TimeoutError") or mapped in ("node.timeout", "node.runaway")
+        code in ("node_timeout", "TimeoutError") or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway")
     )
 
 
@@ -370,7 +370,7 @@ def _failure_event_matches(
         # Timeout is a distinct event — a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         or code in ("node_timeout", "TimeoutError", "executor_stalled")
-        or mapped in ("node.timeout", "node.runaway", "agent.stall")
+        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall")
     ):
         return False
     # FAR-296 Phase 2: never-retryable script-mode terminal codes are excluded
@@ -2360,6 +2360,40 @@ class PipelineExecutor:
             node_ids=node_ids,
         )
 
+    async def _record_eval_blocked_audit(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        error_detail: str | None,
+    ) -> None:
+        """Record an ``eval.blocked`` audit event — failure-isolated.
+
+        Runs in its own session/transaction so a blocked-eval audit failure
+        never interrupts terminalization. The payload carries the sanitized
+        detail plus the run's pipeline id so the event links back to the graph.
+        """
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="eval.blocked",
+                    resource_type="run",
+                    resource_id=run_id,
+                    payload_json={
+                        "pipeline_id": str(pipeline_id),
+                        "error_detail": _sanitize_detail(error_detail, limit=5000),
+                    },
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
+
     async def _finalize_run_after_stream(
         self,
         *,
@@ -2382,23 +2416,14 @@ class PipelineExecutor:
         terminal/awaiting_human outcome of the stream.
         """
         # Record audit events for block failures on resume.
-        if final_status == "eval_failed" and error_code == "eval_blocked":
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                try:
-                    await append_audit_event(
-                        session,
-                        org_id=org_id,
-                        event_type="eval.blocked",
-                        resource_type="run",
-                        resource_id=run_id,
-                        payload_json={"error_detail": _sanitize_detail(error_detail, limit=5000)},
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
+        eval_blocked = final_status == "eval_failed" and error_code == "eval_blocked"
+        if eval_blocked:
+            await self._record_eval_blocked_audit(
+                org_id=org_id,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                error_detail=error_detail,
+            )
 
         # Resume recomputes from LIVE components over the cumulative merged set
         # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
@@ -2444,7 +2469,7 @@ class PipelineExecutor:
         # guardrail-blocked now gets those side effects compensated. Best-effort
         # + failure-isolated (guard-the-guard): a compensation failure never
         # crashes terminalization. Uses its own fresh session + hub.
-        if final_status == "eval_failed" and error_code == "eval_blocked":
+        if eval_blocked:
             await self._compensate_blocked_run_best_effort(
                 org_id=org_id,
                 run_id=run_id,
@@ -2644,7 +2669,6 @@ class PipelineExecutor:
                 model_backend_hub=model_backend_hub,
                 connector_hub=connector_hub,
                 broker=broker,
-                completed_node_outputs=completed_node_outputs,
                 stall_requested=self._stall_requested,
             )
             gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
@@ -2752,7 +2776,6 @@ class PipelineExecutor:
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
         broker: RunEventBroker,
-        completed_node_outputs: dict[str, Any],
         stall_requested: asyncio.Event | None,
     ) -> dict[str, Any]:
         """Decide how a transient node-cancelled / sandbox-failed run recovers.
@@ -4053,6 +4076,7 @@ class PipelineExecutor:
         """
         broker = ctx.broker
         run_id = ctx.run_id
+        node_token_usage = state.node_token_usage or None
         if isinstance(exc, GraphInterrupt):
             interrupts = exc.args[0] if exc.args else []
             return await self._handle_graph_interrupt(interrupts, state, ctx)
@@ -4072,7 +4096,7 @@ class PipelineExecutor:
                 "eval_failed",
                 "eval_blocked",
                 _sanitize_detail(exc, limit=5000),
-                state.node_token_usage or None,
+                node_token_usage,
             )
         if isinstance(exc, OutputRejectedError):
             # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
@@ -4082,12 +4106,12 @@ class PipelineExecutor:
                 "failed",
                 "output_rejected",
                 _sanitize_detail(exc, limit=5000),
-                state.node_token_usage or None,
+                node_token_usage,
             )
         if isinstance(exc, RunCancelledError):
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
-            return "cancelled", None, None, state.node_token_usage or None
+            return "cancelled", None, None, node_token_usage
         if isinstance(exc, RunawayRunError):
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
@@ -4099,14 +4123,14 @@ class PipelineExecutor:
                     "limit": exc.limit,
                 },
             )
-            return _terminal_failure(broker, "failed", "runaway", error_detail, state.node_token_usage or None)
+            return _terminal_failure(broker, "failed", "runaway", error_detail, node_token_usage)
         if isinstance(exc, TimeoutError):
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
                 _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
-            return _terminal_failure(broker, "failed", "node_timeout", error_detail, state.node_token_usage or None)
+            return _terminal_failure(broker, "failed", "node_timeout", error_detail, node_token_usage)
         if isinstance(exc, SupersededNodeError):
             # A6: the sandbox dispatch marker was denied — a superseded claim
             # or a run no longer running. Terminal ``superseded`` failure; the
@@ -4122,7 +4146,7 @@ class PipelineExecutor:
                 "failed",
                 "executor_superseded",
                 scrubbed,
-                state.node_token_usage or None,
+                node_token_usage,
             )
         if isinstance(exc, OutputSchemaValidationError):
             # Manual-node resume output (or agent output) failed validation
@@ -4138,7 +4162,7 @@ class PipelineExecutor:
                 "failed",
                 "schema_validation_failure",
                 scrubbed,
-                state.node_token_usage or None,
+                node_token_usage,
             )
         _tb = _traceback_detail(exc, limit=5000)
         return _terminal_failure(
