@@ -36,8 +36,8 @@ class PipelineEdge(OrgScoped):
     # FAR-416 (FAR-402 F1): port addressing over the flat run_context/artifact
     # dict. Defaults mirror the pre-port flat-state keys so legacy edges route
     # identically. Nullable + server_default so existing rows need no rewrite.
-    source_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="out")
-    target_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="in")
+    source_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="out", default="out")
+    target_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="in", default="in")
     # MutableDict.as_mutable(JSON): in-place gate-config mutations are tracked
     # as dirty (hitl-gate-removal-guard-plan.md v19 §3 item 7 — defense in
     # depth so a load-then-mutate pattern can never silently bypass a write).
