@@ -1,13 +1,13 @@
 # Progressive Autonomy: Measurement Framework & Initial Study
 
-> **FAR-395** — Evidence-based progressive autonomy is Modulo's key wedge against
+> **FAR-395** – Evidence-based progressive autonomy is Modulo's key wedge against
 > incumbents (GitHub Actions, GitLab CI). Those tools gate *human review* on/off;
 > they do not *record* the autonomy decision per change, nor learn from outcomes.
 > This document defines how we measure progressive autonomy and publishes an
 > honest first longitudinal view.
 
 **Status:** Framework v1 (specification + initial instrumentation). Data view is
-**illustrative** where real instrumentation does not yet exist — flagged
+**illustrative** where real instrumentation does not yet exist – flagged
 explicitly below.
 
 ---
@@ -25,8 +25,8 @@ Modulo lets each pipeline choose a default **autonomy level** for its HITL gates
 The *progressive* claim: autonomy should **rise** for change classes that
 consistently ship clean and **fall** after a defect escapes human review. A
 team that runs `manual_approval` for a pipeline, sees a streak of clean merges,
-and promotes it to `notify_on_complete` — then back to `manual_approval` if a
-bad change slips through — is practising *evidence-based* progressive autonomy.
+and promotes it to `notify_on_complete` – then back to `manual_approval` if a
+bad change slips through – is practising *evidence-based* progressive autonomy.
 
 **Why this is defensible vs incumbents:** GitHub/GitLab expose "require review"
 as a static branch-protection boolean. They produce no cross-agent evidence
@@ -47,7 +47,7 @@ Discovered by reading the codebase at implementation time:
 | HITL gate **eval result** (LLM-judge before interrupt) | ✅ | `hitl_gate.eval_result` telemetry |
 | **Per-run effective autonomy** actually applied | ❌ *new* | **Now emitted**: `run.autonomy_level_applied` (`core/run_context/autonomy_telemetry.py`) |
 | **Gate-fire** (human path taken vs bypassed) per run | ❌ *new* | **Now emitted** as `gate_outcome` in the same event |
-| **Defect-escape** (autonomous change later reverted/fixed) | ❌ | Not yet — see §6 |
+| **Defect-escape** (autonomous change later reverted/fixed) | ❌ | Not yet – see §6 |
 | Autonomy level in the analytics fact table | ❌ | `run_daily_facts` has no autonomy column |
 
 The two gaps closed by this change (`run.autonomy_level_applied`) are the
@@ -60,7 +60,7 @@ item, not yet instrumented.
 
 ### 3.1 Primary events (the evidence record)
 
-`run.autonomy_level_applied` — emitted once per HITL gate evaluation at runtime:
+`run.autonomy_level_applied` – emitted once per HITL gate evaluation at runtime:
 
 ```json
 {
@@ -133,7 +133,7 @@ config-change audit event, the *configured* autonomy distribution across an
 org is observable *now* via `pipeline.autonomy_level_changed`. The *applied*
 distribution requires the new event and a collection window.
 
-### 4.2 Illustrative longitudinal table (PLACEHOLDER — not real data)
+### 4.2 Illustrative longitudinal table (PLACEHOLDER – not real data)
 
 | Period | Autonomy grant rate | Gate-fire rate | Autonomous defect-escape | Human-only defect-escape |
 |---|---|---|---|---|
@@ -164,7 +164,7 @@ environment with live runs.*
 2. **Cross-agent evidence is the moat.** Autonomy decisions in Modulo are made
    by agents (context-setter recommends, pipeline defaults, hitl-gate
    eval-before-interrupt). The evidence record spans *every* agent touchpoint,
-   not a single CI job — so the learning signal is richer than a human-review
+   not a single CI job – so the learning signal is richer than a human-review
    log could ever be.
 3. **Progressive autonomy is measurable, therefore governable.** Because each
    grant is an event and each outcome is joinable, a customer can *prove* to
@@ -172,7 +172,7 @@ environment with live runs.*
    That is a compliance story incumbents cannot tell.
 4. **Fail-open by design.** Instrumentation never blocks a run
    (`autonomy_telemetry` is wrapped in try/except, logged, dropped). Measuring
-   autonomy cannot become a production risk — which is itself a trust argument.
+   autonomy cannot become a production risk – which is itself a trust argument.
 
 ---
 
@@ -191,9 +191,9 @@ environment with live runs.*
 ## 7. Implementation notes (this change)
 
 - **New module:** `backend/src/modulo/core/run_context/autonomy_telemetry.py`
-  — `emit_autonomy_telemetry()` (fail-open, session-factory driven).
+  – `emit_autonomy_telemetry()` (fail-open, session-factory driven).
 - **Wired at:** `core/pipeline_engine/node_runner.py:make_hitl_gate_fn._hitl_gate`
-  — emits `skipped` / `auto_approved` (when the gate is bypassed) and `fired`
+  – emits `skipped` / `auto_approved` (when the gate is bypassed) and `fired`
   (when the human path is taken).
 - **Registered:** `run.autonomy_level_applied` added to
   `core/product_analytics/metrics_constants.VALID_EVENT_TYPES` so it flows
