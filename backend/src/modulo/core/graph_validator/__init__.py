@@ -1119,7 +1119,7 @@ class GraphValidator:
         self._check_ports(graph_json, result)
         self._check_sandbox_agent_config(graph_json, result)
         self._check_node_idempotent(graph_json, result)
-        await self._check_node_send_budget(graph_json, connector_bindings or [], session, result)
+        await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
         self._check_parallel_run_context_writes(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
         await self._check_connector_bindings(connector_bindings or [], session, result)
@@ -1206,7 +1206,10 @@ class GraphValidator:
 
         # Node idempotency flag check (FAR-295).
         self._check_node_idempotent(snapshot.graph_json, result)
-        await self._check_node_send_budget(snapshot.graph_json, snapshot.connector_bindings_json, session, result)
+
+        await self._check_node_send_budget_bindings(
+            snapshot.graph_json, snapshot.connector_bindings_json, session, result
+        )
 
         # Edge validation.
         self._check_edges(snapshot.graph_json, result)
@@ -2420,10 +2423,57 @@ class GraphValidator:
                 )
 
     # ------------------------------------------------------------------
+
+    # Node send budget reconcile — FAR-410 flat node-key path.
+    # Kept so the branch's direct unit tests (GraphValidator._check_node_send_budget)
+    # still exercise the flat-key reconcile; the validate path uses the
+    # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
+    @staticmethod
+    def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
+
+        A connector node may fan out over ``fanout_cardinality`` items and run
+        each with a ``per_item_budget`` — but all of that must fit inside the
+        node's total ``wait_for`` budget (``node_wait_for`` or ``timeout_seconds``
+        when no explicit wait_for is set). When the per-item sends cannot
+        sequentially fit in the budget, retries collide with the node deadline
+        and every attempt gets cancelled mid-send (UNKNOWN outcomes). This is a
+        save-time warning, not a hard error: nodes without these config keys
+        (every existing graph) are unaffected, and it is advisory rather than
+        a blocker so an operator can still save while they reconcile.
+        """
+        for node in graph_json.get("nodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            fanout = node.get("fanout_cardinality")
+            per_item = node.get("per_item_budget")
+            if fanout is None and per_item is None:
+                continue
+            nid = _string_or_default(node.get("id"))
+            fanout_val = _as_positive_number(fanout)
+            per_item_val = _as_positive_number(per_item)
+            if fanout_val is None or per_item_val is None:
+                continue
+            wait_for = _as_positive_number(node.get("node_wait_for"))
+            if wait_for is None:
+                wait_for = _as_positive_number(node.get("timeout_seconds"))
+            if wait_for is None:
+                continue
+            total = fanout_val * per_item_val
+            if total > wait_for:
+                result.warning(
+                    "NODE_SEND_BUDGET_OVERSUBSCRIBED",
+                    f"Node '{nid}': fanout_cardinality={fanout_val} x per_item_budget={per_item_val} "
+                    f"({total:.1f}s) exceeds node wait_for budget {wait_for:.1f}s — retries will be "
+                    "cancelled mid-send, producing UNKNOWN outcomes. Raise node_wait_for or lower "
+                    "per_item_budget.",
+                    node_id=nid,
+                )
+
     # Node send budget reconcile (FAR-410 / FAR-411)
     # ------------------------------------------------------------------
 
-    async def _check_node_send_budget(
+    async def _check_node_send_budget_bindings(
         self,
         graph_json: dict[str, Any],
         connector_bindings: list[dict[str, Any]] | None,

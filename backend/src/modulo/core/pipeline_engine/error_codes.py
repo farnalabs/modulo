@@ -48,6 +48,13 @@ _CODE_CONTRACT_SCHEMA = "contract.schema"
 _CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
 _CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
 _CODE_CAPACITY_ORG = "capacity.org"
+# FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
+# the upstream side-effect state is unknowable. This is a DISTINCT terminal
+# outcome — never collapsed into generic failure (it must surface for manual
+# confirm and be re-runnable with the same persisted idempotency key). The
+# dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
+# ("side-effect state unknown; never retried").
+_CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
 
 
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
@@ -198,6 +205,20 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=False,
         alert_severity="warning",
         guidance="Delivery already sent; transient retry suppressed by the idempotency gate.",
+    ),
+    # --- connector (generic REST) codes ----------------------------------
+    # FAR-410: write-timeout / mid-send cancellation is a DISTINCT terminal
+    # state that must NOT masquerade as generic failure. It surfaces to the run
+    # viewer / HITL for manual confirm and is re-runnable with the SAME
+    # persisted idempotency key (never a fresh random per run).
+    _CODE_CONNECTOR_UNKNOWN: ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "Connector write was cancelled mid-send; upstream side-effect state unknown. "
+            "Re-run with the same idempotency key or confirm manually."
+        ),
     ),
     # --- sandbox codes ---------------------------------------------------
     "sandbox.no_output_json": ErrorCodeSpec(
@@ -445,6 +466,15 @@ LEGACY_ALIASES: dict[str, str] = {
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.
     "idempotency_gate": "harness.idempotency_gate",
+    # FAR-410: connector write-timeout / mid-send cancellation → distinct
+    # ``connector.side_effect_unknown`` (never collapsed into generic failure).
+    # ``connector_unknown`` is the raw exception/snake_case spelling;
+    # ``ConnectorUnknownError`` is the exception class name the executor's
+    # generic catch publishes (``type(exc).__name__``); ``connector.unknown`` is
+    # the prior dotted spelling kept for backward-compat.
+    "connector_unknown": _CODE_CONNECTOR_UNKNOWN,
+    "ConnectorUnknownError": _CODE_CONNECTOR_UNKNOWN,
+    "connector.unknown": _CODE_CONNECTOR_UNKNOWN,
     # Provider (model backend) exception class names published by executor's
     # generic catch (``type(exc).__name__``) on LLM-node failures.
     "RateLimitError": "provider.rate_limited",

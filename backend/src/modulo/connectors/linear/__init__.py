@@ -24,6 +24,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._retry_headers import RETRYABLE_STATUSES
 from modulo.connectors.base import (
     ConnectorPayload,
     ConnectorQuery,
@@ -36,7 +37,11 @@ from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
 # Retryable transport / upstream conditions for the thin GraphQL client.
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# FAR-410: the shared constant is the INTERSECTION {429, 502, 503, 504}; Linear
+# historically ALSO retried 500 (Linear's GraphQL edge can 500 on a few-millisecond
+# outage). That 500 clause is preserved explicitly — the shared constant is never
+# silently widened, and Linear's behaviour is unchanged.
+_RETRYABLE_STATUS = RETRYABLE_STATUSES | frozenset({500})
 _MAX_RETRIES = 3
 _BASE_DELAY = 0.5
 _MAX_DELAY = 10.0

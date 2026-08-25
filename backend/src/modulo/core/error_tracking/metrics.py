@@ -31,6 +31,11 @@ _runs_oldest_running_gauge: Any = None
 _runs_stall_reason_total: Any = None
 _runs_claim_count_histogram: Any = None
 
+# FAR-410 UNKNOWN-rate instrument — a connector write cancelled mid-send whose
+# upstream side-effect state is unknowable. Distinct from generic failure so it
+# is observable independently.
+_connector_unknown_total: Any = None
+
 
 def _get_meter() -> Any:
     try:
@@ -330,3 +335,72 @@ def record_alert_delivery_failed(rule_id: str, action_type: str) -> None:
         _init_delivery_failed_counter()
     if _alert_delivery_failed_total is not None:
         _alert_delivery_failed_total.add(1, attributes={"rule_id": rule_id, "action_type": action_type})
+
+
+def _init_connector_unknown_counter() -> None:
+    global _connector_unknown_total
+    if _connector_unknown_total is not None:
+        return
+    try:
+        meter = _get_meter()
+        if meter is None:
+            return
+        _connector_unknown_total = meter.create_counter(
+            name="modulo_connector_unknown_total",
+            description=(
+                "Total connector write-timeouts cancelled mid-send with unknown "
+                "upstream side-effect state (UNKNOWN rate)"
+            ),
+            unit="1",
+        )
+    except Exception:
+        _log.warning("metrics.connector_unknown_counter_failed")
+
+
+def record_connector_unknown(connector: str, node_id: str = "") -> None:
+    """Record a FAR-410 UNKNOWN terminal outcome (mid-send cancellation).
+
+    Kept distinct from generic failure metrics so an UNKNOWN rate spike is
+    observable and attributable to the connector (and node) that produced it.
+    """
+    if _connector_unknown_total is None:
+        _init_connector_unknown_counter()
+    if _connector_unknown_total is not None:
+        attrs: dict[str, Any] = {"connector": connector or "unknown"}
+        if node_id:
+            attrs["node_id"] = node_id
+        _connector_unknown_total.add(1, attributes=attrs)
+
+
+def record_connector_unknown_span(connector: str, node_id: str | None = None, detail: str | None = None) -> None:
+    """Mark the current OTel span as a FAR-410 UNKNOWN outcome and record the rate.
+
+    A connector write cancelled mid-send is a DISTINCT terminal state, never a
+    generic failure. Sets the current span's status to ``ERROR`` with the
+    ``connector.side_effect_unknown`` error-code attribute (and the
+    ``error.type`` / ``connector`` / ``node_id`` attributes) so it is observable
+    and attributable to the connector/node, then increments the UNKNOWN-rate
+    counter. Both are best-effort and swallow their own failures (tracing/
+    metrics must never break the retry path).
+    """
+    try:
+        from opentelemetry import trace as _otel_trace
+        from opentelemetry.trace import Status, StatusCode
+
+        span = _otel_trace.get_current_span()
+        if span is not None and span.is_recording():
+            attrs: dict[str, str] = {
+                "error.code": "connector.side_effect_unknown",
+                "error.type": "connector.side_effect_unknown",
+            }
+            if connector:
+                attrs["connector"] = connector
+            if node_id:
+                attrs["node_id"] = node_id
+            if detail:
+                attrs["error.message"] = detail[:256]
+            span.set_status(Status(StatusCode.ERROR, "connector.side_effect_unknown"))
+            span.set_attributes(attrs)
+    except Exception:
+        _log.warning("metrics.connector_unknown_span_failed", exc_info=True)
+    record_connector_unknown(connector, node_id or "")

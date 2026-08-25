@@ -78,6 +78,10 @@ __all__ = [
     "get_api_key_role_cap_count",  # test-support diagnostic getter for API-key role-cap security counter
     # runs.py wrapper kept for test_prompt_reveal (reveal_node_prompt uses _build_messages)
     "_build_messages_from_agent_and_state",
+    # GraphValidator._check_node_send_budget — flat node-key send-budget reconcile kept for
+    # tests/unit/graph_validator/test_edges_and_sandbox_validation.py (FAR-410); the validate
+    # path uses _check_node_send_budget_bindings, so vulture cannot see a prod call site.
+    "_check_node_send_budget",
     # --- Service methods exercised by tests / framework wiring (no direct prod call site vulture can see) ---
     "get_override",
     "expire_stale",
@@ -246,6 +250,17 @@ __all__ = [
     # _network_backend is an httpcore AsyncConnectionPool attribute consumed by
     # httpcore itself; this module only assigns it to wire the pinned backend in.
     "_network_backend",  # httpcore pool attr consumed by httpcore, not this module
+    # --- FAR-410 REST retry / idempotency / UNKNOWN infrastructure — public API
+    #     for the generic REST connector (FAR-401, separate ticket). Consumed
+    #     only by tests today; vulture sees no prod call site yet. Each is a
+    #     load-bearing contract the future connector composes with the executor
+    #     wait_for budget. (The runs-column idempotency persistence is deferred:
+    #     origin/main's migration chain is broken, so no runs migration ships.) ---
+    "rest_retry_decision",
+    "cancellation_is_unknown",
+    "per_attempt_timeout_seconds",
+    "record_connector_unknown_span",
+    "stable_idempotency_key",
     # --- REST connector fan-out error attributes (FAR-411, consumed by operators/tests) ---
     "cardinality_over_cap",  # RESTCardinalityExceededError metric: True when a fan-out hit the cap fail-closed
 ]

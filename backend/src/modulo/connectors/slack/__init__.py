@@ -7,7 +7,12 @@ from typing import Any, cast
 
 import httpx
 
-from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
+from modulo.connectors._retry_headers import (
+    RETRYABLE_STATUSES,
+)
+from modulo.connectors._retry_headers import (
+    parse_retry_after as _parse_retry_after,
+)
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
@@ -22,7 +27,7 @@ from modulo.connectors.base import (
 
 _SLACK_API = "https://slack.com/api"
 
-_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+_RETRYABLE_STATUSES = RETRYABLE_STATUSES
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
