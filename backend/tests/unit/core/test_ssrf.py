@@ -7,6 +7,8 @@ hostname literally containing "private/internal" must not be spuriously
 blocked.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from modulo.core import ssrf
@@ -159,3 +161,123 @@ def test_allowlist_honours_runtime_env_change(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "")
     with pytest.raises(ValueError, match="private/internal"):
         ssrf.validate_outbound_url("http://10.1.2.3/")
+
+
+# ---------------------------------------------------------------------------
+# URL syntax validation (all rejected before any DNS resolution)
+# ---------------------------------------------------------------------------
+
+
+class TestURLSyntaxValidation:
+    def test_empty_url_raises(self) -> None:
+        with pytest.raises(ValueError, match="URL is required"):
+            ssrf.validate_outbound_url("")
+
+    def test_none_url_raises(self) -> None:
+        with pytest.raises(ValueError, match="URL is required"):
+            ssrf.validate_outbound_url(None)  # type: ignore[arg-type]
+
+    def test_non_string_url_raises(self) -> None:
+        with pytest.raises(ValueError, match="URL is required"):
+            ssrf.validate_outbound_url(123)  # type: ignore[arg-type]
+
+    def test_non_http_scheme_raises(self) -> None:
+        with pytest.raises(ValueError, match="http:// or https://"):
+            ssrf.validate_outbound_url("ftp://example.com/file")
+
+    def test_missing_hostname_raises(self) -> None:
+        with pytest.raises(ValueError, match="valid hostname"):
+            ssrf.validate_outbound_url("http:///path")
+
+    def test_public_ip_with_userinfo_accepted_without_dns(self) -> None:
+        assert ssrf.validate_outbound_url("http://user:pass@8.8.8.8/path") is None
+
+
+# ---------------------------------------------------------------------------
+# IPv6 literal addresses
+# ---------------------------------------------------------------------------
+
+
+class TestIPV6LiteralAddresses:
+    def test_ipv6_loopback_blocked(self) -> None:
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[::1]/")
+
+    def test_ipv6_link_local_blocked(self) -> None:
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[fe80::1]/")
+
+    def test_ipv6_unique_local_blocked(self) -> None:
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[fd12:3456::1]/")
+
+    def test_ipv6_public_accepted_without_dns(self) -> None:
+        assert ssrf.validate_outbound_url("http://[2606:4700:4700::1111]/") is None
+
+    def test_ipv6_allowlist_overrides_private_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "fc00::/7")
+        assert ssrf.validate_outbound_url("http://[fd12:3456::1]/") is None
+
+    def test_ipv6_link_local_allowlist_still_blocked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[fe80::1]/")
+
+
+# ---------------------------------------------------------------------------
+# Hostname resolution path
+# ---------------------------------------------------------------------------
+
+
+class TestHostnameResolution:
+    def test_dns_resolution_failure_is_fail_closed(self) -> None:
+        with (
+            patch.object(ssrf.socket, "getaddrinfo", side_effect=ssrf.socket.gaierror("no such host")),
+            pytest.raises(ValueError, match="DNS resolution failed"),
+        ):
+            ssrf.validate_outbound_url("http://inexistent.example/")
+
+    async def test_async_dns_resolution_failure_is_fail_closed(self) -> None:
+        async def fail_resolve(host: str) -> list[str]:
+            raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.")
+
+        with (
+            patch.object(ssrf, "_resolve_all_async", fail_resolve),
+            pytest.raises(ValueError, match="DNS resolution failed"),
+        ):
+            await ssrf.validate_outbound_url_async("http://dead.example/")
+
+    def test_hostname_resolving_to_any_internal_address_blocked(self) -> None:
+        def fake_resolve(host: str) -> list[str]:
+            return ["93.184.216.34", "10.0.0.5"]
+
+        with (
+            patch.object(ssrf, "_resolve_all_sync", fake_resolve),
+            pytest.raises(ValueError, match=r"10\.0\.0\.5"),
+        ):
+            ssrf.validate_outbound_url("http://mixed.example/")
+
+    def test_hostname_resolving_to_internal_ipv6_blocked(self) -> None:
+        with (
+            patch.object(ssrf, "_resolve_all_sync", lambda host: ["fd12:3456::1"]),
+            pytest.raises(ValueError, match="resolves to a private/internal address"),
+        ):
+            ssrf.validate_outbound_url("http://ipv6.internal.example/")
+
+    def test_hostname_resolving_to_nothing_accepted(self) -> None:
+        # A hostname with no resolved records is treated as external.
+        with patch.object(ssrf, "_resolve_all_sync", lambda host: []):
+            assert ssrf.validate_outbound_url("http://empty.example/") is None
+
+    def test_hostname_normalized_before_resolution(self) -> None:
+        """Trailing dots and ports must be stripped before the resolver is consulted."""
+        resolved: list[str] = []
+
+        def fake_resolve(host: str) -> list[str]:
+            resolved.append(host)
+            return ["93.184.216.34"]
+
+        with patch.object(ssrf, "_resolve_all_sync", fake_resolve):
+            ssrf.validate_outbound_url("http://example.com.:8080/path")
+
+        assert resolved == ["example.com"]
