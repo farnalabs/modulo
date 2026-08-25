@@ -1737,9 +1737,26 @@ async def test_execute_fails_on_bad_graph():
 
 
 async def test_execute_fails_on_checkpointer_connection_error():
-    """When the checkpointer can't connect, the run is marked failed."""
+    """When the checkpointer can't connect, the run is marked failed.
+
+    FAR-432 (derived persist policy): a checkpointer is only attached to an
+    interactive pipeline, so this scenario needs a HITL gate edge in the graph
+    for the checkpointer connection to be opened at all.
+    """
     run = _make_run()
-    snapshot = _make_snapshot()
+    snapshot = _make_snapshot(
+        {
+            "nodes": [{"id": "node-a", "node_type": "agent"}],
+            "edges": [
+                {
+                    "source": "node-a",
+                    "target": "node-a",
+                    "type": "normal",
+                    "hitl_gate_config": {"human_only": True},
+                }
+            ],
+        }
+    )
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
     compiled = _mock_compiled()

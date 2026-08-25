@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors._safe_page import safe_paging_total as _paging_total
 from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.sonarqube import SonarQubeConnector, _next_page_cursor, _paging_total
+from modulo.connectors.sonarqube import SonarQubeConnector, _next_page_cursor
 
 TOKEN = "sqp_test_token"
 BASE_URL = "https://sonarqube.company.com"
@@ -64,34 +65,34 @@ def test_next_page_cursor_last_page_returns_none():
 
 def test_paging_total_non_finite_float_returns_zero():
     """inf/nan totals must not poison the reported result count."""
-    assert _paging_total({"paging": {"total": float("inf")}}) == 0
-    assert _paging_total({"paging": {"total": float("nan")}}) == 0
+    assert _paging_total({"paging": {"total": float("inf")}}, "paging", "total") == 0
+    assert _paging_total({"paging": {"total": float("nan")}}, "paging", "total") == 0
 
 
 def test_paging_total_garbage_values_return_zero():
     """Garbage totals fall back to zero rather than crashing."""
-    assert _paging_total({"paging": {"total": "abc"}}) == 0
-    assert _paging_total({"paging": {"total": True}}) == 0
+    assert _paging_total({"paging": {"total": "abc"}}, "paging", "total") == 0
+    assert _paging_total({"paging": {"total": True}}, "paging", "total") == 0
 
 
 def test_paging_total_missing_returns_none():
     """A missing total keeps the historical None behaviour."""
-    assert _paging_total({}) is None
-    assert _paging_total({"paging": {}}) is None
+    assert _paging_total({}, "paging", "total") is None
+    assert _paging_total({"paging": {}}, "paging", "total") is None
 
 
 def test_paging_total_non_dict_paging_returns_none():
     """A non-dict paging value (list/string) must not raise AttributeError."""
-    assert _paging_total({"paging": []}) is None
-    assert _paging_total({"paging": "garbage"}) is None
-    assert _paging_total({"paging": 42}) is None
+    assert _paging_total({"paging": []}, "paging", "total") is None
+    assert _paging_total({"paging": "garbage"}, "paging", "total") is None
+    assert _paging_total({"paging": 42}, "paging", "total") is None
 
 
 def test_paging_total_valid_values_coerce():
     """Finite numeric totals coerce to int unchanged."""
-    assert _paging_total({"paging": {"total": 42}}) == 42
-    assert _paging_total({"paging": {"total": "42"}}) == 42
-    assert _paging_total({"paging": {"total": 0}}) == 0
+    assert _paging_total({"paging": {"total": 42}}, "paging", "total") == 42
+    assert _paging_total({"paging": {"total": "42"}}, "paging", "total") == 42
+    assert _paging_total({"paging": {"total": 0}}, "paging", "total") == 0
 
 
 # --- End-to-end: query with corrupt paging ---

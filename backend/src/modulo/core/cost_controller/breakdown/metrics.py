@@ -45,6 +45,7 @@ def _get_meter() -> Any:
             return None
         return provider.get_meter("modulo.cost_controller", version="0.1.0")
     except Exception:
+        _log.debug("cost_controller.metrics.meter_unavailable")
         return None
 
 

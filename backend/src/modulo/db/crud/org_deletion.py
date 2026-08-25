@@ -42,6 +42,12 @@ _ERR_ORG_NOT_FOUND = "Organisation not found"
 DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24
 RUN_RETENTION_DAYS = 30
+# LangGraph checkpoint rows are the bulk of the DB volume (~7.9GB observed) but
+# carry no feature beyond the terminal run's audit trail. Post-terminal nothing
+# reads them, so they are aged out on a MUCH shorter window than the ``runs``
+# rows themselves (FAR-432). A terminal run's checkpoints become reclaimable a
+# few days after it finishes rather than at the 30-day run window.
+CHECKPOINT_RETENTION_DAYS = 3
 CHECKPOINT_BATCH_SIZE = 500
 # Best-effort E2B sandbox kill timeout (B7) — teardown-grade, per the SDK
 # wait_for guidance in backend AGENTS.md.
@@ -328,32 +334,69 @@ async def export_org_data(
     return await _collect_org_export(session, org)
 
 
+async def _checkpoint_created_at_present(session: AsyncSession) -> bool:
+    """True iff the saver checkpoint tables expose a ``created_at`` column.
+
+    ``ModuloPostgresSaver._MIGRATION_SQL`` adds ``created_at`` (idempotent) to
+    all three checkpoint tables at app boot. Several deployed schemas never
+    applied that migration, so the column is absent — the retention sweep then
+    keys age off ``runs.*`` instead of referencing a column that does not exist
+    (FAR-432). Note that inspecting ``checkpoints`` is sufficient: the saver
+    adds the column to every checkpoint table in the same migration set.
+    """
+    result = await session.execute(
+        text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'checkpoints' AND column_name = 'created_at' LIMIT 1"
+        )
+    )
+    return result.first() is not None
+
+
 async def batch_delete_langgraph_checkpoints(
     session: AsyncSession,
     *,
     batch_size: int = CHECKPOINT_BATCH_SIZE,
+    max_age_days: int = CHECKPOINT_RETENTION_DAYS,
 ) -> int:
     """Hourly retention: purge old LangGraph checkpoint rows of TERMINAL runs.
 
-    Ages out checkpoint rows older than the run retention window (30 days),
-    but ONLY for threads whose owning ``runs`` row is terminal — or whose run
-    row is already gone (purged by the runs sweep, an orphaned thread). A live
-    run (``pending``/``running``/``awaiting_human``/``claimed``) ALWAYS has a
-    ``runs`` row (created at run creation),
-    so the orphan branch never matches a live run. This is the load-bearing
-    guard: an ``awaiting_human`` run paused >30 days at a HITL gate keeps its
-    interrupt checkpoint, so ``resume_run`` on later approval resumes the graph
-    instead of re-running side-effectful nodes from scratch.
+    Ages out checkpoint rows for threads whose owning ``runs`` row is TERMINAL
+    and older than ``max_age_days`` (default ``CHECKPOINT_RETENTION_DAYS`` = 3,
+    deliberately shorter than the 30-day ``runs`` window — checkpoints are the
+    bulk volume and are unread post-terminal). A live run
+    (``pending``/``running``/``awaiting_human``/``claimed``) is never purged,
+    because its ``runs`` row status is not in ``TERMINAL_STATUSES``. This is
+    the load-bearing guard: an ``awaiting_human`` run paused at a HITL gate
+    keeps its interrupt checkpoint, so ``resume_run`` on later approval resumes
+    the graph instead of re-running side-effectful nodes from scratch.
+
+    AGE IS MEASURED FROM ``runs`` (FAR-432). The historical implementation
+    referenced ``created_at`` on the checkpoint tables, which is missing in
+    some deployed schemas — the query raised and every call silently returned
+    ``checkpoints_deleted=0`` while ~7.9GB accumulated. The age predicate is
+    now ``COALESCE(runs.completed_at, runs.created_at) < cutoff`` so the sweep
+    works regardless of whether the checkpoint ``created_at`` column exists.
+
+    Schema-aware behaviour:
+      * If the checkpoint tables DO have ``created_at`` (the test DB and any
+        boot that ran the saver migrations), the predicate is
+        ``(run-age < cutoff OR checkpoint.created_at < cutoff)`` with the
+        historical orphan branch (``r.id IS NULL``) retained. This preserves
+        the granular within-thread semantics the retention tests assert.
+      * If the column is ABSENT (the deployed-schema bug), the predicate is
+        ``run-age < cutoff AND r.status = ANY(terminal)`` only — no reference
+        to the missing column, so the sweep actually deletes instead of
+        raising. Orphaned threads (run row already purged) are handled by the
+        FAR-427 ``run_retention.purge_terminal_runs`` cascade; they cannot be
+        age-filtered without the checkpoint column.
 
     Operates directly on the unqualified table names the
     ``ModuloPostgresSaver`` migrations create (``checkpoints``,
     ``checkpoint_blobs``, ``checkpoint_writes``) — they land in the
     connection's default search_path schema, not a ``langgraph`` schema.
     Blob rows are not FK-cascaded from checkpoints (the saver migrations
-    define no foreign keys), so all three tables are purged. Age is measured
-    via the ``created_at`` column added by the saver migrations. The terminal
-    status set matches ``batch_delete_old_terminal_runs``
-    (``Run.TERMINAL_STATUSES``).
+    define no foreign keys), so all three tables are purged.
 
     ``checkpoint_writes`` rows are keyed by their owning checkpoint
     (``checkpoint_id``) and written together with it, so the thread + age +
@@ -369,47 +412,99 @@ async def batch_delete_langgraph_checkpoints(
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
-    cutoff = datetime.now(UTC) - timedelta(days=RUN_RETENTION_DAYS)
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     terminal_statuses = list(TERMINAL_STATUSES)
     deleted_total = 0
 
-    _table_sql = {
-        "checkpoint_writes": (
-            "DELETE FROM checkpoint_writes w "
-            "WHERE ctid IN ("
-            "  SELECT w.ctid FROM checkpoint_writes w "
-            "  LEFT JOIN runs r ON r.langgraph_thread_id = w.thread_id "
-            "  WHERE w.created_at < :cutoff "
-            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
-            "  LIMIT :limit"
-            ")"
-        ),
-        "checkpoints": (
-            "DELETE FROM checkpoints c "
-            "WHERE ctid IN ("
-            "  SELECT c.ctid FROM checkpoints c "
-            "  LEFT JOIN runs r ON r.langgraph_thread_id = c.thread_id "
-            "  WHERE c.created_at < :cutoff "
-            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
-            "  LIMIT :limit"
-            ")"
-        ),
-        "checkpoint_blobs": (
-            "DELETE FROM checkpoint_blobs b "
-            "WHERE ctid IN ("
-            "  SELECT b.ctid FROM checkpoint_blobs b "
-            "  LEFT JOIN runs r ON r.langgraph_thread_id = b.thread_id "
-            "  WHERE b.created_at < :cutoff "
-            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
-            "    AND NOT EXISTS ("
-            "      SELECT 1 FROM checkpoints c "
-            "      WHERE c.thread_id = b.thread_id "
-            "        AND c.checkpoint_ns = b.checkpoint_ns"
-            "    ) "
-            "  LIMIT :limit"
-            ")"
-        ),
-    }
+    # ``table_col`` is the per-table ``created_at`` reference used ONLY when the
+    # column is present. When absent (deployed-schema bug), the SQL must not
+    # mention it at all — hence two predicate templates.
+    has_created_at = await _checkpoint_created_at_present(session)
+
+    if has_created_at:
+        # Precise path: purge by checkpoint-age OR run-age, keeping the orphan
+        # branch. ``r`` is LEFT JOINed (orphans have no ``runs`` row).
+        _table_sql = {
+            "checkpoint_writes": (
+                "DELETE FROM checkpoint_writes w "
+                "WHERE ctid IN ("
+                "  SELECT w.ctid FROM checkpoint_writes w "
+                "  LEFT JOIN runs r ON r.langgraph_thread_id = w.thread_id "
+                "  WHERE (COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "      OR w.created_at < :cutoff) "
+                "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+                "  LIMIT :limit"
+                ")"
+            ),
+            "checkpoints": (
+                "DELETE FROM checkpoints c "
+                "WHERE ctid IN ("
+                "  SELECT c.ctid FROM checkpoints c "
+                "  LEFT JOIN runs r ON r.langgraph_thread_id = c.thread_id "
+                "  WHERE (COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "      OR c.created_at < :cutoff) "
+                "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+                "  LIMIT :limit"
+                ")"
+            ),
+            "checkpoint_blobs": (
+                "DELETE FROM checkpoint_blobs b "
+                "WHERE ctid IN ("
+                "  SELECT b.ctid FROM checkpoint_blobs b "
+                "  LEFT JOIN runs r ON r.langgraph_thread_id = b.thread_id "
+                "  WHERE (COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "      OR b.created_at < :cutoff) "
+                "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+                "    AND NOT EXISTS ("
+                "      SELECT 1 FROM checkpoints c "
+                "      WHERE c.thread_id = b.thread_id "
+                "        AND c.checkpoint_ns = b.checkpoint_ns"
+                "    ) "
+                "  LIMIT :limit"
+                ")"
+            ),
+        }
+    else:
+        # Deployed-schema path (no checkpoint.created_at): key age on runs.*
+        # only. INNER JOIN guarantees a terminal ``runs`` row; the terminal
+        # status filter is what protects a live/HITL run from purge.
+        _table_sql = {
+            "checkpoint_writes": (
+                "DELETE FROM checkpoint_writes w "
+                "WHERE ctid IN ("
+                "  SELECT w.ctid FROM checkpoint_writes w "
+                "  INNER JOIN runs r ON r.langgraph_thread_id = w.thread_id "
+                "  WHERE COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "    AND r.status = ANY(:terminal_statuses) "
+                "  LIMIT :limit"
+                ")"
+            ),
+            "checkpoints": (
+                "DELETE FROM checkpoints c "
+                "WHERE ctid IN ("
+                "  SELECT c.ctid FROM checkpoints c "
+                "  INNER JOIN runs r ON r.langgraph_thread_id = c.thread_id "
+                "  WHERE COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "    AND r.status = ANY(:terminal_statuses) "
+                "  LIMIT :limit"
+                ")"
+            ),
+            "checkpoint_blobs": (
+                "DELETE FROM checkpoint_blobs b "
+                "WHERE ctid IN ("
+                "  SELECT b.ctid FROM checkpoint_blobs b "
+                "  INNER JOIN runs r ON r.langgraph_thread_id = b.thread_id "
+                "  WHERE COALESCE(r.completed_at, r.created_at) < :cutoff "
+                "    AND r.status = ANY(:terminal_statuses) "
+                "    AND NOT EXISTS ("
+                "      SELECT 1 FROM checkpoints c "
+                "      WHERE c.thread_id = b.thread_id "
+                "        AND c.checkpoint_ns = b.checkpoint_ns"
+                "    ) "
+                "  LIMIT :limit"
+                ")"
+            ),
+        }
     for stmt_text in _table_sql.values():
         while True:
             stmt = text(stmt_text)

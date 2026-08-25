@@ -168,6 +168,7 @@ PERMISSIONS: dict[str, str] = {
     "error_forwarder.manage": "admin",
     "error_notification.manage": "admin",
     "housekeeping.manage": "admin",
+    "run_retention.manage": "admin",
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",

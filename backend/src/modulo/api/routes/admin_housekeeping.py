@@ -13,6 +13,7 @@ from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
+from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -180,3 +181,85 @@ async def perform_cleanup(
         ) from None
 
     return CleanupResponse(deleted_count=deleted_count, errors=errors)
+
+
+class CheckpointRetentionPurgeRequest(BaseModel):
+    max_age_days: int | None = None
+    confirm: bool = False
+
+
+class CheckpointRetentionPurgeResponse(BaseModel):
+    checkpoints_purged: int
+    threads_purged: int
+    bytes_freed: int
+
+
+@router.post("/checkpoints/purge", response_model=CheckpointRetentionPurgeResponse)
+async def purge_checkpoints(
+    req: CheckpointRetentionPurgeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission("housekeeping.manage"),
+) -> CheckpointRetentionPurgeResponse:
+    """Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
+
+    FAR-432: a terminal run's checkpoint rows are unread after the run finishes
+    and dominate DB volume. This releases them for TERMINAL runs older than
+    ``max_age_days`` (default ``CHECKPOINT_RETENTION_DAYS`` = 3) while leaving
+    the ``runs`` rows intact (outputs, telemetry, classification stay for audit
+    + analytics, ADR 020). Never purges a non-terminal / HITL-paused run — an
+    ``awaiting_human`` run keeps its interrupt checkpoint so ``resume_run``
+    continues the graph instead of re-running side-effectful nodes.
+
+    Requires ``confirm: true``. Scoped to the caller's organisation (RLS).
+    """
+
+    if not req.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Checkpoint purge requires an explicit `confirm: true` body value.",
+        )
+
+    max_age_days = req.max_age_days or CHECKPOINT_RETENTION_DAYS
+    result: CheckpointRetentionPurgeResponse
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_execution_context(session)
+            purge_result = await purge_terminal_checkpoints(
+                session,
+                org_id=principal.organisation_id,
+                max_age_days=max_age_days,
+            )
+            result = CheckpointRetentionPurgeResponse(**purge_result)
+    except ProgrammingError:
+        _log.exception("admin_housekeeping.purge_checkpoints.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("admin_housekeeping.purge_checkpoints.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("admin_housekeeping.purge_checkpoints.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    _log.info(
+        "admin_housekeeping.checkpoints_purged",
+        extra={
+            "org_id": str(principal.organisation_id),
+            "max_age_days": max_age_days,
+            "checkpoints_purged": result.checkpoints_purged,
+            "threads_purged": result.threads_purged,
+            "bytes_freed": result.bytes_freed,
+        },
+    )
+    return result

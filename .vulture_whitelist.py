@@ -209,6 +209,10 @@ __all__ = [
     "catalog_json",  # LibrarySyncState (FAR-363) write-only cache column - consumed by the future library browser
     "last_synced_at",  # LibrarySyncState (FAR-363) write-only sync-stamp column
     "last_success_at",  # LibrarySyncState (FAR-363) write-only success-stamp column
+    "baseline_run_id",  # SuiteRun (FAR-376) write-only baseline-link column - read by comparison surface later
+    "comparison_json",  # SuiteRun (FAR-376) write-only comparison-output snapshot column
+    "claimed_cost",  # SuiteRun (FAR-376) row-locked spend ledger incremented before each judge call
+    "regressed",  # SuiteRun (FAR-376) regression flag column, read by consumers in later phases
     "_superseded",
     "_task_group",
     "lifespan_context",
@@ -234,4 +238,6 @@ __all__ = [
     # --- Product analytics enforcement (FAR-361) ---
     "is_enforcement_active",
     "should_degrade_to_community",
+    # --- REST connector fan-out error attributes (FAR-411, consumed by operators/tests) ---
+    "cardinality_over_cap",  # RESTCardinalityExceededError metric: True when a fan-out hit the cap fail-closed
 ]

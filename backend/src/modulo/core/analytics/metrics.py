@@ -19,7 +19,10 @@ completed) — see ``build_facts_query``'s ``complete_count``/``failure_status``
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 _facts_write_failed_total: Any = None
 _backfill_last_run_ts: Any = None
@@ -38,6 +41,7 @@ def _get_meter() -> Any:
             return None
         return provider.get_meter("modulo.analytics", version="0.1.0")
     except Exception:
+        _log.debug("analytics.metrics.meter_unavailable")
         return None
 
 

@@ -47,7 +47,10 @@ export async function stopCoverage(page: Page): Promise<void> {
       })
     }
 
-    const coverageFile = join(COVERAGE_DIR, `coverage-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    const suffixArr = new Uint8Array(8)
+    crypto.getRandomValues(suffixArr)
+    const suffix = Array.from(suffixArr, (b) => b.toString(16).padStart(2, '0')).join('')
+    const coverageFile = join(COVERAGE_DIR, `coverage-${Date.now()}-${suffix}.json`)
     if (!existsSync(COVERAGE_DIR)) mkdirSync(COVERAGE_DIR, { recursive: true })
     writeFileSync(coverageFile, JSON.stringify(coverageData))
   } catch (e) {

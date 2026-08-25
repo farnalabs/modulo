@@ -255,7 +255,7 @@ class PromptOptimizer:
 
             if attempt < _MAX_RETRIES - 1:
                 delay = _RETRY_BASE_DELAY * (_RETRY_BACKOFF_MULTIPLIER**attempt)
-                jitter = delay * _RETRY_JITTER_FACTOR * (2 * random.random() - 1)  # noqa: S311  # nosec B311 — non-cryptographic retry jitter only
+                jitter = delay * _RETRY_JITTER_FACTOR * (2 * random.random() - 1)  # noqa: S311  # NOSONAR S2245 — non-cryptographic retry-timing jitter only (no security impact)
                 total_delay = delay + jitter
                 _log.info("Retrying in %.1fs", total_delay)
                 await asyncio.sleep(total_delay)
