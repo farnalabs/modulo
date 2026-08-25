@@ -550,7 +550,7 @@ def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
 # uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
 # Default reflects the dashboard-confirmed opencode template = 2 vCPU / 2 GiB
 # at E2B per-second rates (~$0.133/hr). Operators can override via
-# E2B_SANDBOX_USD_PER_HOUR. NOTE: this fallback only applies when settings
+# E2B_SANDBOX_USD_PER_HOUR. This fallback only applies when settings
 # cannot be imported; keep it in sync with settings.py's
 # `e2b_sandbox_usd_per_hour` default.
 _E2B_SANDBOX_USD_PER_HOUR = 0.13
@@ -740,7 +740,7 @@ def _build_no_output_message(
     return "\n".join(parts)
 
 
-_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+")
+_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
 # Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
 # commands run with OPENCODE_API_KEY and GITHUB_TOKEN (a PAT) injected, and
@@ -984,61 +984,83 @@ async def _persist_raw_output_marker(
         )
         return
 
-    async def _persist() -> None:
-        # Imports live INSIDE the try so a first-call import failure is
-        # swallowed+logged like any other persist failure — it must never
-        # propagate and convert the retryable raise into a generic failed node.
-        from sqlalchemy import select as _sql_select
-
-        from modulo.db.models.run import Run as _RunModel
-
-        try:
-            async with session_factory() as session, session.begin():
-                await set_rls_org(session, org_uuid)
-                await set_rls_execution_context(session)
-                run = (
-                    await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
-                ).scalar_one_or_none()
-                if run is None:
-                    _log.warning(
-                        "sandbox_agent.raw_output_marker_skip_row_not_found",
-                        extra={
-                            "run_id": run_id,
-                            "node_id": node_id,
-                            "hint": "row missing or RLS-hidden by another org",
-                        },
-                    )
-                    return
-                markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
-                key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
-                persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
-                markers[key] = persisted_marker
-                run.raw_output_markers = markers
-                await session.flush()
-                _log.info(
-                    "sandbox_agent.raw_output_marker_persisted",
-                    extra={
-                        "run_id": run_id,
-                        "node_id": node_id,
-                        "attempt_key": key,
-                        "retained_bytes": len(persisted_marker.get("raw_output") or ""),
-                    },
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception(
-                "sandbox_agent.raw_output_marker_persist_failed",
-                extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
-            )
-
     try:
-        await asyncio.wait_for(_persist(), timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)
+        await asyncio.wait_for(
+            _write_raw_output_marker(
+                session_factory,
+                org_uuid=org_uuid,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                marker=marker,
+            ),
+            timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception(
             "sandbox_agent.raw_output_marker_persist_timeout_or_error",
+            extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
+        )
+
+
+async def _write_raw_output_marker(
+    session_factory: Callable[..., Any],
+    *,
+    org_uuid: uuid.UUID | None,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+) -> None:
+    """Bounded persist of a single raw-output retention marker row.
+
+    Imports live INSIDE the try so a first-call import failure is
+    swallowed+logged like any other persist failure — it must never
+    propagate and convert the retryable raise into a generic failed node.
+    """
+    from sqlalchemy import select as _sql_select
+
+    from modulo.db.models.run import Run as _RunModel
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            run = (
+                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
+            ).scalar_one_or_none()
+            if run is None:
+                _log.warning(
+                    "sandbox_agent.raw_output_marker_skip_row_not_found",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "hint": "row missing or RLS-hidden by another org",
+                    },
+                )
+                return
+            markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
+            key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
+            persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
+            markers[key] = persisted_marker
+            run.raw_output_markers = markers
+            await session.flush()
+            _log.info(
+                "sandbox_agent.raw_output_marker_persisted",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "attempt_key": key,
+                    "retained_bytes": len(persisted_marker.get("raw_output") or ""),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.raw_output_marker_persist_failed",
             extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
         )
 
@@ -1447,6 +1469,91 @@ def _resolve_node_run_overrides(
     return model_backend_id_str, prompt_template
 
 
+def _render_agent_prompt(
+    *,
+    state: dict[str, Any],
+    run_context: dict[str, Any],
+    raw_input: Any,
+    prompt_template: str,
+    node_def: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Render the node's prompt template (FAR-332/342 overrides applied inbound).
+
+    Injects the state, run_context, input, and any resolved parameters into a
+    sandboxed Jinja environment, then appends the LLM-routing prompt when the
+    node is an ``llm`` routing node. Returns ``(rendered_prompt, routing_mode)``.
+    """
+    env = SandboxedEnvironment()
+    template = env.from_string(prompt_template)
+    template_vars: dict[str, Any] = {
+        "state": state,
+        "run_context": run_context,
+        "input": raw_input,
+    }
+    resolved = node_def.get("_resolved_parameters")
+    if isinstance(resolved, dict):
+        template_vars["parameter"] = resolved
+    rendered_prompt = template.render(**template_vars)
+
+    routing_mode: str | None = node_def.get("routing_mode")
+    if routing_mode == "llm":
+        routing_prompt: str = node_def.get("routing_prompt", "")
+        if routing_prompt:
+            rendered_prompt = rendered_prompt + "\n\n" + routing_prompt
+    return rendered_prompt, routing_mode
+
+
+async def _invoke_node_model(rendered_prompt: str, model_backend_id_str: str, node_id: str) -> Any:
+    """Invoke the configured model backend and return its parsed output.
+
+    Resolves the ModelBackendHub (ContextVar), builds a HumanMessage from the
+    rendered prompt, invokes the backend, and best-effort JSON-parses a
+    string response. Raises when the hub is unavailable.
+    """
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    if hub is None:
+        raise RuntimeError(f"ModelBackendHub not available for node {node_id!r}")
+
+    backend_id = uuid.UUID(model_backend_id_str)
+    backend = await hub.get(backend_id)
+
+    messages = [HumanMessage(content=rendered_prompt)]
+    response = await backend.invoke(messages)
+
+    content = response.content if hasattr(response, "content") else str(response)
+    output_data: Any = content
+    if isinstance(content, str):
+        with suppress(json.JSONDecodeError, ValueError):
+            output_data = json.loads(content)
+    return output_data
+
+
+def _finalize_node_result(
+    node_id: str,
+    output_data: Any,
+    output_schema_json: dict[str, Any] | None,
+    routing_mode: str | None,
+) -> dict[str, Any]:
+    """Validate schema, build the node artifact result, and surface a routed hop."""
+    if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
+        _validate_against_schema(output_data, output_schema_json)
+
+    result: dict[str, Any] = {
+        "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
+        "output": output_data,
+    }
+
+    # Extract _next_node from LLM routing output for the router.
+    if routing_mode == "llm" and isinstance(output_data, dict):
+        next_node = output_data.pop("_next_node", None)
+        if next_node is not None:
+            result["_llm_next_node"] = next_node
+
+    return result
+
+
 def make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -1525,62 +1632,17 @@ def make_node_fn(
         if not model_backend_id_str:
             return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
 
-        env = SandboxedEnvironment()
-        template = env.from_string(prompt_template)
-        template_vars: dict[str, Any] = {
-            "state": state,
-            "run_context": run_context,
-            "input": raw_input,
-        }
-        # Inject resolved parameters as {{ parameter.<key> }}.
-        resolved = node_def.get("_resolved_parameters")
-        if isinstance(resolved, dict):
-            template_vars["parameter"] = resolved
-        rendered_prompt = template.render(**template_vars)
+        rendered_prompt, routing_mode = _render_agent_prompt(
+            state=state,
+            run_context=run_context,
+            raw_input=raw_input,
+            prompt_template=prompt_template,
+            node_def=node_def,
+        )
 
-        # Append routing prompt for LLM routing nodes.
-        routing_mode: str | None = node_def.get("routing_mode")
-        if routing_mode == "llm":
-            routing_prompt: str = node_def.get("routing_prompt", "")
-            if routing_prompt:
-                rendered_prompt = rendered_prompt + "\n\n" + routing_prompt
+        output_data = await _invoke_node_model(rendered_prompt, model_backend_id_str, node_id)
 
-        # Get ModelBackendHub from ContextVar.
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-        hub = get_model_backend_hub()
-        if hub is None:
-            raise RuntimeError(f"ModelBackendHub not available for node {node_id!r}")
-
-        # Resolve backend ID and invoke the model.
-        backend_id = uuid.UUID(model_backend_id_str)
-        backend = await hub.get(backend_id)
-
-        messages = [HumanMessage(content=rendered_prompt)]
-        response = await backend.invoke(messages)
-
-        content = response.content if hasattr(response, "content") else str(response)
-        output_data: Any = content
-        if isinstance(content, str):
-            with suppress(json.JSONDecodeError, ValueError):
-                output_data = json.loads(content)
-
-        # Validate against output schema if defined.
-        if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
-            _validate_against_schema(output_data, output_schema_json)
-
-        result: dict[str, Any] = {
-            "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
-            "output": output_data,
-        }
-
-        # Extract _next_node from LLM routing output for the router.
-        if routing_mode == "llm" and isinstance(output_data, dict):
-            next_node = output_data.pop("_next_node", None)
-            if next_node is not None:
-                result["_llm_next_node"] = next_node
-
-        return result
+        return _finalize_node_result(node_id, output_data, output_schema_json, routing_mode)
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -1651,7 +1713,7 @@ def _build_llm_judge_callable(
         text = response.content if hasattr(response, "content") else str(response)
         try:
             parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             parsed = {"passed": False, "score": 0.0, "detail": text}
         detail = parsed.get("detail", "")
         return {
@@ -2037,7 +2099,6 @@ def _hitl_gate_autonomy_result(
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
-    timeout: float | None = None,
     eval_definitions: Sequence[EvalDefinition] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
@@ -2231,6 +2292,60 @@ def make_manual_node_fn(
     return _manual_node
 
 
+def _resolve_binding_connector(
+    binding: dict[str, Any],
+    node_id: str,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Resolve a bound connector instance for *node_id*.
+
+    Returns ``(connector, None)`` on success, or ``(None, error_artifact)``
+    when the hub is unavailable, the instance id is missing, or the connector
+    cannot be resolved — the error artifact is already enveloped for return.
+    """
+    from modulo.core.pipeline_engine.decorator import get_connector_hub
+
+    hub = get_connector_hub()
+    if hub is None:
+        return (
+            None,
+            {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]},
+        )
+
+    instance_id_str = binding.get("instance_id")
+    if not instance_id_str:
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": "no connector instance_id"}]}
+
+    import uuid as _uuid
+
+    try:
+        connector = hub.get(_uuid.UUID(str(instance_id_str)))
+    except Exception as _conn_exc:
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
+    return connector, None
+
+
+def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Merge run input into the connector filters/data and return (resource, filters, data).
+
+    Run input keys slot into ``filters`` by default and into ``data`` only
+    when the binding already carries them; a shell connector without a
+    ``provider_ref`` defaults to ``"/"``.
+    """
+    run_context = state.get("run_context") or {}
+    raw_input = run_context.get("input", {})
+    resource: str = binding.get("resource", "command")
+    filters = dict(binding.get("filters", {}))
+    data = dict(binding.get("data", {}))
+    if isinstance(raw_input, dict):
+        filters.update({k: v for k, v in raw_input.items() if k not in data})
+        data.update({k: v for k, v in raw_input.items() if k not in filters})
+
+    # Ensure provider_ref for shell connectors
+    if "provider_ref" not in filters and "provider_ref" not in data:
+        filters["provider_ref"] = "/"
+    return resource, filters, data
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -2262,35 +2377,12 @@ def make_connector_fn(
         )
 
         from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-        from modulo.core.pipeline_engine.decorator import get_connector_hub
 
-        hub = get_connector_hub()
-        if hub is None:
-            return {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]}
+        connector, error_artifact = _resolve_binding_connector(binding, node_id)
+        if error_artifact is not None:
+            return error_artifact
 
-        instance_id_str = binding.get("instance_id")
-        if not instance_id_str:
-            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": "no connector instance_id"}]}
-
-        import uuid as _uuid
-
-        try:
-            connector = hub.get(_uuid.UUID(str(instance_id_str)))
-        except Exception as _conn_exc:
-            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
-
-        run_context = state.get("run_context") or {}
-        raw_input = run_context.get("input", {})
-        resource: str = binding.get("resource", "command")
-        filters = dict(binding.get("filters", {}))
-        data = dict(binding.get("data", {}))
-        if isinstance(raw_input, dict):
-            filters.update({k: v for k, v in raw_input.items() if k not in data})
-            data.update({k: v for k, v in raw_input.items() if k not in filters})
-
-        # Ensure provider_ref for shell connectors
-        if "provider_ref" not in filters and "provider_ref" not in data:
-            filters["provider_ref"] = "/"
+        resource, filters, data = _connector_inputs(binding, state)
 
         try:
             if op == "write":
@@ -2655,7 +2747,6 @@ async def _sandbox_store_dispatch_marker_sandbox(
     claim_lease: str | None,
     org_id: str,
     run_id: str,
-    node_id: str,
     attempt_key: str | None,
 ) -> None:
     """Persist the real sandbox id onto the runs row after a successful create."""
@@ -2696,7 +2787,6 @@ async def _sandbox_store_script_lease(
     claim_lease: str | None,
     org_id: str,
     run_id: str,
-    node_id: str,
     attempt_key: str | None,
 ) -> None:
     """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
@@ -2839,7 +2929,6 @@ async def _sandbox_clear_dispatch_marker(
     claim_lease: str | None,
     org_id: str,
     run_id: str,
-    node_id: str,
 ) -> None:
     """Fenced marker clear — only when the claim token still matches.
 
@@ -3065,14 +3154,7 @@ class _SandboxWatchdog:
             self._stall.touch("output")
             self._stall.touch("heartbeat")
             self.touch_stdout(new)
-            # Bound retained memory to the drain window: drop the
-            # oldest chunks once the accumulated log exceeds it.
-            while self._drained_len > _MAX_DRAIN_WINDOW and len(self._drained_chunks) > 1:
-                dropped = self._drained_chunks.pop(0)
-                self._drained_len -= len(dropped)
-            if self._drained_len > _MAX_DRAIN_WINDOW and self._drained_chunks:
-                self._drained_chunks[0] = self._drained_chunks[0][-_MAX_DRAIN_WINDOW:]
-                self._drained_len = len(self._drained_chunks[0])
+            self._trim_drained_chunks()
         # Self-correcting drain offset: ``full_len`` (what this tick's
         # read returned) can exceed the STALE probe ``size`` when the
         # agent appends between probe and read. Advancing to the max
@@ -3080,6 +3162,20 @@ class _SandboxWatchdog:
         # where THIS tick's emitted bytes actually ended, not where
         # the probe saw the file.
         self._drain_offset = max(self._drain_offset, full_len)
+
+    def _trim_drained_chunks(self) -> None:
+        """Bound retained memory to the drain window.
+
+        Drops the oldest chunks once the accumulated log exceeds the window,
+        then clamps the head chunk to the window so the in-memory total can
+        never grow past ``_MAX_DRAIN_WINDOW``.
+        """
+        while self._drained_len > _MAX_DRAIN_WINDOW and len(self._drained_chunks) > 1:
+            dropped = self._drained_chunks.pop(0)
+            self._drained_len -= len(dropped)
+        if self._drained_len > _MAX_DRAIN_WINDOW and self._drained_chunks:
+            self._drained_chunks[0] = self._drained_chunks[0][-_MAX_DRAIN_WINDOW:]
+            self._drained_len = len(self._drained_chunks[0])
 
     async def probe_log_growth(self) -> None:
         try:
@@ -3126,25 +3222,36 @@ class _SandboxWatchdog:
         changed = False
         seen: set[str] = set()
         for entry in entries:
-            path = getattr(entry, "path", None) or getattr(entry, "name", None)
-            if not isinstance(path, str):
-                continue
-            if path == _SANDBOX_LOG_PATH or (self._watch_log_path and path == self._watch_log_path):
-                continue
-            if _path_matches_any_glob(path, self._watch_globs):
-                seen.add(path)
-                key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
-                if path in self._fs_state and self._fs_state[path] != key:
-                    changed = True
-                self._fs_state[path] = key
-        # A previously-seen path that no longer matches (deleted) is
-        # also activity.
+            if self._track_fs_entry(entry, seen):
+                changed = True
+        if self._prune_missing_paths(seen):
+            changed = True
+        if changed:
+            self._stall.touch("filesystem")
+
+    def _track_fs_entry(self, entry: Any, seen: set[str]) -> bool:
+        """Track one watch-glob fs entry; True when its stat changed or it is new."""
+        path = getattr(entry, "path", None) or getattr(entry, "name", None)
+        if not isinstance(path, str):
+            return False
+        if path == _SANDBOX_LOG_PATH or (self._watch_log_path and path == self._watch_log_path):
+            return False
+        if _path_matches_any_glob(path, self._watch_globs):
+            seen.add(path)
+            key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
+            if path in self._fs_state and self._fs_state[path] != key:
+                return True
+            self._fs_state[path] = key
+        return False
+
+    def _prune_missing_paths(self, seen: set[str]) -> bool:
+        """Drop previously-seen paths that no longer match; True when any were pruned."""
+        changed = False
         for prev_path in list(self._fs_state):
             if prev_path not in seen:
                 del self._fs_state[prev_path]
                 changed = True
-        if changed:
-            self._stall.touch("filesystem")
+        return changed
 
     async def enforce_resource_limits(self) -> bool:
         """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
@@ -3191,29 +3298,12 @@ class _SandboxWatchdog:
         metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
         if metrics is None:
             return False
-        killed = False
         try:
             # Observable caps only. cpu_count / max_processes /
             # max_fds / max_sockets are NOT enforceable via the SDK
             # (no matching observable metric) — they stay
             # metadata-only (template-side enforcement).
-            cpu_cap = self._resource_limits.get("cpu_usage_pct")
-            if cpu_cap is not None:
-                cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
-                if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
-                    killed = True
-            mem_cap = self._resource_limits.get("memory_mb")
-            if mem_cap is not None and not killed:
-                mem_used = getattr(metrics, "mem_used", None)
-                if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
-                    killed = True
-            disk_cap = self._resource_limits.get("disk_mb")
-            if disk_cap is not None and not killed:
-                # Disk is only enforced when the SDK reports disk
-                # fields (older envd/API versions may omit them).
-                disk_used = getattr(metrics, "disk_used", None)
-                if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
-                    killed = True
+            killed = self._budget_exceeded(metrics)
         except Exception:
             _log.exception(
                 "sandbox_agent.resource_metrics_compare_failed",
@@ -3224,6 +3314,33 @@ class _SandboxWatchdog:
             return False
         await self.kill_sandbox_for_budget(self._node_id, reason="resource_limits_exceeded")
         return True
+
+    def _budget_exceeded(self, metrics: Any) -> bool:
+        """True when any observable resource cap is exceeded (best-effort).
+
+        Memory/disk thresholds are MB values compared against byte metrics;
+        the first exceeded cap short-circuits the rest.
+        """
+        if not self._resource_limits:
+            return False
+        cpu_cap = self._resource_limits.get("cpu_usage_pct")
+        if cpu_cap is not None:
+            cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
+            if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
+                return True
+        mem_cap = self._resource_limits.get("memory_mb")
+        if mem_cap is not None:
+            mem_used = getattr(metrics, "mem_used", None)
+            if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
+                return True
+        disk_cap = self._resource_limits.get("disk_mb")
+        if disk_cap is not None:
+            # Disk is only enforced when the SDK reports disk
+            # fields (older envd/API versions may omit them).
+            disk_used = getattr(metrics, "disk_used", None)
+            if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
+                return True
+        return False
 
     async def kill_sandbox_for_budget(self, node_id: str, reason: str) -> None:
         """Kill the sandbox for a budget overrun (resource caps or wall-clock spend).
@@ -3856,7 +3973,6 @@ async def _sandbox_agent_impl(
             claim_lease=claim_lease,
             org_id=org_id,
             run_id=run_id,
-            node_id=node_id,
             attempt_key=attempt_key,
         )
 
@@ -3877,7 +3993,6 @@ async def _sandbox_agent_impl(
             claim_lease=claim_lease,
             org_id=org_id,
             run_id=run_id,
-            node_id=node_id,
             attempt_key=attempt_key,
         )
 
@@ -3910,7 +4025,6 @@ async def _sandbox_agent_impl(
             claim_lease=claim_lease,
             org_id=org_id,
             run_id=run_id,
-            node_id=node_id,
         )
 
     try:
@@ -4038,13 +4152,10 @@ async def _sandbox_agent_impl(
                         "backoff_seconds": _backoff,
                     },
                 )
-                try:
-                    await asyncio.wait_for(
-                        asyncio.sleep(_backoff),
-                        timeout=min(sandbox_timeout, 120),
-                    )
-                except asyncio.CancelledError:
-                    raise
+                await asyncio.wait_for(
+                    asyncio.sleep(_backoff),
+                    timeout=min(sandbox_timeout, 120),
+                )
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
