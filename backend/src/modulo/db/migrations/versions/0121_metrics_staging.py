@@ -76,6 +76,16 @@ def upgrade() -> None:
             """
         )
     )
+    # CREATE POLICY has no IF NOT EXISTS, so drop any prior policy first to keep
+    # this reconciliation migration safely re-runnable (idempotent). Mirrors the
+    # pattern used by sibling migrations such as 0130_eval_suite_entity.
+    op.execute(
+        sa.text(
+            """
+            DROP POLICY IF EXISTS rls_org_isolation ON "metrics_staging"
+            """
+        )
+    )
     op.execute(
         sa.text(
             """
