@@ -57,6 +57,13 @@ dependencies = [
     "aiomysql>=0.3.2",
     "pymysql>=1.1.1",
     # HTTP client (GitHub connector)
+    # SSRF pinned transport (modulo.core.ssrf) installs the pin by overriding
+    # httpcore's PRIVATE `_pool._network_backend` seam. Pin this to a
+    # KNOWN-GOOD compatible range so a breaking upgrade is explicit rather than
+    # silent: if httpcore stops routing that attribute into connection creation,
+    # the DNS-rebinding pin silently drops (guarded loudly in
+    # PinnedAsyncHTTPTransport). Known-good pair: httpx 0.28.1 -> httpcore 1.0.9.
+    # A constraint tightening beyond this range must be reflected in uv.lock.
     "httpx>=0.28.1",
     # Auth + crypto
     "PyJWT[crypto]>=2.10.1",
