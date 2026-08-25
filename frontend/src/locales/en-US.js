@@ -1050,7 +1050,18 @@ export default {
       "invalid": "Invalid",
       "inactive": "Inactive",
       "expires": "Expires",
-      "developer_mode": "Developer Mode"
+      "developer_mode": "Developer Mode",
+      "developer_mode_description": "When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.",
+      "toggle_flag": "Toggle {name}",
+      "depends_on": "Depends on {value}",
+      "no_flags_in_tier": "No flags in this tier.",
+      "n_a": "N/A",
+      "no_feature_flags": "No feature flags yet.",
+      "no_feature_flags_description": "Feature flags will appear here once your organisation has registered some.",
+      "select_override": "Select override",
+      "system_default": "System default",
+      "force_enabled": "Force enabled",
+      "force_disabled": "Force disabled"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
@@ -3044,6 +3055,8 @@ export default {
     "remove": "Remove",
     "create": "Create",
     "deleting": "Deleting...",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
     "trigger_types": {
       "manual": "Manual",
       "webhook": "Webhook",
