@@ -28,5 +28,5 @@ class ParameterSet(SoftDeleteMixin, OrgScoped):
     description: Mapped[str | None] = mapped_column(Text)
     values: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

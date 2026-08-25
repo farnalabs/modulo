@@ -127,9 +127,11 @@ class Run(OrgScoped):
         index=True,
     )
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    trigger_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("triggers.id", ondelete="SET NULL"))
+    trigger_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("triggers.id", ondelete="SET NULL"), index=True
+    )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(

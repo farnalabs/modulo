@@ -44,8 +44,8 @@ class LifecycleMapStage(OrgScoped):
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     stage_type: Mapped[str] = mapped_column(String(20), nullable=False)
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete="RESTRICT"), nullable=True
+        Uuid(), ForeignKey("pipelines.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

@@ -47,7 +47,7 @@ class EvalDefinition(OrgScoped):
         index=True,
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     # Eval-definition versioning (FAR-382): each definition carries an integer
     # ``version`` starting at 1, bumped on every create and update so a rubric

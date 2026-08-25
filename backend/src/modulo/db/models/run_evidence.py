@@ -28,7 +28,9 @@ class RunEvidence(Base):
     __tablename__ = "run_evidence"
     __table_args__ = (PrimaryKeyConstraint("run_id", "node_id", name="pk_run_evidence_run_node"),)
 
-    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)

@@ -35,9 +35,7 @@ class ChatMessage(Base):
     tool_results_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(),
-        ForeignKey("chat_messages.id", ondelete="SET NULL"),
-        nullable=True,
+        Uuid(), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

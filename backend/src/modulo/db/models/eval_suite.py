@@ -51,7 +51,7 @@ class EvalSuite(OrgScoped):
     )
 
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -24,12 +24,14 @@ class LifecycleMap(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

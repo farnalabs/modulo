@@ -583,9 +583,12 @@ def test_single_migration_head() -> None:
     # Nothing chains off 0140 except 0141 (the FAR-416 pipeline edge ports migration).
     chaining_off_0140 = [p for p in revisions if parents[p] == "0140_eval_regression_alert"]
     assert [_basename(p) for p in chaining_off_0140] == ["0141_pipeline_edge_ports.py"]
-    # Nothing chains off 0141 -> it is the single head.
+    # Nothing chains off 0141 except 0142 (the FK-index migration).
     chaining_off_0141 = [p for p in revisions if parents[p] == "0141_pipeline_edge_ports"]
-    assert chaining_off_0141 == []
+    assert [_basename(p) for p in chaining_off_0141] == ["0142_merge_heads_add_fk_indexes.py"]
+    # Nothing chains off 0142 -> it is the single head.
+    chaining_off_0142 = [p for p in revisions if parents[p] == "0142_merge_heads_add_fk_indexes"]
+    assert chaining_off_0142 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

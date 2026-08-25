@@ -10,11 +10,13 @@ class SnapshotSchemaPin(OrgScoped):
     __tablename__ = "snapshot_schema_pins"
 
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("pipeline_snapshots.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("pipeline_snapshots.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
-    schema_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schemas.id", ondelete="RESTRICT"), nullable=False)
+    schema_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schemas.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
 
     __table_args__ = (

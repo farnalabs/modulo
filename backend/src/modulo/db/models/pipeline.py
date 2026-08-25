@@ -35,7 +35,9 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"))
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"), index=True
+    )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
     )

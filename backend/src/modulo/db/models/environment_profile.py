@@ -37,7 +37,9 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     persistence_policy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ephemeral")
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")

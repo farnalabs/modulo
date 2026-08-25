@@ -18,9 +18,9 @@ class OrgApiKey(OrgScoped):
     lookup_prefix: Mapped[str] = mapped_column(String(8), nullable=False)
     hashed_secret: Mapped[str] = mapped_column(String(64), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

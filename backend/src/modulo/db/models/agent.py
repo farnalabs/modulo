@@ -46,7 +46,7 @@ class Agent(OrgScoped):
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     model_backend_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=True
+        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     required_environment_capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
@@ -55,11 +55,11 @@ class Agent(OrgScoped):
     max_input_length: Mapped[int | None] = mapped_column(Integer)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), index=True
     )
     parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("parameter_schemas.id", ondelete="RESTRICT"), nullable=True
+        Uuid(), ForeignKey("parameter_schemas.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
