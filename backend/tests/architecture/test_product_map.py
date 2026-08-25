@@ -117,7 +117,26 @@ def test_documentation_indexer_surfaces_product_map_features():
         f"  {path}" for path in sorted(missing_features)
     )
 
+    # Every route must surface each of its product_map feature references in the
+    # summary text, so Remy's documentation indexer can find a route by feature
+    # tag end to end — not just the /admin/costs page. The reference is matched
+    # as a token, so a combined multi-feature ``product_map=`` summary still
+    # exposes every individual feature reference.
+    for path, entry in by_path.items():
+        for feature in entry.features:
+            assert feature in entry.first_paragraph, (
+                f"docs index entry for {path} obscures feature {feature!r} "
+                "from the summary text (search by feature would miss it)"
+            )
+
     costs = by_path.get("/admin/costs")
     assert costs is not None
     assert "feat-costs" in costs.features
     assert "product_map=feat-costs" in costs.first_paragraph
+
+    # Feature-tagged search must resolve a route via the feature reference itself,
+    # including routes that advertise multiple features.
+    matches = index.search("feat-costs")
+    assert any(entry.heading_path == "/admin/costs" for entry in matches)
+    matches = index.search("feat-runtime")
+    assert any(entry.heading_path == "/admin/environments" for entry in matches)
