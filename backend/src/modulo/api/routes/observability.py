@@ -248,12 +248,11 @@ async def test_otel_connection(
     if not endpoint:
         return TestSpanResult(success=False, message="OTLP endpoint is required")
 
+    url = f"{endpoint}/v1/traces"
     try:
-        await validate_outbound_url_async(endpoint)
+        await validate_outbound_url_async(url)
     except ValueError as exc:
         return TestSpanResult(success=False, message=f"Rejected: {exc}")
-
-    url = f"{endpoint}/v1/traces"
     trace_id = uuid.uuid4().hex[:32]
     span_id = uuid.uuid4().hex[:16]
 

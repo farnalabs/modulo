@@ -7,6 +7,7 @@ import argparse
 import getpass
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,35 @@ def _validate_arg(value: str, name: str) -> str:
     subprocess argument (defense against argument injection)."""
     if not value or value.startswith("-"):
         raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
+    return value
+
+
+def _validate_executable(value: str, name: str) -> str:
+    """Resolve *value* to a real executable and return its absolute path.
+
+    Prevents an untrusted ``--pg-restore`` argument from launching an arbitrary
+    command (S8701). The value must not look like a CLI flag and must resolve to
+    an existing executable on ``PATH``.
+    """
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty executable that does not start with '-'")
+    resolved = shutil.which(value)
+    if resolved is None:
+        raise ValueError(f"invalid {name}: executable not found on PATH: {value!r}")
+    return resolved
+
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_identifier(value: str, name: str) -> str:
+    """Reject anything that is not a safe SQL identifier.
+
+    Used for the database name that is interpolated into a ``psql -c`` SQL string
+    (defense against SQL injection in the terminate-backends command, S8705).
+    """
+    if not _IDENTIFIER_RE.match(value or ""):
+        raise ValueError(f"invalid {name}: {value!r} is not a valid SQL identifier")
     return value
 
 
@@ -178,13 +208,14 @@ def pg_database_name(db_url: str) -> str:
 
 def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     dump_path = os.path.join(extract_dir, "modulo.pgdump")
+    pg_restore = _validate_executable(pg_restore, "pg_restore")
     _validate_arg(db_url, "database URL")
     if not os.path.exists(dump_path):
         print("ERROR: modulo.pgdump not found in archive")
         sys.exit(1)
 
     db_name = pg_database_name(db_url)
-    _validate_arg(db_name, "database name")
+    _validate_identifier(db_name, "database name")
     print(f"Restoring Postgres to database '{db_name}'...")
 
     admin_db = "postgres"

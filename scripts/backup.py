@@ -69,6 +69,21 @@ def _validate_arg(value: str, name: str) -> str:
     return value
 
 
+def _validate_executable(value: str, name: str) -> str:
+    """Resolve *value* to a real executable and return its absolute path.
+
+    Prevents an untrusted ``--pg-dump`` argument from launching an arbitrary
+    command (S8701). The value must not look like a CLI flag and must resolve to
+    an existing executable on ``PATH``.
+    """
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty executable that does not start with '-'")
+    resolved = shutil.which(value)
+    if resolved is None:
+        raise ValueError(f"invalid {name}: executable not found on PATH: {value!r}")
+    return resolved
+
+
 def check_disk_space(path: str, min_gb: int) -> None:
     usage = shutil.disk_usage(path)
     free_gb = usage.free / (1024**3)
@@ -229,6 +244,8 @@ async def main() -> None:
 
     check_disk_space(os.path.dirname(args.output or "."), args.min_disk_gb)
 
+    pg_dump = _validate_executable(args.pg_dump, "pg_dump")
+
     org_id = get_org_id(db_url)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or f"modulo-backup-{org_id}-{timestamp}.tar.gz.enc"
@@ -241,7 +258,7 @@ async def main() -> None:
     tmpdir = tempfile.mkdtemp(prefix="modulo-backup-")
     try:
         dump_path = os.path.join(tmpdir, "modulo.pgdump")
-        await run_pg_dump(db_url, args.pg_dump, dump_path)
+        await run_pg_dump(db_url, pg_dump, dump_path)
 
         secret_files = collect_secrets(tmpdir)
         all_files = [dump_path, *secret_files]

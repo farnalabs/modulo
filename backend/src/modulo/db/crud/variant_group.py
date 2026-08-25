@@ -4,7 +4,7 @@ All functions require RLS org context to be set by the caller.
 """
 
 import logging
-import random
+import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -201,9 +201,9 @@ def pick_variant_weighted(
     weights = [float(v.get("weight", 1.0)) for v in clean]
     total = sum(weights)
     if total <= 0:
-        return random.choice(clean)  # noqa: S311  # nosec B311 — variant selection is not cryptographic
+        return secrets.choice(clean)  # NOSONAR S2245 — A/B traffic split, not a security boundary
 
-    r = random.random() * total  # noqa: S311  # nosec B311 — variant selection is not cryptographic
+    r = (secrets.randbelow(1_000_000) / 1_000_000) * total  # NOSONAR S2245 — A/B traffic split, not a security boundary
     cumulative = 0.0
     for i, w in enumerate(weights):
         cumulative += w
