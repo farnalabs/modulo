@@ -27,12 +27,12 @@
         <div>
           <h3 class="text-sm font-semibold">{{ $t('views.AdminFeatureFlagsView.developer_mode') }}</h3>
           <p class="text-xs text-muted-foreground">
-            When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.
+            {{ $t('views.AdminFeatureFlagsView.developer_mode_description') }}
           </p>
         </div>
         <ToggleSwitch
           :checked="devModeEnabled"
-          label="Developer Mode"
+          :label="$t('views.AdminFeatureFlagsView.developer_mode')"
           data-testid="developer-mode-toggle"
           @toggle="toggleDevMode"
         />
@@ -74,7 +74,7 @@
             <template v-if="planStore.expiresAt">
               {{ formatDate(planStore.expiresAt) }}
             </template>
-            <span v-else class="badge badge-status-muted">N/A</span>
+            <span v-else class="badge badge-status-muted">{{ $t('views.AdminFeatureFlagsView.n_a') }}</span>
           </p>
         </div>
       </div>
@@ -130,9 +130,11 @@
       </div>
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
       <template v-else>
-        <div v-if="!hasResults && searchQuery" class="flex flex-col items-center justify-center py-16">
-          <p class="text-lg font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.no_results') }}</p>
-        </div>
+        <EmptyState
+          v-if="!hasResults"
+          :title="searchQuery ? $t('views.AdminFeatureFlagsView.no_results') : $t('views.AdminFeatureFlagsView.no_feature_flags')"
+          :description="searchQuery ? undefined : $t('views.AdminFeatureFlagsView.no_feature_flags_description')"
+        />
         <template v-else>
           <div
               v-for="section in paginatedGroups"
@@ -165,7 +167,8 @@
                       <ToggleSwitch
                         :checked="flag.currently_active"
                         :toggling="flagToggling[flag.name]"
-                        :label="'Toggle ' + flag.name"
+                        :label="$t('views.AdminFeatureFlagsView.toggle_flag', { name: flag.name })"
+                        :data-testid="'flag-toggle-' + flag.name"
                         @toggle="toggleFlag(flag)"
                       />
                     </td>
@@ -185,7 +188,7 @@
                     </td>
                     <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
                     <td class="table-cell-numeric">
-                      <Button severity="secondary" outlined size="small" @click.stop="openOverrideDialog(flag)">
+                      <Button severity="secondary" outlined size="small" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
                       </Button>
                     </td>
@@ -193,16 +196,16 @@
                 </tbody>
               </table>
               <div v-else class="px-4 py-6 text-center text-sm text-muted-foreground">
-                No flags in this tier.
+                {{ $t('views.AdminFeatureFlagsView.no_flags_in_tier') }}
               </div>
             </div>
           <div v-if="totalPages > 1" class="flex items-center justify-center gap-4 py-4">
             <span class="text-sm text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.page_of', { current: currentPage, total: totalPages }) }}</span>
             <div class="flex gap-2">
-              <Button severity="secondary" outlined size="small" :disabled="currentPage <= 1" @click="currentPage = Math.max(1, currentPage - 1)">
+              <Button severity="secondary" outlined size="small" :disabled="currentPage <= 1" data-testid="flags-prev-page" @click="currentPage = Math.max(1, currentPage - 1)">
                 {{ $t('common.previous') }}
               </Button>
-              <Button severity="secondary" outlined size="small" :disabled="currentPage >= totalPages" @click="currentPage = Math.min(totalPages, currentPage + 1)">
+              <Button severity="secondary" outlined size="small" :disabled="currentPage >= totalPages" data-testid="flags-next-page" @click="currentPage = Math.min(totalPages, currentPage + 1)">
                 {{ $t('common.next') }}
               </Button>
             </div>
@@ -213,14 +216,15 @@
     <FormDialog
       :open="overrideDialogOpen"
       @update:open="overrideDialogOpen = !!$event"
-      title="Org Override"
+      :title="$t('views.AdminFeatureFlagsView.org_override')"
       :description="overrideDescription"
-      confirm-text="Save"
+      :confirm-text="$t('common.save')"
       @confirm="saveOverride"
     >
       <div class="py-4">
         <Select
-  aria-label="Form control"
+  :aria-label="$t('views.AdminFeatureFlagsView.org_override')"
+  data-testid="flag-override-select"
   v-model="overrideDialogValue"
   :placeholder="$t('views.AdminFeatureFlagsView.select_override')"
   :options="[{ value: 'null', label: $t('views.AdminFeatureFlagsView.system_default') }, { value: 'true', label: $t('views.AdminFeatureFlagsView.force_enabled') }, { value: 'false', label: $t('views.AdminFeatureFlagsView.force_disabled') }]"
@@ -248,6 +252,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import Button from 'primevue/button'
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -261,10 +266,10 @@ const devModeEnabled = ref(planStore.devMode)
 
 async function toggleDevMode(enabled: boolean) {
   try {
-    const resp = await (api as any).PUT('/api/v1/admin/dev-mode', { body: { enabled } }) as { data?: { enabled: boolean }; error?: unknown }
-    if (resp.data) {
-      devModeEnabled.value = resp.data.enabled
-      planStore.devMode = resp.data.enabled
+    const { data } = await api.PUT('/api/v1/admin/dev-mode', { body: { enabled } })
+    if (data) {
+      devModeEnabled.value = data.enabled
+      planStore.devMode = data.enabled
     }
   } catch (err) {
     console.warn('Failed to toggle dev mode', err)
@@ -384,7 +389,7 @@ function formatDate(dateStr: string): string {
 
 function flagTooltip(flag: FlagItem): string {
   if (flag.depends_on && flag.depends_on.length > 0) {
-    return `${flag.description} Depends on ${flag.depends_on.join(', ')}`
+    return `${flag.description} ${t('views.AdminFeatureFlagsView.depends_on', { value: flag.depends_on.join(', ') })}`
   }
   return flag.description
 }
@@ -440,7 +445,7 @@ async function toggleFlag(flag: FlagItem) {
     body: { enabled },
   })
   if (err) {
-    error.value = `Failed to toggle flag: ${formatApiError(err)}`
+    error.value = `${t('views.AdminFeatureFlagsView.failed_to_toggle_flag')} ${formatApiError(err)}`
     flagToggling.value[flag.name] = false
     return
   }
