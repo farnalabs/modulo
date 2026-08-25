@@ -1275,6 +1275,23 @@ def _retry_policy_applies(
     return retry_budget is not None and not is_correction_run and graph_idempotent
 
 
+@dataclass(frozen=True)
+class _RunScope:
+    """Immutable per-run identity scalars for ``_prepare_and_stream``.
+
+    Bundles the fixed run-scoped values the stream preparation path needs so
+    the method takes a single bundle instead of many loose parameters
+    (SonarQube S107: too many parameters). An annotation-only public attribute
+    set; a pure refactor — no behaviour, ordering, or state-transition change.
+    """
+
+    run_id: uuid.UUID
+    org_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    snapshot_id: uuid.UUID
+    thread_id: str
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -2673,17 +2690,20 @@ class PipelineExecutor:
         gate_suppressed = False
 
         try:
-            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
+            scope = _RunScope(
                 run_id=run_id,
                 org_id=org_id,
                 pipeline_id=pipeline_id,
                 snapshot_id=snapshot_id,
+                thread_id=thread_id,
+            )
+            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
+                scope=scope,
                 snapshot=snapshot,
                 input_payload=input_payload,
                 variant_config_snapshot=variant_config_snapshot,
                 graph_json=graph_json,
                 eval_defs_by_node=eval_defs_by_node,
-                thread_id=thread_id,
                 node_ids=node_ids,
                 completed_node_outputs=completed_node_outputs,
                 guard=guard,
@@ -3133,16 +3153,12 @@ class PipelineExecutor:
     async def _prepare_and_stream(
         self,
         *,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID,
-        pipeline_id: uuid.UUID,
-        snapshot_id: uuid.UUID,
+        scope: _RunScope,
         snapshot: PipelineSnapshot,
         input_payload: dict[str, Any],
         variant_config_snapshot: dict[str, Any] | None,
         graph_json: dict[str, Any],
         eval_defs_by_node: dict[str, list[EvalDefDTO]],
-        thread_id: str,
         node_ids: set[str],
         completed_node_outputs: dict[str, Any],
         guard: RunawayGuard,
@@ -3159,13 +3175,13 @@ class PipelineExecutor:
         """
         # Compile (or retrieve from cache) the StateGraph.
         compiled = get_or_compile(
-            pipeline_id,
-            snapshot_id,
+            scope.pipeline_id,
+            scope.snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
                 eval_definitions_by_node=eval_defs_by_node,
                 session_factory=self._session_factory,
-                org_id=org_id,
+                org_id=scope.org_id,
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
             ),
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
@@ -3175,12 +3191,12 @@ class PipelineExecutor:
         initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
         initial_state.update(
             {
-                "_run_id": run_id,
-                "_org_id": org_id,
+                "_run_id": scope.run_id,
+                "_org_id": scope.org_id,
                 "_claim_lease": self._claim_token,
             }
         )
-        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        config: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}
         node_ids.clear()
         node_ids.update({str(n["id"]) for n in graph_json.get("nodes", [])})
         # FAR-369: expose each node's configured ``timeout_seconds`` so the
@@ -3204,12 +3220,12 @@ class PipelineExecutor:
         # re-validates its bound guardrail conformance at node start. The
         # claimed guardrail list is hoisted ONCE per run (one query); the
         # live capability manifest is still read per node at node start.
-        claimed, claims_load_failed = await self._load_claimed_conformance_guardrails(org_id, pipeline_id)
+        claimed, claims_load_failed = await self._load_claimed_conformance_guardrails(scope.org_id, scope.pipeline_id)
         set_conformance_ctx(
             self._session_factory,
-            org_id,
+            scope.org_id,
             snapshot.environment_profile_id,
-            pipeline_id,
+            scope.pipeline_id,
             claimed,
             claims_load_failed,
         )
@@ -3222,11 +3238,11 @@ class PipelineExecutor:
         # consume the retry budget before any real execution attempt
         # (postmortem FAR-121).
         async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
+            await set_rls_org(session, scope.org_id)
             await set_rls_execution_context(session)
             await session.execute(
                 text("UPDATE runs SET node_attempt_count = node_attempt_count + 1 WHERE id = :rid"),
-                {"rid": str(run_id)},
+                {"rid": str(scope.run_id)},
             )
 
         # FAR-432 (item 4a): a checkpointer is ONLY attached when the pipeline
@@ -3243,7 +3259,7 @@ class PipelineExecutor:
             _settings = get_settings()
             async with _checkpointer_scope(
                 self._checkpointer_conn_string,
-                organisation_id=org_id,
+                organisation_id=scope.org_id,
                 fernet_key=_settings.fernet_key,
             ) as saver:
                 compiled.checkpointer = saver
@@ -3253,9 +3269,9 @@ class PipelineExecutor:
                     config,
                     node_ids,
                     broker,
-                    run_id,
-                    pipeline_id=pipeline_id,
-                    org_id=org_id,
+                    scope.run_id,
+                    pipeline_id=scope.pipeline_id,
+                    org_id=scope.org_id,
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
@@ -3270,9 +3286,9 @@ class PipelineExecutor:
                 config,
                 node_ids,
                 broker,
-                run_id,
-                pipeline_id=pipeline_id,
-                org_id=org_id,
+                scope.run_id,
+                pipeline_id=scope.pipeline_id,
+                org_id=scope.org_id,
                 completed_node_outputs=completed_node_outputs,
                 guard=guard,
                 node_token_budgets=node_token_budgets,

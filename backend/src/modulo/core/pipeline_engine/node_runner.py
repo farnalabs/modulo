@@ -1572,7 +1572,7 @@ def make_node_fn(
     role: str | None = None,
     timeout: float | None = None,
     max_input_length: int | None = None,
-    token_budget: int | None = None,
+    token_budget: int | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); budget enforced at executor level
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
@@ -2244,7 +2244,7 @@ def make_hitl_gate_fn(
 def make_manual_node_fn(
     node_def: dict[str, Any],
     *,
-    timeout: float | None = None,
+    timeout: float | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); manual nodes never time out
 ) -> Any:
     """Return a node function for a manual-input node.
 
@@ -3050,7 +3050,6 @@ class _SandboxWatchdog:
         sandbox_mode: str,
         stdout_percentage_delta: float | None,
         stream_broker: RunEventBroker | None,
-        stream_enabled: bool,
         drained_chunks: list[str],
         wallclock_budget_seconds: int | None,
         start_time: float,
@@ -3067,7 +3066,7 @@ class _SandboxWatchdog:
         self._sandbox_mode = sandbox_mode
         self._stdout_ratio = stdout_percentage_delta
         self._stream_broker = stream_broker
-        self._stream_enabled = stream_enabled
+        self._stream_enabled = isinstance(stream_broker, RunEventBroker)
         self._drained_chunks = drained_chunks
         self._activity: dict[str, Any] = {"last": time.monotonic()}
         self._stdout_prev: str | None = None
@@ -3783,7 +3782,7 @@ def _script_enforcement_requires_remote(
     )
 
 
-async def _sandbox_agent_impl(
+async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
     config: _SandboxNodeConfig,
@@ -4349,7 +4348,6 @@ async def _sandbox_agent_impl(
                     _stream_broker = get_registry().get(uuid.UUID(run_id))
                 except (TypeError, ValueError):
                     _stream_broker = None
-            _stream_enabled = isinstance(_stream_broker, RunEventBroker)
 
             watchdog = _SandboxWatchdog(
                 sandbox=sandbox,
@@ -4362,7 +4360,6 @@ async def _sandbox_agent_impl(
                 sandbox_mode=sandbox_mode,
                 stdout_percentage_delta=stdout_percentage_delta,
                 stream_broker=_stream_broker,
-                stream_enabled=_stream_enabled,
                 drained_chunks=_drained_chunks,
                 wallclock_budget_seconds=wallclock_budget_seconds,
                 start_time=start_time,
