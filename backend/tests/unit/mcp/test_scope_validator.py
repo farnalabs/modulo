@@ -320,6 +320,41 @@ class TestNewlyGuardedTools:
             check_tool_scope("viewer", "list_trigger_events")
 
 
+class TestAllowedToolsNarrowing:
+    """FAR-436: node-level ``allowed_tools`` narrows (never widens) the chokepoint.
+
+    The role check must STILL pass for the tool (narrowing is an additional
+    filter, never a bypass), and when a node declares ``allowed_tools`` an
+    out-of-scope tool is rejected. Only an ABSENT allow-list (None) is
+    unrestricted; an explicit EMPTY allow-list is deny-by-default.
+    """
+
+    def test_no_allowed_tools_is_unrestricted(self) -> None:
+        # Absent allow-list (None) -> role check only (legacy behaviour).
+        assert check_tool_scope("runner", "trigger_pipeline") is None
+
+    def test_in_scope_tool_passes(self) -> None:
+        assert check_tool_scope("admin", "create_pipeline", allowed_tools=["create_pipeline"]) is None
+
+    def test_out_of_scope_tool_rejected_despite_valid_role(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_tool_scope("admin", "create_pipeline", allowed_tools=["create_agent"])
+
+    def test_empty_allow_list_is_deny_by_default(self) -> None:
+        # A node granted no tools may call none — even with a valid role.
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_tool_scope("admin", "create_pipeline", allowed_tools=[])
+
+    def test_matching_is_case_insensitive(self) -> None:
+        assert check_tool_scope("admin", "CREATE_PIPELINE", allowed_tools=["create_pipeline"]) is None
+
+    def test_scope_does_not_bypass_role_check(self) -> None:
+        # Narrowing is additive, never a grant: an in-scope tool still needs
+        # the role (viewer lacks pipeline.create -> denied by the role check).
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "create_pipeline", allowed_tools=["create_pipeline"])
+
+
 class TestMCPAuthorizationError:
     """MCPAuthorizationError behaviour."""
 

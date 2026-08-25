@@ -180,12 +180,14 @@ def check_tool_scope(
 
     normalized = _sanitize(tool_name, name="tool_name")
 
-    # FAR-418: node-level allowed_tools narrowing. When a node's capability_scope
-    # declares an allowed-tool allow-list, it is an ADDITIONAL filter layered on
-    # the (already-validated) role check — the role must still permit the tool,
-    # and the tool must be on the node's list. Absent/empty (the UNRESTRICTED
-    # default) performs no narrowing, preserving pre-scope behaviour.
-    if allowed_tools:
+    # FAR-418 / FAR-436: node-level allowed_tools narrowing. When a node's
+    # capability_scope declares an allowed-tool allow-list, it is an ADDITIONAL
+    # filter layered on the (already-validated) role check — the role must still
+    # permit the tool, and the tool must be on the node's list. Only an ABSENT
+    # allow-list (None — the UNRESTRICTED default) performs no narrowing; an
+    # explicit EMPTY allow-list is deny-by-default (a node granted no tools may
+    # call none), preserving the narrow-not-widen invariant.
+    if allowed_tools is not None:
         allowed = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
         if normalized not in allowed:
             _log.warning(
