@@ -85,8 +85,8 @@ def upgrade() -> None:
     op.execute(sa.text('ALTER TABLE public."run_evidence" FORCE ROW LEVEL SECURITY'))
     op.execute(sa.text(f'CREATE POLICY rls_org_isolation ON public."run_evidence" USING ({_ORG_SCOPE})'))
 
-    # 5. Runtime role needs DML (guarded on the role existing — on fresh dev/BDD
-    # databases the app roles are bootstrapped after alembic runs).
+    # 5. Runtime role needs DML (skip the GRANT when the role is absent, e.g. a
+    #    fresh dev/BDD database that has not bootstrapped modulo_app yet).
     if _role_exists(bind, _APP_ROLE):
         op.execute(sa.text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON public."run_evidence" TO {_APP_ROLE}'))
 

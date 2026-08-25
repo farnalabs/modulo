@@ -119,4 +119,9 @@ source_modules =
 forbidden_modules =
     modulo.core
 ignore_imports =
+    # Shell resolves workspace sessions via the DB layer.
     modulo.connectors.shell -> modulo.db.session
+    # The REST connector (FAR-408) binds its SSRF + output-injection port at the
+    # composition root (connector_hub) and never imports ``modulo.core`` directly;
+    # this contract enforces that the connector stays decoupled. Any attempt to
+    # pull ``modulo.core`` into ``modulo.connectors.rest`` must fail here.

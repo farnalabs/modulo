@@ -32,7 +32,7 @@ def _get_hub_connector_types() -> set[str]:
 def test_all_connector_types_have_polling_parity():
     """Every non-excluded connector type in connector_hub must be handled by
     _build_polling_connector or explicitly excluded."""
-    polling_types = {"filesystem", "github", "gitlab", "jira", "slack", "linear"}
+    polling_types = {"filesystem", "github", "gitlab", "jira", "slack", "linear", "rest"}
 
     excluded_types: dict[str, str] = {
         "shell": "requires runtime_provider — polling has no run context",
@@ -93,6 +93,7 @@ def test_polling_types_are_valid_connectors():
         ("jira", {"instance": "x"}, {"token": "x"}),
         ("slack", {}, {"bot_token": "x"}),
         ("linear", {}, {"token": "x"}),
+        ("rest", {"base_url": "https://api.example.com"}, {"auth_mode": "bearer", "token": "t"}),
     ]
     for type_id, config, creds in test_cases:
         connector = _build_polling_connector(type_id, config, creds)

@@ -47,6 +47,7 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
     from modulo.connectors.gitlab import GitLabConnector
     from modulo.connectors.jira import JiraConnector
     from modulo.connectors.linear import LinearConnector
+    from modulo.connectors.rest import RestConnector
     from modulo.connectors.slack import SlackConnector
 
     match type_id:
@@ -75,6 +76,14 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
             return SlackConnector(bot_token=creds["bot_token"])
         case "linear":
             return LinearConnector(token=creds["token"])
+        case "rest":
+            from modulo.core.connector_hub import _core_security_guard
+
+            return RestConnector(
+                config=config,
+                creds=creds,
+                security_guard=_core_security_guard(),
+            )
         case _:
             raise ValueError(f"Unsupported connector type for polling: {type_id!r}")
 
