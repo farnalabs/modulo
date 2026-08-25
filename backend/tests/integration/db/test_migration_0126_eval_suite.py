@@ -145,7 +145,7 @@ async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     db_name = f"eval_suite_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
 
     iso_url = _swap_db_name(db_url, db_name)
