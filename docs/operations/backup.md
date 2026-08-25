@@ -48,8 +48,8 @@ The script will:
 
 ### Environment Variables
 
-- `DATABASE_URL` — Postgres connection string
-- `MODULO_BACKUP_PASSPHRASE` — Encryption passphrase (if not using `--passphrase`)
+- `DATABASE_URL` – Postgres connection string
+- `MODULO_BACKUP_PASSPHRASE` – Encryption passphrase (if not using `--passphrase`)
 
 ### Cron Job Template
 

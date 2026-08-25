@@ -2,18 +2,18 @@
 
 **Audience:** Platform engineers and SREs operating a self-hosted Modulo
 instance. This guide covers emergency administrative procedures that require
-direct infrastructure access — beyond what the application API or admin UI
+direct infrastructure access – beyond what the application API or admin UI
 provides.
 
 **Prerequisite reading:**
-- `docs/deployment.md` — base deployment reference
-- `docs/deployment-security.md` — security hardening baseline
-- `docs/security/secret-management.md` — key management and rotation
-- `docs/operations/backup.md` — backup/restore procedures
-- `docs/operations/admin-bypass.md` — LangGraph checkpoint bypass procedures
-- `docs/configuration-reference.md` — all env vars reference
-- `docs/system-requirements.md` — hardware and platform requirements
-- `docs/upgrade-process.md` — upgrade and rollback procedures
+- `docs/deployment.md` – base deployment reference
+- `docs/deployment-security.md` – security hardening baseline
+- `docs/security/secret-management.md` – key management and rotation
+- `docs/operations/backup.md` – backup/restore procedures
+- `docs/operations/admin-bypass.md` – LangGraph checkpoint bypass procedures
+- `docs/configuration-reference.md` – all env vars reference
+- `docs/system-requirements.md` – hardware and platform requirements
+- `docs/upgrade-process.md` – upgrade and rollback procedures
 
 ---
 
@@ -22,7 +22,7 @@ provides.
 Self-hosted deployments give the operator full control over the infrastructure
 stack, including direct database access, filesystem access, and environment
 variable management. This power is necessary for emergency recovery but comes
-with significant responsibility — every bypass step documented here **skips
+with significant responsibility – every bypass step documented here **skips
 application-layer validation and audit logging**.
 
 ### When to Use This Guide vs. File a Support Issue
@@ -31,12 +31,12 @@ application-layer validation and audit logging**.
 |-----------|---------|
 | A pipeline run is stuck and `POST /api/v1/runs/{id}/cancel` cannot recover it | Follow `docs/operations/admin-bypass.md` |
 | An admin user forgot their password | **Reset via CLI below** (§2) |
-| `SECRET_KEY` was rotated and all sessions are invalid | Restart services — sessions re-negotiate (§3.1) |
+| `SECRET_KEY` was rotated and all sessions are invalid | Restart services – sessions re-negotiate (§3.1) |
 | `FERNET_KEY` was rotated and credentials fail to decrypt | Re-enter credentials under the new key; `modulo restore --previous-fernet-key` does not recover a lost key (§3.2) |
-| Both `SECRET_KEY` and `FERNET_KEY` are lost | **You cannot recover encrypted data** — restore from backup (§4) |
+| Both `SECRET_KEY` and `FERNET_KEY` are lost | **You cannot recover encrypted data** – restore from backup (§4) |
 | You cannot authenticate to the admin UI to debug a configuration issue | Local auth bypass (§5) |
-| You suspect a bug in the application | File a GitHub issue — do not modify the database |
-| You want to add a feature or modify schema | Do not manually DDL — write a migration |
+| You suspect a bug in the application | File a GitHub issue – do not modify the database |
+| You want to add a feature or modify schema | Do not manually DDL – write a migration |
 | Data corruption, security incident, or tenant breach | Follow `docs/security/incident-response-playbook.md` |
 
 ### Guiding Principle
@@ -106,14 +106,14 @@ affect encrypted data at rest (that uses `FERNET_KEY`). Recovery is simple:
 3. Restart Modulo services.
 4. All users (including admin) must re-authenticate.
 
-**No data is lost.** Sessions are ephemeral — users log back in.
+**No data is lost.** Sessions are ephemeral – users log back in.
 
 ### 3.2 Lost `FERNET_KEY`
 
 **This is a data-loss scenario.** `FERNET_KEY` encrypts connector credentials,
 webhook secrets, and model backend API keys at rest. If the key is lost:
 
-1. **Do not restart services** — the application will refuse to start if
+1. **Do not restart services** – the application will refuse to start if
    `FERNET_KEY` is absent, but running instances will continue to work with
    cached decrypted credentials in memory.
 2. **If the key file was deleted but the process is still running**, recover
@@ -131,7 +131,7 @@ webhook secrets, and model backend API keys at rest. If the key is lost:
    - Checkpoint blobs encrypted with the old key are **unrecoverable**
      unless you have a backup (see §4).
 4. **Always store a backup copy of `FERNET_KEY`** in a separate vault,
-   password manager, or offline storage — never only in the running
+   password manager, or offline storage – never only in the running
    environment.
 
 ### 3.3 Key Rotation Best Practice
@@ -210,7 +210,7 @@ locally.
 
 The `modulo` CLI only exposes `backup` and `restore` (see §4). Emergency
 admin actions (password reset, token creation) require direct database
-access as described in §2 and below — there is no `modulo users` or
+access as described in §2 and below – there is no `modulo users` or
 `modulo sessions` command.
 
 ### 5.2 Create a Temporary Admin API Token
