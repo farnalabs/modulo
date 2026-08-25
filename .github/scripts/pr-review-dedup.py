@@ -97,19 +97,19 @@ def main(argv):
         print(
             "usage: pr-review-dedup.py <reviews.json> <commits.json> <head_sha>",
             file=sys.stderr,
-        )  # noqa: T201
+        )
         return 2
     try:
         reviews = load(argv[1])
         commits = load(argv[2])
         head_sha = argv[3]
     except Exception as exc:  # fail open on any I/O or JSON error
-        print("skip=false", flush=True)  # noqa: T201
-        print(f"error loading inputs: {exc} - dispatch (fail open)", file=sys.stderr)  # noqa: T201
+        print("skip=false", flush=True)
+        print(f"error loading inputs: {exc} - dispatch (fail open)", file=sys.stderr)
         return 0
     skip, reason = decide(reviews, commits, head_sha)
-    print("skip=true" if skip else "skip=false", flush=True)  # noqa: T201
-    print(reason, file=sys.stderr)  # noqa: T201
+    print("skip=true" if skip else "skip=false", flush=True)
+    print(reason, file=sys.stderr)
     return 0
 
 

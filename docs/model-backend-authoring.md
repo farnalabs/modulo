@@ -105,6 +105,7 @@ from langchain_core.messages import HumanMessage
 
 from modulo.model_backends.base import HealthResult
 
+
 async def health_check(self) -> HealthResult:
     try:
         await self.invoke([HumanMessage(content="ping")], max_tokens=1)

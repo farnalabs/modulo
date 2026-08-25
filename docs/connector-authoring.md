@@ -52,10 +52,12 @@ class ConnectorQuery:
     limit: int = 100
     cursor: str | None = None
 
+
 @dataclass
 class ConnectorPayload:
     resource: str
     data: dict[str, Any]
+
 
 @dataclass
 class ConnectorResult:
@@ -104,9 +106,7 @@ the real connector against test fixtures (e.g., local Git repositories for
 ```python
 async def test_your_connector():
     connector = YourConnector(api_key="test-token")  # creds passed to the constructor
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"state": "open"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"state": "open"}))
     assert result.total is None or len(result.records) <= result.total
 ```
 

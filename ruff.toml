@@ -29,6 +29,7 @@ ignore = [
 [lint.per-file-ignores]
 "scripts/*" = ["T20", "E402", "E501", "S106", "S603", "S607", "S608", "RUF005", "ASYNC240"]
 "backend/scripts/*" = ["T20"]
+".github/scripts/*" = ["T20"]
 "deploy/*" = ["T20", "S108"]
 "tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008"]
 "docs/**" = ["T20"]
