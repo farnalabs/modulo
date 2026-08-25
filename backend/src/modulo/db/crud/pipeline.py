@@ -514,6 +514,8 @@ async def _clone_edges(
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
             hitl_gate_config=copy.deepcopy(edge["hitl_gate_config"]),
+            source_port=edge.get("source_port", "out"),
+            target_port=edge.get("target_port", "in"),
         )
         session.add(cloned_edge)
         if edge["hitl_gate_config"] is not None:
@@ -593,6 +595,8 @@ def _edge_to_plain_dict(e: PipelineEdge) -> dict[str, Any]:
         "target_node_id": e.target_node_id,
         "edge_type": e.edge_type,
         "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+        "source_port": getattr(e, "source_port", "out"),
+        "target_port": getattr(e, "target_port", "in"),
     }
 
 
