@@ -507,7 +507,7 @@
               <Button :disabled="setSaving || !setForm.name.trim()" @click="saveSet" data-testid="paramschema-set-save">
                 {{ setSaving ? $t('views.ParameterSchemasView.saving') : $t('views.ParameterSchemasView.save') }}
               </Button>
-              <button
+              <button type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                 @click="cancelSetEdit"
               >
@@ -524,7 +524,7 @@
               <Button :disabled="deletingSet" severity="danger" @click="doDeleteSet">
                 {{ deletingSet ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
               </Button>
-              <button
+              <button type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                 @click="deleteSetConfirmId = null"
               >
@@ -918,14 +918,14 @@ function startNewSet() {
 function editSet(set: SetItem) {
   editingSet.value = true
   editingSetId.value = set.id
-  setForm.value = { name: set.name, description: set.description || '', values: { ...(set.values || {}) } }
+  setForm.value = { name: set.name, description: set.description || '', values: { ...set.values } }
   setSaveError.value = null
 }
 
 function cloneSet(set: SetItem) {
   editingSet.value = true
   editingSetId.value = null
-  setForm.value = { name: t('views.ParameterSchemasView.cloned_set_name', { name: set.name }), description: set.description || '', values: { ...(set.values || {}) } }
+  setForm.value = { name: t('views.ParameterSchemasView.cloned_set_name', { name: set.name }), description: set.description || '', values: { ...set.values } }
   setSaveError.value = null
 }
 

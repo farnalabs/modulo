@@ -107,7 +107,7 @@ function mountView(run: unknown = guardrailBlockedRun()) {
         Dialog: {
           template: '<div class="p-dialog"><slot name="header" /><slot /><slot name="footer" /></div>',
         },
-        Button: { template: '<button><slot /></button>' },
+        Button: { template: '<button type="button"><slot /></button>' },
         JsonViewer: { template: '<div />' },
         RunErrorTag: { template: '<span />' },
         LoadingSpinner: { template: '<div />' },

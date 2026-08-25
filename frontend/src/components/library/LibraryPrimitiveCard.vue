@@ -50,7 +50,7 @@
 
     <div v-if="showAutoUpdate && prim.forked_from" class="flex items-center gap-2 mb-3">
       <span class="text-xs text-muted-foreground">{{ $t('views.LibraryView.auto_update') }}</span>
-      <button
+      <button type="button"
         class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50"
         :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
         role="switch"
@@ -67,7 +67,7 @@
     </div>
 
     <div class="flex items-center gap-2 mt-auto">
-      <button
+      <button type="button"
         v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
         class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
         @click="$emit('create-pipeline', prim)"
@@ -75,7 +75,7 @@
       >
         {{ $t('views.LibraryView.create_pipeline') }}
       </button>
-      <button
+      <button type="button"
         v-else-if="prim.primitive_type === 'lifecycle_map'"
         class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="adapting[prim.id]"
@@ -89,7 +89,7 @@
             : $t('views.LibraryView.copy_to_adapt')
         }}
       </button>
-      <button
+      <button type="button"
         class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
         @click="$emit('view-details', prim)"
         data-testid="library-view-details"

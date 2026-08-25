@@ -1,6 +1,6 @@
 <template>
   <div class="relative" ref="dropdownRef">
-    <button
+    <button type="button"
       class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
       @click="open = !open"
     >
@@ -15,7 +15,7 @@
     >
       <div class="border-b px-3 py-2 text-xs font-medium text-muted-foreground">{{ $t('components.lifecycle-map.editor.VersionHistoryDropdown.version_history') }}</div>
       <div class="max-h-48 overflow-y-auto">
-        <button
+        <button type="button"
           v-for="v in sortedVersions"
           :key="v.id"
           :class="[
@@ -65,7 +65,7 @@ const sortedVersions = computed(() =>
 function formatDate(dateStr: string) {
   try {
     const d = new Date(dateStr)
-    if (isNaN(d.getTime())) return '?'
+    if (Number.isNaN(d.getTime())) return '?'
     return formatDateShort(d)
   } catch {
     return '?'
