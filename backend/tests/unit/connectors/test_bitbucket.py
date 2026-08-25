@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors._safe_page import safe_paging_total as _paging_total
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector, _paging_total
+from modulo.connectors.bitbucket import BitbucketConnector
 
 TOKEN = "bitbucket_test_token"
 _API = "https://api.bitbucket.org/2.0"
@@ -215,14 +216,14 @@ async def test_query_issues_corrupt_body_no_crash(connector):
 
 
 def test_paging_total() -> None:
-    assert _paging_total({"size": 25}) == 25
-    assert _paging_total({"size": "25"}) == 25
-    assert _paging_total({"size": 1e999}) == 0
-    assert _paging_total({"size": float("nan")}) == 0
-    assert _paging_total({"size": True}) == 0
-    assert _paging_total({"size": "garbage"}) == 0
-    assert _paging_total({}) is None
-    assert _paging_total(["garbage"]) is None
+    assert _paging_total({"size": 25}, "size") == 25
+    assert _paging_total({"size": "25"}, "size") == 25
+    assert _paging_total({"size": 1e999}, "size") == 0
+    assert _paging_total({"size": float("nan")}, "size") == 0
+    assert _paging_total({"size": True}, "size") == 0
+    assert _paging_total({"size": "garbage"}, "size") == 0
+    assert _paging_total({}, "size") is None
+    assert _paging_total(["garbage"], "size") is None
 
 
 def test_app_password_auth():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -79,8 +80,22 @@ def test_read_version_missing_returns_none(tmp_path):
     assert bv.read_version(path) is None
 
 
-def test_write_version_toml(tmp_path):
-    path = tmp_path / "pyproject.toml"
+@pytest.fixture
+def root_tmp():
+    """Temp dir located INSIDE the project root.
+
+    write_version refuses to touch paths outside PROJECT_ROOT (a security guard
+    added on this branch), so fixtures that exercise the real writer must stay
+    within the project tree.
+    """
+    d = bv.PROJECT_ROOT / ".bump_version_test_tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def test_write_version_toml(root_tmp):
+    path = root_tmp / "pyproject.toml"
     path.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
     bv.write_version(path, "1.2.3", "2.0.0")
     content = path.read_text()
@@ -88,8 +103,8 @@ def test_write_version_toml(tmp_path):
     assert "1.2.3" not in content
 
 
-def test_write_version_json(tmp_path):
-    path = tmp_path / "package.json"
+def test_write_version_json(root_tmp):
+    path = root_tmp / "package.json"
     path.write_text('{"name": "modulo", "version": "1.2.3"}\n')
     bv.write_version(path, "1.2.3", "1.3.0")
     content = path.read_text()
@@ -97,21 +112,28 @@ def test_write_version_json(tmp_path):
     assert "1.2.3" not in content
 
 
+def test_write_version_refuses_outside_root(tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
+    with pytest.raises(ValueError, match="refusing to write version outside project root"):
+        bv.write_version(path, "1.2.3", "2.0.0")
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
 
-def _setup_main(tmp_path):
-    pyproject = tmp_path / "pyproject.toml"
+def _setup_main(root_tmp):
+    pyproject = root_tmp / "pyproject.toml"
     pyproject.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
-    package = tmp_path / "package.json"
+    package = root_tmp / "package.json"
     package.write_text('{"name": "modulo", "version": "1.2.3"}\n')
     return pyproject, package
 
 
-def test_main_bumps_patch_by_default(monkeypatch, tmp_path, capsys):
-    pyproject, package = _setup_main(tmp_path)
+def test_main_bumps_patch_by_default(monkeypatch, root_tmp, capsys):
+    pyproject, package = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
@@ -124,8 +146,8 @@ def test_main_bumps_patch_by_default(monkeypatch, tmp_path, capsys):
     assert "Bumping patch version: 1.2.3 -> 1.2.4" in out
 
 
-def test_main_bumps_requested_part(monkeypatch, tmp_path):
-    pyproject, package = _setup_main(tmp_path)
+def test_main_bumps_requested_part(monkeypatch, root_tmp):
+    pyproject, package = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "minor"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
@@ -136,8 +158,8 @@ def test_main_bumps_requested_part(monkeypatch, tmp_path):
     assert '"version": "1.3.0"' in package.read_text()
 
 
-def test_main_bumps_major(monkeypatch, tmp_path):
-    pyproject, package = _setup_main(tmp_path)
+def test_main_bumps_major(monkeypatch, root_tmp):
+    pyproject, package = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "major"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),

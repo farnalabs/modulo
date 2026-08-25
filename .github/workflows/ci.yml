@@ -60,6 +60,19 @@ jobs:
       - run: uv run --no-build --no-sync pip-audit
       - name: Import-linter architecture contracts
         run: uv run --no-build --no-sync lint-imports
+      - name: Validate sidebar nav translations
+        working-directory: .
+        run: uv run --no-build --project backend --no-sync python scripts/run_validate_translations.py
+      - name: Trivy filesystem scan (dependency CVEs + misconfigs)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: 'table'
+          skip-dirs: '**/.venv,**/node_modules,**/.git,**/.agents,**/.pytest_cache,**/dist,**/build'
 
   backend-test:
     name: Test (Backend)

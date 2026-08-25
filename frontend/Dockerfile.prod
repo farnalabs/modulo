@@ -7,13 +7,22 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
         cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
     fi
-COPY . .
+# S6470: copy only the sources needed to build instead of `COPY . .`
+COPY index.html vite.config.ts tsconfig.json tsconfig.node.json tailwind.config.cjs components.json eslint.config.mjs .npmrc .nsprc ./
+COPY src ./src
+COPY public ./public
 ARG VITE_API_URL=""
 ENV VITE_API_URL=${VITE_API_URL}
 ARG VITE_MONITOR_BACKEND="builtin,sentry,datadog-rum,grafana-faro"
 ENV VITE_MONITOR_BACKEND=${VITE_MONITOR_BACKEND}
 ARG VITE_SENTRY_DSN=""
 ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN}
+# NOSONAR (S6472): VITE_-prefixed vars are inlined into the public client bundle by
+# design, so these are NOT server secrets. VITE_DATADOG_RUM_CLIENT_TOKEN is a
+# Datadog RUM *client* token (public by design — safe to ship to browsers, unlike
+# the RUM API key), and VITE_GRAFANA_FARO_URL is a public collector endpoint URL.
+# Keeping them as build ARGs/ENV is the only way Vite can inline them at build time;
+# a build secret would still end up in the shipped JS, so it adds no protection here.
 ARG VITE_DATADOG_RUM_CLIENT_TOKEN=""
 ENV VITE_DATADOG_RUM_CLIENT_TOKEN=${VITE_DATADOG_RUM_CLIENT_TOKEN}
 ARG VITE_GRAFANA_FARO_URL=""

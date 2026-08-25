@@ -176,6 +176,51 @@ def test_mapped_routes_render_a_page_not_a_redirect():
     )
 
 
+def test_route_names_are_unique_across_manifest():
+    routes = _load_manifest()["routes"]
+    seen: dict[str, str] = {}
+    duplicated: list[str] = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        name = entry["name"]
+        if name in seen:
+            duplicated.append(f"  {name}: {seen[name]} and {path}")
+        else:
+            seen[name] = path
+    assert not duplicated, (
+        "duplicate route names corrupt the router's manifestByName lookup and breadcrumb hierarchy; "
+        "each route must be uniquely named:\n" + "\n".join(duplicated)
+    )
+
+
+def test_route_parent_hierarchy_is_acyclic_and_resolves():
+    routes = _load_manifest()["routes"]
+    invalid = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("parent"):
+            continue
+        parent = entry["parent"]
+        if parent not in routes:
+            invalid.append(f"{path} -> dangling parent {parent!r} (not a route path)")
+            continue
+
+        seen: set[str] = set()
+        cursor: str | None = parent
+        while cursor:
+            if cursor in seen:
+                invalid.append(f"{path} -> circular parent chain involving {cursor!r}")
+                break
+            seen.add(cursor)
+            next_entry = routes[cursor]
+            cursor = next_entry.get("parent") if isinstance(next_entry, dict) else None
+    assert not invalid, (
+        "dangling or circular parent references break breadcrumbs and Remy's page hierarchy:\n" + "\n".join(invalid)
+    )
+
+
 def _load_elements() -> dict[str, list[dict]]:
     data = _load_manifest()
     elements = data.get("elements")

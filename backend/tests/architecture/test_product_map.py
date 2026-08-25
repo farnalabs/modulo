@@ -89,6 +89,20 @@ def test_every_registered_feature_is_referenced_by_a_route():
     )
 
 
+def test_every_registered_feature_has_a_description():
+    data = _load_manifest()
+    registry = data["features"]
+    blank = {
+        feat: spec
+        for feat, spec in registry.items()
+        if not isinstance(spec, dict) or not str(spec.get("description") or "").strip()
+    }
+    assert not blank, (
+        "registered features with a blank/missing description (Remy's feature search has nothing to match):\n"
+        + "\n".join(f"  {feat} -> {spec!r}" for feat, spec in sorted(blank.items()))
+    )
+
+
 def test_documentation_indexer_surfaces_product_map_features():
     from modulo.core.documentation_indexer import DocumentationIndex
 

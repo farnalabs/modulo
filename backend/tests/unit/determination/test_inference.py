@@ -202,6 +202,32 @@ def test_ci_detected_from_repo_name() -> None:
     assert len(ci) == 1
 
 
+def test_ci_detected_from_description_without_name() -> None:
+    """CI detection must not require an identifier: a bare description hint suffices."""
+    samples = [make_sample("repos", [{"description": "deploys via .github/workflows"}])]
+    findings = infer(samples)
+    ci = [f for f in findings if f.category == "automation" and "CI/CD configuration detected" in f.finding]
+    assert len(ci) == 1
+
+
+def test_non_string_repo_identifier_does_not_crash() -> None:
+    """Malformed records whose identifiers are not strings must not crash or skew inference."""
+    samples = [
+        make_sample(
+            "repos",
+            [
+                {"full_name": 12345},
+                {"name": ["nested"]},
+                {"full_name": "owner/repo"},
+            ],
+        )
+    ]
+    findings = infer(samples)
+    development = [f for f in findings if f.category == "stage" and "Development" in f.finding]
+    assert len(development) == 1
+    assert "1 repository" in development[0].evidence
+
+
 def test_confidence_levels_present() -> None:
     samples = [
         make_sample("repos", [{"name": "repo"}]),

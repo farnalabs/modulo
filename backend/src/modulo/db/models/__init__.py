@@ -22,6 +22,18 @@ from modulo.db.models.eval_dataset import (
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
+from modulo.db.models.eval_suite_run import (
+    IllegalStateTransitionError,
+    OptimisticLockError,
+    SuiteRun,
+    SuiteRunState,
+    can_transition,
+    canonical_hash,
+    compute_definition_checksum,
+    compute_scenario_signature,
+    is_terminal,
+    transition_state,
+)
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.journey import Journey
@@ -105,6 +117,7 @@ __all__ = [
     "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",
+    "IllegalStateTransitionError",
     "Journey",
     "JourneyFact",
     "LibraryPrimitive",
@@ -125,6 +138,7 @@ __all__ = [
     "OAuthClient",
     "OAuthTokenFamily",
     "OnboardingProgress",
+    "OptimisticLockError",
     "OrgApiKey",
     "OrgDailyRunCount",
     "OrgMembership",
@@ -153,6 +167,8 @@ __all__ = [
     "SnapshotSchemaPin",
     "SpendAnomaly",
     "SsoProvider",
+    "SuiteRun",
+    "SuiteRunState",
     "SystemConfig",
     "Team",
     "TeamMembership",
@@ -166,7 +182,13 @@ __all__ = [
     "WebhookDedupHash",
     "WebhookPayload",
     "WorkspaceLease",
+    "can_transition",
+    "canonical_hash",
+    "compute_definition_checksum",
     "compute_input_hash",
+    "compute_scenario_signature",
+    "is_terminal",
     "purge_soft_deleted_eval_cases",
+    "transition_state",
     "validate_dataset_has_cases",
 ]

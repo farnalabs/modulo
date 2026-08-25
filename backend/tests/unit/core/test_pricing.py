@@ -29,33 +29,32 @@ class TestGetPricing:
         ("provider", "model", "expected_input", "expected_output"),
         [
             ("openai", "gpt-4o", 2.50, 10.00),
-            ("openai", "gpt-4o-2024-08-06", 2.50, None),
-            ("openai", "gpt-4o-mini-2024-07-18", 0.15, None),
-            ("anthropic", "claude-sonnet-4-20250514", 3.00, None),
-            ("anthropic", "claude-haiku-3.5-20241022", 0.80, None),
+            ("openai", "gpt-4o-2024-08-06", 2.50, 10.00),
+            ("openai", "gpt-4o-mini-2024-07-18", 0.15, 0.60),
+            ("anthropic", "claude-sonnet-4-20250514", 3.00, 15.00),
+            ("anthropic", "claude-haiku-3.5-20241022", 0.80, 4.00),
             ("deepseek", "deepseek-chat", 0.27, 1.10),
-            ("deepseek", "deepseek-v3", 0.27, None),
-            ("deepseek", "deepseek-r1", 0.55, None),
+            ("deepseek", "deepseek-v3", 0.27, 1.10),
+            ("deepseek", "deepseek-r1", 0.55, 2.19),
             ("groq", "llama-3.3-70b-versatile", 0.0, 0.0),
-            ("groq", "mixtral-8x7b-32768", 0.0, None),
-            ("perplexity", "sonar", 1.00, None),
-            ("perplexity", "sonar-pro", 3.00, None),
+            ("groq", "mixtral-8x7b-32768", 0.0, 0.0),
+            ("perplexity", "sonar", 1.00, 1.00),
+            ("perplexity", "sonar-pro", 3.00, 3.00),
             ("perplexity", "sonar-reasoning", 1.00, 5.00),
-            ("togetherai", "mixtral-8x22b-instruct", 0.60, None),
-            ("togetherai", "Llama-3.3-70B-Instruct-Turbo", 0.80, None),
-            ("azure_openai", "gpt-4o-2024-08-06", 2.50, None),
-            ("azure_openai", "gpt-4o-mini-2024-07-18", 0.15, None),
+            ("togetherai", "mixtral-8x22b-instruct", 0.60, 0.60),
+            ("togetherai", "Llama-3.3-70B-Instruct-Turbo", 0.80, 0.80),
+            ("azure_openai", "gpt-4o-2024-08-06", 2.50, 10.00),
+            ("azure_openai", "gpt-4o-mini-2024-07-18", 0.15, 0.60),
             ("azure_openai", "o4-mini", 1.10, 4.40),
         ],
     )
     def test_known_model_pricing(
-        self, provider: str, model: str, expected_input: float, expected_output: float | None
+        self, provider: str, model: str, expected_input: float, expected_output: float
     ) -> None:
         pricing = get_pricing(provider, model)
         assert pricing is not None
         assert pricing.input_price_per_1k == expected_input
-        if expected_output is not None:
-            assert pricing.output_price_per_1k == expected_output
+        assert pricing.output_price_per_1k == expected_output
 
     @pytest.mark.parametrize(
         ("provider", "model"),
@@ -68,6 +67,38 @@ class TestGetPricing:
     def test_unknown_returns_none(self, provider: str, model: str) -> None:
         pricing = get_pricing(provider, model)
         assert pricing is None
+
+    def test_provider_match_is_exact_and_case_sensitive(self) -> None:
+        assert get_pricing("OPENAI", "gpt-4o") is None
+        assert get_pricing("openai", "gpt-4o") is not None
+
+    def test_provider_specific_star_pattern_does_not_leak(self) -> None:
+        # groq is the only provider with a bare "*" pattern; a model that is
+        # unknown to another provider must not be backfilled by groq's wildcard.
+        assert get_pricing("openai", "totally-unknown-model") is None
+        assert get_pricing("deepseek", "totally-unknown-model") is None
+
+    @pytest.mark.parametrize(
+        ("model", "expected_pattern"),
+        [
+            ("gpt-4o", "gpt-4o"),
+            ("gpt-4o-2024-08-06", "gpt-4o*"),
+            ("gpt-4o-mini-2024-07-18", "gpt-4o-mini*"),
+            ("o3-mini", "o3*"),
+            ("o4-mini-2024-07-18", "o4-mini*"),
+        ],
+    )
+    def test_specific_pattern_matches_before_generic(self, model: str, expected_pattern: str) -> None:
+        # The specific-* entry must win over the broader sibling (e.g. gpt-4o-mini*
+        # over gpt-4o*) because it appears earlier in PRICING_TABLE.
+        pricing = get_pricing("openai", model)
+        assert pricing is not None
+        assert pricing.model_pattern == expected_pattern
+
+    def test_model_with_trailing_dots_and_slash(self) -> None:
+        pricing = get_pricing("openai", "gpt-4o/2024")
+        assert pricing is not None
+        assert pricing.model_pattern == "gpt-4o*"
 
 
 class TestPricingTable:

@@ -912,6 +912,7 @@ def _trigger_period_seconds(
             return max(int((nxt - prev).total_seconds()), 1)
         return None
     except Exception:
+        _log.debug("error_tracking.cadence_uncomputable", extra={"trigger_type": trigger_type})
         return None
 
 

@@ -843,7 +843,7 @@ async def _load_hitl_series(
         }
 
     hitl_volume: list[dict[str, Any]] = []
-    for i in range(days):
+    for i in range(min(days, 90)):
         d = (start_date + timedelta(days=i)).isoformat()
         entry = hitl_by_date.get(
             d,
@@ -913,7 +913,7 @@ async def _load_feedback_volume(
         }
 
     feedback_volume: list[dict[str, Any]] = []
-    for i in range(days):
+    for i in range(min(days, 90)):
         d = (start_date + timedelta(days=i)).isoformat()
         entry = feedback_by_date.get(
             d,

@@ -29,7 +29,7 @@ _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0120 is still the
 # org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0136_rename_remy_user_id_to_account_id"
+_CHAIN_HEAD_MIGRATION = "0140_eval_regression_alert"
 
 
 def _source(name: str) -> str:

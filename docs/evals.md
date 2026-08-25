@@ -163,3 +163,174 @@ Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
 > Note: this document is the source of truth for the eval data layer while
 > `docs/prd.md` is being revised; any PRD section describing an "eval dataset"
 > concept must match the entities and guarantees above.
+
+## Tracking an eval over time (`SuiteRun`) — FAR-376 Phase 3
+
+Phase 3 closes the flywheel: take an `EvalSuite` (Phase 1) onto a repeatable
+`EvalDataset` (Phase 2), run it against a pinned Model Backend on a snapshot of
+the exact inputs + definition config, persist every per-case outcome, and —
+when a same-tuple baseline already exists — **detect a pass-rate regression**.
+
+### `SuiteRun` — one execution, three immutable snapshots
+
+A `SuiteRun` records one execution of a suite against a dataset:
+
+* **`dataset_version`** — snapshot of dataset membership at creation. A content
+  change bumps the version, which produces a NEW baseline tuple rather than
+  corrupting a prior run's comparison.
+* **`definition_checksum`** — SHA-256 of every eval-definition's config snapshot.
+  A changed config or changed membership also produces a new tuple.
+* **`scenario_signature`** — canonical hash of the run's scenario inputs; `NULL`
+  is the explicit "scenarios unused" sentinel.
+
+These are captured **at creation and never live-looked-up**. The immutable
+`baseline_tuple` is the comparison key: `(suite_id, dataset_id, dataset_version,
+eval_definition_ids, definition_checksum, model_backend_id, scenario_signature)`.
+
+### Version scoping — FAR-382
+
+Each `EvalDefinition` and `EvalSuite` carries an integer `version` (default `1`,
+non-null from cutover). Every definition create stamps `version=1`; every edit
+snapshots the pre-edit config into `pre_version_raw` (JSON) and bumps `version`
+by one, so a rubric change (e.g. a v1 -> v2 edit to an eval's `config_json`) is
+an **explicitly version-scoped event** rather than a silent mutation.
+
+* **`EvalResult.eval_definition_version`** — a snapshot of the eval-definition
+  `version` that scored the result, captured at write time. A version bump after
+  a result was scored never retroactively changes what that result represents.
+* **NULL-version lookup (latest-at-time)** — a result recorded before
+  versioning was cut over carries `eval_definition_version = NULL`. When a query
+  needs an eval definition but no version is pinned, it resolves to the
+  definition's **current (latest)** `version` (see
+  `resolve_eval_definition_version`); a pinned version is returned unchanged.
+* Complement, not replacement: `definition_checksum` remains the config
+  fingerprint that produces a new `baseline_tuple` on a config change, while
+  `version` is the human-explicit signal of that change. The two together ensure
+  a rubric change is never mistaken for a regression.
+
+`CalibrationLabel` / calibration-vs-human-labels is deliberately **out of scope**
+for this versioning work.
+
+### State machine
+
+```
+pending -> running -> completed | partial | failed
+  |--cancelled (pending or running)
+```
+
+* `partial` (some cases errored) is distinct from `failed` (orchestration error).
+* Transitions are guarded by an **optimistic-lock `version` column**: two
+  concurrent workers cannot both land `completed` — the second is rejected.
+
+### Baseline resolution
+
+The baseline is the **latest same-tuple `completed` run strictly prior** to the
+current run, with a deterministic `(created_at, id)` tiebreak. It never queries
+the live dataset/definition; it is a pure tuple match on prior `SuiteRun` rows.
+
+* First run (no completed same-tuple prior) → **comparison skipped** + warning,
+  no regression flag.
+* `partial`/`failed`/`cancelled` prior runs are never baselines.
+* Cross-org runs are never selected (org-scoped, and never by the org's RLS).
+* An operator may pin a canonical baseline (`baseline_locked`).
+
+### Comparison — REUSES the existing engine, never a parallel store
+
+Per-case outcomes are persisted into the existing `eval_results` table (via
+`suite_run_id`) and the pass-rate comparison delegates to `detect_regressions`
+with `group_by="suite_id"` plus an explicit `baseline` scope. **The default
+`detect_regressions(session, org_id, days=7, ...)` signature is unchanged.**
+
+* Pass rates are aggregated **per `eval_type` only** — raw `score` is never
+  averaged across differing eval types (type-incorrect).
+* Regression fires on configurable absolute (and optional relative) drop
+  thresholds.
+* A `partial` run excludes its errored cases from the denominator (recorded as
+  `excluded_case_count`) and does not raise a regression alert unless explicitly
+  configured.
+
+### Regression notification — the Alerting layer (FAR-379)
+
+Regression postings route through the existing `Notifier` (`eval_regression`
+event) — no parallel "sink". Eval notification endpoints share **zero**
+subscribers with production error forwarders (a runtime guard asserts this);
+posting is idempotent on `suite_run_id`, rate-limited per suite, requires a
+baseline before any alert fires, and alerts if the eval channel has no
+subscribers (never a silent drop).
+
+Detection is Phase 3's job. The **alerting** layer (FAR-379) owns *when* and
+*how often* it pages, and is configured per suite via
+`PUT /api/v1/evals/suites/{suite_id}/alerting`:
+
+| Field | Meaning |
+|---|---|
+| `baseline_window` | Rolling N-run baseline window used when resolving the comparison baseline. `NULL` = alerting dormant until an explicit baseline exists. |
+| `minimum_delta` | Minimum pass-rate drop (fraction 0..1) the observed drop must exceed before an alert fires. `NULL` = defer entirely to the Phase 3 `regressed` flag. |
+| `cooldown` | Silence window (minutes) between regression alerts for a suite — a single sustained regression does not page on every run. `NULL` = no time-based rate limit (idempotency on `suite_run_id` still applies). |
+
+The decision function is `maybe_alert_eval_regression` in
+`core/eval_engine/suite_run.py`. Its guards fire in order: an **explicit
+baseline is required** (a first run never alerts — `regressed` is `None`), a
+non-regressed run is skipped, a `partial` run never alerts, an alert for a
+given run is sent at most once (idempotent on `suite_run_id` via `notified_at`),
+the drop must meet `minimum_delta`, and the suite's `cooldown` window rate-limits
+a persistent regression. Only then does the runtime isolation guard run — it
+*fails loudly* (raises) if the eval channel has no eval-scoped subscribers or
+leaks to a production error forwarder, never a silent drop. All config is
+org-scoped and overwritten-able (`NULL` clears a field).
+
+### Spend & tenancy
+
+Execution routes through the org Model Backend with the `daily_spend_limit`
+**and** a separate per-suite cumulative cost ceiling (two independent counters).
+The per-suite ledger is a row-locked increment before each judge call so a
+read-check-write race cannot overshoot. `suite_runs` carries `ENABLE` + `FORCE
+ROW LEVEL SECURITY` + `rls_org_isolation` (owned by `modulo_migrate`), so the
+`OrgScoped` mixin alone is not the isolation boundary.
+
+### Feature flag
+
+The SuiteRun / comparison ENDPOINTS and UI are gated behind the existing
+`eval_maturity` flag (`eval_maturity_enabled()`), fail-closed to the legacy
+suite path. The data layer is always present; only the new comparison surface is
+gated.
+
+## Leaderboard / rollup read-model (FAR-378)
+
+The READ side of the eval flywheel is a pure read-model over the now-structured
+`SuiteRun` / `eval_results` data. It is **live aggregation** over the existing
+tables — there is no parallel materialised table, no new "scores over time"
+store — so it can never diverge from what the writer actually persisted.
+
+Two endpoints:
+
+* `GET /api/v1/evals/leaderboard?group_by=pipeline|node|agent` — per-axis
+  leaderboard ranked by aggregate pass-rate, optional `eval_id` filter (the
+  cross-pipeline rollup), plus `pipeline_id` / `node_id` / `model_backend_id`
+  and `days` filters.
+* `GET /api/v1/evals/{eval_id}/timeseries` — day-bucketed pass-rate series for
+  one eval, with a window `summary` and a `pipelines` cross-pipeline rollup.
+
+### The pass-rate-only rule (non-circular)
+
+Leaderboards and time-series rank and aggregate on **pass-rate only** — the
+`passed` boolean, never the raw `score` column. A raw score is not comparable
+across differing `eval_type` (an `llm_judge` 0.8 and a `regex` 0.6 measure
+different things), so every aggregation **partitions by `eval_type`** and rolls
+up by *counting passes*, never by *averaging scores*. A mixed-`eval_type` axis
+is never ranked on a raw score:
+
+* each leaderboard entry carries a per-`eval_type` `by_type` breakdown
+  (`pass_rate` / `passed` / `total` / `run_count`); the entry-level
+  `pass_rate` is `passed/total` across the boolean partitions, never a score
+  mean;
+* the timeseries buckets `eval_type` separately too.
+
+### Isolation and determinism
+
+Every query injects the explicit `organisation_id = :org` predicate —
+`modulo_app` is BYPASSRLS, so the predicate is the ONLY isolation control
+(`set_rls_org` remains defense-in-depth). Suite-run outcomes count only when the
+run is terminal (`completed`/`partial`), so the read-model is deterministic
+across two calls; legacy pipeline-path rows (no `suite_run_id`) are always
+included. Guardrail rows are excluded (the standard eval consumer contract).

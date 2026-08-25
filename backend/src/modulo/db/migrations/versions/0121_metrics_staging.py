@@ -76,9 +76,10 @@ def upgrade() -> None:
             """
         )
     )
-    # Guard the policy creation so this reconciliation migration stays
-    # idempotent when re-run against a database that already carries the
-    # rls_org_isolation policy (e.g. a partial/interrupted prior apply).
+    # Idempotent guard: the table/index/constraint above use IF NOT EXISTS, so
+    # this reconciliation migration must not fail when re-applied against a DB
+    # that already carries the policy (e.g. a reused/persisted Postgres, or a
+    # re-run of the migration chain). CREATE POLICY has no native IF NOT EXISTS.
     op.execute(
         sa.text(
             """

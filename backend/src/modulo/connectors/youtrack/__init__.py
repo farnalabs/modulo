@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -13,7 +14,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.types import _DICT_STR_ANY
 
 
 def _safe_top_level_records(body: Any) -> list[dict[str, Any]]:

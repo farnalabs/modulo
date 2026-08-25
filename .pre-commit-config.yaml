@@ -130,6 +130,12 @@
         language: system
         files: ^backend/pyproject\.toml$
         pass_filenames: false
+      - id: validate-translations
+        name: validate sidebar nav translation keys
+        entry: uv run --project backend --no-sync python scripts/run_validate_translations.py
+        language: system
+        files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js)$
+        pass_filenames: false
       - id: validate-pipeline-configs
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
         entry: uv run --directory backend --no-sync python ../scripts/validate_pipeline_configs.py

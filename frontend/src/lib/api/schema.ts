@@ -995,6 +995,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/housekeeping/checkpoints/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge Checkpoints
+         * @description Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
+         *
+         *     FAR-432: a terminal run's checkpoint rows are unread after the run finishes
+         *     and dominate DB volume. This releases them for TERMINAL runs older than
+         *     ``max_age_days`` (default ``CHECKPOINT_RETENTION_DAYS`` = 3) while leaving
+         *     the ``runs`` rows intact (outputs, telemetry, classification stay for audit
+         *     + analytics, ADR 020). Never purges a non-terminal / HITL-paused run — an
+         *     ``awaiting_human`` run keeps its interrupt checkpoint so ``resume_run``
+         *     continues the graph instead of re-running side-effectful nodes.
+         *
+         *     Requires ``confirm: true``. Scoped to the caller's organisation (RLS).
+         */
+        post: operations["purge_checkpoints_api_v1_admin_housekeeping_checkpoints_purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -5629,6 +5659,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/leaderboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eval Leaderboard
+         * @description Return a per-axis leaderboard ranked by aggregate pass-rate (FAR-378).
+         *
+         *     A pure read-model over the ``SuiteRun``/``eval_results`` data. The axis is
+         *     ``pipeline`` | ``node`` | ``agent`` (the model backend that produced the
+         *     output). Pass-rate is computed from the ``passed`` boolean ONLY — raw
+         *     ``score`` is never compared across differing ``eval_type``; each axis entry
+         *     carries a per-``eval_type`` partition (``by_type``) so a mixed-type suite is
+         *     never ranked on a raw score. Org-scoped: every query carries the explicit
+         *     ``organisation_id`` predicate.
+         */
+        get: operations["eval_leaderboard_api_v1_evals_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eval Timeseries
+         * @description Return a day-bucketed pass-rate time-series for a single eval (FAR-378).
+         *
+         *     Zeros the day grid from the window start through today so the series is
+         *     continuous; an absent day is emitted with ``total=0`` and ``pass_rate=None``
+         *     (never ``0.0``). Carries a cross-pipeline rollup (``pipelines``) and a
+         *     window ``summary``. Pass-rate is computed from ``passed`` only, partitioned
+         *     by ``eval_type``.
+         */
+        get: operations["eval_timeseries_api_v1_evals__eval_id__timeseries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/suites/{suite_id}/alerting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Suite Alerting
+         * @description Configure regression alerting for an eval suite (FAR-379).
+         *
+         *     Admin only. Sets the suite's ``baseline_window`` / ``minimum_delta`` /
+         *     ``cooldown`` so the Alerting layer knows WHEN and HOW OFTEN to page: a
+         *     regression must exceed ``minimum_delta``, and after it fires the suite is
+         *     silent for ``cooldown`` minutes. ``baseline_window`` controls how many of
+         *     the most-recent completed same-tuple prior runs form the comparison baseline
+         *     (``N`` — a rolling N-run baseline; NULL — single-latest). A NULL
+         *     ``baseline_window`` does NOT disable alerting: the window widens the baseline
+         *     but whether to alert is always governed by the comparison result and
+         *     ``minimum_delta``. Additive/non-breaking — every field is optional, and NULL
+         *     clears that field.
+         *
+         *     The suite is looked up org-scoped (a cross-org suite can never be
+         *     configured). NULL values are persisted as NULL, wiping the config.
+         */
+        put: operations["update_suite_alerting_api_v1_evals_suites__suite_id__alerting_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals/{eval_id}": {
         parameters: {
             query?: never;
@@ -6184,6 +6302,79 @@ export interface paths {
         get: operations["rotation_status_api_v1_admin_rotation_status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/run-retention/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Candidates
+         * @description List runs matching the filter set, with an estimated per-run byte size.
+         *
+         *     Returns every matching run (including non-terminal ones — the UI shows
+         *     terminal-only as purge-able), the total match count, and an estimated total
+         *     reclaimable byte count across ALL matches.
+         */
+        get: operations["candidates_api_v1_admin_run_retention_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/run-retention/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export
+         * @description Stream a JSONL file of the matching runs (metadata + full outputs).
+         *
+         *     Memory-safe: runs are streamed in pages and each run's checkpoint summary is
+         *     aggregated in a batch, so nothing accumulates. The response is a download
+         *     with a ``Content-Disposition`` attachment header.
+         */
+        post: operations["export_api_v1_admin_run_retention_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/run-retention/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge
+         * @description Delete terminal runs matching the filter set, cascading to checkpoints.
+         *
+         *     Requires ``confirm: true``. Only terminal-status runs are ever deleted; the
+         *     purge is batched (500 runs per SAVEPOINT), transactional, and idempotent.
+         *     Never deletes a pending/running/awaiting_human/claimed run. On success an
+         *     audit event is appended to the affected org's chain.
+         */
+        post: operations["purge_api_v1_admin_run_retention_purge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8648,6 +8839,15 @@ export interface components {
              */
             entity_type: string;
         };
+        /** CandidatesResponse */
+        CandidatesResponse: {
+            /** Runs */
+            runs: components["schemas"]["RetentionCandidate"][];
+            /** Total Count */
+            total_count: number;
+            /** Total Estimated Bytes */
+            total_estimated_bytes: number;
+        };
         /** ChangeMemberRoleRequest */
         ChangeMemberRoleRequest: {
             /** Role */
@@ -8664,6 +8864,25 @@ export interface components {
             latency_ms?: number | null;
             /** Detail */
             detail?: string | null;
+        };
+        /** CheckpointRetentionPurgeRequest */
+        CheckpointRetentionPurgeRequest: {
+            /** Max Age Days */
+            max_age_days?: number | null;
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
+        };
+        /** CheckpointRetentionPurgeResponse */
+        CheckpointRetentionPurgeResponse: {
+            /** Checkpoints Purged */
+            checkpoints_purged: number;
+            /** Threads Purged */
+            threads_purged: number;
+            /** Bytes Freed */
+            bytes_freed: number;
         };
         /** CircuitBreakerResetResponse */
         CircuitBreakerResetResponse: {
@@ -10203,10 +10422,45 @@ export interface components {
             /** Suite Id */
             suite_id?: string | null;
             /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** Pre Version Raw */
+            pre_version_raw?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Created By
              * Format: uuid
              */
             created_by: string;
+        };
+        /**
+         * EvalSuiteAlertingRequest
+         * @description Per-suite regression alerting configuration (FAR-379).
+         */
+        EvalSuiteAlertingRequest: {
+            /** Baseline Window */
+            baseline_window?: number | null;
+            /** Minimum Delta */
+            minimum_delta?: number | null;
+            /** Cooldown */
+            cooldown?: number | null;
+        };
+        /** EvalSuiteAlertingResponse */
+        EvalSuiteAlertingResponse: {
+            /**
+             * Suite Id
+             * Format: uuid
+             */
+            suite_id: string;
+            /** Baseline Window */
+            baseline_window: number | null;
+            /** Minimum Delta */
+            minimum_delta: number | null;
+            /** Cooldown */
+            cooldown: number | null;
         };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
@@ -10218,6 +10472,19 @@ export interface components {
             config_used: {
                 [key: string]: unknown;
             };
+        };
+        /** ExportRequest */
+        ExportRequest: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Organisation Id */
+            organisation_id?: string | null;
         };
         /** FeatureFlagInfo */
         FeatureFlagInfo: {
@@ -13328,6 +13595,33 @@ export interface components {
             /** Verified */
             verified: boolean;
         };
+        /** PurgeRequest */
+        PurgeRequest: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Organisation Id */
+            organisation_id?: string | null;
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
+        };
+        /** PurgeResponse */
+        PurgeResponse: {
+            /** Purged Runs */
+            purged_runs: number;
+            /** Purged Checkpoints */
+            purged_checkpoints: number;
+            /** Freed Estimated Bytes */
+            freed_estimated_bytes: number;
+        };
         /** PurgeRunsRequest */
         PurgeRunsRequest: {
             /**
@@ -13665,6 +13959,21 @@ export interface components {
             schedule_type: string;
             /** Created At */
             created_at: string;
+        };
+        /** RetentionCandidate */
+        RetentionCandidate: {
+            /** Id */
+            id: string;
+            /** Created At */
+            created_at: string | null;
+            /** Status */
+            status: string;
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Estimated Bytes */
+            estimated_bytes: number;
         };
         /** RetentionConfigResponse */
         RetentionConfigResponse: {
@@ -18949,6 +19258,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleanupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_checkpoints_api_v1_admin_housekeeping_checkpoints_purge_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointRetentionPurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointRetentionPurgeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29687,6 +30031,233 @@ export interface operations {
             };
         };
     };
+    eval_leaderboard_api_v1_evals_leaderboard_get: {
+        parameters: {
+            query?: {
+                group_by?: string;
+                days?: number;
+                eval_id?: string | null;
+                pipeline_id?: string | null;
+                node_id?: string | null;
+                model_backend_id?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    eval_timeseries_api_v1_evals__eval_id__timeseries_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                pipeline_id?: string | null;
+                node_id?: string | null;
+                model_backend_id?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_suite_alerting_api_v1_evals_suites__suite_id__alerting_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                suite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvalSuiteAlertingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalSuiteAlertingResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_eval_definition_api_v1_evals__eval_id__get: {
         parameters: {
             query?: {
@@ -31277,6 +31848,114 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    candidates_api_v1_admin_run_retention_candidates_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                pipeline_id?: string | null;
+                status?: string | null;
+                organisation_id?: string | null;
+                limit?: number;
+                offset?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_api_v1_admin_run_retention_export_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_api_v1_admin_run_retention_purge_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

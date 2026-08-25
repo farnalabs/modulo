@@ -46,7 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.types import _DICT_STR_ANY
+from modulo._types import _DICT_STR_ANY
 
 _log = logging.getLogger(__name__)
 
