@@ -76,6 +76,35 @@ def _parse_password(url: str) -> str:
     return unquote(parsed.password) if parsed.password else ""
 
 
+def _role_attributes(*, login: bool, bypassrls: bool) -> str:
+    """Build the LOGIN/BYPASSRLS attribute clause shared by CREATE/ALTER ROLE."""
+    if login and bypassrls:
+        return "LOGIN BYPASSRLS"
+    if login:
+        return "LOGIN"
+    if bypassrls:
+        return "NOSUPERUSER NOLOGIN BYPASSRLS"
+    return "NOSUPERUSER NOLOGIN"
+
+
+async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
+    attrs = _role_attributes(login=login, bypassrls=bypassrls)
+    if login:
+        await conn.execute(f"CREATE ROLE \"{name}\" {attrs} PASSWORD '{password}'")
+    else:
+        await conn.execute(f'CREATE ROLE "{name}" {attrs}')
+    _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
+
+
+async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
+    attrs = _role_attributes(login=login, bypassrls=bypassrls)
+    if login:
+        await conn.execute(f"ALTER ROLE \"{name}\" WITH {attrs} PASSWORD '{password}'")
+    else:
+        await conn.execute(f'ALTER ROLE "{name}" WITH {attrs}')
+    _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
+
+
 async def _create_or_update_role(
     conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool = True
 ) -> None:
@@ -87,28 +116,10 @@ async def _create_or_update_role(
     """
     quoted_pass = (password or "").replace("'", "''")
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
-    if not exists:
-        if login:
-            if bypassrls:
-                await conn.execute(f"CREATE ROLE \"{name}\" LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
-            else:
-                await conn.execute(f"CREATE ROLE \"{name}\" LOGIN PASSWORD '{quoted_pass}'")
-        elif bypassrls:
-            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
-        else:
-            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN')
-        _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
+    if exists:
+        await _alter_role(conn, name, login=login, password=quoted_pass, bypassrls=bypassrls)
     else:
-        if login:
-            if bypassrls:
-                await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
-            else:
-                await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN PASSWORD '{quoted_pass}'")
-        elif bypassrls:
-            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
-        else:
-            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN')
-        _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
+        await _create_role(conn, name, login=login, password=quoted_pass, bypassrls=bypassrls)
 
 
 async def _table_exists(conn: asyncpg.Connection, table: str) -> bool:
