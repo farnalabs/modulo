@@ -650,12 +650,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
-          path: .
+          path: backend
       - name: Download frontend coverage
         uses: actions/download-artifact@v4
         with:
           name: frontend-coverage
-          path: .
+          path: frontend/coverage
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f
         env:
