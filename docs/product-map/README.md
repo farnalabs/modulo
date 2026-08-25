@@ -134,15 +134,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
 ### Auth and Security
+- [feat-core-oidc-integration](auth/oidc-integration.md) => PRD 9.4
+- [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
+- [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
 
 ### Core Platform
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
+- [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
+- [feat-core-run-context](core/run-context.md) => PRD N/A
 
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
 
 ### Pipelines
+- [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
 
 ### Teams

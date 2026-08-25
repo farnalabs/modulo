@@ -173,6 +173,46 @@ def test_feature_references_resolve():
     )
 
 
+def _feature_literals_in_docs() -> dict[str, list[str]]:
+    """Every ``feat-*`` literal referenced anywhere under ``docs/``."""
+    docs = REPO_ROOT / "docs"
+    if not docs.is_dir():
+        return {}
+    found: dict[str, list[str]] = {}
+    for path in sorted(docs.rglob("*.md")):
+        if path.suffix != ".md":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for literal in sorted(_FEAT_LITERAL.findall(text)):
+            found.setdefault(literal, []).append(path.relative_to(REPO_ROOT).as_posix())
+    return found
+
+
+def test_documentation_feature_references_resolve():
+    """Every ``feat-*`` literal in docs resolves against the product map.
+
+    Docs are consumed by Remy's ``search_documentation`` indexer and the feature
+    graph's behaviour trackers carry typed ``depends-on`` edges between ``feat-*``
+    nodes. A ``feat-*`` id used in documentation but missing from the manifest
+    ``features:`` registry and from every ``docs/product-map/`` entry id is a dangling
+    graph edge: the reader (or the graph) points at a feature that has no node.
+    Register infra-only features as behaviour-tracker entries (``docs/product-map/``);
+    route-referenced features belong in the manifest registry.
+    """
+    resolver = _manifest_features() | _product_map_entry_ids()
+    assert resolver, "product map must register at least one feature"
+
+    dangling = {feat: docs for feat, docs in sorted(_feature_literals_in_docs().items()) if feat not in resolver}
+    assert not dangling, (
+        "feat-* references in docs that resolve against no product-map feature"
+        " (not in frontend/src/manifest.yaml 'features:' and no docs/product-map entry):\n"
+        + "\n".join(f"  {feat} -> {', '.join(docs)}" for feat, docs in sorted(dangling.items()))
+    )
+
+
 def test_documented_graph_paths_resolve():
     """Every ``docs/product-map/...`` path referenced in shipped docs resolves.
 

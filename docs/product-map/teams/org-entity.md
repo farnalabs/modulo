@@ -30,7 +30,7 @@ depends-on:
   - feat-auth-jwt-auth
   - feat-core-db-abstraction-core
   - feat-core-run-context
-  - feat-core-feature-flag-ui
+  - feat-org
 status: covered
 ---
 

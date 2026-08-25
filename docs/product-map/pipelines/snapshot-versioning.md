@@ -1,0 +1,55 @@
+---
+id: feat-pipelines-pipeline-versioning
+prd: 8.13
+adr: []
+code:
+  - backend/src/modulo/db/models/pipeline_snapshot.py
+  - backend/src/modulo/db/crud/pipeline_snapshot.py
+  - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/runs.py
+unit-tests:
+  - backend/tests/unit/pipelines/test_snapshot_versioning.py
+  - backend/tests/unit/pipelines/test_snapshot_crud.py
+  - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
+  - backend/tests/unit/db/test_pipeline_snapshot.py
+bdd: []
+depends-on:
+  - feat-pipelines
+status: covered
+---
+
+# Pipeline Snapshot Versioning
+
+Versioned pipeline snapshots: a snapshot is captured automatically at run
+trigger, each carries an incrementing `snapshot_version`, and the versioning
+CRUD (tag, annotate, delete, rollback, diff) is the data layer under
+`feat-pipelines-pipeline-diff-rollback`.
+
+## Behaviours
+
+- [x] Snapshots are created from the live graph and ordered by version descending
+      with total count
+- [x] Diff between two snapshots returns added / removed / modified nodes and
+      edges with per-field changes (including connector bindings, environment
+      bindings, and HITL gate config), and an empty diff when identical
+- [x] Diff for a missing snapshot resolves to `None` (caller surfaces 404)
+- [x] Tag / annotate a snapshot via PATCH
+- [x] Delete refuses the latest snapshot of a pipeline
+- [x] Backward compatibility for pre-versioning snapshot records
+- [x] Versioning CRUD is the back-end of the `snapshots` endpoints under
+      `/api/v1/pipelines` and the `runs-diff` surface
+
+## Known Gaps
+
+- **No BDD feature file** — snapshot versioning is covered by unit tests only
+  (`test_snapshot_versioning.py` etc.); scenarios live behind the higher-level
+  `feat-pipelines-pipeline-diff-rollback` entry.
+
+## QA History
+
+- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+  dangling `depends-on: feat-pipelines-pipeline-versioning` edge in
+  `pipelines/pipeline-diff-rollback.md`. Behaviours re-verified against
+  `db/crud/pipeline_snapshot_versioning.py` and the snapshot unit suites. Status:
+  covered.

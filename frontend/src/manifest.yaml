@@ -3010,9 +3010,9 @@ features:
             - "[x] Idempotent verbs (GET/HEAD) retry on 429/5xx with backoff; mutating verbs retry only when an idempotency_header is declared (UNTESTED for idempotency key replay)"
             - "[x] Pagination is response-driven (next_cursor via JMESPath) but is deferred beyond v1 - a direct start cursor is rejected with an actionable error"
         deferrals:
-            - Per-tenant weighted concurrency semaphore (today the connector shares a single connection-pooled client; far-out fan-out relies on pipeline-level concurrency limits)
+            - Per-tenant weighted concurrency semaphore (the connector shares a single connection-pooled client; fan-out emits one request per item sequentially, so cross-tenant fairness relies on pipeline-level concurrency limits)
             - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is deferred to FAR-404)
-            - Fan-out cardinality guard (a connector-level cap on parallel requests per fan-out is deferred; rely on pipeline-level concurrency limits)
+            - Redis-backed rate limiting (the per-destination token bucket is per-process / best-effort per uvicorn-SAQ worker, not Redis-backed)
 
     feat-costs:
         description: Cost tracking, spend limits, cost controls, and cost components
