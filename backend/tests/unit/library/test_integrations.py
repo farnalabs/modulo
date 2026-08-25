@@ -37,7 +37,7 @@ def _integration(name: str) -> dict[str, Any]:
 
 def test_all_integrations_exported() -> None:
     """Every exported integration constant is a dict definition."""
-    assert len(integration_exports) == 23
+    assert len(integration_exports) == 24
     for name in integration_exports:
         assert isinstance(_integration(name), dict), name
 

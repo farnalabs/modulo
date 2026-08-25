@@ -312,6 +312,32 @@ regression that silently weakens the suite:
   literal that *contains* ``ANY`` (``[a, ANY]``) makes ``in`` always PASS and
   ``not in`` always FAIL, because the element match short-circuits on
   ``x == ANY``
+- ``test_*`` functions *nested inside another function* — pytest only
+  collects module/class-level ``test_*`` functions, so a ``def test_*``
+  defined inside a test (or helper) body is never collected and silently
+  drops whatever regression coverage it carries without any warning. It is
+  almost always an accidental indentation or a helper miscast as a test, and
+  nothing in the normal run reports it — the suite just runs a few tests
+  fewer than a reader believes. Hoist the nested test to module scope, or
+  rename a helper that only happens to start with ``test_``. ``@pytest.mark``-
+  decorated functions are covered too (same non-collection), while nested
+  ``def``/``class``/``@pytest.fixture`` helpers are left alone — those are the
+  legitimate local-helper spellings
+- a freshly-constructed Mock nested *inside* a container literal in an
+  ``assert`` — ``assert result == {'status': MagicMock()}``,
+  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
+  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
+  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
+  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
+  truthy) ALWAYS PASS — every one decided at source time, never by the code
+  under test. This is the nested-or-direct-container twin of the Mock-
+  constructor lens, which owns only the *direct* positions (the assert's test
+  expression, a ``not``-wrap, or a single comparison operand): a fresh
+  constructor buried in a list/dict/tuple/set literal is a different AST shape
+  that the direct lens provably misses. The configure-then-assert fix is the
+  same — configure the double (``return_value``/``side_effect``) and verify
+  through ``assert_called*``/attribute checks instead of comparing to a
+  constructor call
 - a direct mutation of the process environment made without the ``monkeypatch``
   fixture in scope — subscript set/delete on the ``os.environ`` mapping
   (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
@@ -325,9 +351,23 @@ regression that silently weakens the suite:
   teardown automatically and are the pytest-blessed form — a function that
   requests ``monkeypatch`` is left alone even when it mutates ``os.environ``
   directly. Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
-  module-level ``os.environ.setdefault(...)`` bootstrap (the ``conftest.py``
+  module-level ``os.environ.setdefault(...)`` bootstrap (the   ``conftest.py``
   pattern that pins ``DATABASE_URL`` once at import time, which is idempotent
   configuration rather than between-test leakage) are deliberately left alone
+- a direct mutation of the process *working directory* made without the
+  ``monkeypatch`` fixture in scope — ``os.chdir(...)`` (either spelling),
+  ``os.fchdir(...)``, and ``Path.chdir()``. A test that changes the current
+  working directory and never restores it leaks that directory into every test
+  that runs afterwards, so the suite becomes order-dependent: a test that (say)
+  resolves a config template relative to ``os.getcwd()``, or writes a file into
+  ``Path.cwd()``, behaves one way alone in CI and another way after a sibling
+  that ``os.chdir``'d (or that itself depends on the pristine repo-root CWD).
+  ``monkeypatch.chdir(tmp_path)`` restores the original directory at teardown
+  automatically and is the pytest-blessed form — a function that requests
+  ``monkeypatch`` is trusted even when it ``os.chdir``'s directly. Reads of the
+  working directory (``os.getcwd()``, ``Path.cwd()``) are left alone, as are
+  directory *creation* calls (``os.makedirs``/``os.mkdir``/``Path.mkdir``)
+  that never change the process CWD
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -355,6 +395,26 @@ def _decorator_name(dec: ast.AST) -> str | None:
     if isinstance(dec, ast.Name):
         return dec.id
     return None
+
+
+def _is_mark_decorator(dec: ast.AST) -> bool:
+    """Return True when ``dec`` is a ``@pytest.mark.*`` marker.
+
+    Unlike ``_decorator_name(d) == "mark"`` (which only matches a bare
+    ``@pytest.mark`` / ``@mark``), this walks the whole attribute chain so a
+    realistically-spelled marker such as ``@pytest.mark.asyncio`` is also
+    recognised — its terminal attribute is ``asyncio``, but the ``mark``
+    attribute sits further up the chain."""
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    node: ast.AST = dec
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return "mark" in parts
 
 
 def _iter_test_modules():
@@ -1626,7 +1686,7 @@ def test_no_noop_test_functions():
                 continue
             if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
                 continue
-            if not (node.name.startswith("test_") or any(_decorator_name(d) == "mark" for d in node.decorator_list)):
+            if not (node.name.startswith("test_") or any(_is_mark_decorator(d) for d in node.decorator_list)):
                 continue
             if _noop_lens_verifies(node):
                 continue
@@ -2796,7 +2856,7 @@ def _async_test_without_async_behavior_violations(tree: ast.AST) -> list[tuple[i
             continue
         if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
             continue
-        if not (node.name.startswith("test_") or any(_decorator_name(d) == "mark" for d in node.decorator_list)):
+        if not (node.name.startswith("test_") or any(_is_mark_decorator(d) for d in node.decorator_list)):
             continue
         if _function_is_async(node):
             continue
@@ -4287,6 +4347,122 @@ def test_mock_constructor_lens_flags_dead_asserts():
         assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+def _mock_constructor_container_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression nests a freshly-constructed Mock *inside* a container literal
+    (``[Mock()]``, ``{'k': MagicMock()}``, ``(AsyncMock(),)``, ``{Mock()}``).
+
+    A fresh Mock is only meaningful as an obligation for ``assert_called_with``
+    to match; inside a container it is compared by identity (``__eq__``
+    defaults to ``is``), so ``assert result == {'s': MagicMock()}`` ALWAYS
+    FAILS and ``assert result != [...]`` ALWAYS PASSES no matter what
+    ``result`` evaluates to, while ``assert [Mock()]`` (a non-empty container
+    is always truthy) ALWAYS PASSES. The outcome is fixed at source time in
+    every case. Only the *container-nesting* position is flagged here —
+    a fresh constructor that is the assert's test expression, a ``not``-wrap,
+    or the direct operand of a single-operator comparison belongs to the
+    Mock-constructor lens, so the two never double-report the same line. No
+    name resolution is involved, so a mock bound to a name elsewhere is never
+    implicated and the lens has no false positives from mocking assignments or
+    ``patch`` bindings."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        # Hunt for a fresh-mock constructor nested anywhere inside a container
+        # literal that itself sits inside the assert's test expression.
+        for container in ast.walk(node.test):
+            if not isinstance(container, (ast.List, ast.Dict, ast.Tuple, ast.Set)):
+                continue
+            elements = (
+                list(container.elts)
+                if isinstance(container, (ast.List, ast.Tuple, ast.Set))
+                else (list(container.keys) + list(container.values))
+            )
+            if any(_is_mock_constructor_call(el) for el in elements):
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(node.test)} — a fresh Mock nested inside a "
+                        "container literal is compared by identity, so the outcome is fixed "
+                        "at source time",
+                    )
+                )
+                break
+    return found
+
+
+def test_no_mock_constructor_in_container_asserts():
+    """An ``assert`` that nests a freshly-constructed Mock *inside* a container
+    literal is dead code with a fixed outcome, like the direct Mock-constructor
+    lens. A fresh Mock compares by identity (``__eq__`` defaults to ``is``), so
+    ``assert result == {'s': MagicMock()}`` always fails and
+    ``assert result != [AsyncMock()]`` always passes regardless of what
+    ``result`` evaluates to, and ``assert [Mock()]`` always passes because a
+    non-empty container is truthy. The nested-container spelling is a distinct
+    AST shape from the direct positions the Mock-constructor lens owns, so it
+    needs its own detector. The double should be configured
+    (``return_value``/``side_effect``) and asserted through ``assert_called*``
+    /attribute checks, never compared to through a container wrapper."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_constructor_container_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a newly-constructed Mock nested in a container.\n"
+        "A fresh Mock compares by identity and a non-empty container is always truthy, so the\n"
+        "outcome is decided at source time, never by the code under test. Configure the double\n"
+        "(return_value/side_effect) and assert through assert_called* instead.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_constructor_container_lens_flags_nested_constructors():
+    """Synthetic positive/negative control for the container-nested Mock lens: it
+    must flag an ``assert`` that nests a fresh Mock constructor inside a
+    list/dict/tuple/set literal in any operand position (equality with the
+    container, membership against it, bare truthiness) and ignore the direct
+    constructor positions owned by the Mock-constructor lens (bare, ``not``-wrapped,
+    single-comparison operand), already-bound mock names, mocks passed as call
+    arguments, and containers built from non-mock values (including ``ANY``)."""
+    positive_sources = [
+        "def test_foo():\n    assert result == [MagicMock()]\n",
+        "def test_foo():\n    assert result != [AsyncMock()]\n",
+        "def test_foo():\n    assert result == {'status': MagicMock()}\n",
+        "def test_foo():\n    assert result in (Mock(), 'x')\n",
+        "def test_foo():\n    assert result not in {MagicMock()}\n",
+        "def test_foo():\n    assert [Mock()]\n",
+        "def test_foo():\n    assert (AsyncMock(),)\n",
+        "def test_foo():\n    assert {'k': mocker.MagicMock()} == result\n",
+        "def test_foo():\n    assert result == [mock.Mock()]\n",
+        "def test_foo():\n    assert result == {'a': 1, 'b': unittest.mock.AsyncMock()}\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_constructor_container_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert Mock()\n",
+        "def test_foo():\n    assert result == Mock()\n",
+        "def test_foo():\n    assert not MagicMock()\n",
+        "def test_foo():\n    assert result is not None\n",
+        "def test_foo():\n    mock = MagicMock()\n    assert result == [mock]\n",
+        "def test_foo():\n    assert result == [m]\n",
+        "def test_foo():\n    assert result == [1, 2]\n",
+        "def test_foo():\n    assert result == {'k': 'v'}\n",
+        "def test_foo():\n    assert result == [ANY]\n",
+        "def test_foo():\n    mock.assert_called_with([1, MagicMock(return_value=2)])\n",
+        "def test_foo():\n    assert result == []\n",
+        "def test_foo():\n    assert result == {}\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_constructor_container_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 _MOCK_ASSERT_METHOD_NAMES = frozenset(
     {
         "assert_called",
@@ -4949,6 +5125,109 @@ def test_any_equality_lens_flags_fixed_outcomes():
         assert not _any_equality_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
+def _nested_test_functions(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``test_*`` (or
+    ``@pytest.mark``-decorated) function defined inside another function.
+
+    pytest only collects ``test_*`` functions at module and class scope, so a
+    test defined inside a function body is never collected and never runs —
+    silently dropping its coverage with no warning. ``@pytest.fixture`` and
+    other local helpers are deliberately excluded: those are the legitimate
+    nested-helper spellings and pytest asyncio/plugins may reference them.
+    ``@pytest.mark``-decorated nested functions are included, because the
+    decorator marks intent to be a test that pytest still will not collect.
+    """
+    stack: list[tuple[str, ast.AST]] = []  # (kind, node) for enclosing defs/classes
+
+    def _is_fixture(decs: list[ast.AST]) -> bool:
+        return any(_decorator_name(d) == "fixture" for d in decs)
+
+    found: list[tuple[int, str]] = []
+
+    def _visit(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            inside_fn = any(kind == "fn" for kind, _ in stack)
+            is_here_a_test = node.name.startswith("test_") or any(_is_mark_decorator(d) for d in node.decorator_list)
+            if inside_fn and is_here_a_test and not _is_fixture(node.decorator_list):
+                found.append((node.lineno, f"{node.name}() defined inside another function — pytest never collects it"))
+            stack.append(("fn", node))
+            for child in node.body:
+                _visit(child)
+            stack.pop()
+            return
+        if isinstance(node, ast.ClassDef):
+            stack.append(("cls", node))
+            for child in node.body:
+                _visit(child)
+            stack.pop()
+            return
+        for child in ast.iter_child_nodes(node):
+            _visit(child)
+
+    _visit(tree)
+    return found
+
+
+def test_no_nested_test_functions():
+    """A ``test_*`` function (or ``@pytest.mark``-decorated function) defined
+    *inside another function* is never collected by pytest, so the coverage it
+    carries silently drops from every run with no warning. pytest only
+    collects ``test_*`` at module and class scope; a test nested inside a test
+    or helper body is dead code that a reader — and a mutation-testing run —
+    believes is running. These are almost always an indentation accident or a
+    helper miscast as a ``test_``. Hoist a real test to module scope, or
+    rename a helper that merely happens to start with ``test_``. Nested
+    ``@pytest.fixture`` helpers and non-test local defs/classes are
+    deliberately left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _nested_test_functions(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} test function(s) nested inside another function.\n"
+        "pytest only collects test_* at module/class scope, so a nested test never runs —\n"
+        "its coverage silently drops from every run. Hoist it to module scope, or rename a\n"
+        "helper that only happens to start with 'test_'.\n" + "\n".join(violations)
+    )
+
+
+def test_nested_test_lens_flags_uncollected_tests():
+    """Synthetic positive/negative control for the nested-test lens: must flag
+    a ``test_*`` (or ``@pytest.mark``-decorated) function nested inside any
+    function (sync, async, or another test), and ignore nested fixtures,
+    non-``test_`` local helpers, and module/class-scope tests (which pytest
+    does collect)."""
+    positive_sources = [
+        "def test_foo():\n    def test_bar():\n        assert 1 == 1\n",
+        "def test_foo():\n    def helper():\n        def test_bar():\n            assert 1 == 1\n",
+        "async def test_foo():\n    def test_bar():\n        assert 1 == 1\n",
+        "def test_foo():\n    @pytest.mark.asyncio\n    def test_bar():\n        assert 1 == 1\n",
+        # Mark-detection branch exercised with a NON-``test_`` name: this only
+        # flags because ``@pytest.mark.asyncio`` is recognised as a marker.
+        "def test_foo():\n    @pytest.mark.asyncio\n    def _coro():\n        assert 1 == 1\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _nested_test_functions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert 1 == 1\n",
+        "def test_foo():\n    def helper():\n        return 1\n    assert helper() == 1\n",
+        "def test_foo():\n    @pytest.fixture\n    def fxt():\n        return 1\n",
+        "def test_bar():\n    assert 1 == 1\n",
+        "class TestSuite:\n    def test_bar(self):\n        assert 1 == 1\n",
+        "def test_bar():\n    assert 1 == 1\n",
+        "@pytest.mark.parametrize('x', [1])\ndef test_bar(x):\n    assert x == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _nested_test_functions(tree), f"lens should NOT flag:\n{source}"
+
+
 _MUTATING_ENVIRON_METHODS = frozenset({"pop", "update", "setdefault", "clear", "__setitem__", "__delitem__"})
 # Method names on ``os.environ`` that mutate the mapping in place. The
 # ``__setitem__``/``__delitem__`` twins cover the pydantic-spelled
@@ -5107,3 +5386,140 @@ def test_environ_mutation_lens_flags_unguarded_mutations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _environ_mutation_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _chdir_reference(node: ast.AST) -> bool:
+    """Return True for the ``os.chdir`` spelling — ``import os`` + the
+    attribute path ``os.chdir(...)`` (and the ``os.fchdir`` twin)."""
+    if not isinstance(node, (ast.Attribute,)) or not isinstance(node.value, ast.Name):
+        return False
+    return node.value.id == "os" and node.attr in ("chdir", "fchdir")
+
+
+def _cwd_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every direct working-directory
+    mutation made without the ``monkeypatch`` fixture in scope.
+
+    A test that changes the process working directory and never restores it
+    leaks that directory into every test that runs afterwards, so the suite
+    becomes order-dependent: a sibling that (say) resolves a config template
+    relative to ``os.getcwd()``, or writes into ``Path.cwd()``, behaves
+    differently after the offender runs. ``monkeypatch.chdir(tmp_path)``
+    restores the original directory at teardown automatically and is the
+    pytest-blessed form — a function that requests ``monkeypatch`` is left
+    alone even when it changes the directory directly. The recognised
+    mutation spellings are ``os.chdir(path)``/``os.fchdir(fd)`` (the
+    ``import os`` attribute form), the bare ``chdir(path)`` name (the
+    ``from os import chdir`` twin), and the ``Path.chdir()`` method. Reads of
+    the working directory (``os.getcwd()``, ``Path.cwd()``) and directory
+    *creation* calls (``os.makedirs``/``os.mkdir``/``Path.mkdir``) never
+    change the process CWD and are deliberately left alone. Only mutations
+    *inside a function body* are flagged: a module-level ``os.chdir(...)``
+    bootstrap that pins the process CWD once at import time is idempotent
+    setup, not between-test leakage.
+    """
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    found: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def _record(node: ast.AST, fn: ast.AST, kind: str) -> None:
+        key = (node.lineno, ast.unparse(node))
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} in {fn.name} changes the working directory without monkeypatch ({kind})",
+            )
+        )
+
+    for fn in functions:
+        guarded = any(arg.arg == "monkeypatch" for arg in fn.args.args)
+        pending = list(fn.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not guarded and isinstance(node, ast.Call):
+                func = node.func
+                if _chdir_reference(func):
+                    _record(node, fn, f"os.{func.attr}()")
+                elif isinstance(func, ast.Name) and func.id == "chdir":
+                    _record(node, fn, "bare chdir()")
+                elif isinstance(func, ast.Attribute) and func.attr == "chdir":
+                    receiver = func.value
+                    if not (isinstance(receiver, ast.Name) and receiver.id == "monkeypatch"):
+                        _record(node, fn, "Path.chdir()")
+            pending.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def test_no_cwd_mutation_without_monkeypatch():
+    """A test that changes the process working directory and never restores it
+    leaks that directory into every later test in the same run, so the suite
+    becomes order-dependent: a test can pass on its own and silently corrupt a
+    sibling that (say) resolves config relative to ``os.getcwd()`` or writes
+    into ``Path.cwd()``. ``monkeypatch.chdir(tmp_path)`` restores the original
+    directory at teardown automatically and is the pytest-blessed form, so a
+    function that requests ``monkeypatch`` is trusted even when it changes the
+    directory directly. This guards the ``os.chdir``/``os.fchdir`` attribute
+    spellings, the bare ``chdir(...)`` name, and ``Path.chdir()``. Reads of
+    the working directory (``os.getcwd()``/``Path.cwd()``) and directory
+    *creation* calls (``os.makedirs``/``os.mkdir``) are deliberately left
+    alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _cwd_mutation_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} working-directory mutation(s) made without monkeypatch.\n"
+        "A direct os.chdir never restores the prior directory, so it leaks state into every\n"
+        "later test in the run — the suite becomes order-dependent and fails at the wrong\n"
+        "test. Use monkeypatch.chdir(tmp_path), which restores at teardown.\n" + "\n".join(violations)
+    )
+
+
+def test_cwd_mutation_lens_flags_unguarded_mutations():
+    """Synthetic positive/negative control for the cwd-mutation lens: it must
+    flag every direct spelling (``os.chdir``/``os.fchdir``, the bare
+    ``chdir(...)`` name, and ``Path.chdir()``) when the enclosing function does
+    not request ``monkeypatch``, and ignore reads of the working directory,
+    directory *creation* calls, ``monkeypatch.chdir`` (the blessed form),
+    mutations inside a ``monkeypatch``-guarded function, nested helpers that
+    *are* guarded, and unrelated calls."""
+    positive_sources = [
+        "def test_foo():\n    os.chdir(tmp_path)\n",
+        "def test_foo():\n    import os\n    os.chdir('/tmp/x')\n",
+        "def test_foo():\n    os.fchdir(fd)\n",
+        "def test_foo():\n    chdir(tmp_path)\n",
+        "def test_foo():\n    from os import chdir\n    chdir('/tmp/x')\n",
+        "def test_foo():\n    Path.cwd().chdir()\n",
+        "def test_foo():\n    from pathlib import Path\n    Path('/tmp/x').chdir()\n",
+        "def test_foo():\n    def inner():\n        os.chdir(tmp_path)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _cwd_mutation_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo(monkeypatch):\n    os.chdir(tmp_path)\n",
+        "def test_foo():\n    monkeypatch.chdir(tmp_path)\n",
+        "def test_foo():\n    cwd = os.getcwd()\n",
+        "def test_foo():\n    cwd = Path.cwd()\n",
+        "def test_foo():\n    os.makedirs('/tmp/x')\n",
+        "def test_foo():\n    os.mkdir('/tmp/x')\n",
+        "def test_foo():\n    Path('/tmp/x').mkdir()\n",
+        "def test_foo():\n    p = Path('/tmp/x')\n    p.chdir = fake\n",
+        "def test_foo():\n    os.path.join('a', 'b')\n",
+        "def test_foo():\n    chdir_service.run()\n",
+        "def test_foo(monkeypatch):\n    def inner(monkeypatch):\n        os.chdir(tmp_path)\n",
+        "def test_foo():\n    fd = os.open('/tmp/x', os.O_RDONLY)\n    os.close(fd)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _cwd_mutation_violations(tree), f"lens should NOT flag:\n{source}"

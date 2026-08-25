@@ -88,7 +88,7 @@ class TestScanAll:
         scanners = [
             Scanner(
                 category="orphan_secrets",
-                scanner=AsyncMock(return_value=scanned_candidates),
+                scan_func=AsyncMock(return_value=scanned_candidates),
                 label="Orphan Secrets",
                 description="d",
                 entity_type="secret",
@@ -115,14 +115,14 @@ class TestScanAll:
             [
                 Scanner(
                     category="orphan_secrets",
-                    scanner=AsyncMock(return_value=ok_candidates),
+                    scan_func=AsyncMock(return_value=ok_candidates),
                     label="Orphan Secrets",
                     description="d",
                     entity_type="secret",
                 ),
                 Scanner(
                     category="stale_pipelines",
-                    scanner=broken_scanner,
+                    scan_func=broken_scanner,
                     label="Stale Pipelines",
                     description="d",
                     entity_type="pipeline",
@@ -144,7 +144,7 @@ class TestScanAll:
             [
                 Scanner(
                     category="empty_teams",
-                    scanner=AsyncMock(return_value=[]),
+                    scan_func=AsyncMock(return_value=[]),
                     label="Empty Teams",
                     description="d",
                     entity_type="team",
@@ -227,7 +227,7 @@ class TestScanInvalidOrgFk:
     def test_invalid_org_fk_is_registered_in_scanners(self) -> None:
         entry = SCANNERS_BY_CATEGORY.get("invalid_org_fk")
         assert entry is not None
-        assert entry.scanner is hk._scan_invalid_org_fk
+        assert entry.scan_func is hk._scan_invalid_org_fk
         assert entry.label == "Invalid Organisation FK"
         assert "orphaned" in entry.description.lower()
         assert entry.entity_type is None
@@ -278,7 +278,7 @@ class TestScanCheckpointRetention:
     def test_checkpoint_retention_is_registered_detection_only(self) -> None:
         entry = SCANNERS_BY_CATEGORY.get("checkpoint_retention")
         assert entry is not None
-        assert entry.scanner is hk._scan_checkpoint_retention
+        assert entry.scan_func is hk._scan_checkpoint_retention
         assert entry.label == "Checkpoint Retention"
         assert entry.entity_type is None
 
@@ -309,7 +309,7 @@ class TestScannerRegistry:
         scanned = [Candidate(id="x", name="n", detail="d", entity_type="invalid_org_fk")]
         detection_only = Scanner(
             category="invalid_org_fk",
-            scanner=AsyncMock(return_value=scanned),
+            scan_func=AsyncMock(return_value=scanned),
             label="Invalid Org FK",
             description="Orphan rows referencing a missing organisation",
             entity_type=None,

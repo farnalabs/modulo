@@ -26,5 +26,5 @@ class NodeCategory(SoftDeleteMixin, OrgScoped):
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

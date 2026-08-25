@@ -55,7 +55,7 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     # Cron-specific fields (nullable for non-cron trigger types)
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)

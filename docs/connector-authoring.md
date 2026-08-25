@@ -9,6 +9,7 @@ implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 ConnectorBase (ABC)          ← modulo/connectors/base.py
   ├── 40+ built-in connectors (filesystem, github, gitlab, jira,
   │   linear, slack, shell, pagerduty, sentry, datadog, and more)
+  │   including the generic REST connector (rest)
   │   see modulo/connectors/ for the full list
   ├── CIRunnerBase           ← modulo/connectors/ci_runner/ (abstract CI runner)
   ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract ticket-tracker base)
@@ -142,3 +143,9 @@ registry.register_connector_type(
     ),
 )
 ```
+
+## Generic REST connector
+
+For pointing Modulo at an arbitrary HTTP endpoint (no vendor client), see
+[`docs/rest-connector.md`](rest-connector.md) — config shape, auth modes, the
+egress allowlist, UNKNOWN semantics, and the determinism/ordering caveats.

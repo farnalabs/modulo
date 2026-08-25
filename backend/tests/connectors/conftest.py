@@ -5,10 +5,13 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from modulo.connectors.base import ConnectorBase
+from modulo.connectors.rest import RestConnector
 from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
+from tests.connectors._noop_guard import make_noop_security_guard
 
 # ── Connector fixture definitions ──────────────────────────────────────────
 
@@ -51,6 +54,41 @@ def shell_connector():
 
 
 register_conformance_connector("shell", "shell_connector")
+
+
+@pytest.fixture
+def rest_connector():
+    """A REST connector driven by a stub ``MockTransport`` (no real network).
+
+    The ``operations`` map only declares ``directory`` (read) and ``file``
+    (write), so unknown-resource conformance scenarios raise as expected. The
+    transport returns a JSON list for GETs (readable via ``records_path``) and a
+    JSON object for POSTs (the write result).
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(200, json={"data": {"items": [{"id": 1}, {"id": 2}]}})
+
+    return RestConnector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/health",
+            "records_path": "data.items",
+            "operations": {
+                "directory": {"path": "/directory"},
+                "file": {"method": "POST", "path": "/file", "body": {"path": "{{ path }}"}},
+            },
+        },
+        {"auth_mode": "bearer", "token": "test-token"},
+        transport=httpx.MockTransport(handler),
+        ssrf_validator=lambda url: None,
+        security_guard=make_noop_security_guard(),
+    )
+
+
+register_conformance_connector("rest", "rest_connector")
 
 
 # ── Auto-parametrisation hook ──────────────────────────────────────────────

@@ -31,7 +31,7 @@ class Journey(OrgScoped):
     __table_args__ = (UniqueConstraint("organisation_id", "kind", "ref", name="uq_journeys_org_kind_ref"),)
 
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     ref: Mapped[str] = mapped_column(String(255), nullable=False)

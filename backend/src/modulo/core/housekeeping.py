@@ -3,7 +3,7 @@
 import contextlib
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -107,7 +107,7 @@ class Scanner:
     """
 
     category: str
-    scanner: Callable[[AsyncSession, uuid.UUID], Awaitable[list["Candidate"]]]
+    scan_func: Callable[[AsyncSession, uuid.UUID], Awaitable[list["Candidate"]]]
     label: str
     description: str
     entity_type: str | None = None
@@ -149,6 +149,29 @@ class CategoryResult:
         }
 
 
+def _connector_secret_keys(connectors: Sequence[Any]) -> set[str]:
+    """Collect every secret key referenced by connector configs."""
+    referenced: set[str] = set()
+    for c in connectors:
+        for v in (c.config_json or {}).values():
+            if isinstance(v, str):
+                referenced.add(v)
+    return referenced
+
+
+def _agent_secret_keys(agents: Sequence[Any]) -> set[str]:
+    """Collect every secret key referenced by agent connector_type_refs."""
+    referenced: set[str] = set()
+    for a in agents:
+        for ref in a.connector_type_refs or []:
+            if not isinstance(ref, dict):
+                continue
+            secret_key = ref.get("secret_key") or ref.get("key")
+            if secret_key:
+                referenced.add(secret_key)
+    return referenced
+
+
 async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     secrets = (await session.execute(select(Secret).where(Secret.organisation_id == org_id))).scalars().all()
     if not secrets:
@@ -161,19 +184,7 @@ async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list
     )
     agents = (await session.execute(select(Agent).where(Agent.organisation_id == org_id))).scalars().all()
 
-    referenced_keys: set[str] = set()
-    for c in connectors:
-        cfg = c.config_json or {}
-        for v in cfg.values():
-            if isinstance(v, str):
-                referenced_keys.add(v)
-    for a in agents:
-        refs = a.connector_type_refs or []
-        for ref in refs:
-            if isinstance(ref, dict):
-                secret_key = ref.get("secret_key") or ref.get("key")
-                if secret_key:
-                    referenced_keys.add(secret_key)
+    referenced_keys = _connector_secret_keys(connectors) | _agent_secret_keys(agents)
 
     return [
         Candidate(
@@ -798,119 +809,119 @@ async def _scan_checkpoint_retention(session: AsyncSession, org_id: uuid.UUID) -
 _SCANNERS: list[Scanner] = [
     Scanner(
         category="orphan_secrets",
-        scanner=_scan_orphan_secrets,
+        scan_func=_scan_orphan_secrets,
         label="Orphan Secrets",
         description="Secrets whose key is not referenced by any connector config or agent connector_type_refs",
         entity_type="secret",
     ),
     Scanner(
         category="unbound_connectors",
-        scanner=_scan_unbound_connectors,
+        scan_func=_scan_unbound_connectors,
         label="Unbound Connectors",
         description="Connector instances not bound to any pipeline snapshot",
         entity_type="connector",
     ),
     Scanner(
         category="untriggered_pipelines",
-        scanner=_scan_untriggered_pipelines,
+        scan_func=_scan_untriggered_pipelines,
         label="Untriggered Pipelines",
         description="Pipelines with no trigger and no runs",
         entity_type="pipeline",
     ),
     Scanner(
         category="stale_pipelines",
-        scanner=_scan_stale_pipelines,
+        scan_func=_scan_stale_pipelines,
         label="Stale Pipelines",
         description="Pipelines with no runs in the last 4 weeks",
         entity_type="pipeline",
     ),
     Scanner(
         category="unused_model_backends",
-        scanner=_scan_unused_model_backends,
+        scan_func=_scan_unused_model_backends,
         label="Unused Model Backends",
         description="Model backends not assigned to any agent",
         entity_type="model_backend",
     ),
     Scanner(
         category="inactive_triggers",
-        scanner=_scan_inactive_triggers,
+        scan_func=_scan_inactive_triggers,
         label="Inactive Triggers",
         description="Triggers that are inactive and have never fired",
         entity_type="trigger",
     ),
     Scanner(
         category="orphan_snapshots",
-        scanner=_scan_orphan_snapshots,
+        scan_func=_scan_orphan_snapshots,
         label="Orphan Snapshots",
         description="Snapshots whose pipeline no longer exists",
         entity_type="pipeline_snapshot",
     ),
     Scanner(
         category="expired_webhook_dedups",
-        scanner=_scan_expired_webhook_dedups,
+        scan_func=_scan_expired_webhook_dedups,
         label="Expired Webhook Dedups",
         description="Expired webhook deduplication hash entries",
         entity_type="webhook_dedup",
     ),
     Scanner(
         category="duplicate_triggers",
-        scanner=_scan_duplicate_triggers,
+        scan_func=_scan_duplicate_triggers,
         label="Duplicate Triggers",
         description="Pipelines with multiple triggers of the same type (e.g. two cron triggers)",
         entity_type="trigger",
     ),
     Scanner(
         category="unused_environment_profiles",
-        scanner=_scan_unused_environment_profiles,
+        scan_func=_scan_unused_environment_profiles,
         label="Unused Environment Profiles",
         description="Environment profiles not referenced by any pipeline snapshot",
         entity_type="environment_profile",
     ),
     Scanner(
         category="stale_api_keys",
-        scanner=_scan_stale_api_keys,
+        scan_func=_scan_stale_api_keys,
         label="Stale API Keys",
         description="API keys not used in the last 4 weeks",
         entity_type="org_api_key",
     ),
     Scanner(
         category="unused_sso_providers",
-        scanner=_scan_unused_sso_providers,
+        scan_func=_scan_unused_sso_providers,
         label="Unused SSO Providers",
         description="SSO providers with no accounts using them for authentication",
         entity_type="sso_provider",
     ),
     Scanner(
         category="empty_teams",
-        scanner=_scan_empty_teams,
+        scan_func=_scan_empty_teams,
         label="Empty Teams",
         description="Teams with no active user members",
         entity_type="team",
     ),
     Scanner(
         category="unused_parameter_schemas",
-        scanner=_scan_unused_parameter_schemas,
+        scan_func=_scan_unused_parameter_schemas,
         label="Unused Parameter Schemas",
         description="Parameter schemas not assigned to any agent",
         entity_type="parameter_schema",
     ),
     Scanner(
         category="unused_schemas",
-        scanner=_scan_unused_schemas,
+        scan_func=_scan_unused_schemas,
         label="Unused Schemas",
         description="Schemas not referenced by any agent or pipeline snapshot",
         entity_type="schema",
     ),
     Scanner(
         category="empty_lifecycle_maps",
-        scanner=_scan_empty_lifecycle_maps,
+        scan_func=_scan_empty_lifecycle_maps,
         label="Empty Lifecycle Maps",
         description="Lifecycle maps with empty content (no stages configured)",
         entity_type="lifecycle_map",
     ),
     Scanner(
         category="invalid_org_fk",
-        scanner=_scan_invalid_org_fk,
+        scan_func=_scan_invalid_org_fk,
         label="Invalid Organisation FK",
         description=(
             "Tenant-scoped rows whose organisation_id references a non-existent "
@@ -920,7 +931,7 @@ _SCANNERS: list[Scanner] = [
     ),
     Scanner(
         category="checkpoint_retention",
-        scanner=_scan_checkpoint_retention,
+        scan_func=_scan_checkpoint_retention,
         label="Checkpoint Retention",
         description=(
             "Terminal runs with LangGraph graph-state checkpoints beyond the retention "
@@ -937,7 +948,7 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
     results: list[CategoryResult] = []
     for entry in _SCANNERS:
         try:
-            candidates = await entry.scanner(session, org_id)
+            candidates = await entry.scan_func(session, org_id)
             # Detection-only scanners (entity_type=None) set entity_type directly
             # on their candidates and must not be overridden here.
             if entry.entity_type is not None:

@@ -31,10 +31,12 @@ class ErrorGroup(OrgScoped):
     count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     level_peak: Mapped[str] = mapped_column(String(20), nullable=False, server_default="error")
     sample_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("error_events.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("error_events.id", ondelete="SET NULL"), index=True
     )
     sample_event: Mapped[Optional["ErrorEvent"]] = relationship(
         "ErrorEvent", foreign_keys=[sample_event_id], lazy="joined"
     )
-    assigned_to: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

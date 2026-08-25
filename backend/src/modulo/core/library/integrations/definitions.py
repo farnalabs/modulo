@@ -804,3 +804,82 @@ CIRCLECI_INTEGRATION: dict[str, Any] = {
     },
     "tool_group": "ci_cd",
 }
+
+
+# ---------------------------------------------------------------------------
+# 25. generic-rest
+# ---------------------------------------------------------------------------
+REST_INTEGRATION: dict[str, Any] = {
+    "name": "Generic REST",
+    "description": (
+        "Verb-agnostic generic HTTP integration. Point Modulo at an arbitrary "
+        "REST endpoint (URL, method, headers, body, records extraction) and have "
+        "pipeline nodes call it with runtime variables rendered into the request. "
+        "No per-vendor client — just a templated HTTP call. Supports bearer, "
+        "api_key (header or query) and basic auth, SSRF/allowlist guarding, "
+        "response-size capping, and idempotent retry."
+    ),
+    "version": "1.0.0",
+    "author": "Modulo",
+    "tags": ["generic", "http", "rest", "integration", "canonical"],
+    "connector_type": "rest",
+    "default_config": {
+        "base_url": "",
+        "method": "GET",
+        "path": "",
+        "headers": {},
+        "params": {},
+        "body": {},
+        "records_path": "",
+        "next_cursor_path": "",
+        "passthrough": False,
+        "max_response_size": 10485760,
+        "idempotency_header": "",
+        "allowed_hosts": [],
+        "timeout_seconds": 30,
+        "verify_tls": True,
+    },
+    "credential_fields": {
+        "auth_mode": {
+            "type": "string",
+            "description": "Authentication mode: 'bearer', 'api_key', or 'basic'",
+            "required": True,
+        },
+        "token": {
+            "type": "string",
+            "description": "Bearer token (used when auth_mode='bearer')",
+            "required": False,
+        },
+        "api_key": {
+            "type": "string",
+            "description": "API key value (used when auth_mode='api_key')",
+            "required": False,
+        },
+        "in": {
+            "type": "string",
+            "description": "Where to send the API key: 'header' or 'query'",
+            "required": False,
+        },
+        "header_name": {
+            "type": "string",
+            "description": "Header name for a header-mode API key (default 'X-API-Key')",
+            "required": False,
+        },
+        "query_param_name": {
+            "type": "string",
+            "description": "Query-parameter name for a query-mode API key (default 'api_key')",
+            "required": False,
+        },
+        "username": {
+            "type": "string",
+            "description": "Basic auth username (used when auth_mode='basic')",
+            "required": False,
+        },
+        "password": {
+            "type": "string",
+            "description": "Basic auth password (used when auth_mode='basic')",
+            "required": False,
+        },
+    },
+    "tool_group": "integration",
+}

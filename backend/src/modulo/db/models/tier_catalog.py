@@ -19,6 +19,6 @@ class FeatureFlagCatalog(Base):
 
     name: Mapped[str] = mapped_column(String(255), primary_key=True)
     description: Mapped[str | None] = mapped_column(String(2000))
-    tier_id: Mapped[str] = mapped_column(String(255), ForeignKey("tier_catalog.tier_id"), nullable=False)
+    tier_id: Mapped[str] = mapped_column(String(255), ForeignKey("tier_catalog.tier_id"), nullable=False, index=True)
     depends_on: Mapped[list[str] | None] = mapped_column(JSON)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
