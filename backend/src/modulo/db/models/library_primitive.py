@@ -86,7 +86,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2000))
     forked_from: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("library_primitives.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("library_primitives.id", ondelete="RESTRICT"), index=True
     )
     checksum: Mapped[str | None] = mapped_column(String(128))
     ed25519_signature: Mapped[str | None] = mapped_column(String(256))
@@ -95,18 +95,20 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     download_count: Mapped[int | None] = mapped_column(Integer)
     average_rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     review_count: Mapped[int | None] = mapped_column(Integer)
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     contribution_status: Mapped[str | None] = mapped_column(String(20))
     auto_update: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         nullable=True,
     )
     update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(),
-        ForeignKey("library_primitives.id", ondelete="SET NULL"),
-        nullable=True,
+        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), nullable=True, index=True
     )
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")

@@ -23,9 +23,7 @@ class Notification(OrgScoped):
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
     target_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(),
-        ForeignKey(_FK_ACCOUNTS_ID, ondelete="SET NULL"),
-        nullable=True,
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="SET NULL"), nullable=True, index=True
     )
     level: Mapped[str] = mapped_column(String(20), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)

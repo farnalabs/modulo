@@ -15,5 +15,7 @@ class NodeObservation(OrgScoped):
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
     human_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

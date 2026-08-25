@@ -24,5 +24,5 @@ class SavedView(SoftDeleteMixin, OrgScoped):
     sort_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sort_order: Mapped[str] = mapped_column(String(10), nullable=False, default="desc")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

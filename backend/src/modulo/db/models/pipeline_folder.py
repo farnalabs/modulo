@@ -14,10 +14,12 @@ class PipelineFolder(OrgScoped):
     __tablename__ = "pipeline_folders"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete="CASCADE"))
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete="CASCADE"), index=True
+    )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
 
     parent: Mapped[Optional["PipelineFolder"]] = relationship(

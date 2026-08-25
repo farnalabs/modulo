@@ -76,10 +76,19 @@ def upgrade() -> None:
             """
         )
     )
-    # Idempotent guard: the table/index/constraint above use IF NOT EXISTS, so
-    # this reconciliation migration must not fail when re-applied against a DB
-    # that already carries the policy (e.g. a reused/persisted Postgres, or a
-    # re-run of the migration chain). CREATE POLICY has no native IF NOT EXISTS.
+    # Idempotent: drop any existing policy first so the migration is safe to
+    # re-apply against a database whose template already carries the migrated
+    # schema (e.g. the per-test private DB created in
+    # test_migration_0126_eval_suite), or a reused/persisted Postgres. CREATE
+    # POLICY has no native IF NOT EXISTS, so we DROP IF EXISTS then CREATE
+    # IF NOT EXISTS below.
+    op.execute(
+        sa.text(
+            """
+            DROP POLICY IF EXISTS rls_org_isolation ON "metrics_staging"
+            """
+        )
+    )
     op.execute(
         sa.text(
             """

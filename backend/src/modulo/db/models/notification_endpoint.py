@@ -20,7 +20,6 @@ class NotificationEndpoint(SoftDeleteMixin, OrgScoped):
     auto_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(),
-        ForeignKey("accounts.id", ondelete="SET NULL"),
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
     )
-    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)

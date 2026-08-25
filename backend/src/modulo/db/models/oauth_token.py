@@ -86,6 +86,7 @@ class OAuthConsentState(Base):
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
         comment="Populated at approve from the Bearer principal",
+        index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False

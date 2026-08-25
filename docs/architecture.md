@@ -130,6 +130,7 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `PagerDutyConnector` | `incident-management` | trigger/acknowledge/resolve incidents |
 | `SentryConnector` | `error-tracking` | list/search issues, create events |
 | `DatadogConnector` | `monitoring` | query metrics, create monitors |
+| `RestConnector` | `rest` | verb-agnostic HTTP read/write against a declared endpoint (see `docs/rest-connector.md`) |
 | *(40+ built-in connectors total — see `modulo/connectors/`)* | | |
 
 ### Model Backend Hub (`modulo/model_backends/`)
@@ -394,6 +395,7 @@ ADRs at `docs/adr/` document key trade-offs:
 | 017/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 – revised after 7 plan-review-iterate cycles |
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
+| 025 | Generic REST Integration Connector | Accepted |
 
 Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 

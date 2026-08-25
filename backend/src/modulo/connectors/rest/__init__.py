@@ -32,6 +32,8 @@ the runtime variables supplied per call:
     max_response_size:    <bytes>                              # optional max response body size (default 10 MiB)
     idempotency_header:   <header-name>                        # optional header that makes a
                                                                  #   non-GET/HEAD request safe to retry
+    timeout_seconds:      <number>                             # per-request timeout (default 30.0)
+    verify_tls:           true                                 # verify the server TLS cert (default true)
     fan_out:              {                                     # optional fan-out / iterator mode (FAR-411)
                             "enabled": true,                    #   when truthy + items_path set, write() iterates
                             "items_path": "data.items",         #   JMESPath into payload.data resolving to the
@@ -442,7 +444,11 @@ class RestConnector(ConnectorBase):
         self._config = config or {}
         self._creds = creds or {}
         self._transport = transport
-        self._timeout = float(timeout or _DEFAULT_TIMEOUT)
+        # ``timeout_seconds`` in config_json overrides the constructor default, which
+        # overrides _DEFAULT_TIMEOUT. A falsy value (<0.0000001 or None) falls back
+        # so an operator explicitly disabling a timeout still yields a sane default.
+        self._timeout = float(self._config.get("timeout_seconds") or timeout or _DEFAULT_TIMEOUT)
+        self._verify_tls = bool(self._config.get("verify_tls", True))
         self._ssrf_validator = ssrf_validator
         self._security_guard = security_guard or _stub_security_guard()
         self._base_url = str(self._config.get("base_url", "")).rstrip("/")
@@ -501,6 +507,7 @@ class RestConnector(ConnectorBase):
         if self._cached_client is None:
             kwargs: dict[str, Any] = {
                 "timeout": self._timeout,
+                "verify": self._verify_tls,
                 "follow_redirects": False,
                 "limits": httpx.Limits(
                     max_connections=self._max_connections,

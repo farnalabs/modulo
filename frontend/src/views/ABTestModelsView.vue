@@ -81,13 +81,12 @@
                 {{ $t('views.variantCreator.advanced_overrides_note') }}
               </p>
             <div class="flex items-center gap-3">
-              <span
-                role="status"
+              <output
                 data-testid="variant-builder-headroom"
                 class="text-xs text-muted-foreground"
               >
                 {{ $t('views.variantCreator.headroom', { used: variants.length, max: MAX_VARIANTS }) }}
-              </span>
+              </output>
               <Button
                 :disabled="variants.length >= MAX_VARIANTS"
                 size="small"
@@ -180,6 +179,7 @@
                   </td>
                   <td class="py-2 text-right whitespace-nowrap">
                     <button
+                      type="button"
                       :data-testid="`variant-builder-duplicate-${i}`"
                       :disabled="variants.length >= MAX_VARIANTS"
                       class="mr-2 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -189,6 +189,7 @@
                       {{ $t('views.variantCreator.duplicate') }}
                     </button>
                     <button
+                      type="button"
                       :data-testid="`variant-builder-remove-${i}`"
                       class="text-xs text-destructive hover:underline"
                       :aria-label="$t('views.variantCreator.remove')"
@@ -202,14 +203,13 @@
             </table>
           </div>
 
-          <p
+          <output
             v-if="variants.length < 2"
-            role="status"
             data-testid="variant-builder-min-two"
             class="text-sm text-muted-foreground"
           >
             {{ $t('views.variantCreator.min_two_hint') }}
-          </p>
+          </output>
 
           <ErrorAlert
             v-if="fireError"

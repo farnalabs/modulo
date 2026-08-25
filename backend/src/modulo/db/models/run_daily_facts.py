@@ -77,11 +77,15 @@ class RunDailyFact(OrgScoped):
         ),
     )
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="SET NULL"))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="SET NULL"), index=True)
     team_name: Mapped[str | None] = mapped_column(String(255))
-    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"))
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"), index=True
+    )
     pipeline_name: Mapped[str | None] = mapped_column(String(255))
-    folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"))
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"), index=True
+    )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
