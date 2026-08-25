@@ -76,11 +76,24 @@ def upgrade() -> None:
             """
         )
     )
+    # Guard the policy creation so this reconciliation migration stays
+    # idempotent when re-run against a database that already carries the
+    # rls_org_isolation policy (e.g. a partial/interrupted prior apply).
     op.execute(
         sa.text(
             """
-            CREATE POLICY rls_org_isolation ON "metrics_staging"
-            USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'public'
+                      AND tablename = 'metrics_staging'
+                      AND policyname = 'rls_org_isolation'
+                ) THEN
+                    CREATE POLICY rls_org_isolation ON "metrics_staging"
+                    USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid);
+                END IF;
+            END $$;
             """
         )
     )
