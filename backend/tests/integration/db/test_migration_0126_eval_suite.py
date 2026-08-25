@@ -21,9 +21,11 @@ undisturbed for later tests.
 
 import types
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
@@ -119,6 +121,59 @@ def _alembic_config(db_url: str) -> Config:
     )
     config.config_file_name = None
     return config
+
+
+def _swap_db_name(db_url: str, new_db: str) -> str:
+    """Return ``db_url`` with its database name replaced by ``new_db``."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(db_url)
+    return urlunparse(parsed._replace(path=f"/{new_db}"))
+
+
+@pytest_asyncio.fixture
+async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
+    """A fresh, private Postgres database migrated only up to ``PREV_REV``.
+
+    ``test_0126`` downgrades the schema (dropping ``eval_suites`` /
+    ``eval_suite_id``) and re-upgrades it. Running that against the shared
+    session ``migrated_db_url`` corrupts the one database every other
+    integration test uses, cascading into spurious ``eval_suite_id does not
+    exist`` failures across the suite. Give this test its own database so the
+    shared schema is never touched.
+    """
+    admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
+    db_name = f"eval_suite_iso_{uuid.uuid4().hex[:10]}"
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    iso_url = _swap_db_name(db_url, db_name)
+    eng = create_async_engine(iso_url, poolclass=NullPool)
+    async with eng.connect() as conn:
+        await conn.execute(
+            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
+        )
+        await conn.commit()
+    await eng.dispose()
+
+    command.upgrade(_alembic_config(iso_url), PREV_REV)
+
+    try:
+        yield iso_url
+    finally:
+        admin_engine = create_async_engine(
+            db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"}
+        )
+        async with admin_engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :n AND pid <> pg_backend_pid()"
+                ).bindparams(n=db_name)
+            )
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        await admin_engine.dispose()
 
 
 async def _seed(db_url: str, orgs: tuple[uuid.UUID, uuid.UUID]) -> dict[str, uuid.UUID]:
@@ -217,8 +272,8 @@ async def _count_suites(engine, org: uuid.UUID | None = None) -> int:
     return int(n)
 
 
-async def test_0126_eval_suite_backfill_rls_and_downgrade(migrated_db_url, monkeypatch) -> None:
-    db_url = migrated_db_url
+async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monkeypatch) -> None:
+    db_url = isolated_db_url
     monkeypatch.setenv("DATABASE_URL", db_url)
     config = _alembic_config(db_url)
     engine = create_async_engine(db_url, poolclass=NullPool)
