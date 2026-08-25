@@ -277,6 +277,15 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="critical",
         guidance="Connector credentials are invalid.",
     ),
+    # FAR-418: node-level capability_scope violation — a node used a connector /
+    # tool / run_context key excluded by its scope (deny-by-default). Permanent
+    # (re-dispatching would reproduce the same violation), so never retryable.
+    "scope.violation": ErrorCodeSpec(
+        error_class="scope",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Node used a capability excluded by its capability_scope (connector/tool/context).",
+    ),
     "connector.permission": ErrorCodeSpec(
         error_class="connector",
         retryable=False,
@@ -452,6 +461,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "pipeline_capacity": "capacity.pipeline",
     "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",
+    # FAR-418: scope violation (legacy snake_case spelling canonicalized to
+    # scope.violation).
+    "scope_violation": "scope.violation",
+    "ScopeViolationError": "scope.violation",
 }
 
 

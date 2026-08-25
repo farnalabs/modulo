@@ -178,12 +178,24 @@ class ConnectorHub:
         self._acls.clear()
         self._initialised = False
 
-    async def initialise(self, instances: Sequence[ConnectorInstance]) -> None:
+    async def initialise(
+        self,
+        instances: Sequence[ConnectorInstance],
+        *,
+        allowed_connectors: Sequence[str] | None = None,
+    ) -> None:
         """Decrypt credentials and initialise connectors. Call once at run start.
 
         ACLs are built from instance visibility and allowed_operations columns.
         Connectors that fail to initialise are skipped and logged individually
         so that one misconfigured connector does not block the rest.
+
+        Fetch-time scoping (FAR-418): when *allowed_connectors* is provided it
+        gates the FETCH set BEFORE any credential is decrypted — the hub decrypts
+        only the named instance-ids/types, so connectors outside the scope never
+        expose credentials (deny-by-default within the scope). When *None* (the
+        default) the hub is unrestricted and fetches every instance, preserving
+        the pre-scope behaviour exactly.
         """
         if self._initialised:
             logger.warning("ConnectorHub already initialised — skipping")
@@ -192,7 +204,10 @@ class ConnectorHub:
             if self._initialised:
                 logger.warning("ConnectorHub already initialised — skipping")
                 return
+            fetch_scope: set[str] | None = set(allowed_connectors) if allowed_connectors is not None else None
             for ci in instances:
+                if fetch_scope is not None and not _in_fetch_scope(ci, fetch_scope):
+                    continue
                 try:
                     try:
                         raw_str = await asyncio.wait_for(
@@ -474,6 +489,16 @@ class _TracedConnector(ConnectorBase):
                 acl_operation=None,
             ),
         )
+
+
+def _in_fetch_scope(instance: ConnectorInstance, fetch_scope: set[str]) -> bool:
+    """Return True when a connector instance is inside the run's fetch scope.
+
+    An instance is fetched when its UUID (string) OR its connector type is
+    explicitly named in the scope. The scope is a deny-by-default allow-list:
+    anything not named is never decrypted.
+    """
+    return str(instance.id) in fetch_scope or instance.connector_type_id in fetch_scope
 
 
 def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
