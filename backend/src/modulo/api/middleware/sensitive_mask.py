@@ -20,13 +20,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
+# Re-exported so API-layer callers can import from the documented location.
+# Required because mypy runs under `strict` (no_implicit_reexport = True).
+__all__ = ["SENSITIVE_VALUE_MASK"]
+
 _log = logging.getLogger(__name__)
 
-SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
+# The DOM-side mask constant lives in :mod:`modulo.core.secret_patterns` (the
+# single source of truth) so the two modules can never drift. The canonical
+# secret-format redaction patterns, the value-pattern list and the shared raw
+# patterns (``SECRET_VALUE_PATTERNS``, ``mask_secret_values_in_text``,
+# ``GITHUB_PAT_PATTERN``, ``AWS_ACCESS_KEY_PATTERN``) are also defined ONCE in
+# :mod:`modulo.core.secret_patterns`; the API layer (runs.py) imports them
+# directly from there. They live in ``core`` (not here) so the core redaction
+# sites (error_codes.py, node_runner.py, soc2.py) can use the same definitions
+# without violating the ``core-does-not-import-api`` contract.
 
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
     {

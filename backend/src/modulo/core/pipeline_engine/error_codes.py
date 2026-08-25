@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
 
 @dataclass(frozen=True)
 class ErrorCodeSpec:
@@ -542,7 +544,10 @@ _ERROR_DETAIL_HARD_LIMIT = 5000
 # Redaction patterns — char-class-only, NO alternations with nested quantifiers
 # (the codebase's own (a|b)+ ReDoS lesson). Each pattern is a single anchored
 # literal prefix + a flat char class + a flat quantifier, so worst-case work is
-# linear in the (capped) input.
+# linear in the (capped) input. The AWS-key and GitHub fine-grained-PAT formats
+# are sourced from the canonical shared list in
+# :mod:`modulo.core.secret_patterns` so the secret-format knowledge is never
+# duplicated or drifted across redaction sites.
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"),
     re.compile(r"sk-[A-Za-z0-9]{8,}"),
@@ -551,8 +556,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
     re.compile(r"gh[ousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"glpat-[A-Za-z0-9_-]{8,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"ASIA[0-9A-Z]{16}"),
+    AWS_ACCESS_KEY_PATTERN,
     re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
     re.compile(r"xox[bap]-[A-Za-z0-9-]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
@@ -560,6 +564,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"://[^:\s@]+:[^@\s@]+@"),
     re.compile(r"secret_[A-Za-z0-9]{16,}"),
     re.compile(r"npm_[A-Za-z0-9]{20,}"),
+    GITHUB_PAT_PATTERN,
 )
 
 # Hard control characters (NUL, bell, vertical tab, form feed, C0 except

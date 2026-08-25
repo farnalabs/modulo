@@ -67,6 +67,8 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
+from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
 if TYPE_CHECKING:
     from e2b import AsyncSandbox
 
@@ -751,7 +753,16 @@ _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_
 # any ``http(s)://...@host`` URL; ``_TOKEN_VALUE_PATTERN`` defensively masks
 # bare token values that follow known credential labels.
 _TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
-_TOKEN_VALUE_PATTERN = _re.compile(r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+")
+# Label-based masking (covers short tokens including github_pat_ <50 chars)
+# plus the canonical bare-value patterns for fine-grained GitHub PATs and AWS
+# access keys, shared from the sensitive_mask canonical list.
+_TOKEN_VALUE_PATTERN = _re.compile(
+    r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+"
+    + r"|"
+    + GITHUB_PAT_PATTERN.pattern
+    + r"|"
+    + AWS_ACCESS_KEY_PATTERN.pattern
+)
 
 
 def _extract_pr_url(raw_text: str) -> str:
