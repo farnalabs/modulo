@@ -13,10 +13,15 @@ from typing import Any, NoReturn, cast
 import httpx
 
 from modulo.connectors._retry_headers import (
+    MAX_DELAY,
+    MAX_RETRIES,
+    RETRYABLE_STATUSES,
+    backoff_delay,
     extract_rate_limit_metadata,
     format_rate_limit_detail,
     parse_rate_limit_reset,
     parse_retry_after,
+    should_retry_status,
 )
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
@@ -78,11 +83,10 @@ _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move"})
 # Review events accepted by the PR review resource (write("pr_review"))
 _REVIEW_EVENTS = frozenset({"APPROVE", "REQUEST_CHANGES", "COMMENT"})
 
-# Retry/backoff configuration
-_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
-_MAX_RETRIES = 3
-_BASE_DELAY = 1.0
-_MAX_DELAY = 30.0
+# Retry/backoff configuration (canonical values live in _retry_headers)
+_RETRYABLE_STATUSES = RETRYABLE_STATUSES
+_MAX_RETRIES = MAX_RETRIES
+_MAX_DELAY = MAX_DELAY
 
 # Circuit breaker configuration — a sustained run of service-level failures
 # (server errors, exhausted rate limits, transport failures) opens the circuit
@@ -597,7 +601,7 @@ class GitHubConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+        return backoff_delay(attempt)
 
     async def _call_api(
         self,
@@ -684,7 +688,7 @@ class GitHubConnector(ConnectorBase):
     @staticmethod
     def _should_retry_status(status_code: int, attempt: int) -> bool:
         """True when a retryable status still has retry budget remaining."""
-        return status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES
+        return should_retry_status(status_code, attempt)
 
     async def _sleep_network_retry(self, attempt: int) -> bool:
         """Sleep before a transport-level retry; True when a retry should run."""
@@ -714,7 +718,7 @@ class GitHubConnector(ConnectorBase):
     @staticmethod
     def _backoff_delay(attempt: int) -> float:
         """Compute the exponential backoff delay for a retry attempt (capped)."""
-        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+        return backoff_delay(attempt)
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as a typed API error."""
