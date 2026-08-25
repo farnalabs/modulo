@@ -848,6 +848,8 @@ async def replace_pipeline_graph(
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
             "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+            "source_port": getattr(e, "source_port", "out"),
+            "target_port": getattr(e, "target_port", "in"),
         }
         for e in old_rows
     ]
@@ -913,6 +915,8 @@ async def replace_pipeline_graph(
             target_node_id=uuid.UUID(str(edge["target_node_id"])),
             edge_type=edge["edge_type"],
             hitl_gate_config=_preserve_omitted_gate_config(edge, old_by_key),
+            source_port=edge.get("source_port", "out"),
+            target_port=edge.get("target_port", "in"),
         )
         for edge in edges
     ]

@@ -328,6 +328,8 @@ def test_get_pipeline_graph_returns_authoritative_graph(client: TestClient) -> N
     edge.edge_type = "normal"
     edge.condition_expression = None
     edge.hitl_gate_config = None
+    edge.source_port = "out"
+    edge.target_port = "in"
     nodes = [
         {
             "id": str(node_id),
@@ -663,6 +665,8 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
     edge.target_node_id = uuid.uuid4()
     edge.edge_type = "normal"
     edge.condition_expression = None
+    edge.source_port = "out"
+    edge.target_port = "in"
     edge.hitl_gate_config = {
         "label": "Review",
         "description": "Gate",

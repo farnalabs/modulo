@@ -19,6 +19,7 @@ restores the head state in ``finally`` so the shared session schema is
 undisturbed for later tests.
 """
 
+import os
 import types
 import uuid
 from collections.abc import AsyncIterator
@@ -132,7 +133,7 @@ def _swap_db_name(db_url: str, new_db: str) -> str:
 
 
 @pytest_asyncio.fixture
-async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
+async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[str]:
     """A fresh, private Postgres database migrated only up to ``PREV_REV``.
 
     ``test_0126`` downgrades the schema (dropping ``eval_suites`` /
@@ -141,14 +142,28 @@ async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
     integration test uses, cascading into spurious ``eval_suite_id does not
     exist`` failures across the suite. Give this test its own database so the
     shared schema is never touched.
+
+    The isolated database is provisioned from ``template0`` (guaranteed empty)
+    rather than the default ``template1``. ``migrations/env.py`` overrides the
+    alembic ``sqlalchemy.url`` with ``DATABASE_URL``/``DATABASE_ADMIN_URL`` from
+    the environment, so we point those vars at the isolated database here —
+    otherwise ``command.upgrade`` would run against the shared session database
+    and the migrations that create tables such as ``library_sync_state`` would
+    collide with the already-applied schema (DuplicateTable).
     """
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     db_name = f"eval_suite_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        # template0 is always present and empty, so the new database starts
+        # with no inherited tables regardless of template1's state.
+        await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
 
     iso_url = _swap_db_name(db_url, db_name)
+    # Ensure env.py's DATABASE_URL / DATABASE_ADMIN_URL override resolves to this
+    # isolated database, not the shared session database.
+    monkeypatch.setenv("DATABASE_URL", iso_url)
+    monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
         await conn.execute(
@@ -157,7 +172,25 @@ async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
         await conn.commit()
     await eng.dispose()
 
-    command.upgrade(_alembic_config(iso_url), PREV_REV)
+    # ``env.py`` overrides the connection URL with ``DATABASE_URL`` (or
+    # ``DATABASE_ADMIN_URL``), so the ``sqlalchemy.url`` set inside
+    # ``_alembic_config`` is ignored. Point ``DATABASE_URL`` at the isolated
+    # database here; otherwise the upgrade runs against the shared session DB.
+    # The shared DB is left at a mid-chain version by other migration tests
+    # (e.g. ``test_migration_0120_org_fk`` resets it to 0119 and only restores
+    # it to 0120), so re-running the 0120->0129 span there collides on
+    # already-existing tables such as ``library_sync_state`` (migration 0122),
+    # surfacing as ``relation "library_sync_state" already exists``. Restoring
+    # the previous value keeps the shared session env untouched for other tests.
+    prev_db_url = os.environ.get("DATABASE_URL")
+    monkeypatch.setenv("DATABASE_URL", iso_url)
+    try:
+        command.upgrade(_alembic_config(iso_url), PREV_REV)
+    finally:
+        if prev_db_url is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", prev_db_url)
 
     try:
         yield iso_url

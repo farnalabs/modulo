@@ -97,6 +97,7 @@ from modulo.core.pipeline_engine.node_runner import (
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
+from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.pipeline import get_pipeline
@@ -2296,6 +2297,7 @@ class PipelineExecutor:
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             ),
             pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
+            graph_struct_hash=compute_port_topology_hash(graph_json),
         )
 
         config = {"configurable": {"thread_id": thread_id}}
@@ -3149,6 +3151,7 @@ class PipelineExecutor:
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
             ),
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
+            graph_struct_hash=compute_port_topology_hash(graph_json),
         )
 
         initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
