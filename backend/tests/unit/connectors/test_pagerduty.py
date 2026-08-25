@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors._safe_page import safe_paging_total as _paging_total
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pagerduty import PagerDutyConnector, _body_field, _next_offset_cursor, _paging_total
+from modulo.connectors.pagerduty import PagerDutyConnector, _body_field, _next_offset_cursor
 
 TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"
@@ -567,13 +568,13 @@ async def test_query_incidents_non_finite_total_does_not_leak(connector: PagerDu
 
 
 def test_paging_total_missing() -> None:
-    assert _paging_total({}) is None
+    assert _paging_total({}, "total") is None
 
 
 def test_paging_total_non_dict() -> None:
-    assert _paging_total(["garbage"]) is None
-    assert _paging_total("garbage") is None
-    assert _paging_total(None) is None
+    assert _paging_total(["garbage"], "total") is None
+    assert _paging_total("garbage", "total") is None
+    assert _paging_total(None, "total") is None
 
 
 def test_body_field() -> None:
@@ -586,23 +587,23 @@ def test_body_field() -> None:
 
 
 def test_paging_total_valid() -> None:
-    assert _paging_total({"total": 42}) == 42
+    assert _paging_total({"total": 42}, "total") == 42
 
 
 def test_paging_total_corrupt_inf() -> None:
-    assert _paging_total({"total": float("inf")}) == 0
+    assert _paging_total({"total": float("inf")}, "total") == 0
 
 
 def test_paging_total_corrupt_nan() -> None:
-    assert _paging_total({"total": float("nan")}) == 0
+    assert _paging_total({"total": float("nan")}, "total") == 0
 
 
 def test_paging_total_corrupt_bool() -> None:
-    assert _paging_total({"total": True}) == 0
+    assert _paging_total({"total": True}, "total") == 0
 
 
 def test_paging_total_corrupt_garbage() -> None:
-    assert _paging_total({"total": "not-a-number"}) == 0
+    assert _paging_total({"total": "not-a-number"}, "total") == 0
 
 
 def test_next_offset_cursor_no_more() -> None:
