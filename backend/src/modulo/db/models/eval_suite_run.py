@@ -32,7 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -237,7 +237,7 @@ def transition_state(
 
     values: dict[str, Any] = {"state": new_state.value, "version": SuiteRun.version + 1}
     if new_state in (SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED):
-        values["completed_at"] = completed_at or datetime.now()
+        values["completed_at"] = completed_at or datetime.now(UTC)
 
     stmt = (
         update(SuiteRun)
