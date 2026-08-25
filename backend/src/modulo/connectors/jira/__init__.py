@@ -9,10 +9,17 @@ from typing import Any
 import httpx
 
 from modulo.connectors._retry_headers import (
+    BASE_DELAY,
+    MAX_DELAY,
+    MAX_RETRIES,
+    RETRYABLE_STATUSES,
+    backoff_delay,
     extract_rate_limit_metadata,
     format_rate_limit_detail,
     parse_rate_limit_reset,
     parse_retry_after,
+    should_retry_network,
+    should_retry_status,
 )
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
@@ -24,10 +31,11 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
-_MAX_RETRIES = 3
-_BASE_DELAY = 1.0
-_MAX_DELAY = 30.0
+# Retry/backoff configuration (canonical values live in _retry_headers)
+_RETRYABLE_STATUSES = RETRYABLE_STATUSES
+_MAX_RETRIES = MAX_RETRIES
+_BASE_DELAY = BASE_DELAY
+_MAX_DELAY = MAX_DELAY
 
 # Jira Cloud reports quota state via X-RateLimit-* headers on every response
 _RATE_LIMIT_HEADERS = (
@@ -218,14 +226,14 @@ class JiraConnector(ConnectorBase):
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
                         raise ValueError("Jira API returned 304 Not Modified — resource unchanged")
-                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                    if should_retry_status(r.status_code, attempt):
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                if should_retry_status(exc.response.status_code, attempt):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 detail = exc.response.text[:200]
@@ -236,14 +244,14 @@ class JiraConnector(ConnectorBase):
                 raise ValueError(f"Jira API HTTP {exc.response.status_code}: {detail}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                if should_retry_network(attempt):
+                    await asyncio.sleep(_jitter(backoff_delay(attempt)))
                     continue
                 raise ValueError("Jira API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                if should_retry_network(attempt):
+                    await asyncio.sleep(_jitter(backoff_delay(attempt)))
                     continue
                 raise ValueError("Jira API connection error") from exc
         raise ValueError("Jira API request failed after retries") from last_exc
