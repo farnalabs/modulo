@@ -52,10 +52,10 @@ The dashboards query the following span attributes and metric labels. Your OTel 
 | `status` (`"ok"` / `"error"`) | `modulo_runs_total` | Error rate calculation |
 
 Expected metrics:
-- `modulo_pipeline_duration_seconds_{bucket,count,sum}` — histogram
-- `modulo_node_duration_seconds_{bucket,count,sum}` — histogram
-- `modulo_runs_total` — counter (labels: `pipeline_name`, `status`)
-- `modulo_runs_active` — gauge
+- `modulo_pipeline_duration_seconds_{bucket,count,sum}` – histogram
+- `modulo_node_duration_seconds_{bucket,count,sum}` – histogram
+- `modulo_runs_total` – counter (labels: `pipeline_name`, `status`)
+- `modulo_runs_active` – gauge
 
 ### HITL Review
 
@@ -68,10 +68,10 @@ Expected metrics:
 | `status` | Claim token metrics | Claimed vs expired |
 
 Expected metrics:
-- `modulo_hitl_gates_total` — counter (labels: `pipeline_name`, `hitl_status`)
-- `modulo_hitl_review_time_seconds_{sum,count}` — histogram
-- `modulo_hitl_gates_active` — gauge
-- `modulo_hitl_claim_tokens_total` — counter (labels: `pipeline_name`, `status`)
+- `modulo_hitl_gates_total` – counter (labels: `pipeline_name`, `hitl_status`)
+- `modulo_hitl_review_time_seconds_{sum,count}` – histogram
+- `modulo_hitl_gates_active` – gauge
+- `modulo_hitl_claim_tokens_total` – counter (labels: `pipeline_name`, `status`)
 
 ### Cost Tracking
 
@@ -83,8 +83,8 @@ Expected metrics:
 | `llm_type` (`"input"` / `"output"`) | Token metrics | Input vs output split |
 
 Expected metrics:
-- `modulo_cost_usd_total` — counter (labels: `cost_org_id`, `cost_pipeline_id`, `cost_model_id`)
-- `modulo_llm_tokens_total` — counter (labels: `cost_org_id`, `cost_pipeline_id`, `cost_model_id`, `llm_type`)
+- `modulo_cost_usd_total` – counter (labels: `cost_org_id`, `cost_pipeline_id`, `cost_model_id`)
+- `modulo_llm_tokens_total` – counter (labels: `cost_org_id`, `cost_pipeline_id`, `cost_model_id`, `llm_type`)
 
 ## Dashboard Variables
 
@@ -156,5 +156,5 @@ If your OTel collector uses a different metric prefix (e.g. `acme_modulo_` inste
 ## Notes
 
 - All dashboards default to a 30-second auto-refresh and a 24-hour window
-- The Claim Token Expiry panel uses a stacked time-series bar chart (not a native calendar heatmap) — install the [Discrete](https://grafana.com/grafana/plugins/natel-discrete-panel/) or [Status History](https://grafana.com/grafana/plugins/marcusolsson-status-history-panel/) panel plugin for a true calendar heatmap view
-- Cost dashboards use `increase(...[$__interval])` which works with Prometheus counter metrics — ensure your metrics are counters, not gauges
+- The Claim Token Expiry panel uses a stacked time-series bar chart (not a native calendar heatmap) – install the [Discrete](https://grafana.com/grafana/plugins/natel-discrete-panel/) or [Status History](https://grafana.com/grafana/plugins/marcusolsson-status-history-panel/) panel plugin for a true calendar heatmap view
+- Cost dashboards use `increase(...[$__interval])` which works with Prometheus counter metrics – ensure your metrics are counters, not gauges
