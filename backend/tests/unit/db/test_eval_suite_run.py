@@ -563,6 +563,7 @@ def test_single_migration_head() -> None:
     # -> 0140_eval_regression_alert (FAR-379 alerting config on eval_suites).
     # -> 0143_rest_connector_profile (FAR-412 REST connector profile, renumbered
     #    from 0142 to avoid colliding with main's 0142_merge_heads_add_fk_indexes).
+    # -> 0144_broaden_notification_status_in_app (this PR: allow 'in_app' status on notification_delivery_log).
     chaining_off_0131 = [p for p in revisions if parents[p] == "0131_eval_dataset_corpus"]
     assert [_basename(p) for p in chaining_off_0131] == ["0132_agent_connector_report_soft_delete_audit.py"]
     chaining_off_0132 = [p for p in revisions if parents[p] == "0132_agent_connector_report_soft_delete_audit"]
@@ -589,9 +590,11 @@ def test_single_migration_head() -> None:
     # Nothing chains off 0142 except 0143 (the FAR-412 REST connector profile, renumbered).
     chaining_off_0142 = [p for p in revisions if parents[p] == "0142_merge_heads_add_fk_indexes"]
     assert [_basename(p) for p in chaining_off_0142] == ["0143_rest_connector_profile.py"]
-    # Nothing chains off 0143 -> it is the single head.
+    # 0144_broaden_notification_status_in_app (this PR) chains off 0143 and is the single head.
     chaining_off_0143 = [p for p in revisions if parents[p] == "0143_rest_connector_profile"]
-    assert chaining_off_0143 == []
+    assert [_basename(p) for p in chaining_off_0143] == ["0144_broaden_notification_status_in_app.py"]
+    chaining_off_0144 = [p for p in revisions if parents[p] == "0144_broaden_notification_status_in_app"]
+    assert chaining_off_0144 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
