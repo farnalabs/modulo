@@ -25,6 +25,9 @@
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=sqale_rating" alt="Maintainability"/></a>
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=reliability_rating" alt="Reliability"/></a>
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=security_rating" alt="Security"/></a>
+  <a href="https://codescene.io/projects/83783"><img src="https://codescene.io/projects/83783/status-badges/average-code-health" alt="CodeScene Average Code Health"/></a>
+  <a href="https://codescene.io/projects/83783"><img src="https://codescene.io/projects/83783/status-badges/hotspot-code-health" alt="CodeScene Hotspot Code Health"/></a>
+  <a href="https://codescene.io/projects/83783"><img src="https://codescene.io/projects/83783/status-badges/system-mastery" alt="CodeScene System Mastery"/></a>
 </p>
 
 > [!WARNING]

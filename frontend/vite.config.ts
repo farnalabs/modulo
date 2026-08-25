@@ -35,6 +35,13 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    coverage: {
+      provider: 'v8',
+      reporter: ['lcov', 'text-summary'],
+      include: ['src/**/*.{ts,vue}'],
+      exclude: ['src/__tests__/**', 'src/**/*.d.ts', '**/node_modules/**', 'src/**/__mocks__/**'],
+      reportsDirectory: './coverage',
+    },
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
     // FAR-101 test configuration rationale (#817 + follow-up):

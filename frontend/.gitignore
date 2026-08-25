@@ -4,3 +4,6 @@
 # Playwright shared-login auth state (globalSetup storageState; may contain
 # session tokens — never commit).
 storageState-*.json
+# Frontend coverage reports (vitest --coverage, read by the SonarCloud job in
+# ci.yml via sonar.javascript.lcov.reportPaths). Never commit generated reports.
+coverage/
