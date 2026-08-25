@@ -14,7 +14,13 @@ function makeTabId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
-  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  // Fallback for environments without randomUUID — use the CSPRNG, not Math.random.
+  const arr = new Uint8Array(16)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(arr)
+    return `tab-${Date.now()}-${Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')}`
+  }
+  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` // NOSONAR: only when no CSPRNG exists
 }
 
 function parseStoredTabs(raw: unknown): RemyTab[] {
