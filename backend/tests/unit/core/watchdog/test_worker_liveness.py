@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,6 +39,16 @@ def _make_settings(**overrides: Any) -> Settings:
     }
     base.update(overrides)
     return Settings(**base)
+
+
+def _async_iter(values: list[str]) -> AsyncIterator[str]:
+    """An async iterator over *values* (for mocking ``SCAN`` key discovery)."""
+
+    async def _gen() -> AsyncIterator[str]:
+        for value in values:
+            yield value
+
+    return _gen()
 
 
 class _FakeWatchdogRedis:
@@ -73,6 +84,13 @@ class _FakeWatchdogRedis:
     async def zrangebyscore(self, key: str, _min: Any, _max: Any) -> list[str]:
         self._raise_if_failing()
         return [m for m, score in self._zscores.get(key, {}).items() if score >= _min]
+
+    async def scan_iter(self, match: str | None = None, count: int = 10) -> AsyncIterator[str]:
+        self._raise_if_failing()
+        prefix = (match or "").split("*")[0]
+        for k in self._data:
+            if k.startswith(prefix):
+                yield k
 
     async def keys(self, pattern: str) -> list[str]:
         self._raise_if_failing()
@@ -344,7 +362,7 @@ async def test_cron_heartbeat_fresh_skips_missing_and_corrupt_values() -> None:
             return "not-a-number"
         return str(int(time.time() - 5))  # k3: fresh
 
-    redis.keys.return_value = ["k1", "k2", "k3"]
+    redis.scan_iter = MagicMock(side_effect=lambda *args, **kwargs: _async_iter(["k1", "k2", "k3"]))
     redis.get.side_effect = _get
     assert await wl._cron_heartbeat_fresh(redis) is True
 
@@ -357,7 +375,7 @@ async def test_cron_heartbeat_fresh_false_when_no_value_is_fresh() -> None:
             return None
         return str(int(time.time() - 600))  # k2: stale
 
-    redis.keys.return_value = ["k1", "k2"]
+    redis.scan_iter = MagicMock(side_effect=lambda *args, **kwargs: _async_iter(["k1", "k2"]))
     redis.get.side_effect = _get
     assert await wl._cron_heartbeat_fresh(redis) is False
 
@@ -375,7 +393,7 @@ async def test_cron_read_failure_fails_open_without_alert() -> None:
     post = AsyncMock()
 
     with (
-        patch.object(fake, "keys", side_effect=RuntimeError("redis down")),
+        patch.object(fake, "scan_iter", side_effect=RuntimeError("redis down")),
         patch.object(wl, "_send_alerts", post),
     ):
         state = await wl._evaluate_once(settings, fake, None)
@@ -745,6 +763,25 @@ class TestWebhookErrorPaths:
         assert "watchdog.webhook_http_error" in caplog.text
         assert "500" in caplog.text
 
+    async def test_generic_webhook_posts_encoded_json_with_channel_headers(self) -> None:
+        """The deduped POST contract: encoded JSON body + Content-Type + User-Agent."""
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+        alert_text = wl._alert_text(["no live SAQ worker"])
+
+        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+            await wl._post_generic_webhook(settings, alert_text)
+
+        client.post.assert_awaited_once()
+        call = client.post.await_args
+        assert call.args and call.args[0] == settings.alert_webhook_url
+        body = json.loads(call.kwargs["content"])
+        assert body == {"text": alert_text}
+        assert call.kwargs["headers"]["Content-Type"] == "application/json"
+        assert call.kwargs["headers"]["User-Agent"] == "Modulo-Watchdog/1.0"
+
     async def test_teams_webhook_http_error_status_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
         client = AsyncMock()
@@ -985,7 +1022,7 @@ class TestAdditionalFailOpenPaths:
         fake.add_live_worker("runs")
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
         with (
-            patch.object(fake, "keys", side_effect=asyncio.CancelledError()),
+            patch.object(fake, "scan_iter", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
             await wl._evaluate_once(settings, fake, None)
