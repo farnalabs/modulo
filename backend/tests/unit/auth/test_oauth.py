@@ -839,7 +839,7 @@ class TestConsentState:
         consumed = await consume_consent_state(
             session,
             state="state-abc",
-            org_id=_ORG_ID,
+            _org_id=_ORG_ID,
             account_id=_ACCOUNT_ID,
         )
         assert consumed is state_row
@@ -853,7 +853,7 @@ class TestConsentState:
         result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result)
 
-        assert await consume_consent_state(session, state="unknown", org_id=_ORG_ID, account_id=_ACCOUNT_ID) is None
+        assert await consume_consent_state(session, state="unknown", _org_id=_ORG_ID, account_id=_ACCOUNT_ID) is None
 
 
 # ---------------------------------------------------------------------------

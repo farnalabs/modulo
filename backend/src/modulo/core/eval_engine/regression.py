@@ -163,7 +163,7 @@ async def detect_regressions(
             )
         ).all()
     except TimeoutError:
-        _log.error("Regression detection query timed out for org %s (days=%s)", org_id, days)
+        _log.exception("Regression detection query timed out for org %s (days=%s)", org_id, days)
         raise
     except SQLAlchemyError:
         _log.exception("Regression detection DB error for org %s (days=%s)", org_id, days)

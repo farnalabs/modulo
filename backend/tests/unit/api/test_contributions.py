@@ -277,7 +277,7 @@ class TestSubmitForReview:
 
         assert resp.status_code == 200
         mock_submit.assert_awaited_once()
-        assert mock_submit.call_args.kwargs["created_by"] == _USER_ID
+        assert mock_submit.call_args.kwargs["_created_by"] == _USER_ID
 
     def test_submit_for_review_404(self, client: TestClient):
         with (

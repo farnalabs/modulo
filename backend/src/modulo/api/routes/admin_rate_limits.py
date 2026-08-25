@@ -44,7 +44,7 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 @router.get("", dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
-    current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RateLimitStatusResponse:
     rules = [
         RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s)
@@ -59,7 +59,7 @@ async def get_rate_limits(
 @router.put("", dependencies=[require_feature("rate_limits")])
 async def update_rate_limits(
     req: RateLimitUpdateRequest,
-    current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RateLimitStatusResponse:
     new_rules = [
         RateLimitRule(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in req.rules

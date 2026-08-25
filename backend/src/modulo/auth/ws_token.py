@@ -38,7 +38,7 @@ async def create_ws_token(
         payload = json.dumps(principal_json, default=str)
         await redis.setex(key, ttl, payload)
     except (TypeError, RedisError) as exc:
-        _log.error("ws_token.create_failed", extra={"error": str(exc)})
+        _log.exception("ws_token.create_failed", extra={"error": str(exc)})
         raise
     return token
 
@@ -57,10 +57,10 @@ async def consume_ws_token(
     try:
         data = await redis.getdel(key)
     except RedisTimeoutError:
-        _log.error("ws_token.consume_timeout")
+        _log.exception("ws_token.consume_timeout")
         raise WsTokenConsumeError("Redis timeout while consuming WS token") from None
     except RedisError as exc:
-        _log.error("ws_token.consume_failed", extra={"error": str(exc)})
+        _log.exception("ws_token.consume_failed", extra={"error": str(exc)})
         raise WsTokenConsumeError(f"Redis error: {exc}") from exc
     if data is None:
         raise WsTokenExpiredError("WS token expired or already used")
@@ -69,6 +69,6 @@ async def consume_ws_token(
         if not isinstance(decoded, dict):
             raise ValueError("WS token payload must be an object")
         return cast("dict[str, Any]", decoded)
-    except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        _log.error("ws_token.corrupt_data", extra={"error": str(exc)})
+    except (ValueError, TypeError) as exc:
+        _log.exception("ws_token.corrupt_data", extra={"error": str(exc)})
         raise WsTokenConsumeError(f"Corrupt WS token data: {exc}") from exc

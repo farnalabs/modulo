@@ -187,7 +187,7 @@ def send_email(
                 server.send_message(msg)
             _log.info("email.sent", extra={"to": to, "subject": subject})
             return True
-        except (smtplib.SMTPException, OSError) as exc:
+        except OSError as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES:
                 _log.warning(

@@ -85,7 +85,7 @@ class _BeginCtx:
 
 async def test_get_monitor_config_runs_query_inside_begin() -> None:
     fake = _AutobeginAwareSession(entry_value={"backends": ["sentry", "builtin"]})
-    result = await get_monitor_config(current_user=_admin_principal(), session=fake)
+    result = await get_monitor_config(_current_user=_admin_principal(), session=fake)
     assert result["backends"] == ["sentry", "builtin"]
 
 

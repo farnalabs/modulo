@@ -89,7 +89,7 @@ def _scan_pipeline_config_files() -> None:
                 data = json.loads(content)
             elif path.suffix in (".yaml", ".yml"):
                 data = yaml.safe_load(content)
-        except (json.JSONDecodeError, ValueError, yaml.YAMLError):
+        except (ValueError, yaml.YAMLError):
             continue
 
         if not data:

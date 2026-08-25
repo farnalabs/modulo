@@ -77,7 +77,7 @@ class RuntimeProvider(ABC):
         """Return the current status string for the workspace."""
         ...
 
-    def supports(self, profile: Any) -> bool:
+    def supports(self, _profile: Any) -> bool:
         """Return True if this provider can handle the given profile.
 
         Base implementation returns ``False`` so providers that don't

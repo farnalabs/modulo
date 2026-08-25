@@ -37,7 +37,7 @@ class TransparencyResponse(BaseModel):
 @handle_db_errors("product_analytics.transparency")
 async def get_transparency(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_PRODUCT_ANALYTICS_MANAGE),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_PRODUCT_ANALYTICS_MANAGE),  # type: ignore[assignment]
 ) -> TransparencyResponse:
     async with session.begin():
         last_dump_entry = await get_config(session, "product_analytics_last_dump_at")

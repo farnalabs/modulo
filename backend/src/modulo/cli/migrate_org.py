@@ -222,7 +222,7 @@ async def _export_organisation(session: Any, org_id: uuid.UUID) -> dict[str, Any
     return _serialise_row(org)
 
 
-async def _do_export(org_id: uuid.UUID, output: Path) -> dict[str, Any]:
+async def _do_export(org_id: uuid.UUID, _output: Path) -> dict[str, Any]:
     bundle: dict[str, Any] = {
         "__meta__": {
             "version": EXPORT_VERSION,

@@ -232,7 +232,7 @@ async def purge(
                 date_from=req.date_from,
                 date_to=req.date_to,
                 pipeline_id=req.pipeline_id,
-                status=req.status,
+                _status=req.status,
             )
 
             if org_id is not None:

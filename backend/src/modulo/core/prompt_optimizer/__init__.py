@@ -244,7 +244,7 @@ class PromptOptimizer:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                _log.error(
+                _log.exception(
                     "LLM call failed (attempt %d/%d): %s",
                     attempt + 1,
                     _MAX_RETRIES,

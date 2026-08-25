@@ -794,7 +794,7 @@ class CsrfTokenResponse(BaseModel):
 @router.get("/csrf-token", response_model=CsrfTokenResponse)
 @handle_db_errors("auth.csrf_token")
 async def csrf_token(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     try:

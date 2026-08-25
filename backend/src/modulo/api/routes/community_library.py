@@ -68,7 +68,7 @@ async def list_community(
 async def get_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.search"),
+    _principal: TenantPrincipal = require_permission("library.search"),
 ) -> dict[str, Any]:
     """Return a single community entry, including its parsed blob content."""
     try:

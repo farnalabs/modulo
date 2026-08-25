@@ -384,7 +384,7 @@ async def _dispatch_forwarders(
     org_id: Any,
     error_group: Any,
     error_event: Any,
-    event_data: dict[str, Any],
+    _event_data: dict[str, Any],
     session: Any | None = None,
 ) -> None:
     """Call all configured forwarders for the org.

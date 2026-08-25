@@ -280,7 +280,7 @@ class TestPurgeTerminalRuns:
             return []
 
         with patch.object(rr, "_select_run_page", side_effect=fake_select):
-            await self._purge(session, status="running")
+            await self._purge(session, _status="running")
 
         assert selected_statuses == [TERMINAL_STATUSES]
 

@@ -543,7 +543,7 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def get_or_create_engine(settings: Settings) -> AsyncEngine:
+def get_or_create_engine(_settings: Settings) -> AsyncEngine:
     """Return the process-global engine, creating it if necessary.
 
     This is the non-Depends version — use it outside FastAPI route handlers

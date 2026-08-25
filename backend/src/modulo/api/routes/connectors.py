@@ -360,13 +360,10 @@ async def connector_health_endpoint(
     a 404. Build/decrypt failures are 502; a failing health check is reported
     in-band as ``ok: false`` with the connector's detail.
     """
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            ci = await get_connector_instance(session, connector_id)
-    except HTTPException:
-        raise
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        ci = await get_connector_instance(session, connector_id)
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
     try:

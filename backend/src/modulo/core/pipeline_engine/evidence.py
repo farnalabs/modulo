@@ -462,7 +462,7 @@ def build_default_evidence_provider(
     output_json loading, E2B-SDK command/files probing.
     """
 
-    async def _resolve_sandbox_id(run_id: UUID, node_id: str) -> str | None:
+    async def _resolve_sandbox_id(run_id: UUID, _node_id: str) -> str | None:
         from modulo.db.crud.run import get_run
         from modulo.db.rls import set_rls_org
 

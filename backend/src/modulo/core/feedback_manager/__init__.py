@@ -934,8 +934,8 @@ class FeedbackManager:
             return None
         outcome = await resume_interrupted_correction(
             correction=ctx.correction,
-            guardrail=ctx.guardrail,
-            backend=ctx.backend,
+            _guardrail=ctx.guardrail,
+            _backend=ctx.backend,
             state=persisted_state,
             revalidation_config=ctx.revalidation_config,
             judge_callable=ctx.judge_callable,

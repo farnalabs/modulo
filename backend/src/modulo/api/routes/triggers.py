@@ -660,7 +660,7 @@ async def update_polling_config(
             ):
                 trigger_engine = TriggerEngine()
                 await trigger_engine.schedule_polling_trigger(
-                    session, trigger=trigger, org_id=principal.organisation_id
+                    session, trigger=trigger, _org_id=principal.organisation_id
                 )
 
             await session.flush()
@@ -857,7 +857,7 @@ async def test_polling_condition(
     trigger_engine = TriggerEngine()
     return await trigger_engine.evaluate_condition(
         session,
-        trigger=trigger,
+        _trigger=trigger,
         org_id=principal.organisation_id,
         connector_instance_id=uuid.UUID(req.connector_instance_id),
         poll_query=req.poll_query,

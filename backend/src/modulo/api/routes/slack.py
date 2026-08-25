@@ -168,7 +168,7 @@ async def receive_slack_event(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
-    engine: AsyncEngine = Depends(_get_engine),
+    _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
     """Receive a Slack Events API delivery (app_mention) and enqueue a run.
 

@@ -394,10 +394,10 @@ def _stub_security_guard() -> SecurityGuard:
     inject a real ``SecurityGuard``.
     """
 
-    async def validate_url(url: str) -> None:
+    async def validate_url(_url: str) -> None:
         return None
 
-    def filter_strings(values: Sequence[str], resource: str) -> None:
+    def filter_strings(_values: Sequence[str], resource: str) -> None:
         return None
 
     return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)

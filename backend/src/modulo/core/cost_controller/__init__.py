@@ -197,7 +197,7 @@ async def check_and_record_spend(
     org_limit_result = await session.execute(select(Organisation.daily_spend_limit).where(Organisation.id == org_id))
     org_limit = org_limit_result.scalar_one_or_none()
     if org_limit is not None:
-        org_sum = await _sum_created_at_day(session, org_id=org_id, day_start=day_start, run_id=run_id)
+        org_sum = await _sum_created_at_day(session, org_id=org_id, day_start=day_start, _run_id=run_id)
         refuse_org = org_sum + cost_usd > org_limit
 
     refuse_team = False
@@ -207,7 +207,7 @@ async def check_and_record_spend(
         team_limit = team_limit_result.scalar_one_or_none()
         if team_limit is not None:
             team_sum = await _sum_created_at_day(
-                session, org_id=org_id, day_start=day_start, run_id=run_id, team_id=team_id
+                session, org_id=org_id, day_start=day_start, _run_id=run_id, team_id=team_id
             )
             refuse_team = team_sum + cost_usd > team_limit
 
@@ -245,7 +245,7 @@ async def _sum_created_at_day(
     *,
     org_id: uuid.UUID,
     day_start: datetime,
-    run_id: uuid.UUID | None,
+    _run_id: uuid.UUID | None,
     team_id: uuid.UUID | None = None,
 ) -> Decimal:
     """SUM the day's ledger spend (``org_daily_run_counts.total_spend_usd``).

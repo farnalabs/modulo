@@ -359,3 +359,32 @@ class TestReconcileCronRegistrationsUnit:
         assert pipeline.deleted == ["jid:cron:_dummy_cron"]
         assert len(pipeline.zremmed) == 1
         assert len(pipeline.lremmed) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_run_accepts_claim_token_from_saq_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SAQ re-invokes resume_run with the ``claim_token`` stamped into job.kwargs
+    by a prior attempt. The kwarg must be accepted (not raise TypeError) and
+    ignored — the core claim regenerates its own token.
+    """
+    core_result = {"status": "resumed"}
+
+    async def _fake_core(**_kwargs: Any) -> dict[str, Any]:
+        return core_result
+
+    monkeypatch.setattr("modulo.core.pipeline_execution.resume_run", _fake_core)
+    monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
+
+    # Mimics SAQ retry re-invocation: claim_token arrives via **job.kwargs.
+    result = await sw.resume_run(
+        ctx={},
+        run_id="run-1",
+        org_id="org-1",
+        resume_data={"foo": "bar"},
+        claim_token="stale-token",
+    )
+    assert result == core_result
+
+    # And it must still work without the kwarg present.
+    result2 = await sw.resume_run(ctx={}, run_id="run-2", org_id="org-2")
+    assert result2 == core_result

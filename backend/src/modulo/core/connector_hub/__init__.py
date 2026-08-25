@@ -274,12 +274,10 @@ class ConnectorHub:
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
                 except (
-                    TimeoutError,
                     ConnectorDecryptError,
                     ValueError,
                     TypeError,
                     KeyError,
-                    json.JSONDecodeError,
                     OSError,
                 ):
                     logger.warning(

@@ -662,7 +662,7 @@ class TriggerEngine:
         session: AsyncSession,
         *,
         trigger: Trigger,
-        org_id: uuid.UUID,
+        _org_id: uuid.UUID,
     ) -> None:
         """Register/update a polling trigger's scheduled next fire.
 
@@ -685,7 +685,7 @@ class TriggerEngine:
     async def evaluate_condition(
         session: AsyncSession,
         *,
-        trigger: Trigger,
+        _trigger: Trigger,
         org_id: uuid.UUID,
         connector_instance_id: uuid.UUID,
         poll_query: str,

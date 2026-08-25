@@ -522,7 +522,7 @@ def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
 @handle_db_errors("composite_templates.detect_params_endpoint")
 async def detect_params_endpoint(
     req: DetectParamsRequest,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    _principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DetectParamsResponse:
     """Scan sub-pipeline node prompts for ``{{parameter.*}}`` placeholders.
 

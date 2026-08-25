@@ -1,7 +1,6 @@
 """OIDC and SAML 2.0 SSO support with JIT account provisioning."""
 
 import base64
-import binascii
 import hmac
 import json
 import logging
@@ -424,7 +423,7 @@ def _decode_id_token_claims(id_token: str) -> dict[str, object]:
         padded = parts[1] + "=" * pad
         decoded = json.loads(base64.urlsafe_b64decode(padded))
         return _require_json_object(decoded, "OIDC ID token claims")
-    except (ValueError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         _log.warning("sso.id_token_decode_failed", extra={"error": str(exc)})
         return {}
 
@@ -477,7 +476,7 @@ def _decode_saml_response(saml_response: str) -> bytes:
     """
     try:
         return base64.b64decode(saml_response, validate=False)
-    except (binascii.Error, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError(f"Invalid base64 SAML response: {exc}") from None
 
 

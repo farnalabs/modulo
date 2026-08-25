@@ -1018,7 +1018,7 @@ def _edge_source(edge: dict[str, Any]) -> str:
 
 
 def _check_llm_routing_labels(
-    node: dict[str, Any],
+    _node: dict[str, Any],
     edges: list[dict[str, Any]],
     nid: str,
     result: ValidationResult,

@@ -184,7 +184,7 @@ def _filter_community(
 
 async def _fetch_published_community_from_db(
     session: AsyncSession,
-    org_id: uuid.UUID,
+    _org_id: uuid.UUID,
     *,
     primitive_type: str | None = None,
     primitive_types: list[str] | None = None,
@@ -570,7 +570,7 @@ async def submit_contribution_for_review(
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
     *,
-    created_by: uuid.UUID,
+    _created_by: uuid.UUID,
 ) -> LibraryPrimitive:
     """Move a draft fixture contribution to the review queue.
 

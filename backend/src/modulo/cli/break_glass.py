@@ -833,7 +833,7 @@ async def _async_status(
     org_ref: str | None,
     all_rows: bool,
     as_json: bool,
-    actor: str,
+    _actor: str,
 ) -> None:
     factory = _factory_from_ctx(ctx, settings)
     try:
@@ -921,7 +921,7 @@ def smoke_cmd(ctx: click.Context) -> None:
 async def _async_smoke(
     ctx: click.Context,
     settings: Settings,
-    actor: str,
+    _actor: str,
 ) -> None:
     factory = _factory_from_ctx(ctx, settings)
     try:

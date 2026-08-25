@@ -782,7 +782,7 @@ class TestExecuteResumeWrappers:
                 run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
                 org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
                 resume_data={"action": "approved"},
-                claim_token="stale-token-from-previous-attempt",
+                _claim_token="stale-token-from-previous-attempt",
             )
         assert result == {"status": "complete"}
         core.assert_awaited_once()

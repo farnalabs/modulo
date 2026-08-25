@@ -193,8 +193,8 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
 async def request_org_deletion(
     session: AsyncSession,
     org_id: uuid.UUID,
-    actor_user_id: uuid.UUID,
-    settings: dict[str, Any] | None = None,
+    _actor_user_id: uuid.UUID,
+    _settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Initiate the soft-delete workflow for an organisation.
 

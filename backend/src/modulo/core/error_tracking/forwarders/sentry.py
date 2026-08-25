@@ -64,7 +64,7 @@ class SentryErrorForwarder(BaseForwarder):
     async def _forward_via_sdk(
         self,
         sentry_sdk: Any,
-        dsn: str,
+        _dsn: str,
         org_id: Any,
         error_group: Any,
         error_event: Any,

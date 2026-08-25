@@ -218,7 +218,7 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
 
 
 async def apply_gated_edge_diff(
-    session: AsyncSession,
+    _session: AsyncSession,
     old_edges: list[PipelineEdge] | list[dict[str, Any]],
     new_edges: list[dict[str, Any]],
     is_privileged: bool,
@@ -345,7 +345,7 @@ async def resolve_effective_privilege(
     try:
         live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
     except SQLAlchemyError:
-        _log.error(
+        _log.exception(
             "hitl_gate_guard.role_check_db_error",
             extra={"org_id": str(org_id), "account_id": str(account_id)},
         )
@@ -491,7 +491,7 @@ async def _resolve_effective_guardrail_admin(
     try:
         live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
     except SQLAlchemyError:
-        _log.error(
+        _log.exception(
             "hitl_gate_guard.guardrail_admin_role_check_db_error",
             extra={"org_id": str(org_id), "account_id": str(account_id)},
         )
