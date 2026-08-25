@@ -148,7 +148,7 @@ describe('useRemyTabsStore', () => {
     tabs.reconcile()
     const loadSessionSpy = vi.spyOn(store, 'loadSession').mockResolvedValue(undefined as never)
     tabs.closeTab('t1')
-    expect(tabs.tabs.length).toBe(1)
+    expect(tabs.tabs).toHaveLength(1)
     expect(tabs.tabs[0].sessionId).toBe('session-2')
     expect(loadSessionSpy).toHaveBeenCalledWith('session-2')
   })
@@ -162,7 +162,7 @@ describe('useRemyTabsStore', () => {
     const tabs = useRemyTabsStore()
     tabs.reconcile()
     tabs.closeTab('t1')
-    expect(tabs.tabs.length).toBe(0)
+    expect(tabs.tabs).toHaveLength(0)
     expect(store.activeSessionId).toBeNull()
     expect(store.messages).toEqual([])
   })
@@ -180,7 +180,7 @@ describe('useRemyTabsStore', () => {
     store.activeSessionId = 'ghost-session'
     const tabs = useRemyTabsStore()
     tabs.reconcile()
-    expect(tabs.tabs.length).toBe(2)
+    expect(tabs.tabs).toHaveLength(2)
     expect(store.activeSessionId).toBe('session-1')
   })
 

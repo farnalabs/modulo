@@ -67,7 +67,7 @@ describe('navigation.ts', () => {
   })
 
   it('populates sidebar groups from manifest', () => {
-    expect(navGroups.length).toBe(4)
+    expect(navGroups).toHaveLength(4)
     const groupIds = navGroups.map((g) => g.id)
     expect(groupIds).toEqual(['core', 'monitor', 'configure', 'admin'])
   })
@@ -92,7 +92,7 @@ describe('navigation.ts', () => {
 
   it('items within groups are sorted by sidebar_order', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(5)
+    expect(core.items).toHaveLength(5)
     expect(core.items[0].to).toBe('/')
     expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/lifecycle-maps'])
   })
@@ -281,7 +281,7 @@ describe('navigation.ts', () => {
 
   it('core has exactly 5 items (lifecycle-maps restored, connectors moved, stages removed)', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(5)
+    expect(core.items).toHaveLength(5)
   })
 
   it('monitor has evals, diff, observability, etc', () => {
