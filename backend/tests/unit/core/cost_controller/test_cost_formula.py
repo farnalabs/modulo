@@ -96,9 +96,18 @@ def test_formula_too_long_rejected() -> None:
 
 
 def test_max_length_boundary() -> None:
-    formula = "1 + 1"
-    assert len(formula) <= MAX_FORMULA_LENGTH
-    validate_formula(formula, _SANDBOX)  # no raise
+    # The cap applies to the RAW formula string: an expression of EXACTLY
+    # MAX_FORMULA_LENGTH characters parses, one character more is
+    # formula_too_long. The old test exercised a 5-char formula whose
+    # `len(...) <= MAX_FORMULA_LENGTH` truthiness was fixed at source time.
+    at_limit = "111111" + " * 11" * 50  # 6 + 5*50 == 256
+    assert len(at_limit) == MAX_FORMULA_LENGTH
+    validate_formula(at_limit, _SANDBOX)  # no raise - at the cap
+    assert evaluate_formula(at_limit, _params(), _SANDBOX) == Decimal(111111) * (Decimal(11) ** 50)
+    over_limit = "1" * (MAX_FORMULA_LENGTH + 1)
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula(over_limit, _SANDBOX)
+    assert exc_info.value.code == "formula_too_long"
 
 
 def test_depth_exceeded() -> None:
@@ -218,6 +227,37 @@ def test_stray_operator_in_primary_is_unexpected_token() -> None:
     with pytest.raises(CostFormulaError) as exc_info:
         validate_formula("1 + * 2", _SANDBOX)
     assert exc_info.value.code == "unexpected_token"
+
+
+def test_leading_rparen_is_unbalanced_parentheses() -> None:
+    # The stable machine code for the ')'-first path is NOT exercised anywhere
+    # else in the package (missing-lparen lands on unexpected_token).
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula(")1", _SANDBOX)
+    assert exc_info.value.code == "unbalanced_parentheses"
+
+
+def test_division_binds_tighter_and_chains_left_associatively() -> None:
+    assert evaluate_formula("1 + 8 / 4", _params(), _SANDBOX) == Decimal(3)
+    assert evaluate_formula("8 / 4 / 2", _params(), _SANDBOX) == Decimal(1)
+    assert evaluate_formula("10 - 3 - 2", _params(), _SANDBOX) == Decimal(5)
+
+
+def test_intermediate_negative_subexpression_is_allowed() -> None:
+    # Only the FINAL result is checked (documented contract): 1 - 2 is
+    # transiently -1 but the whole expression is +2, so it must evaluate.
+    assert evaluate_formula("1 - 2 + 3", _params(), _SANDBOX) == Decimal(2)
+
+
+def test_unary_minus_nesting_hits_depth_cap() -> None:
+    # Unary minus recurses through _factor(depth + 1), a distinct depth path
+    # from the paren-nesting the other depth tests exercise.
+    at_limit = "-" * MAX_FORMULA_DEPTH + "1"
+    validate_formula(at_limit, _SANDBOX)  # no raise - even negations -> +1
+    assert evaluate_formula(at_limit, _params(), _SANDBOX) == Decimal(1)
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula("-" * (MAX_FORMULA_DEPTH + 1) + "1", _SANDBOX)
+    assert exc_info.value.code == "depth_exceeded"
 
 
 def test_non_finite_param_result_is_eval_error() -> None:
