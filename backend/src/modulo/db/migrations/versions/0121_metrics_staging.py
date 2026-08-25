@@ -76,6 +76,16 @@ def upgrade() -> None:
             """
         )
     )
+    # Drop first so the migration is idempotent even if the policy already
+    # exists (e.g. a freshly-bootstrapped or overlay DB that inherited the
+    # schema). Mirrors the DROP POLICY IF EXISTS guard used elsewhere.
+    op.execute(
+        sa.text(
+            """
+            DROP POLICY IF EXISTS rls_org_isolation ON "metrics_staging"
+            """
+        )
+    )
     op.execute(
         sa.text(
             """
