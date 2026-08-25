@@ -22,6 +22,11 @@ def _auto_clear_cache() -> None:
     _CACHE.clear()
 
 
+def _k(pid: uuid.UUID, sid: uuid.UUID, timeout: int, h: str = "") -> tuple:
+    """Build a cache key tuple (matches graph_cache.CacheKey arity)."""
+    return (pid, sid, timeout, h)
+
+
 # ---------------------------------------------------------------------------
 # get_or_compile
 # ---------------------------------------------------------------------------
@@ -59,10 +64,10 @@ def test_get_or_compile_different_pipeline_calls_factory():
 def test_evict_removes_entry():
     pid, sid = uuid.uuid4(), uuid.uuid4()
     get_or_compile(pid, sid, lambda: "cached")
-    assert (pid, sid, 300) in _CACHE
+    assert _k(pid, sid, 300) in _CACHE
 
     evict(pid, sid)
-    assert (pid, sid, 300) not in _CACHE
+    assert _k(pid, sid, 300) not in _CACHE
 
 
 def test_cache_evicts_oldest_when_full():
@@ -76,7 +81,7 @@ def test_cache_evicts_oldest_when_full():
     extra_pid = uuid.uuid4()
     get_or_compile(extra_pid, base_sid, lambda: "new")
     assert first_key not in _CACHE
-    assert (extra_pid, base_sid, 300) in _CACHE
+    assert _k(extra_pid, base_sid, 300) in _CACHE
 
 
 def test_evict_does_not_affect_other_pipelines():
@@ -85,8 +90,8 @@ def test_evict_does_not_affect_other_pipelines():
     get_or_compile(pid2, sid, lambda: "2")
 
     evict(pid1, sid)
-    assert (pid1, sid, 300) not in _CACHE
-    assert (pid2, sid, 300) in _CACHE
+    assert _k(pid1, sid, 300) not in _CACHE
+    assert _k(pid2, sid, 300) in _CACHE
 
 
 def test_lru_moves_entry_on_access():
@@ -96,7 +101,7 @@ def test_lru_moves_entry_on_access():
         get_or_compile(k, sid, lambda: "v")
     # Access the first key, making it recently used
     get_or_compile(keys[0], sid, lambda: "v")
-    assert next(iter(_CACHE)) == (keys[1], sid, 300)
+    assert next(iter(_CACHE)) == _k(keys[1], sid, 300)
 
 
 def test_get_or_compile_distinguishes_node_timeout_values():
@@ -126,12 +131,55 @@ def test_evict_removes_all_node_timeout_variants():
     pid, sid = uuid.uuid4(), uuid.uuid4()
     get_or_compile(pid, sid, lambda: "a", pipeline_node_timeout_seconds=100)
     get_or_compile(pid, sid, lambda: "b", pipeline_node_timeout_seconds=200)
-    assert (pid, sid, 100) in _CACHE
-    assert (pid, sid, 200) in _CACHE
+    assert _k(pid, sid, 100) in _CACHE
+    assert _k(pid, sid, 200) in _CACHE
 
     evict(pid, sid)
-    assert (pid, sid, 100) not in _CACHE
-    assert (pid, sid, 200) not in _CACHE
+    assert _k(pid, sid, 100) not in _CACHE
+    assert _k(pid, sid, 200) not in _CACHE
+
+
+def test_port_topology_hash_forces_recompile():
+    """FAR-416 / F1: a distinct port topology must recompile, not serve a stale graph."""
+    from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
+
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    calls: list[str] = []
+
+    base_graph = {
+        "nodes": [
+            {"id": "a", "node_type": "agent", "outputs": [{"port": "out"}]},
+            {"id": "b", "node_type": "agent", "inputs": [{"port": "in"}]},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+    mutated_graph = {
+        "nodes": [
+            {"id": "a", "node_type": "agent", "outputs": [{"port": "out"}]},
+            {"id": "b", "node_type": "agent", "inputs": [{"port": "different"}]},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+    h1 = compute_port_topology_hash(base_graph)
+    h2 = compute_port_topology_hash(mutated_graph)
+    assert h1 != h2
+
+    def factory_for(h: str) -> Callable[[], str]:
+        def factory() -> str:
+            calls.append(h)
+            return f"compiled-{h}"
+
+        return factory
+
+    first = get_or_compile(pid, sid, factory_for(h1), graph_struct_hash=h1)
+    second = get_or_compile(pid, sid, factory_for(h2), graph_struct_hash=h2)
+    cached = get_or_compile(pid, sid, factory_for(h1), graph_struct_hash=h1)
+
+    assert first == f"compiled-{h1}"
+    assert second == f"compiled-{h2}"
+    assert cached == f"compiled-{h1}"
+    # Recompiled once for the new port topology; original hash served from cache.
+    assert calls == [h1, h2]
 
 
 # ---------------------------------------------------------------------------

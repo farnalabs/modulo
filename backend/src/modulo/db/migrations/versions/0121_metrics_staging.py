@@ -76,6 +76,10 @@ def upgrade() -> None:
             """
         )
     )
+    # Idempotent guard: the table/index/constraint above use IF NOT EXISTS, so
+    # this reconciliation migration must not fail when re-applied against a DB
+    # that already carries the policy (e.g. a reused/persisted Postgres, or a
+    # re-run of the migration chain). CREATE POLICY has no native IF NOT EXISTS.
     op.execute(
         sa.text(
             """
@@ -83,7 +87,8 @@ def upgrade() -> None:
             BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_policies
-                    WHERE tablename = 'metrics_staging'
+                    WHERE schemaname = 'public'
+                      AND tablename = 'metrics_staging'
                       AND policyname = 'rls_org_isolation'
                 ) THEN
                     CREATE POLICY rls_org_isolation ON "metrics_staging"

@@ -176,6 +176,51 @@ def test_mapped_routes_render_a_page_not_a_redirect():
     )
 
 
+def test_route_names_are_unique_across_manifest():
+    routes = _load_manifest()["routes"]
+    seen: dict[str, str] = {}
+    duplicated: list[str] = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        name = entry["name"]
+        if name in seen:
+            duplicated.append(f"  {name}: {seen[name]} and {path}")
+        else:
+            seen[name] = path
+    assert not duplicated, (
+        "duplicate route names corrupt the router's manifestByName lookup and breadcrumb hierarchy; "
+        "each route must be uniquely named:\n" + "\n".join(duplicated)
+    )
+
+
+def test_route_parent_hierarchy_is_acyclic_and_resolves():
+    routes = _load_manifest()["routes"]
+    invalid = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("parent"):
+            continue
+        parent = entry["parent"]
+        if parent not in routes:
+            invalid.append(f"{path} -> dangling parent {parent!r} (not a route path)")
+            continue
+
+        seen: set[str] = set()
+        cursor: str | None = parent
+        while cursor:
+            if cursor in seen:
+                invalid.append(f"{path} -> circular parent chain involving {cursor!r}")
+                break
+            seen.add(cursor)
+            next_entry = routes[cursor]
+            cursor = next_entry.get("parent") if isinstance(next_entry, dict) else None
+    assert not invalid, (
+        "dangling or circular parent references break breadcrumbs and Remy's page hierarchy:\n" + "\n".join(invalid)
+    )
+
+
 def _load_elements() -> dict[str, list[dict]]:
     data = _load_manifest()
     elements = data.get("elements")
@@ -232,6 +277,36 @@ def test_element_testids_exist_in_frontend():
     assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(
         f"  {path} -> {testid}" for testid, path in sorted(dangling.items())
     )
+
+
+def test_mapped_route_elements_cover_owning_view_testids():
+    """Every static ``data-testid`` in a route's owning view is documented.
+
+    The manifest is the single source of truth for the product surface, and
+    Remy's ``search_documentation`` tool builds its page inventory from it
+    (ADR 008). ``test_element_testids_exist_in_frontend`` only guards the
+    manifest -> frontend direction (documented elements must ship); this test
+    guards the reverse direction for whole-page views so a newly shipped
+    panel/control does not silently stay invisible to the product map.
+
+    It is intentionally scoped to whole-page view components that own their
+    testids end to end (no shared/imported controls), keeping the assertion
+    deterministic and free of shared-component noise.
+    """
+    owned_pages = {
+        "/admin/housekeeping": "frontend/src/views/AdminHousekeepingView.vue",
+    }
+    elements = _load_elements()
+    for route, view_rel in owned_pages.items():
+        view = REPO_ROOT / view_rel
+        view_testids = set(_TESTID_LITERAL.findall(view.read_text(encoding="utf-8")))
+        documented = {item.get("testid") for item in elements.get(route, [])}
+        missing = sorted(view_testids - documented)
+        assert not missing, (
+            f"static data-testids in {view_rel} are missing from the product map "
+            f"elements for {route} (invisible to Remy's docs indexer / /api/v1/manifest):\n"
+            + "\n".join(f"  {t}" for t in missing)
+        )
 
 
 def test_every_non_auth_router_route_is_mapped():

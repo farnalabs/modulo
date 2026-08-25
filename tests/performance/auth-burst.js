@@ -41,8 +41,8 @@ const testUsers = [
 
 export default function () {
   group('Auth login burst', function () {
-    // Rotate through test users to avoid token caching effects
-    const user = testUsers[Math.floor(Math.random() * testUsers.length)];
+    // Rotate through test users to avoid token caching effects (non-security test jitter)
+    const user = testUsers[Math.floor(Math.random() * testUsers.length)]; // NOSONAR: load-test user rotation, not security-sensitive
 
     const payload = JSON.stringify({
       email: user.email,

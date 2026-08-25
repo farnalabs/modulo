@@ -138,7 +138,7 @@ describe('Breadcrumb.vue', () => {
     const links = wrapper.findAll('.breadcrumb-link')
     const current = wrapper.find('.breadcrumb-current')
 
-    expect(links.length).toBe(0)
+    expect(links).toHaveLength(0)
     expect(current.exists()).toBe(true)
     expect(current.text()).toBe('Dashboard')
   })
@@ -152,7 +152,7 @@ describe('Breadcrumb.vue', () => {
     const links = wrapper.findAll('.breadcrumb-link')
     const current = wrapper.find('.breadcrumb-current')
 
-    expect(links.length).toBe(2)
+    expect(links).toHaveLength(2)
     expect(links[0].text()).toBe('Dashboard')
     expect(links[1].text()).toBe('Schemas')
     expect(current.text()).toBe('Schema Editor')
@@ -167,7 +167,7 @@ describe('Breadcrumb.vue', () => {
     const links = wrapper.findAll('.breadcrumb-link')
     const current = wrapper.find('.breadcrumb-current')
 
-    expect(links.length).toBe(1)
+    expect(links).toHaveLength(1)
     expect(links[0].text()).toBe('Dashboard')
     expect(current.text()).toBe('Library')
   })
@@ -187,7 +187,7 @@ describe('Breadcrumb.vue', () => {
     const links = wrapper.findAll('.breadcrumb-link')
     const current = wrapper.find('.breadcrumb-current')
 
-    expect(links.length).toBe(1)
+    expect(links).toHaveLength(1)
     expect(links[0].text()).toBe('Dashboard')
     expect(current.text()).toBe('Onboarding')
   })

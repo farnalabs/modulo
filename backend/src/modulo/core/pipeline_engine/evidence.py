@@ -46,13 +46,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo._types import _DICT_STR_ANY
+
 _log = logging.getLogger(__name__)
 
 #: Bounded async probe budget — code-constant, ≤3s per probe (§15.13).
 EVIDENCE_PROBE_TIMEOUT_SECONDS: float = 3.0
-
-#: Type alias used in ``cast`` for raw output JSON (S1192).
-type _DICT_STR_ANY = dict[str, Any]
 
 #: Run statuses eligible for the reconciliation sweep. Only genuinely
 #: terminalized ``complete`` runs (not all terminal statuses) are no-op

@@ -1,6 +1,7 @@
 """Unit tests for the housekeeping scan service (modulo.core.housekeeping)."""
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -229,6 +230,56 @@ class TestScanInvalidOrgFk:
         assert entry.scanner is hk._scan_invalid_org_fk
         assert entry.label == "Invalid Organisation FK"
         assert "orphaned" in entry.description.lower()
+        assert entry.entity_type is None
+
+
+class TestScanCheckpointRetention:
+    _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+    @pytest.mark.asyncio
+    async def test_reports_only_runs_with_reclaimable_checkpoint_bytes(self) -> None:
+        session = AsyncMock()
+        run1 = SimpleNamespace(
+            langgraph_thread_id="org:t1", status="complete", run_number=1, created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        run2 = SimpleNamespace(
+            langgraph_thread_id="org:t2", status="failed", run_number=2, created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [run1, run2]
+        session.execute = AsyncMock(return_value=result)
+
+        detail_mock = AsyncMock(return_value=({"org:t1": 500, "org:t2": 0}, {}))
+        with patch.object(hk, "_checkpoint_detail", new=detail_mock):
+            candidates = await hk._scan_checkpoint_retention(session, self._ORG)
+
+        # Only run1 has reclaimable checkpoint bytes (> 0); run2 is skipped.
+        assert len(candidates) == 1
+        assert candidates[0].id == "org:t1"
+        assert candidates[0].name == "Run 1"
+        assert "500" in candidates[0].detail
+
+        # The byte estimator was asked about both selected runs' thread-ids.
+        est_call = detail_mock.await_args
+        assert est_call is not None
+        assert est_call.args[1] == ["org:t1", "org:t2"]
+        assert est_call.args[2] == self._ORG
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_reclaimable_runs(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=result)
+        with patch.object(hk, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))):
+            candidates = await hk._scan_checkpoint_retention(session, self._ORG)
+        assert candidates == []
+
+    def test_checkpoint_retention_is_registered_detection_only(self) -> None:
+        entry = SCANNERS_BY_CATEGORY.get("checkpoint_retention")
+        assert entry is not None
+        assert entry.scanner is hk._scan_checkpoint_retention
+        assert entry.label == "Checkpoint Retention"
         assert entry.entity_type is None
 
 

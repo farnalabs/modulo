@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
@@ -14,9 +15,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-
-# Type aliases used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
 
 
 class GrafanaConnector(ConnectorBase):

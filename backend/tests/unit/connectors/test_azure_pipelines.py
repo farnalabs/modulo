@@ -4,10 +4,10 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors._safe_page import safe_paging_total as _paging_total
 from modulo.connectors.azure_pipelines import (
     AzurePipelinesConnector,
     _AzurePipelinesTestDouble,
-    _paging_total,
 )
 from modulo.connectors.base import (
     CIRunStatus,
@@ -500,14 +500,14 @@ async def test_get_run_logs_list_body_skips_non_dict_entries(ap_runner):
 
 
 def test_paging_total() -> None:
-    assert _paging_total({"count": 25}) == 25
-    assert _paging_total({"count": "25"}) == 25
-    assert _paging_total({"count": 1e999}) == 0
-    assert _paging_total({"count": float("nan")}) == 0
-    assert _paging_total({"count": True}) == 0
-    assert _paging_total({"count": "garbage"}) == 0
-    assert _paging_total({}) is None
-    assert _paging_total(["garbage"]) is None
+    assert _paging_total({"count": 25}, "count") == 25
+    assert _paging_total({"count": "25"}, "count") == 25
+    assert _paging_total({"count": 1e999}, "count") == 0
+    assert _paging_total({"count": float("nan")}, "count") == 0
+    assert _paging_total({"count": True}, "count") == 0
+    assert _paging_total({"count": "garbage"}, "count") == 0
+    assert _paging_total({}, "count") is None
+    assert _paging_total(["garbage"], "count") is None
 
 
 # ---------------------------------------------------------------------------

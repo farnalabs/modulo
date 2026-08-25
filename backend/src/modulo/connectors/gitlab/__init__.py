@@ -14,10 +14,16 @@ from urllib.parse import quote
 import httpx
 
 from modulo.connectors._retry_headers import (
+    MAX_DELAY,
+    MAX_RETRIES,
+    RETRYABLE_STATUSES,
+    backoff_delay,
     extract_rate_limit_metadata,
     format_rate_limit_detail,
     parse_rate_limit_reset,
     parse_retry_after,
+    should_retry_network,
+    should_retry_status,
 )
 from modulo.connectors.base import (
     ConnectorBase,
@@ -50,11 +56,10 @@ _RATE_LIMIT_HEADERS = (
 # Preferred headers (epoch seconds) for the quota-reset retry delay, in order.
 _RATE_LIMIT_RESET_HEADERS = ("RateLimit-ResetTime", "RateLimit-Reset")
 
-# Retry/backoff configuration
-_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
-_MAX_RETRIES = 3
-_BASE_DELAY = 1.0
-_MAX_DELAY = 30.0
+# Retry/backoff configuration (canonical values live in _retry_headers)
+_RETRYABLE_STATUSES = RETRYABLE_STATUSES
+_MAX_RETRIES = MAX_RETRIES
+_MAX_DELAY = MAX_DELAY
 
 # Actions accepted by the Commits API for multi-file (batch) operations
 _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move", "chmod"})
@@ -230,17 +235,17 @@ def _single_result(response: httpx.Response) -> ConnectorResult:
 
 def _backoff_delay(attempt: int) -> float:
     """Exponential backoff delay (capped at ``_MAX_DELAY``) for a retry attempt."""
-    return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+    return backoff_delay(attempt)
 
 
 def _should_retry_status(status_code: int, attempt: int) -> bool:
     """Whether a retryable HTTP status may be retried on this attempt."""
-    return status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES
+    return should_retry_status(status_code, attempt)
 
 
 def _should_retry_attempt(attempt: int) -> bool:
     """Whether a transport-level failure may be retried on this attempt."""
-    return attempt < _MAX_RETRIES
+    return should_retry_network(attempt)
 
 
 def _http_error_message(exc: httpx.HTTPStatusError) -> str:

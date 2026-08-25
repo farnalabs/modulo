@@ -2408,7 +2408,8 @@ export default {
       }
     },
     "AdminHousekeepingView": {
-      "confirm_cleanup": "Confirm Cleanup"
+      "confirm_cleanup": "Confirm Cleanup",
+      "checkpoint_retention": "Checkpoint Retention"
     },
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",

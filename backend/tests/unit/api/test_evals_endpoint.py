@@ -74,6 +74,8 @@ def _make_eval_def(**overrides) -> MagicMock:
     m.suite_id = overrides.get("suite_id")
     m.created_by = overrides.get("created_by", _USER_ID)
     m.account_id = overrides.get("account_id", _USER_ID)
+    m.version = overrides.get("version", 1)
+    m.pre_version_raw = overrides.get("pre_version_raw")
     return m
 
 
@@ -177,6 +179,7 @@ class TestCreateEvalDefinition:
         assert data["pass_threshold"] == pytest.approx(0.8)
         assert data["suite_id"] == "suite-1"
         assert data["config_json"] == {"pattern": r"\d+"}
+        assert data["version"] == 1
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
         mock_pipeline = MagicMock()
@@ -529,6 +532,10 @@ class TestUpdateEvalDefinition:
         assert data["name"] == "Updated Eval"
         assert data["pass_threshold"] == pytest.approx(0.9)
         assert data["suite_id"] == "suite-2"
+        # FAR-382: an update bumps the version and snapshots the pre-edit config
+        # so a rubric change is explicitly version-scoped.
+        assert data["version"] == 2
+        assert data["pre_version_raw"] == {"config_json": {"pattern": r"\d+"}}
 
     def test_update_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()

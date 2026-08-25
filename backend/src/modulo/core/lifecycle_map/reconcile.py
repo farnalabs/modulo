@@ -107,6 +107,7 @@ def _get_meter() -> Any:
             return None
         return provider.get_meter("modulo.lifecycle_map", version="0.1.0")
     except Exception:
+        _log.debug("lifecycle_map.meter_unavailable")
         return None
 
 

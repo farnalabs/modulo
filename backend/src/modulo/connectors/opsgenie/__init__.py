@@ -5,7 +5,9 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -18,27 +20,8 @@ from modulo.connectors.base import (
 
 _BASE = "https://api.opsgenie.com/v2"
 
-# Repeated REST path and cast type alias (S1192).
+# Repeated REST path (S1192).
 _ALERTS_PATH = "/alerts"
-type _DICT_STR_ANY = dict[str, Any]
-
-
-def _paging_total_count(body: object) -> int | None:
-    """Extract Opsgenie's ``totalCount`` as a safe int.
-
-    Guards against non-finite floats (``inf``/``nan``) which otherwise crash
-    downstream ``int()`` coercion — Python's json parser produces ``inf`` for
-    overflowing literals such as ``1e999``, so a corrupt or hostile Opsgenie
-    response must not be able to poison the reported total. A missing
-    ``totalCount`` keeps the historical ``None`` behaviour. A non-dict body
-    (list, string, number, ...) from a corrupt response is treated as absent.
-    """
-    if not isinstance(body, dict):
-        return None
-    raw = body.get("totalCount")
-    if raw is None:
-        return None
-    return _safe_int(raw)
 
 
 def _next_offset_cursor(offset: object, records: list[Any], paging: object) -> str | None:
@@ -139,7 +122,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=_next_offset_cursor(
                 params.get("offset", 0), records, body.get("paging") if isinstance(body, dict) else None
             ),
@@ -173,7 +156,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -193,7 +176,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -211,7 +194,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -227,7 +210,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -260,7 +243,7 @@ class OpsgenieConnector(ConnectorBase):
         records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total_count(body),
+            total=_safe_paging_total(body, "totalCount"),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 

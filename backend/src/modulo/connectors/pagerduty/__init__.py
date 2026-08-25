@@ -6,7 +6,9 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -18,27 +20,6 @@ from modulo.connectors.base import (
 )
 
 _BASE = "https://api.pagerduty.com"
-
-# Type alias used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
-
-
-def _paging_total(body: object) -> int | None:
-    """Extract PagerDuty's ``total`` as a safe int.
-
-    Guards against non-finite floats (``inf``/``nan``) which otherwise poison
-    aggregation — Python's json parser produces ``inf`` for overflowing
-    literals such as ``1e999``, so a corrupt or hostile PagerDuty response
-    must not be able to poison the reported total. A missing ``total`` keeps
-    the historical ``None`` behaviour. A non-dict body (list, string, number,
-    ...) from a corrupt response is treated as absent.
-    """
-    if not isinstance(body, dict):
-        return None
-    raw = body.get("total")
-    if raw is None:
-        return None
-    return _safe_int(raw)
 
 
 def _body_field(body: object, key: str, default: object) -> object:
@@ -152,7 +133,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "incidents")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(offset, records, _body_field(body, "more", None)),
         )
 
@@ -172,7 +153,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "services")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
@@ -190,7 +171,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "teams")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
@@ -210,7 +191,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "users")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
@@ -230,7 +211,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "escalation_policies")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
@@ -248,7 +229,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "schedules")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
@@ -267,7 +248,7 @@ class PagerDutyConnector(ConnectorBase):
         records = _safe_records(body, "oncalls")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=_paging_total(body),
+            total=_safe_paging_total(body, "total"),
             next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 

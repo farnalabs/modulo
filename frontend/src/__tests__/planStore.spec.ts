@@ -475,7 +475,7 @@ describe('usePlanStore', () => {
     }
 
     await vi.waitFor(() => {
-      expect((api.GET as any).mock.calls.length).toBe(callsBefore + 3)
+      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 3)
     })
   })
 
@@ -507,7 +507,7 @@ describe('usePlanStore', () => {
     for (const handler of getHandlers('team')) handler(event)
 
     await vi.waitFor(() => {
-      expect((api.GET as any).mock.calls.length).toBe(callsBefore + 3)
+      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 3)
     })
   })
 
@@ -521,7 +521,7 @@ describe('usePlanStore', () => {
       handler(syncEvent({ type: 'run', id: 'evt-run' }))
     }
 
-    expect((api.GET as any).mock.calls.length).toBe(callsBefore)
+    expect((api.GET as any).mock.calls).toHaveLength(callsBefore)
   })
 
   it('disposeHandlers unregisters all sync handlers', async () => {

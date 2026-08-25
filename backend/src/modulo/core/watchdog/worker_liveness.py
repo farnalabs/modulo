@@ -111,10 +111,13 @@ async def _cron_heartbeat_fresh(redis: aioredis.Redis) -> bool:
     Fleet-wide semantics (matches the ``app``-machine health gate): the
     system cron runs on worker machines only, so a stale fleet-wide reading
     means no worker's cron scheduler has fired within 2x its 60s cadence.
+
+    The heartbeat keys are discovered with ``SCAN`` — never ``KEYS`` — so a
+    Redis instance already under load cannot be blocked by an O(N) full-key
+    scan exactly when a fleet-wide death needs to be detected.
     """
-    heartbeat_keys = await redis.keys("saq:cron:heartbeat:fire_due_triggers:*")
     now = time.time()
-    for key in heartbeat_keys:
+    async for key in redis.scan_iter(match="saq:cron:heartbeat:fire_due_triggers:*"):
         raw = await redis.get(key)
         if raw is None:
             continue
@@ -224,29 +227,39 @@ def _recovery_text(state: dict[str, Any]) -> str:
     )
 
 
+async def _post_webhook_payload(url: str, payload: bytes, channel: str) -> None:
+    """Best-effort JSON webhook POST. Never raises out of the task.
+
+    ``channel`` demultiplexes the failure log keys (``webhook`` for the generic
+    Slack-compatible webhook, ``teams_webhook`` for the Microsoft Teams
+    MessageCard webhook) so a failure stays attributable to its channel. The
+    two webhook channels are otherwise byte-identical in their HTTP posting —
+    one implementation avoids drift between the copies.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
+            resp = await client.post(
+                url,
+                content=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "Modulo-Watchdog/1.0"},
+            )
+        if not resp.is_success:
+            _log.warning("watchdog.%s_http_error status=%s", channel, resp.status_code)
+    except asyncio.CancelledError:
+        raise
+    except httpx.RequestError as exc:
+        _log.warning("watchdog.%s_request_failed: %s", channel, exc)
+    except Exception as exc:
+        _log.warning("watchdog.%s_unknown_failure: %s", channel, exc)
+
+
 async def _post_generic_webhook(settings: Settings, text: str) -> None:
     """Best-effort Slack-compatible webhook POST. Never raises out of the task."""
     webhook_url = settings.alert_webhook_url
     if not webhook_url:
         _log.warning("watchdog.webhook_no_url")
         return
-
-    payload = json.dumps({"text": text}).encode()
-    try:
-        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
-            resp = await client.post(
-                webhook_url,
-                content=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "Modulo-Watchdog/1.0"},
-            )
-        if not resp.is_success:
-            _log.warning("watchdog.webhook_http_error status=%s", resp.status_code)
-    except asyncio.CancelledError:
-        raise
-    except httpx.RequestError as exc:
-        _log.warning("watchdog.webhook_request_failed: %s", exc)
-    except Exception as exc:
-        _log.warning("watchdog.webhook_unknown_failure: %s", exc)
+    await _post_webhook_payload(webhook_url, json.dumps({"text": text}).encode(), "webhook")
 
 
 async def _post_teams_webhook(settings: Settings, text: str) -> None:
@@ -255,7 +268,6 @@ async def _post_teams_webhook(settings: Settings, text: str) -> None:
     if not webhook_url:
         _log.warning("watchdog.teams_webhook_no_url")
         return
-
     payload = json.dumps(
         {
             "@type": "MessageCard",
@@ -265,21 +277,7 @@ async def _post_teams_webhook(settings: Settings, text: str) -> None:
             "text": text,
         }
     ).encode()
-    try:
-        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
-            resp = await client.post(
-                webhook_url,
-                content=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "Modulo-Watchdog/1.0"},
-            )
-        if not resp.is_success:
-            _log.warning("watchdog.teams_webhook_http_error status=%s", resp.status_code)
-    except asyncio.CancelledError:
-        raise
-    except httpx.RequestError as exc:
-        _log.warning("watchdog.teams_webhook_request_failed: %s", exc)
-    except Exception as exc:
-        _log.warning("watchdog.teams_webhook_unknown_failure: %s", exc)
+    await _post_webhook_payload(webhook_url, payload, "teams_webhook")
 
 
 def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
