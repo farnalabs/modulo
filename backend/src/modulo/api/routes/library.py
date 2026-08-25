@@ -1438,6 +1438,8 @@ def _add_pipeline_edges(
                 target_node_id=uuid.UUID(edge_data["target_node_id"]),
                 edge_type=edge_data["edge_type"],
                 hitl_gate_config=edge_data.get("hitl_gate_config"),
+                source_port=edge_data.get("source_port", "out"),
+                target_port=edge_data.get("target_port", "in"),
             )
         )
 
