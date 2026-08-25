@@ -312,6 +312,21 @@ regression that silently weakens the suite:
   literal that *contains* ``ANY`` (``[a, ANY]``) makes ``in`` always PASS and
   ``not in`` always FAIL, because the element match short-circuits on
   ``x == ANY``
+- a freshly-constructed Mock nested *inside* a container literal in an
+  ``assert`` — ``assert result == {'status': MagicMock()}``,
+  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
+  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
+  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
+  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
+  truthy) ALWAYS PASS — every one decided at source time, never by the code
+  under test. This is the nested-or-direct-container twin of the Mock-
+  constructor lens, which owns only the *direct* positions (the assert's test
+  expression, a ``not``-wrap, or a single comparison operand): a fresh
+  constructor buried in a list/dict/tuple/set literal is a different AST shape
+  that the direct lens provably misses. The configure-then-assert fix is the
+  same — configure the double (``return_value``/``side_effect``) and verify
+  through ``assert_called*``/attribute checks instead of comparing to a
+  constructor call
 - a direct mutation of the process environment made without the ``monkeypatch``
   fixture in scope — subscript set/delete on the ``os.environ`` mapping
   (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
@@ -4285,6 +4300,122 @@ def test_mock_constructor_lens_flags_dead_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _mock_constructor_container_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression nests a freshly-constructed Mock *inside* a container literal
+    (``[Mock()]``, ``{'k': MagicMock()}``, ``(AsyncMock(),)``, ``{Mock()}``).
+
+    A fresh Mock is only meaningful as an obligation for ``assert_called_with``
+    to match; inside a container it is compared by identity (``__eq__``
+    defaults to ``is``), so ``assert result == {'s': MagicMock()}`` ALWAYS
+    FAILS and ``assert result != [...]`` ALWAYS PASSES no matter what
+    ``result`` evaluates to, while ``assert [Mock()]`` (a non-empty container
+    is always truthy) ALWAYS PASSES. The outcome is fixed at source time in
+    every case. Only the *container-nesting* position is flagged here —
+    a fresh constructor that is the assert's test expression, a ``not``-wrap,
+    or the direct operand of a single-operator comparison belongs to the
+    Mock-constructor lens, so the two never double-report the same line. No
+    name resolution is involved, so a mock bound to a name elsewhere is never
+    implicated and the lens has no false positives from mocking assignments or
+    ``patch`` bindings."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        # Hunt for a fresh-mock constructor nested anywhere inside a container
+        # literal that itself sits inside the assert's test expression.
+        for container in ast.walk(node.test):
+            if not isinstance(container, (ast.List, ast.Dict, ast.Tuple, ast.Set)):
+                continue
+            elements = (
+                list(container.elts)
+                if isinstance(container, (ast.List, ast.Tuple, ast.Set))
+                else (list(container.keys) + list(container.values))
+            )
+            if any(_is_mock_constructor_call(el) for el in elements):
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(node.test)} — a fresh Mock nested inside a "
+                        "container literal is compared by identity, so the outcome is fixed "
+                        "at source time",
+                    )
+                )
+                break
+    return found
+
+
+def test_no_mock_constructor_in_container_asserts():
+    """An ``assert`` that nests a freshly-constructed Mock *inside* a container
+    literal is dead code with a fixed outcome, like the direct Mock-constructor
+    lens. A fresh Mock compares by identity (``__eq__`` defaults to ``is``), so
+    ``assert result == {'s': MagicMock()}`` always fails and
+    ``assert result != [AsyncMock()]`` always passes regardless of what
+    ``result`` evaluates to, and ``assert [Mock()]`` always passes because a
+    non-empty container is truthy. The nested-container spelling is a distinct
+    AST shape from the direct positions the Mock-constructor lens owns, so it
+    needs its own detector. The double should be configured
+    (``return_value``/``side_effect``) and asserted through ``assert_called*``
+    /attribute checks, never compared to through a container wrapper."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_constructor_container_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a newly-constructed Mock nested in a container.\n"
+        "A fresh Mock compares by identity and a non-empty container is always truthy, so the\n"
+        "outcome is decided at source time, never by the code under test. Configure the double\n"
+        "(return_value/side_effect) and assert through assert_called* instead.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_constructor_container_lens_flags_nested_constructors():
+    """Synthetic positive/negative control for the container-nested Mock lens: it
+    must flag an ``assert`` that nests a fresh Mock constructor inside a
+    list/dict/tuple/set literal in any operand position (equality with the
+    container, membership against it, bare truthiness) and ignore the direct
+    constructor positions owned by the Mock-constructor lens (bare, ``not``-wrapped,
+    single-comparison operand), already-bound mock names, mocks passed as call
+    arguments, and containers built from non-mock values (including ``ANY``)."""
+    positive_sources = [
+        "def test_foo():\n    assert result == [MagicMock()]\n",
+        "def test_foo():\n    assert result != [AsyncMock()]\n",
+        "def test_foo():\n    assert result == {'status': MagicMock()}\n",
+        "def test_foo():\n    assert result in (Mock(), 'x')\n",
+        "def test_foo():\n    assert result not in {MagicMock()}\n",
+        "def test_foo():\n    assert [Mock()]\n",
+        "def test_foo():\n    assert (AsyncMock(),)\n",
+        "def test_foo():\n    assert {'k': mocker.MagicMock()} == result\n",
+        "def test_foo():\n    assert result == [mock.Mock()]\n",
+        "def test_foo():\n    assert result == {'a': 1, 'b': unittest.mock.AsyncMock()}\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_constructor_container_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert Mock()\n",
+        "def test_foo():\n    assert result == Mock()\n",
+        "def test_foo():\n    assert not MagicMock()\n",
+        "def test_foo():\n    assert result is not None\n",
+        "def test_foo():\n    mock = MagicMock()\n    assert result == [mock]\n",
+        "def test_foo():\n    assert result == [m]\n",
+        "def test_foo():\n    assert result == [1, 2]\n",
+        "def test_foo():\n    assert result == {'k': 'v'}\n",
+        "def test_foo():\n    assert result == [ANY]\n",
+        "def test_foo():\n    mock.assert_called_with([1, MagicMock(return_value=2)])\n",
+        "def test_foo():\n    assert result == []\n",
+        "def test_foo():\n    assert result == {}\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_constructor_container_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _MOCK_ASSERT_METHOD_NAMES = frozenset(
