@@ -27,6 +27,7 @@ class ProblemType(enum.StrEnum):
     MIGRATION_REQUIRED = "migration_required"
     BAD_GATEWAY = "bad_gateway"
     SERVICE_UNAVAILABLE = "service_unavailable"
+    STORAGE_EXHAUSTED = "storage_exhausted"
     GATEWAY_TIMEOUT = "gateway_timeout"
     INTERNAL_ERROR = "internal_error"
 
@@ -46,6 +47,7 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.MIGRATION_REQUIRED: {"status": 501, "title": "Migration Required"},
     ProblemType.BAD_GATEWAY: {"status": 502, "title": "Bad Gateway"},
     ProblemType.SERVICE_UNAVAILABLE: {"status": 503, "title": "Service Unavailable"},
+    ProblemType.STORAGE_EXHAUSTED: {"status": 503, "title": "Storage Exhausted"},
     ProblemType.GATEWAY_TIMEOUT: {"status": 504, "title": "Gateway Timeout"},
     ProblemType.INTERNAL_ERROR: {"status": 500, "title": "Internal Error"},
 }

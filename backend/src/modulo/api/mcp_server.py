@@ -136,6 +136,7 @@ from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
 )
+from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -2353,6 +2354,9 @@ async def trigger_pipeline(
         if exc.deleted:
             return {"error": "org_deleted", "detail": f"Organisation {exc.org_id} is deleted"}
         return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
+    except StorageExhaustedError as exc:
+        _log.warning("trigger_pipeline refused — storage exhausted (FAR-426)")
+        return {"error": "storage_exhausted", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("trigger_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

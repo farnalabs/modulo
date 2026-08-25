@@ -43,6 +43,7 @@ from modulo.core.trigger_streak import (
     get_trigger_streak_status,
 )
 from modulo.core.trigger_validation import validate_ongoing_config
+from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import create_run
 from modulo.db.models.organisation import Organisation
@@ -1346,6 +1347,8 @@ async def test_trigger(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+    except StorageExhaustedError:
+        raise
     except HTTPException:
         raise
     except Exception:

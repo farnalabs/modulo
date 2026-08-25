@@ -33,6 +33,7 @@ from modulo.api.mcp_server import (
     validate_current_auth,
 )
 from modulo.auth.api_key import ApiKeyInvalidError
+from modulo.db.capacity import StorageExhaustedError
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -590,3 +591,53 @@ class TestMcpAuthMiddlewareContext:
 
         assert _ctx_auth_token.get(None) == _API_KEY
         assert _ctx_auth_type.get(None) == "api_key"
+
+
+async def test_trigger_pipeline_storage_exhausted_returns_error() -> None:
+    """MCP trigger_pipeline must surface StorageExhaustedError as a structured error.
+
+    The capacity gate is NOT mocked: the real ``enforce_capacity_gate`` raises
+    inside ``create_run``, and the tool's ``except StorageExhaustedError`` branch
+    must map it to ``{"error": "storage_exhausted"}`` instead of the generic tool
+    error (FAR-426 wiring for the MCP surface).
+    """
+    _reset_ctx()
+    _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
+    _ctx_user_id.set(uuid.uuid4())
+    _ctx_role.set("admin")
+    _ctx_auth_type.set("api_key")
+
+    session = _make_mock_session()
+    session_cm = AsyncMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    pipeline = MagicMock()
+    pipeline.owner_team_id = None
+    snapshot = MagicMock()
+    snapshot.id = uuid.uuid4()
+    snapshot.graph_json = {"nodes": [{"id": "n"}]}
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._session") as mock_session,
+        patch("modulo.api.mcp_server.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch("modulo.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
+        patch(
+            "modulo.db.capacity.enforce_capacity_gate",
+            new=AsyncMock(
+                side_effect=StorageExhaustedError(
+                    "Storage capacity exhausted (99% of configured capacity, hard-stop 98%). "
+                    "Export/clear old runs via Run Retention."
+                )
+            ),
+        ),
+    ):
+        mock_session.return_value = session_cm
+        result = await trigger_pipeline(pipeline_id=str(uuid.uuid4()))
+
+    assert result.get("error") == "storage_exhausted"

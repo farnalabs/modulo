@@ -13,6 +13,7 @@ from modulo.api.models.problem import (
     problem_from_http_exception,
     problem_from_validation_error,
 )
+from modulo.db.capacity import StorageExhaustedError
 
 _log = logging.getLogger(__name__)
 
@@ -30,6 +31,22 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     problem = problem_from_validation_error(request, exc.errors())
     return problem.to_response()
+
+
+async def storage_exhausted_exception_handler(request: Request, exc: StorageExhaustedError) -> JSONResponse:
+    """Map the DB-capacity ``StorageExhaustedError`` to HTTP 503 (FAR-426).
+
+    A ``fixed``-mode DB at/over the 98% hard-stop refuses NEW run creation.
+    Rendered as ``urn:problem:modulo:storage_exhausted`` so the frontend can
+    distinguish "storage is full — clear work" from a generic outage.
+    """
+    rid = getattr(request.state, "request_id", None)
+    return ProblemDetail.from_type(
+        problem_type=ProblemType.STORAGE_EXHAUSTED,
+        detail=str(exc),
+        instance=str(request.url.path),
+        request_id=rid,
+    ).to_response()
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

@@ -1009,6 +1009,17 @@ async def create_run(
     # deletion flow has set status='deleted' (or in a hard-deleted org).
     await _ensure_org_not_deleted(session, org_id)
 
+    # DB capacity hard-stop (FAR-426): refuse a NEW run when a *fixed* DB is
+    # at/over the 98% threshold. This is the boundary where a run is created —
+    # a resume, retention sweep or admin operation never reaches it. Fail-open:
+    # a broken capacity probe can never block run creation (it allows the run).
+    # Raises ``StorageExhaustedError`` (modulo.db.capacity); the API layer maps
+    # it to HTTP 503 ``urn:problem:modulo:storage_exhausted`` so the transaction
+    # here rolls back and no phantom run is persisted.
+    from modulo.db.capacity import enforce_capacity_gate
+
+    await enforce_capacity_gate()
+
     # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
     # the guardrail rows, never re-read mid-run. Defaults to OFF on read
     # failure (the fail-closed direction for a data-safety control).

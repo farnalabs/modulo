@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
+from modulo.db.capacity import StorageExhaustedError
 
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
@@ -58,6 +59,8 @@ def handle_db_errors(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Data validation failed.",
                 ) from None
+            except StorageExhaustedError:
+                raise
             except HTTPException:
                 raise
             except Exception:

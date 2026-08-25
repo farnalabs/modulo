@@ -1025,6 +1025,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/db-capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Db Capacity
+         * @description Return the live DB capacity status (the monitoring source of truth).
+         */
+        get: operations["get_db_capacity_api_v1_admin_db_capacity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -9924,6 +9944,19 @@ export interface components {
             notifications: components["schemas"]["NotificationResponse"][];
             /** Total Unread */
             total_unread: number;
+        };
+        /** DbCapacityResponse */
+        DbCapacityResponse: {
+            /** Capacity Percent */
+            capacity_percent: number | null;
+            /** Mode */
+            mode: string;
+            /** Alert Level */
+            alert_level: string;
+            /** Used Bytes */
+            used_bytes: number;
+            /** Capacity Bytes */
+            capacity_bytes: number | null;
         };
         /** DeleteOAuthClientResponse */
         DeleteOAuthClientResponse: {
@@ -19355,6 +19388,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckpointRetentionPurgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_db_capacity_api_v1_admin_db_capacity_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DbCapacityResponse"];
                 };
             };
             /** @description Validation Error */
