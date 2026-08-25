@@ -1,19 +1,36 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Uuid, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
+
+if TYPE_CHECKING:
+    from modulo.db.models.eval_suite_run import SuiteRun
 
 
 class EvalResult(OrgScoped):
     __tablename__ = "eval_results"
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
+    # ``run_id`` is nullable since FAR-376: a SuiteRun-produced per-case outcome
+    # is attributed to a ``suite_run`` (below), not to a pipeline ``Run``. The
+    # legacy pipeline-window path still populates ``run_id``; the legacy
+    # ``detect_regressions`` query joins ``runs`` (INNER JOIN) so it naturally
+    # excludes the NULL-``run_id`` suite-run rows and never mixes them in.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("runs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    # FAR-376: per-case outcome attribution to a ``SuiteRun``. Nullable — rows
+    # produced by the legacy pipeline path keep it NULL.
+    suite_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("suite_runs.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
@@ -29,3 +46,5 @@ class EvalResult(OrgScoped):
     evaluated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
     )
+
+    suite_run: Mapped["SuiteRun"] = relationship(back_populates="eval_results")

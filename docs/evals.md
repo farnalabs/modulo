@@ -163,3 +163,89 @@ Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
 > Note: this document is the source of truth for the eval data layer while
 > `docs/prd.md` is being revised; any PRD section describing an "eval dataset"
 > concept must match the entities and guarantees above.
+
+## Tracking an eval over time (`SuiteRun`) — FAR-376 Phase 3
+
+Phase 3 closes the flywheel: take an `EvalSuite` (Phase 1) onto a repeatable
+`EvalDataset` (Phase 2), run it against a pinned Model Backend on a snapshot of
+the exact inputs + definition config, persist every per-case outcome, and —
+when a same-tuple baseline already exists — **detect a pass-rate regression**.
+
+### `SuiteRun` — one execution, three immutable snapshots
+
+A `SuiteRun` records one execution of a suite against a dataset:
+
+* **`dataset_version`** — snapshot of dataset membership at creation. A content
+  change bumps the version, which produces a NEW baseline tuple rather than
+  corrupting a prior run's comparison.
+* **`definition_checksum`** — SHA-256 of every eval-definition's config snapshot.
+  A changed config or changed membership also produces a new tuple.
+* **`scenario_signature`** — canonical hash of the run's scenario inputs; `NULL`
+  is the explicit "scenarios unused" sentinel.
+
+These are captured **at creation and never live-looked-up**. The immutable
+`baseline_tuple` is the comparison key: `(suite_id, dataset_id, dataset_version,
+eval_definition_ids, definition_checksum, model_backend_id, scenario_signature)`.
+
+### State machine
+
+```
+pending -> running -> completed | partial | failed
+  |--cancelled (pending or running)
+```
+
+* `partial` (some cases errored) is distinct from `failed` (orchestration error).
+* Transitions are guarded by an **optimistic-lock `version` column**: two
+  concurrent workers cannot both land `completed` — the second is rejected.
+
+### Baseline resolution
+
+The baseline is the **latest same-tuple `completed` run strictly prior** to the
+current run, with a deterministic `(created_at, id)` tiebreak. It never queries
+the live dataset/definition; it is a pure tuple match on prior `SuiteRun` rows.
+
+* First run (no completed same-tuple prior) → **comparison skipped** + warning,
+  no regression flag.
+* `partial`/`failed`/`cancelled` prior runs are never baselines.
+* Cross-org runs are never selected (org-scoped, and never by the org's RLS).
+* An operator may pin a canonical baseline (`baseline_locked`).
+
+### Comparison — REUSES the existing engine, never a parallel store
+
+Per-case outcomes are persisted into the existing `eval_results` table (via
+`suite_run_id`) and the pass-rate comparison delegates to `detect_regressions`
+with `group_by="suite_id"` plus an explicit `baseline` scope. **The default
+`detect_regressions(session, org_id, days=7, ...)` signature is unchanged.**
+
+* Pass rates are aggregated **per `eval_type` only** — raw `score` is never
+  averaged across differing eval types (type-incorrect).
+* Regression fires on configurable absolute (and optional relative) drop
+  thresholds.
+* A `partial` run excludes its errored cases from the denominator (recorded as
+  `excluded_case_count`) and does not raise a regression alert unless explicitly
+  configured.
+
+### Regression notification
+
+Regression postings route through the existing `Notifier` (`eval_regression`
+event) — no parallel "sink". Eval notification endpoints share **zero**
+subscribers with production error forwarders (a runtime guard asserts this);
+posting is idempotent on `suite_run_id`, rate-limited per suite, requires a
+baseline before any alert fires, and alerts if the eval channel has no
+subscribers (never a silent drop).
+
+### Spend & tenancy
+
+Execution routes through the org Model Backend with the `daily_spend_limit`
+**and** a separate per-suite cumulative cost ceiling (two independent counters).
+The per-suite ledger is a row-locked increment before each judge call so a
+read-check-write race cannot overshoot. `suite_runs` carries `ENABLE` + `FORCE
+ROW LEVEL SECURITY` + `rls_org_isolation` (owned by `modulo_migrate`), so the
+`OrgScoped` mixin alone is not the isolation boundary.
+
+### Feature flag
+
+The SuiteRun / comparison ENDPOINTS and UI are gated behind the existing
+`eval_maturity` flag (`eval_maturity_enabled()`), fail-closed to the legacy
+suite path. The data layer is always present; only the new comparison surface is
+gated.

@@ -75,6 +75,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "secrets",
         "spend_anomalies",
         "sso_providers",
+        "suite_runs",
         "system_config",
         "team_memberships",
         "teams",
