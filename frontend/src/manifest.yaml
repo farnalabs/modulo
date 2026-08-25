@@ -1141,6 +1141,27 @@ elements:
       - testid: hk-delete-selected
         type: button
         dynamic_testid: false
+      - testid: hk-checkpoint-retention
+        type: element
+        dynamic_testid: false
+      - testid: hk-ckpt-max-age
+        type: input
+        dynamic_testid: false
+      - testid: hk-ckpt-purge
+        type: button
+        dynamic_testid: false
+      - testid: hk-ckpt-purge-confirm
+        type: button
+        dynamic_testid: false
+      - testid: hk-ckpt-purge-cancel
+        type: button
+        dynamic_testid: false
+      - testid: hk-ckpt-result
+        type: element
+        dynamic_testid: false
+      - testid: hk-ckpt-error
+        type: element
+        dynamic_testid: false
     /admin/model-backends:
       - testid: admin-model-backends-add
         type: button
