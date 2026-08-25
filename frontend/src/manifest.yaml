@@ -2995,20 +2995,20 @@ features:
         description: Audit trail and audit log
     feat-connectors:
         description: External tool connectors
-        status: partial
+        status: covered
         behaviours:
             # Generic REST integration connector (FAR-408 / FAR-412).
-            - "[ ] A REST connector instance is creatable with a declarative endpoint (base_url + path + method) and an auth credential profile (bearer / api_key / basic)"
-            - "[ ] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) maps to the write surface"
-            - "[ ] A JSON response with a configured records_path JMESPath expression yields a list of dicts that feeds the downstream JMESPath consumer"
-            - "[ ] When no records_path is configured, raw / passthrough content-types yield a single uniform {body, content_type, status_code, headers} record, so the result always stays a list-of-dicts (UNTESTED for XML)"
-            - "[ ] Templated fields (headers, params, body, path) render from runtime variables via the sandboxed Jinja environment"
-            - "[ ] Credentials are stored encrypted (multi-field JSON dict) and never reach LangGraph state, logs, or error detail; error detail redacts secret values"
-            - "[ ] Non-2xx/3xx responses surface a typed RESTStatusError (with location / Retry-After) instead of silently passing through (UNTESTED for 3xx redirect metadata)"
-            - "[ ] An allowed_hosts allowlist plus SSRF validation prevent private / metadata / off-host targets"
-            - "[ ] The response body is capped at max_response_size so an unbounded body never stalls a run"
-            - "[ ] Idempotent verbs (GET/HEAD) retry on 429/5xx with backoff; mutating verbs retry only when an idempotency_header is declared (UNTESTED for idempotency key replay)"
-            - "[ ] Pagination is response-driven (next_cursor via JMESPath) but is deferred beyond v1 - a direct start cursor is rejected with an actionable error"
+            - "[x] A REST connector instance is creatable with a declarative endpoint (base_url + path + method) and an auth credential profile (bearer / api_key / basic)"
+            - "[x] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) maps to the write surface"
+            - "[x] A JSON response with a configured records_path JMESPath expression yields a list of dicts that feeds the downstream JMESPath consumer"
+            - "[x] When no records_path is configured, raw / passthrough content-types yield a single uniform {body, content_type, status_code, headers} record, so the result always stays a list-of-dicts (UNTESTED for XML)"
+            - "[x] Templated fields (headers, params, body, path) render from runtime variables via the sandboxed Jinja environment"
+            - "[x] Credentials are stored encrypted (multi-field JSON dict) and never reach LangGraph state, logs, or error detail; error detail redacts secret values"
+            - "[x] Non-2xx/3xx responses surface a typed RESTStatusError (with location / Retry-After) instead of silently passing through (UNTESTED for 3xx redirect metadata)"
+            - "[x] An allowed_hosts allowlist plus SSRF validation prevent private / metadata / off-host targets"
+            - "[x] The response body is capped at max_response_size so an unbounded body never stalls a run"
+            - "[x] Idempotent verbs (GET/HEAD) retry on 429/5xx with backoff; mutating verbs retry only when an idempotency_header is declared (UNTESTED for idempotency key replay)"
+            - "[x] Pagination is response-driven (next_cursor via JMESPath) but is deferred beyond v1 - a direct start cursor is rejected with an actionable error"
         deferrals:
             - Per-tenant weighted concurrency semaphore (today the connector shares a single connection-pooled client; far-out fan-out relies on pipeline-level concurrency limits)
             - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is deferred to FAR-404)
