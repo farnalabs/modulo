@@ -254,6 +254,79 @@ def _can_reach(adjacency: dict[str, set[str]], start: str, goal: str) -> bool:
     return False
 
 
+def _clean_stages(
+    raw_stages: list[Any],
+    changes: list[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Drop non-dict/id-less/duplicate stages, returning the survivors + ids."""
+    cleaned: list[dict[str, Any]] = []
+    stage_ids: set[str] = set()
+    for index, stage in enumerate(raw_stages):
+        if not isinstance(stage, dict):
+            changes.append(f"dropped stage #{index} (not an object)")
+            continue
+        stage_id = stage.get("id")
+        if not isinstance(stage_id, str) or not stage_id.strip():
+            changes.append(f"dropped stage #{index} (missing or non-string id)")
+            continue
+        if stage_id in stage_ids:
+            changes.append(f"dropped duplicate stage id {stage_id!r} (#{index})")
+            continue
+        stage_ids.add(stage_id)
+        cleaned.append(stage)
+    return cleaned, stage_ids
+
+
+def _clean_edges(
+    raw_edges: list[Any],
+    stage_ids: set[str],
+    changes: list[str],
+) -> list[dict[str, Any]]:
+    """Drop non-dict/id-less/duplicate/dangling edges, returning the survivors."""
+    seen_edge_ids: set[str] = set()
+    valid_edges: list[dict[str, Any]] = []
+    for index, edge in enumerate(raw_edges):
+        if not isinstance(edge, dict):
+            changes.append(f"dropped edge #{index} (not an object)")
+            continue
+        edge_id = edge.get("id")
+        if not isinstance(edge_id, str) or not edge_id.strip():
+            changes.append(f"dropped edge #{index} (missing or non-string id)")
+            continue
+        if edge_id in seen_edge_ids:
+            changes.append(f"dropped duplicate edge id {edge_id!r} (#{index})")
+            continue
+        seen_edge_ids.add(edge_id)
+        source = _edge_endpoint(edge, "source")
+        target = _edge_endpoint(edge, "target")
+        if source is None or target is None:
+            changes.append(f"dropped edge {edge_id!r} (missing source/target)")
+            continue
+        if source not in stage_ids:
+            changes.append(f"dropped dangling edge {edge_id!r} (source {source!r} not defined)")
+            continue
+        if target not in stage_ids:
+            changes.append(f"dropped dangling edge {edge_id!r} (target {target!r} not defined)")
+            continue
+        valid_edges.append(edge)
+    return valid_edges
+
+
+def _break_transition_cycles(valid_edges: list[dict[str, Any]], changes: list[str]) -> list[dict[str, Any]]:
+    """Greedily drop edges that close a transition cycle (kept graph acyclic)."""
+    adjacency: dict[str, set[str]] = {}
+    acyclic_edges: list[dict[str, Any]] = []
+    for edge in valid_edges:
+        source = _edge_endpoint(edge, "source") or ""
+        target = _edge_endpoint(edge, "target") or ""
+        if _can_reach(adjacency, target, source):
+            changes.append(f"dropped cycle-closing edge {edge.get('id')!r} ({source} -> {target})")
+            continue
+        acyclic_edges.append(edge)
+        adjacency.setdefault(source, set()).add(target)
+    return acyclic_edges
+
+
 def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
     """Repair legacy ``content_json`` so it passes :func:`normalize_content` again.
 
@@ -296,21 +369,7 @@ def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any]
         return result, changes
 
     if "stages" in result:
-        cleaned_stages: list[dict[str, Any]] = []
-        stage_ids: set[str] = set()
-        for index, stage in enumerate(result["stages"]):
-            if not isinstance(stage, dict):
-                changes.append(f"dropped stage #{index} (not an object)")
-                continue
-            stage_id = stage.get("id")
-            if not isinstance(stage_id, str) or not stage_id.strip():
-                changes.append(f"dropped stage #{index} (missing or non-string id)")
-                continue
-            if stage_id in stage_ids:
-                changes.append(f"dropped duplicate stage id {stage_id!r} (#{index})")
-                continue
-            stage_ids.add(stage_id)
-            cleaned_stages.append(stage)
+        cleaned_stages, stage_ids = _clean_stages(result["stages"], changes)
         result["stages"] = cleaned_stages
     else:
         stage_ids = set()
@@ -327,44 +386,8 @@ def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any]
         )
         return result, changes
 
-    seen_edge_ids: set[str] = set()
-    valid_edges: list[dict[str, Any]] = []
-    for index, edge in enumerate(edges_raw):
-        if not isinstance(edge, dict):
-            changes.append(f"dropped edge #{index} (not an object)")
-            continue
-        edge_id = edge.get("id")
-        if not isinstance(edge_id, str) or not edge_id.strip():
-            changes.append(f"dropped edge #{index} (missing or non-string id)")
-            continue
-        if edge_id in seen_edge_ids:
-            changes.append(f"dropped duplicate edge id {edge_id!r} (#{index})")
-            continue
-        seen_edge_ids.add(edge_id)
-        source = _edge_endpoint(edge, "source")
-        target = _edge_endpoint(edge, "target")
-        if source is None or target is None:
-            changes.append(f"dropped edge {edge_id!r} (missing source/target)")
-            continue
-        if source not in stage_ids:
-            changes.append(f"dropped dangling edge {edge_id!r} (source {source!r} not defined)")
-            continue
-        if target not in stage_ids:
-            changes.append(f"dropped dangling edge {edge_id!r} (target {target!r} not defined)")
-            continue
-        valid_edges.append(edge)
-
-    # Greedy cycle-breaking: accept edges in order while the graph stays acyclic.
-    adjacency: dict[str, set[str]] = {}
-    acyclic_edges: list[dict[str, Any]] = []
-    for edge in valid_edges:
-        source = _edge_endpoint(edge, "source") or ""
-        target = _edge_endpoint(edge, "target") or ""
-        if _can_reach(adjacency, target, source):
-            changes.append(f"dropped cycle-closing edge {edge.get('id')!r} ({source} -> {target})")
-            continue
-        acyclic_edges.append(edge)
-        adjacency.setdefault(source, set()).add(target)
+    valid_edges = _clean_edges(edges_raw, stage_ids, changes)
+    acyclic_edges = _break_transition_cycles(valid_edges, changes)
 
     result["edges"] = acyclic_edges
     result.pop("transitions", None)
