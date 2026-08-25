@@ -219,6 +219,8 @@ async def create_pipeline_from_template_endpoint(
                     target_node_id=uuid.UUID(target_id),
                     edge_type=edge.get("edge_type", "normal"),
                     hitl_gate_config=edge.get("hitl_gate_config"),
+                    source_port=edge.get("source_port", "out"),
+                    target_port=edge.get("target_port", "in"),
                 )
                 session.add(pe)
                 persisted_edges.append(pe)
