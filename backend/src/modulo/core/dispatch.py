@@ -76,7 +76,7 @@ def _new_claim_token() -> str:
     return uuid.uuid4().hex
 
 
-async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
     """True when the run's pipeline is at ``max_concurrent_runs`` (plan F3b)."""
     from modulo.db.crud.run import count_active_runs_for_pipeline, get_run
     from modulo.db.models.pipeline import Pipeline
@@ -313,6 +313,88 @@ async def _enqueue_saq(
     return q.job_id(key), True
 
 
+async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Non-terminal enqueue-failure marker + webhook-dedup expiry in one session."""
+    session = _open_session()
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await _mark_enqueue_failed(session, run_id)
+            await _expire_webhook_dedup(session, run_id)
+    finally:
+        await session.close()
+
+
+async def _record_saq_job_session(run_id: uuid.UUID, org_id: uuid.UUID, job_id: str) -> None:
+    """Record dispatched='saq' + job id + fresh claim token in one session."""
+    session = _open_session()
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await _record_saq_job(session, run_id, job_id, _new_claim_token())
+    finally:
+        await session.close()
+
+
+async def _enqueue_with_retry(
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    queue_name: str,
+    job_type: str,
+    resume_data: dict[str, Any] | None,
+    key_suffix: str | None,
+    fail_fast: bool,
+) -> tuple[str, str | None]:
+    """Enqueue the run job to SAQ with the configured retry policy.
+
+    On a successful enqueue, records the SAQ job + claim token and returns
+    ``('enqueued'|'deduped', job_id)``. On final failure marks the run
+    ``enqueue_failed`` (non-terminal, for dispatcher_reconcile recovery) — and
+    expires the webhook dedup so a retried webhook is not suppressed — then
+    returns ``('enqueue_failed', None)``. The fail-fast (webhook) path skips the
+    retry loop.
+    """
+    try:
+        job_id, deduped = await _enqueue_saq(
+            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if fail_fast:
+            _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", run_id)
+            await _mark_enqueue_failed_session(run_id, org_id)
+            return ("enqueue_failed", None)
+        _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", run_id, exc)
+        for attempt in (1, 2, 3):
+            await asyncio.sleep(attempt)
+            try:
+                job_id, deduped = await _enqueue_saq(
+                    str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+                )
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc2:
+                _log.warning(
+                    "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
+                    attempt,
+                    run_id,
+                    exc2,
+                )
+        else:
+            await _mark_enqueue_failed_session(run_id, org_id)
+            return ("enqueue_failed", None)
+    await _record_saq_job_session(run_id, org_id, job_id)
+    return ("deduped" if deduped else "enqueued", job_id)
+
+
 async def dispatch_run(
     run_id: str,
     org_id: str,
@@ -375,7 +457,7 @@ async def dispatch_run(
                 # refused here; this also hardens resumes against terminal runs.
                 _log.info("dispatch_run: run %s already terminal (%s) — not dispatched", rid, run.status)
                 return ("terminal_skipped", None)
-            if await _capacity_deferred(session, rid, oid):
+            if await _capacity_deferred(session, rid):
                 _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)
             if await _org_capacity_deferred(session, rid, oid, job_type=job_type):
@@ -396,75 +478,4 @@ async def dispatch_run(
     finally:
         await session.close()
 
-    try:
-        job_id, deduped = await _enqueue_saq(
-            str(rid), str(oid), queue_name, job_type, resume_data, key_suffix=key_suffix
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        if fail_fast:
-            # Fail-fast (webhook) path: NO retries — return immediately, but
-            # still mark enqueue_failed (non-terminal) + expire the webhook
-            # dedup so a retried webhook is not suppressed while the run awaits
-            # dispatcher_reconcile recovery.
-            _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", rid)
-            session = _open_session()
-            try:
-                async with session.begin():
-                    from modulo.db.rls import set_rls_execution_context, set_rls_org
-
-                    await set_rls_org(session, oid)
-                    await set_rls_execution_context(session)
-                    await _mark_enqueue_failed(session, rid)
-                    await _expire_webhook_dedup(session, rid)
-            finally:
-                await session.close()
-            return ("enqueue_failed", None)
-        _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", rid, exc)
-        for attempt in (1, 2, 3):
-            await asyncio.sleep(attempt)
-            try:
-                job_id, deduped = await _enqueue_saq(
-                    str(rid), str(oid), queue_name, job_type, resume_data, key_suffix=key_suffix
-                )
-                break
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc2:
-                _log.warning(
-                    "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
-                    attempt,
-                    rid,
-                    exc2,
-                )
-        else:
-            session = _open_session()
-            try:
-                async with session.begin():
-                    from modulo.db.rls import set_rls_execution_context, set_rls_org
-
-                    await set_rls_org(session, oid)
-                    await set_rls_execution_context(session)
-                    # NON-terminal: leave the run pending for dispatcher_reconcile
-                    # recovery (a >6s Redis outage must not permanently fail the
-                    # whole dispatch window). Keep the webhook dedup expiry even
-                    # though the run stays pending, so a retried webhook is not
-                    # suppressed while the run awaits re-dispatch.
-                    await _mark_enqueue_failed(session, rid)
-                    await _expire_webhook_dedup(session, rid)
-            finally:
-                await session.close()
-            return ("enqueue_failed", None)
-
-    session = _open_session()
-    try:
-        async with session.begin():
-            from modulo.db.rls import set_rls_execution_context, set_rls_org
-
-            await set_rls_org(session, oid)
-            await set_rls_execution_context(session)
-            await _record_saq_job(session, rid, job_id, _new_claim_token())
-    finally:
-        await session.close()
-    return ("deduped" if deduped else "enqueued", job_id)
+    return await _enqueue_with_retry(rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast)

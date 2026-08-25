@@ -17,6 +17,9 @@ from urllib.parse import urlparse
 _log = logging.getLogger(__name__)
 
 # Extra ranges not covered by ipaddress.is_private (cloud metadata, CGNAT).
+# NOSONAR S1313: these are documented reserved/private network blocks that must
+# be BLOCKED for outbound requests by this SSRF guard — they are destination
+# filters, never connection endpoints, so hardcoding them is required and safe.
 _EXCLUDED_NETWORKS = [
     ipaddress.ip_network("169.254.0.0/16"),  # AWS/GCP/Azure link-local metadata
     ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
@@ -120,8 +123,8 @@ def _check_resolved(decoded: str, ip_strings: list[str]) -> None:
 def _resolve_all_sync(host: str) -> list[str]:
     try:
         addrinfos = socket.getaddrinfo(host, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
-    except (OSError, socket.gaierror):
-        # Fail-closed on DNS resolution failure
+    except OSError:
+        # Fail-closed on DNS resolution failure (socket.gaierror is an OSError)
         raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.") from None
     result: list[str] = []
     for _fam, _typ, _proto, _canon, sockaddr in addrinfos:
@@ -136,7 +139,7 @@ async def _resolve_all_async(host: str) -> list[str]:
     loop = asyncio.get_running_loop()
     try:
         addrinfos = await loop.getaddrinfo(host, 0, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
-    except (OSError, socket.gaierror):
+    except OSError:
         raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.") from None
     result: list[str] = []
     for _fam, _typ, _proto, _canon, sockaddr in addrinfos:

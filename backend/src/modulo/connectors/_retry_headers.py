@@ -13,6 +13,30 @@ import time
 
 import httpx
 
+# Retry/backoff budget shared by the connector clients so their exponential
+# backoff, cap, and retryable-status logic cannot drift apart. Keep the values
+# here as the single source of truth; connectors configure only their own
+# rate-limit header names and feature flags.
+RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+MAX_RETRIES = 3
+BASE_DELAY = 1.0
+MAX_DELAY = 30.0
+
+
+def backoff_delay(attempt: int) -> float:
+    """Exponential backoff delay for a retry attempt, capped at ``MAX_DELAY``."""
+    return min(BASE_DELAY * (1 << attempt), MAX_DELAY)
+
+
+def should_retry_status(status_code: int, attempt: int) -> bool:
+    """Whether a retryable HTTP status still has retry budget remaining."""
+    return status_code in RETRYABLE_STATUSES and attempt < MAX_RETRIES
+
+
+def should_retry_network(attempt: int) -> bool:
+    """Whether a transport-level failure may be retried on this attempt."""
+    return attempt < MAX_RETRIES
+
 
 def parse_retry_after(response: httpx.Response) -> float | None:
     """Parse the ``Retry-After`` header (seconds) into a retry delay.

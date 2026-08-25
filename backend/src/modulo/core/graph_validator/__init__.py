@@ -1116,6 +1116,7 @@ class GraphValidator:
             return result
 
         self._check_edges(graph_json, result)
+        self._check_ports(graph_json, result)
         self._check_sandbox_agent_config(graph_json, result)
         self._check_node_idempotent(graph_json, result)
         await self._check_node_send_budget(graph_json, connector_bindings or [], session, result)
@@ -1209,6 +1210,10 @@ class GraphValidator:
 
         # Edge validation.
         self._check_edges(snapshot.graph_json, result)
+
+        # Port-addressed typed state (FAR-416 / F1): fan-in safety +
+        # port-type validation. Backward-compatible for legacy graphs.
+        self._check_ports(snapshot.graph_json, result)
 
         # Parallel fan-out / run_context writes (warnings are stripped by
         # _strip_warnings below, but the check runs for consistency).
@@ -2642,6 +2647,25 @@ class GraphValidator:
                     f"Node ID '{nid_str}' does not look like a standard UUID format",
                     node_id=nid_str,
                 )
+
+    # ------------------------------------------------------------------
+    # Port-addressed typed state (FAR-416 / F1)
+    # ------------------------------------------------------------------
+
+    def _check_ports(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Compile-time port rules: fan-in safety + port-type validation.
+
+        Delegates to :func:`validate_port_topology`. Fully-legacy graphs (no
+        explicit port metadata) keep their backward-compatible behaviour —
+        the rule is lenient so existing flat-dict pipelines compile identically.
+        """
+        # Lazy import: importing the submodule would otherwise trigger
+        # modulo.core.pipeline_engine.__init__ (which imports the executor, which
+        # imports this package) and create a circular-import deadlock at
+        # module-load time. At call time the package is already initialised.
+        from modulo.core.pipeline_engine.port_resolver import validate_port_topology
+
+        validate_port_topology(graph_json, result)
 
     # ------------------------------------------------------------------
     # Parallel fan-out / run_context writes (FAR-171)

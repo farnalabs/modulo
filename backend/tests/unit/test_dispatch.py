@@ -705,7 +705,7 @@ class TestCapacityDeferred:
         """A run that vanished before the capacity check cannot be enqueued."""
         session = AsyncMock()
         with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=None):
-            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
         session.get.assert_not_awaited()
@@ -718,7 +718,7 @@ class TestCapacityDeferred:
         session = AsyncMock()
         session.get = AsyncMock(return_value=None)
         with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run):
-            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
         session.get.assert_awaited_once()
@@ -737,7 +737,7 @@ class TestCapacityDeferred:
             patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
         ):
-            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is False
         count.assert_not_awaited()
@@ -758,7 +758,7 @@ class TestCapacityDeferred:
                 return_value=2,
             ) as count,
         ):
-            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
         # The run itself is excluded so a resume never counts against its own slot.
@@ -785,7 +785,7 @@ class TestCapacityDeferred:
                 return_value=1,
             ) as count,
         ):
-            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is False
         count.assert_awaited_once_with(
