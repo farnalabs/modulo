@@ -119,9 +119,9 @@ def _gated_edge() -> _Row:
         source_node_id=uuid.UUID(_NODE_A),
         target_node_id=uuid.UUID(_NODE_B),
         edge_type="normal",
-        hitl_gate_config={"human_only": True},
         source_port="out",
         target_port="in",
+        hitl_gate_config={"human_only": True},
     )
 
 
@@ -259,9 +259,9 @@ async def test_clone_emits_one_batched_gate_audit_event(monkeypatch: pytest.Monk
         source_node_id=uuid.UUID(_NODE_A),
         target_node_id=uuid.UUID(_NODE_B),
         edge_type="normal",
-        hitl_gate_config=None,
         source_port="out",
         target_port="in",
+        hitl_gate_config=None,
     )
     edges = [_gated_edge(), _gated_edge(), ungated]
     read_session = _make_read_session(
@@ -302,9 +302,9 @@ async def test_clone_no_gate_edges_emits_no_gate_audit(monkeypatch: pytest.Monke
             source_node_id=uuid.UUID(_NODE_A),
             target_node_id=uuid.UUID(_NODE_B),
             edge_type="normal",
-            hitl_gate_config=None,
             source_port="out",
             target_port="in",
+            hitl_gate_config=None,
         )
     ]
     read_session = _make_read_session(
