@@ -15,12 +15,13 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
+    LicenseData,
     LicenseError,
     get_license,
     parse_and_verify,
     store_license,
 )
-from modulo.core.license_signing import TEAM_FEATURES, LicenseSigningError, generate_team_license
+from modulo.core.license_signing import TEAM_FEATURES, generate_team_license
 from modulo.core.stripe_fulfilment import email_team_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
@@ -71,47 +72,45 @@ class LicenseIssueResponse(BaseModel):
     org_id: str
 
 
+def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseStatusResponse:
+    """Build a ``LicenseStatusResponse`` from a signed-license payload."""
+    return LicenseStatusResponse(
+        has_license=has_license,
+        tier=data.tier,
+        features=data.features,
+        expires_at=data.expires_at or None,
+        org_id=data.org_id or None,
+    )
+
+
+def _resolve_license_key(raw_key: str) -> LicenseStatusResponse | None:
+    """Validate ``raw_key`` and return its license status, or ``None`` if unusable."""
+    if not raw_key:
+        return None
+    validation = parse_and_verify(raw_key)
+    if not validation.valid or validation.license_data is None:
+        return None
+    return _license_status(validation.license_data)
+
+
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
     """Resolve the effective license, checking org-level, then system-level (env var), then in-memory."""
     # 1. Org-level license key
     if org is not None:
         org_key = org.settings_json.get("license_key") if org.settings_json else None
-        if org_key:
-            validation = parse_and_verify(org_key)
-            if validation.valid and validation.license_data is not None:
-                d = validation.license_data
-                return LicenseStatusResponse(
-                    has_license=True,
-                    tier=d.tier,
-                    features=d.features,
-                    expires_at=d.expires_at or None,
-                    org_id=d.org_id or None,
-                )
+        resolved = _resolve_license_key(str(org_key) if org_key else "")
+        if resolved is not None:
+            return resolved
 
     # 2. In-memory store (from POST /admin/license)
     lic = get_license()
     if lic is not None:
-        return LicenseStatusResponse(
-            has_license=True,
-            tier=lic.tier,
-            features=lic.features,
-            expires_at=lic.expires_at or None,
-            org_id=lic.org_id or None,
-        )
+        return _license_status(lic)
 
     # 3. System-level env var
-    raw_key = getattr(settings, "modulo_license_key", "") or ""
-    if raw_key:
-        validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            d = validation.license_data
-            return LicenseStatusResponse(
-                has_license=True,
-                tier=d.tier,
-                features=d.features,
-                expires_at=d.expires_at or None,
-                org_id=d.org_id or None,
-            )
+    resolved = _resolve_license_key(getattr(settings, "modulo_license_key", "") or "")
+    if resolved is not None:
+        return resolved
 
     return LicenseStatusResponse(has_license=False, tier="community")
 
@@ -238,7 +237,7 @@ async def issue_license(
             features=req.features if req.features is not None else TEAM_FEATURES,
             private_key_hex=settings.modulo_license_private_key or None,
         )
-    except (LicenseSigningError, ValueError) as exc:
+    except ValueError as exc:
         logger.exception("license.issue_generation_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
