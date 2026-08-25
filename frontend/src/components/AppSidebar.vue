@@ -94,7 +94,7 @@
     <header
       class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 h-14"
     >
-      <button
+      <button type="button"
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
         class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -107,7 +107,7 @@
       </button>
       <div class="flex items-center gap-1.5 ml-auto" :inert="mobileOpen">
         <NotificationBell />
-        <button
+        <button type="button"
           @click="$emit('open-command-palette')"
           class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           :title="$t('components.AppLayout.search_pages_hint', { modifier: isMac ? 'Cmd' : 'Ctrl' })"

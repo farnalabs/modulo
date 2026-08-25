@@ -35,7 +35,7 @@
     <div v-if="planStore.devMode && remyStore.isExecutingUi" class="remy-execution-overlay">
       <div class="remy-execution-banner">
         <span>{{ $t('components.AppLayout.remy_performing_actions') }}</span>
-        <button class="remy-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.remy_stop') }}</button>
+        <button type="button" class="remy-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.remy_stop') }}</button>
       </div>
     </div>
 

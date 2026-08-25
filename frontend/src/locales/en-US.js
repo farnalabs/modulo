@@ -865,7 +865,23 @@ export default {
       "retry_policy_update_failed": "Failed to update retry policy: ",
       "idempotent": "Idempotent",
       "idempotent_description": "Safe to re-run. When disabled, a run of this pipeline is never automatically retried (re-running could double-execute a side effect).",
-      "saving": "Saving..."
+      "saving": "Saving...",
+      "capability_scope": "Capability Scope",
+      "capability_scope_description": "Narrow this node's access below what its Agent is granted. A node can only restrict, never expand, the Agent's capabilities.",
+      "capability_scope_allowed_connectors": "Allowed Connectors",
+      "capability_scope_allowed_tools": "Allowed Tools",
+      "capability_scope_context_scope": "Context Scope",
+      "capability_scope_no_agent": "Select an Agent to configure capability scope.",
+      "capability_scope_no_connectors": "No connectors available for this Agent.",
+      "capability_scope_unrestricted": "Unrestricted (uses Agent grants)",
+      "capability_scope_tool_placeholder": "Enter a tool name...",
+      "capability_scope_context_placeholder": "Enter a run_context key...",
+      "capability_scope_add": "Add",
+      "capability_scope_reset": "Reset to unrestricted",
+      "capability_scope_widen_warning": "Some selected connectors are not granted to the node's Agent and may be rejected: ",
+      "capability_scope_scoped_badge": "Scoped",
+      "capability_scope_remove_tool": "Remove {name}",
+      "capability_scope_remove_context": "Remove {name}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
@@ -1050,7 +1066,18 @@ export default {
       "invalid": "Invalid",
       "inactive": "Inactive",
       "expires": "Expires",
-      "developer_mode": "Developer Mode"
+      "developer_mode": "Developer Mode",
+      "developer_mode_description": "When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.",
+      "toggle_flag": "Toggle {name}",
+      "depends_on": "Depends on {value}",
+      "no_flags_in_tier": "No flags in this tier.",
+      "n_a": "N/A",
+      "no_feature_flags": "No feature flags yet.",
+      "no_feature_flags_description": "Feature flags will appear here once your organisation has registered some.",
+      "select_override": "Select override",
+      "system_default": "System default",
+      "force_enabled": "Force enabled",
+      "force_disabled": "Force disabled"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
@@ -3044,6 +3071,8 @@ export default {
     "remove": "Remove",
     "create": "Create",
     "deleting": "Deleting...",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
     "trigger_types": {
       "manual": "Manual",
       "webhook": "Webhook",
@@ -3160,5 +3189,44 @@ export default {
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
     "config": { "error": "Configuration error", "invalid": "Invalid configuration" }
+  },
+  "connectors": {
+    "rest": {
+      "name": "Generic REST",
+      "base_url": "Base URL",
+      "method": "Method",
+      "path": "Path",
+      "headers": "Headers",
+      "params": "Query params",
+      "body": "Body",
+      "records_path": "Records path (JMESPath)",
+      "next_cursor_path": "Next cursor path (JMESPath)",
+      "passthrough": "Wrap raw body as a single record",
+      "max_response_size": "Max response bytes",
+      "idempotency_header": "Idempotency header",
+      "allowed_hosts": "Allowed hosts",
+      "timeout_seconds": "Timeout (seconds)",
+      "verify_tls": "Verify TLS",
+      "auth_mode": "Auth mode",
+      "auth_mode_bearer": "Bearer token",
+      "auth_mode_api_key": "API key",
+      "auth_mode_basic": "Basic auth",
+      "auth_in_header": "Send as header",
+      "auth_in_query": "Send as query parameter",
+      "header_name": "Header name",
+      "query_param_name": "Query parameter name",
+      "token": "Bearer token",
+      "api_key": "API key",
+      "username": "Username",
+      "password": "Password",
+      "operations": "Named resources (operations)"
+    }
   }
 }
+
+// NOTE (FAR-412): the `connectors.rest.*` keys above are the structured-config
+// schema for a Generic REST connector. No view wires a label lookup to them yet —
+// the connector's config_json is authored as a bare JSON map. Kept as the i18n
+// surface for the upcoming structured-config form; remove only if the product
+// drops that plan. (Trailing comment — the manifest parser reads the object
+// literal and tolerates nothing inside it.)

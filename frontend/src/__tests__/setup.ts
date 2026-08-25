@@ -86,7 +86,7 @@ config.global.plugins = [
 ]
 
 config.global.directives = {
-  ...(config.global.directives || {}),
+  ...config.global.directives,
   tooltip: Tooltip,
 }
 

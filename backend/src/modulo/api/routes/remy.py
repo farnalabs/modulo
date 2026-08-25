@@ -1219,13 +1219,7 @@ async def _stream_approved_commands(
         flow.should_break = True
         return
 
-    yield f"event: ui_command_batch\ndata: {
-        json.dumps(
-            {
-                'commands': approved_calls,
-            }
-        )
-    }\n\n"
+    yield f"event: ui_command_batch\ndata: {json.dumps({'commands': approved_calls})}\n\n"
 
     registry = _get_registry()
     event = asyncio.Event()
@@ -1248,15 +1242,7 @@ async def _stream_approved_commands(
         skipped = len(results)
         s = "s" if skipped != 1 else ""
         summary = f"Action cancelled by user. {skipped} action{s} skipped."
-        yield f"event: abort_summary\ndata: {
-            json.dumps(
-                {
-                    'completed': 0,
-                    'skipped': skipped,
-                    'summary': summary,
-                }
-            )
-        }\n\n"
+        yield f"event: abort_summary\ndata: {json.dumps({'completed': 0, 'skipped': skipped, 'summary': summary})}\n\n"
         flow.should_break = True
 
 

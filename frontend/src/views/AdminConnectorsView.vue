@@ -230,7 +230,7 @@
           <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
-          <button
+          <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-connectors-delete-cancel"
             @click="deleteConfirmConnectorId = null"

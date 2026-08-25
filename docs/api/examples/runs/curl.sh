@@ -26,7 +26,7 @@ echo ""
 echo "=== Find First Pipeline ==="
 PIPELINE_ID=$(curl -s "$BASE_URL/api/v1/pipelines?page=1&page_size=5" \
   -H "$AUTH" | jq -r '.items[0].id // empty')
-if [ -z "$PIPELINE_ID" ]; then
+if [[ -z "$PIPELINE_ID" ]]; then
   echo "No pipelines found. Create one first (see pipelines/ example)."
   exit 1
 fi

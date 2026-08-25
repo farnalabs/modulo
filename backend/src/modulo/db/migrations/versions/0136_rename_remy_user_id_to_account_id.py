@@ -1,7 +1,7 @@
 """Rename remy ``user_id`` FK columns to ``account_id`` (FK -> ``accounts.id``).
 
 Revision ID: 0136_rename_remy_user_id_to_account_id
-Revises: 0135_status_check_constraints
+Revises: 0131_eval_dataset_corpus
 Create Date: 2026-08-24
 
 The three Remy tables (``chat_sessions``, ``remy_skills``, ``remy_context_sources``)

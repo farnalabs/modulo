@@ -30,7 +30,7 @@ import random
 import socket
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -1819,11 +1819,21 @@ class PipelineExecutor:
             hub = None
         return hub
 
-    async def _init_connector_hub(self, org_id: uuid.UUID) -> Any | None:
+    async def _init_connector_hub(
+        self,
+        org_id: uuid.UUID,
+        allowed_connectors: Sequence[str] | None = None,
+    ) -> Any | None:
         """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
 
         Sets the hub on the current ContextVar so make_connector_fn can access it.
         Returns the hub (or None if no connectors are configured).
+
+        *allowed_connectors* (FAR-418) wires fetch-time capability scoping into the
+        production run path: when every node in the run is connector-scoped the hub
+        decrypts ONLY those connectors, so out-of-scope credentials are never
+        disclosed. Pass ``None`` (the default) to fetch every active org connector,
+        preserving the pre-scope behaviour (used for compensation and unscoped runs).
         """
         hub: Any | None = None
         try:
@@ -1864,7 +1874,7 @@ class PipelineExecutor:
                         runtime_provider=runtime_hub,
                     )
                     await hub.__aenter__()
-                    await hub.initialise(rows)
+                    await hub.initialise(rows, allowed_connectors=allowed_connectors)
                     set_connector_hub(hub)
         except asyncio.CancelledError:
             raise
@@ -3102,7 +3112,15 @@ class PipelineExecutor:
         # Load model backends for this run's org — provides LLM access to agent nodes.
         model_backend_hub = await self._init_model_backend_hub(org_id)
         # Load connector hub for this run's org — provides connector access to connector nodes.
-        connector_hub = await self._init_connector_hub(org_id)
+        # FAR-418: wire fetch-time capability scoping — when every graph node is
+        # connector-scoped the hub decrypts ONLY the union of their allowed
+        # connectors, so out-of-scope credentials are never disclosed.
+        from modulo.core.capability_scope import compute_run_fetch_scope
+
+        connector_hub = await self._init_connector_hub(
+            org_id,
+            allowed_connectors=compute_run_fetch_scope(graph_json),
+        )
 
         # FAR-228: the idempotency gate is inert on multi-node graphs — it only
         # fires for a SINGLE sandbox_agent node (guard A in the node body and

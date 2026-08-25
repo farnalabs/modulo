@@ -109,16 +109,16 @@ async def _run_scoped(session: AsyncSession, org_id: uuid.UUID | None) -> None:
     await set_rls_org(session, org_id)
 
 
-@router.get("/candidates", response_model=CandidatesResponse, dependencies=[require_feature("admin_run_retention")])
+@router.get("/candidates", dependencies=[require_feature("admin_run_retention")])
 async def candidates(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    date_from: datetime | None = Query(None),
-    date_to: datetime | None = Query(None),
-    pipeline_id: uuid.UUID | None = Query(None),
-    status: str | None = Query(None),
-    organisation_id: uuid.UUID | None = Query(None),
-    limit: int = Query(500, ge=1, le=5000),
-    offset: int = Query(0, ge=0),
+    date_from: Annotated[datetime | None, Query()] = None,
+    date_to: Annotated[datetime | None, Query()] = None,
+    pipeline_id: Annotated[uuid.UUID | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    organisation_id: Annotated[uuid.UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
     principal: TenantPrincipal = require_system_or_org_admin(_PERMISSION),
 ) -> CandidatesResponse:
     """List runs matching the filter set, with an estimated per-run byte size.
@@ -202,7 +202,7 @@ async def export(
     )
 
 
-@router.post("/purge", response_model=PurgeResponse, dependencies=[require_feature("admin_run_retention")])
+@router.post("/purge", dependencies=[require_feature("admin_run_retention")])
 async def purge(
     req: PurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

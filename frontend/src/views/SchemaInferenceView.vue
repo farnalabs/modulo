@@ -115,7 +115,7 @@
         </div>
 
         <div class="mb-4">
-          <button
+          <button type="button"
             data-testid="schema-inference-toggle-raw-json"
             class="flex items-center gap-1 text-sm text-primary hover:underline"
             @click="showRawJson = !showRawJson"
@@ -140,7 +140,7 @@
           <Button :disabled="publishing" data-testid="schema-inference-publish" @click="publishSchema">
             {{ publishing ? $t('views.SchemaInferenceView.publishing') : $t('views.SchemaInferenceView.publish') }}
           </Button>
-          <button
+          <button type="button"
             data-testid="schema-inference-discard"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetForm"

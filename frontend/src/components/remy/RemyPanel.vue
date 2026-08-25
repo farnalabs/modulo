@@ -82,7 +82,7 @@
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
         </button>
-        <button
+        <button type="button"
           v-if="store.panelState === 'floating'"
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
@@ -102,7 +102,7 @@
             <line x1="9" y1="3" x2="9" y2="21" />
           </svg>
         </button>
-        <button
+        <button type="button"
           v-if="store.panelState === 'docked'"
           class="remy-titlebar-btn"
           @click="store.setPanelState('floating')"
@@ -115,7 +115,7 @@
             <path d="M21 3l-9 9" />
           </svg>
         </button>
-        <button
+        <button type="button"
           v-if="planStore.featureEnabled('remy_ui_driving')"
           class="remy-titlebar-btn text-xs font-medium px-1.5"
           @click="cycleSpeed"
@@ -124,7 +124,7 @@
         >
           <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
         </button>
-        <button
+        <button type="button"
           v-if="store.panelState !== 'maximised'"
           class="remy-titlebar-btn"
           @click="store.setPanelState('maximised')"
@@ -143,7 +143,7 @@
             <rect x="3" y="3" width="18" height="18" rx="2" />
           </svg>
         </button>
-        <button
+        <button type="button"
           v-else
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
@@ -163,7 +163,7 @@
             <line x1="3" y1="12" x2="21" y2="12" />
           </svg>
         </button>
-        <button
+        <button type="button"
           class="remy-titlebar-btn"
           @click="store.setPanelState('closed')"
           title="Close"
@@ -198,7 +198,7 @@
       :class="isRateLimitError ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-destructive bg-destructive/5'"
     >
       <span>{{ store.error }}</span>
-      <button
+      <button type="button"
         class="shrink-0 ml-2 hover:opacity-80"
         :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
         @click="store.error = null"
@@ -209,7 +209,7 @@
     </div>
     <div v-if="currentSpeed === 'review' && store.activeSession" class="flex items-center justify-between px-3 py-1.5 text-xs border-b bg-muted/30">
       <span>⏸ {{ $t('components.remy.RemyPanel.stops_after_each_navigation') }}</span>
-      <button class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">{{ $t('components.remy.RemyPanel.resume') }}</button>
+      <button type="button" class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">{{ $t('components.remy.RemyPanel.resume') }}</button>
     </div>
     <div class="remy-body">
       <div class="remy-sidebar" :class="{ open: showSidebar }">
@@ -220,28 +220,28 @@
       </div>
       <div class="remy-main">
           <div class="remy-chat-tabs flex items-center border-b px-2">
-            <button
+            <button type="button"
               class="remy-tab"
               :class="{ active: activeTab === 'chat' }"
               @click="activeTab = 'chat'"
             >
               Chat
             </button>
-            <button
+            <button type="button"
               class="remy-tab"
               :class="{ active: activeTab === 'skills' }"
               @click="activeTab = 'skills'"
             >
               Skills
             </button>
-            <button
+            <button type="button"
               class="remy-tab"
               :class="{ active: activeTab === 'sessions' }"
               @click="activeTab = 'sessions'"
             >
               Sessions
             </button>
-            <button
+            <button type="button"
               class="remy-tab"
               :class="{ active: activeTab === 'sources' }"
               @click="activeTab = 'sources'"
@@ -269,7 +269,7 @@
     />
   </div>
 
-  <button
+  <button type="button"
     v-else
     class="remy-floating-btn"
     @click="store.setPanelState('floating')"

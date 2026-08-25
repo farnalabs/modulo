@@ -80,7 +80,7 @@ describe('useSpotlight', () => {
     const { useSpotlight } = await import('../../composables/useSpotlight')
     const spotlight = useSpotlight()
     const el = document.createElement('button')
-    el.setAttribute('data-testid', 'run-list')
+    el.dataset.testid = 'run-list'
     document.body.appendChild(el)
 
     spotlight.highlight('run-list')
@@ -98,7 +98,7 @@ describe('useSpotlight', () => {
     const { useSpotlight } = await import('../../composables/useSpotlight')
     const spotlight = useSpotlight()
     const el = document.createElement('div')
-    el.setAttribute('data-testid', 'settings:run#1')
+    el.dataset.testid = 'settings:run#1'
     document.body.appendChild(el)
 
     spotlight.highlight('settings:run#1')

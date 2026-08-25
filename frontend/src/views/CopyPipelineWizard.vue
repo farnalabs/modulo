@@ -332,7 +332,7 @@
               <Button class="px-6 py-2.5" @click="executeCopy" data-testid="copy-wizard-retry">
                 Retry
               </Button>
-              <button
+              <button type="button"
                 class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="step = 3"
                 data-testid="copy-wizard-back-error"

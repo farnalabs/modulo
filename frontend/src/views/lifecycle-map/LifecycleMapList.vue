@@ -75,7 +75,7 @@
               <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 v{{ m.current_version }}
               </span>
-              <button
+              <button type="button"
                 class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                 :aria-label="$t('views.LifecycleMapList.edit')"
                 data-testid="lifecycle-map-list-edit"
@@ -115,7 +115,7 @@
       </div>
 
       <div v-if="totalPages > 1 && !store.isLoading" class="flex justify-center items-center gap-2 mt-8">
-        <button
+        <button type="button"
           :disabled="page <= 1"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="prevPage"
@@ -126,7 +126,7 @@
         <span class="px-4 py-2 text-sm text-muted-foreground">
           Page {{ page }} of {{ totalPages }}
         </span>
-        <button
+        <button type="button"
           :disabled="page >= totalPages"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="nextPage"
@@ -169,7 +169,7 @@
             {{ createError }}
           </div>
           <div class="flex justify-end gap-2">
-            <button
+            <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showCreateDialog = false"
             >
@@ -253,7 +253,7 @@ function nextPage(): void {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
+  if (Number.isNaN(d.getTime())) return dateStr
   return formatDateShort(d)
 }
 

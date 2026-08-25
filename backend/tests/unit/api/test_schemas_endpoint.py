@@ -433,7 +433,7 @@ def test_migrate_data_records_audit_event(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
         patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
         patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -446,11 +446,10 @@ def test_migrate_data_records_audit_event(client: TestClient) -> None:
     assert resp.status_code == 200
     mock_append.assert_awaited_once()
     call = mock_append.await_args
-    assert call.kwargs["org_id"] == _ORG_ID
     assert call.kwargs["event_type"] == "schema_migration_completed"
     assert call.kwargs["resource_type"] == "schema"
     assert call.kwargs["resource_id"] == to_schema.id
-    payload = call.kwargs["payload_json"]
+    payload = call.kwargs["payload"]
     assert payload["from_schema_id"] == str(from_schema.id)
     assert payload["to_schema_id"] == str(to_schema.id)
     assert payload["dry_run"] is False
@@ -479,7 +478,7 @@ def test_migrate_data_dry_run_records_audit_event(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
         patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
         patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
     ):
         resp = client.post(
             "/api/v1/schemas/migrate?dry_run=true",
@@ -491,7 +490,7 @@ def test_migrate_data_dry_run_records_audit_event(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     mock_append.assert_awaited_once()
-    payload = mock_append.await_args.kwargs["payload_json"]
+    payload = mock_append.await_args.kwargs["payload"]
     assert payload["dry_run"] is True
     body = resp.json()
     assert body["plan"]["dry_run"] is True
@@ -518,7 +517,7 @@ def test_migrate_data_audit_failure_does_not_break_response(client: TestClient) 
         patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch(
-            "modulo.api.routes.schemas.append_audit_event",
+            "modulo.core.audit_logger.append_audit_event",
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit chain unavailable"),
         ),
@@ -557,7 +556,7 @@ def test_migrate_data_audit_programming_error_returns_200(client: TestClient) ->
         patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch(
-            "modulo.api.routes.schemas.append_audit_event",
+            "modulo.core.audit_logger.append_audit_event",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("statement", {}, Exception("missing table")),
         ),
@@ -575,7 +574,7 @@ def test_migrate_data_audit_programming_error_returns_200(client: TestClient) ->
 
 
 def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock):
+    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -599,7 +598,7 @@ def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
 
 
 def test_migration_plan_no_changes(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock):
+    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -632,7 +631,7 @@ def test_migration_plan_unauthenticated_returns_4xx(unauth_client: TestClient) -
 
 
 def test_migration_plan_records_audit_event(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append:
+    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append:
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -649,10 +648,9 @@ def test_migration_plan_records_audit_event(client: TestClient) -> None:
     assert resp.status_code == 200
     mock_append.assert_awaited_once()
     call = mock_append.await_args
-    assert call.kwargs["org_id"] == _ORG_ID
     assert call.kwargs["event_type"] == "schema_migration_planned"
     assert call.kwargs["resource_type"] == "schema"
-    payload = call.kwargs["payload_json"]
+    payload = call.kwargs["payload"]
     assert payload["field_additions"] == 1
     assert payload["field_removals"] == 1
     assert payload["type_changes"] == 0
@@ -661,7 +659,7 @@ def test_migration_plan_records_audit_event(client: TestClient) -> None:
 
 def test_migration_plan_audit_failure_does_not_break_response(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.schemas.append_audit_event",
+        "modulo.core.audit_logger.append_audit_event",
         new_callable=AsyncMock,
         side_effect=RuntimeError("audit boom"),
     ):

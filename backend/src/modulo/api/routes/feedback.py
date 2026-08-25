@@ -38,6 +38,7 @@ from modulo.core.feedback_manager import (
 )
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -669,6 +670,20 @@ async def update_feedback_status(
             detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
         )
 
+    record, old_status = await _update_feedback_status_transaction(session, principal, record_id, req.status)
+
+    await _append_feedback_status_audit(session, principal, record, record_id, old_status)
+
+    return {
+        "id": str(record.id),
+        "feedback_status": record.feedback_status,
+    }
+
+
+async def _update_feedback_status_transaction(
+    session: AsyncSession, principal: TenantPrincipal, record_id: uuid.UUID, new_status: str
+) -> tuple[FeedbackRecord, str]:
+    """Update the feedback status within a transaction, raising 404 if missing."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -677,7 +692,9 @@ async def update_feedback_status(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FEEDBACK_RECORD_NOT_FOUND)
             old_status = record.feedback_status
-            record = await mgr.update_status(record_id, req.status)
+            record = await mgr.update_status(record_id, new_status)
+            if record is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FEEDBACK_RECORD_NOT_FOUND)
     except IntegrityError as exc:
         logger.exception(_CODE_FEEDBACK_UPDATE_FEEDBACK_STATUS)
         raise HTTPException(
@@ -704,10 +721,17 @@ async def update_feedback_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
+    return record, old_status
 
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FEEDBACK_RECORD_NOT_FOUND)
 
+async def _append_feedback_status_audit(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    record: FeedbackRecord,
+    record_id: uuid.UUID,
+    old_status: str,
+) -> None:
+    """Append a feedback status-changed audit event."""
     await append_audit_event_isolated(
         session,
         principal,
@@ -724,10 +748,20 @@ async def update_feedback_status(
         log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
 
-    return {
-        "id": str(record.id),
-        "feedback_status": record.feedback_status,
-    }
+
+async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID) -> list[EvalDefinitionDTO]:
+    """Load the eval definitions for the pipeline associated with a run."""
+    if not record.run_id:
+        return []
+    run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+    if run is None:
+        return []
+    eval_rows = (
+        (await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)))
+        .scalars()
+        .all()
+    )
+    return [_eval_def_to_dto(row, org_id) for row in eval_rows]
 
 
 @router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
@@ -746,20 +780,7 @@ async def detect_eval_gap(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FEEDBACK_RECORD_NOT_FOUND)
 
-            eval_suite: list[EvalDefinitionDTO] = []
-            if record.run_id:
-                run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
-                if run is not None:
-                    eval_rows = (
-                        (
-                            await session.execute(
-                                select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
-                            )
-                        )
-                        .scalars()
-                        .all()
-                    )
-                    eval_suite = [_eval_def_to_dto(row, principal.organisation_id) for row in eval_rows]
+            eval_suite = await _load_eval_suite(session, record, principal.organisation_id)
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
     except IntegrityError as exc:
@@ -795,6 +816,17 @@ async def detect_eval_gap(
     }
 
 
+async def _resolve_pipeline_name(session: AsyncSession, record: Any) -> str | None:
+    """Resolve the display name of the pipeline a feedback record's run belongs to."""
+    if record is None or not record.run_id:
+        return None
+    run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+    if run_row is None:
+        return None
+    pipeline = await session.get(Pipeline, run_row.pipeline_id)
+    return pipeline.name if pipeline is not None else None
+
+
 @router.get("/feedback/inbox/{record_id}", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_FEEDBACK_GET_INBOX_ITEM)
 async def get_inbox_item(
@@ -802,22 +834,13 @@ async def get_inbox_item(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
-    pipeline_name: str | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
-
-            if record is not None and record.run_id:
-                run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
-                if run_row:
-                    from modulo.db.models.pipeline import Pipeline
-
-                    pipeline = await session.get(Pipeline, run_row.pipeline_id)
-                    if pipeline:
-                        pipeline_name = pipeline.name
+            pipeline_name = await _resolve_pipeline_name(session, record)
     except IntegrityError as exc:
         logger.exception(_CODE_FEEDBACK_GET_INBOX_ITEM)
         raise HTTPException(

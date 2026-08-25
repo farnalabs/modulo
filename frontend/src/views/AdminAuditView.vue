@@ -497,7 +497,7 @@ async function exportCsv() {
       e.actor_user_id ?? '',
       e.resource_type ?? '',
       e.resource_id ?? '',
-      summarize(e).replace(/"/g, '""'),
+      summarize(e).replaceAll('"', '""'),
       e.request_id ?? '',
       e.previous_hash ?? '',
     ])

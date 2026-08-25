@@ -310,6 +310,7 @@
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="text-xs font-medium text-primary">AGENT</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                    <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
@@ -512,6 +513,109 @@
               </dd>
             </div>
           </template>
+          <!-- Capability Scope (FAR-437): narrow-not-widen authoring -->
+          <div v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id" data-testid="pipeline-editor-capability-scope">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.capability_scope') }}</dt>
+            <dd class="mt-1 space-y-3">
+              <p class="text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.capability_scope_description') }}</p>
+              <!-- Allowed Connectors (from the Agent's grants) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_allowed_connectors') }}</div>
+                <div v-if="availableConnectorsForNode.length === 0" class="mt-1 text-[11px] text-muted-foreground" data-testid="pipeline-editor-scope-no-connectors">
+                  {{ $t('views.PipelineEditorView.capability_scope_no_connectors') }}
+                </div>
+                <div v-else class="mt-1 space-y-1">
+                  <label v-for="c in availableConnectorsForNode" :key="c.id" class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      :value="c.id"
+                      v-model="nodeCapabilityScope.allowed_connectors"
+                      class="h-4 w-4"
+                      :data-testid="`pipeline-editor-scope-connector-${c.id}`"
+                    />
+                    <span>{{ connectorName({ type: c.connector_type_id, instance_id: c.id }) }}</span>
+                  </label>
+                </div>
+                <div v-if="outOfScopeConnectors.length > 0" class="mt-1 text-[11px] text-warning" role="alert" data-testid="pipeline-editor-scope-widen-warning">
+                  {{ $t('views.PipelineEditorView.capability_scope_widen_warning') }}{{ outOfScopeConnectors.join(', ') }}
+                </div>
+              </div>
+              <!-- Allowed Tools (free-form list) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_allowed_tools') }}</div>
+                <div v-if="nodeCapabilityScope.allowed_tools.length > 0" class="mt-1 flex flex-wrap gap-1">
+                  <span v-for="t in nodeCapabilityScope.allowed_tools" :key="t" class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                    {{ t }}
+                    <button
+                      type="button"
+                      class="text-muted-foreground hover:text-foreground"
+                      :aria-label="$t('views.PipelineEditorView.capability_scope_remove_tool', { name: t })"
+                      :data-testid="`pipeline-editor-scope-tool-remove-${t}`"
+                      @click="removeCapabilityEntry('allowed_tools', t)"
+                    >&times;</button>
+                  </span>
+                </div>
+                <div class="mt-1 flex gap-1">
+                  <input
+                    v-model="capabilityToolInput"
+                    :placeholder="$t('views.PipelineEditorView.capability_scope_tool_placeholder')"
+                    :aria-label="$t('views.PipelineEditorView.capability_scope_allowed_tools')"
+                    class="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    @keydown.enter.prevent="addCapabilityEntry('allowed_tools')"
+                    data-testid="pipeline-editor-scope-tool-input"
+                  />
+                  <button
+                    type="button"
+                    class="shrink-0 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="addCapabilityEntry('allowed_tools')"
+                    data-testid="pipeline-editor-scope-tool-add"
+                  >{{ $t('views.PipelineEditorView.capability_scope_add') }}</button>
+                </div>
+              </div>
+              <!-- Context Scope (free-form list of run_context keys) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_context_scope') }}</div>
+                <div v-if="nodeCapabilityScope.context_scope.length > 0" class="mt-1 flex flex-wrap gap-1">
+                  <span v-for="k in nodeCapabilityScope.context_scope" :key="k" class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                    {{ k }}
+                    <button
+                      type="button"
+                      class="text-muted-foreground hover:text-foreground"
+                      :aria-label="$t('views.PipelineEditorView.capability_scope_remove_context', { name: k })"
+                      :data-testid="`pipeline-editor-scope-context-remove-${k}`"
+                      @click="removeCapabilityEntry('context_scope', k)"
+                    >&times;</button>
+                  </span>
+                </div>
+                <div class="mt-1 flex gap-1">
+                  <input
+                    v-model="capabilityContextInput"
+                    :placeholder="$t('views.PipelineEditorView.capability_scope_context_placeholder')"
+                    :aria-label="$t('views.PipelineEditorView.capability_scope_context_scope')"
+                    class="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    @keydown.enter.prevent="addCapabilityEntry('context_scope')"
+                    data-testid="pipeline-editor-scope-context-input"
+                  />
+                  <button
+                    type="button"
+                    class="shrink-0 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="addCapabilityEntry('context_scope')"
+                    data-testid="pipeline-editor-scope-context-add"
+                  >{{ $t('views.PipelineEditorView.capability_scope_add') }}</button>
+                </div>
+              </div>
+              <!-- Reset to unrestricted -->
+              <div class="flex items-center justify-between gap-2">
+                <span v-if="!doesNodeHaveCapabilityScope(selectedNodeData)" class="text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.capability_scope_unrestricted') }}</span>
+                <button
+                  type="button"
+                  class="text-[11px] text-indigo-500 hover:text-indigo-400"
+                  @click="resetCapabilityScope"
+                  data-testid="pipeline-editor-scope-reset"
+                >{{ $t('views.PipelineEditorView.capability_scope_reset') }}</button>
+              </div>
+            </dd>
+          </div>
           <!-- Sandbox Agent: template, command, env, context -->
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
@@ -1294,11 +1398,95 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+// FAR-437: node-level capability_scope authoring (narrow-not-widen)
+const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_tools: string[]; context_scope: string[] }>({
+  allowed_connectors: [],
+  allowed_tools: [],
+  context_scope: [],
+})
+const capabilityToolInput = ref('')
+const capabilityContextInput = ref('')
+
+function doesNodeHaveCapabilityScope(node: any): boolean {
+  const cs = node?.capability_scope
+  if (!cs || typeof cs !== 'object') return false
+  return [cs.allowed_connectors, cs.allowed_tools, cs.context_scope]
+    .some((arr) => Array.isArray(arr) && arr.length > 0)
+}
+
+function nodeAgent(node: any): any | undefined {
+  return agents.value.find((a: any) => a.id === node?.agent_id)
+}
+
+function agentConnectorTypes(agent: any): Set<string> {
+  const refs: Array<{ connector_type: string }> = agent?.connector_type_refs || []
+  return new Set(refs.map((r) => r.connector_type))
+}
+
+const availableConnectorsForNode = computed(() => {
+  const agent = nodeAgent(selectedNodeData.value)
+  const types = agentConnectorTypes(agent)
+  if (types.size === 0) return []
+  return connectors.value.filter((c: any) => types.has(c.connector_type_id))
+})
+
+const outOfScopeConnectors = computed(() => {
+  const available = new Set(availableConnectorsForNode.value.map((c: any) => c.id))
+  return nodeCapabilityScope.allowed_connectors.filter((v) => !available.has(v))
+})
+
+function syncCapabilityScopeToNode() {
+  if (!selectedNodeData.value) return
+  const cs = nodeCapabilityScope
+  const hasAny = cs.allowed_connectors.length > 0 || cs.allowed_tools.length > 0 || cs.context_scope.length > 0
+  const capability_scope = hasAny
+    ? {
+        ...(cs.allowed_connectors.length > 0 ? { allowed_connectors: [...cs.allowed_connectors] } : {}),
+        ...(cs.allowed_tools.length > 0 ? { allowed_tools: [...cs.allowed_tools] } : {}),
+        ...(cs.context_scope.length > 0 ? { context_scope: [...cs.context_scope] } : {}),
+      }
+    : null
+  selectedNodeData.value.capability_scope = capability_scope
+  const fn = flowNodes.value.find((n: any) => n.id === selectedNodeData.value.id)
+  if (fn) {
+    fn.data = { ...fn.data, hasCapabilityScope: hasAny }
+  }
+}
+
+watch(nodeCapabilityScope, () => syncCapabilityScopeToNode(), { deep: true })
+
+function addCapabilityEntry(field: 'allowed_tools' | 'context_scope') {
+  const input = field === 'allowed_tools' ? capabilityToolInput.value : capabilityContextInput.value
+  const trimmed = input.trim()
+  if (!trimmed) return
+  const arr = nodeCapabilityScope[field]
+  if (!arr.includes(trimmed)) arr.push(trimmed)
+  if (field === 'allowed_tools') capabilityToolInput.value = ''
+  else capabilityContextInput.value = ''
+}
+
+function removeCapabilityEntry(field: 'allowed_tools' | 'context_scope', value: string) {
+  const arr = nodeCapabilityScope[field]
+  const idx = arr.indexOf(value)
+  if (idx >= 0) arr.splice(idx, 1)
+}
+
+function resetCapabilityScope() {
+  nodeCapabilityScope.allowed_connectors = []
+  nodeCapabilityScope.allowed_tools = []
+  nodeCapabilityScope.context_scope = []
+}
+
 function syncNodeToFlow() {
   if (!selectedNodeData.value) return
   const fn = flowNodes.value.find((n: any) => n.id === selectedNodeData.value.id)
   if (fn) {
-    fn.data = { ...fn.data, label: selectedNodeData.value.label, description: selectedNodeData.value.description || '' }
+    fn.data = {
+      ...fn.data,
+      label: selectedNodeData.value.label,
+      description: selectedNodeData.value.description || '',
+      hasCapabilityScope: doesNodeHaveCapabilityScope(selectedNodeData.value),
+    }
   }
 }
 
@@ -1396,6 +1584,7 @@ function convertBackendNode(n: any): any {
       description: n.description || '',
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
+      hasCapabilityScope: doesNodeHaveCapabilityScope(n),
     },
   }
 }
@@ -1487,6 +1676,11 @@ function onNodeClick(event: any) {
   if (!node) return
   const backendNode = rawNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
+  // Populate capability scope (narrow-not-widen)
+  const scope = backendNode?.capability_scope
+  nodeCapabilityScope.allowed_connectors = Array.isArray(scope?.allowed_connectors) ? [...scope.allowed_connectors] : []
+  nodeCapabilityScope.allowed_tools = Array.isArray(scope?.allowed_tools) ? [...scope.allowed_tools] : []
+  nodeCapabilityScope.context_scope = Array.isArray(scope?.context_scope) ? [...scope.context_scope] : []
   // Populate parameter set + overrides
   if (backendNode?.parameter_set_id) {
     selectedNodeParamSetId.value = backendNode.parameter_set_id
@@ -1627,6 +1821,7 @@ async function saveEdgeConfig() {
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
+          capability_scope: n.capability_scope || null,
         })),
         edges: updatedEdges,
       },
@@ -1651,6 +1846,11 @@ function onPaneClick() {
   showSaveAsDropdown.value = false
   selectedNodeParamSetId.value = undefined
   selectedNodeOverrides.value = {}
+  nodeCapabilityScope.allowed_connectors = []
+  nodeCapabilityScope.allowed_tools = []
+  nodeCapabilityScope.context_scope = []
+  capabilityToolInput.value = ''
+  capabilityContextInput.value = ''
 }
 
 function addNode() {
@@ -1905,6 +2105,7 @@ async function saveGraph() {
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
+          capability_scope: n.capability_scope || null,
         })),
         edges: rawEdges.value.map((e: any) => ({
           id: e.id,

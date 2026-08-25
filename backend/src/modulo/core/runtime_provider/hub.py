@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select
 
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from modulo.db.models.environment_profile import EnvironmentProfile
 
 _log = logging.getLogger(__name__)
+
+_TYPE_UNSET = object()
 
 
 class RuntimeProviderHub:
@@ -66,35 +68,67 @@ class RuntimeProviderHub:
         5. Return None if nothing is registered.
         """
         providers = dict(self._providers)
+        provider = self._resolve_by_hint(providers, profile)
+        if provider is not None:
+            return provider
+
+        type_result = self._resolve_by_type(providers, profile)
+        if type_result is not _TYPE_UNSET:
+            return type_result
+
+        return self._resolve_by_supports(providers, profile)
+
+    @staticmethod
+    def _resolve_by_hint(
+        providers: dict[str, RuntimeProvider],
+        profile: Any,
+    ) -> RuntimeProvider | None:
         raw_hint: Any = getattr(profile, "provider_hint", None)
-        if isinstance(raw_hint, str) and raw_hint.strip():
-            hint_normalized = raw_hint.strip().lower()
-            if hint_normalized in providers:
-                return providers[hint_normalized]
-            _log.warning("RuntimeProvider hint '%s' specified but no matching provider registered", raw_hint)
-
-        raw_provider_type: Any = getattr(profile, "provider_type", None)
-        if isinstance(raw_provider_type, str) and raw_provider_type.strip():
-            provider_type = raw_provider_type.strip().lower()
-            direct_match = providers.get(provider_type)
-            if direct_match is not None:
-                return direct_match
-
-            matches = [
-                provider for _, provider in sorted(providers.items()) if provider.matches_provider_type(provider_type)
-            ]
-            if matches:
-                return matches[0]
-
-            _log.warning(
-                "RuntimeProvider type '%s' requested but no matching provider is available",
-                raw_provider_type,
-            )
+        if not isinstance(raw_hint, str) or not raw_hint.strip():
             return None
+        hint_normalized = raw_hint.strip().lower()
+        if hint_normalized not in providers:
+            _log.warning("RuntimeProvider hint '%s' specified but no matching provider registered", raw_hint)
+            return None
+        return providers[hint_normalized]
 
+    @staticmethod
+    def _resolve_by_type(
+        providers: dict[str, RuntimeProvider],
+        profile: Any,
+    ) -> RuntimeProvider | None:
+        raw_provider_type: Any = getattr(profile, "provider_type", None)
+        if not isinstance(raw_provider_type, str) or not raw_provider_type.strip():
+            return cast("RuntimeProvider | None", _TYPE_UNSET)
+        provider_type = raw_provider_type.strip().lower()
+
+        direct_match = providers.get(provider_type)
+        if direct_match is not None:
+            return direct_match
+
+        matches = [
+            provider for _, provider in sorted(providers.items()) if provider.matches_provider_type(provider_type)
+        ]
+        if matches:
+            return matches[0]
+
+        _log.warning(
+            "RuntimeProvider type '%s' requested but no matching provider is available",
+            raw_provider_type,
+        )
+        return None
+
+    @staticmethod
+    def _resolve_by_supports(
+        providers: dict[str, RuntimeProvider],
+        profile: Any,
+    ) -> RuntimeProvider | None:
         for provider in providers.values():
+            supports = getattr(provider, "supports", None)
+            if supports is None:
+                continue
             try:
-                if getattr(provider, "supports", None) is not None and provider.supports(profile):
+                if provider.supports(profile):
                     return provider
             except Exception:
                 _log.debug("supports() check failed for a provider", exc_info=True)
