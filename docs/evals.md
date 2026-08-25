@@ -334,3 +334,91 @@ Every query injects the explicit `organisation_id = :org` predicate —
 run is terminal (`completed`/`partial`), so the read-model is deterministic
 across two calls; legacy pipeline-path rows (no `suite_run_id`) are always
 included. Guardrail rows are excluded (the standard eval consumer contract).
+
+## The coverage-gap signal (FAR-381)
+
+The complements to the pass-rate read-models are **static coverage** (does a
+variant have any eval at all — `coverage-gaps` on a variant group) and the
+dynamic **coverage-gap signal** described here. It answers the PRD §8.19
+problem: *"variants diverged but evals did not differentiate."* That is not a
+dashboard convenience — it is a signal that the **eval SUITE is insufficient**
+and must be routed to eval-quality improvement.
+
+Lineage read (pure read-model, no new table, no migration):
+
+```
+VariantGroup ──> Runs (variant_group_id, batch_id; each has variant_config_snapshot
+                    {variant_id, variant_name} and outputs_json)
+                     │
+                     └──> EvalResult (run_id, eval_id, score, passed)
+```
+
+Endpoint: `GET /api/v1/eval-coverage-gap?variant_group_id=…&batch_id=…&min_runs=3&threshold=0.15`
+
+It returns a per-eval verdict list:
+
+```json
+{
+  "status": "complete",
+  "variant_divergence": 0.4,
+  "evals": [
+    {
+      "eval_id": "…", "eval_name": "…",
+      "variant_divergence": 0.4,
+      "eval_score_spread": 0.01,
+      "has_gap": true,
+      "reason": "Variants diverged but this eval could not differentiate them; route to eval-quality improvement.",
+      "recommended_action": "improve_evals"
+    }
+  ]
+}
+```
+
+### The metrics
+
+* **Variant divergence** — how spread apart the variant *outputs* are. Measured
+  as `1 − mean pairwise normalized edit distance` over the canonical JSON of
+  each terminal variant run's `outputs_json`. Outputs are often unstructured, so
+  a structure-independent string-similarity gradient is the stable default:
+  `0.0` = identical outputs, near `1.0` = maximally different.
+* **Eval differentiation** — the population standard deviation of that eval's
+  per-variant metric within one `eval_id` (`score` when present, else `passed`
+  as `1.0/0.0`). Grouping by `eval_id` keeps a single scale per comparison, so
+  an absolute std is meaningful. A near-zero std means the eval scored every
+  variant ~the same — it did not differentiate them.
+
+### Statistical significance
+
+A signal is emitted only when at least `min_runs` (default `3`) **terminal**
+runs carry eval data. Below that the result is `status: "insufficient_data"`
+with an empty `evals` list and **no signal** — this is what suppresses
+llm-judge high-variance false positives. Runs are terminal-only, so the
+read-model is deterministic across two calls.
+
+### The gap condition (configurable threshold)
+
+```
+has_gap = variant_divergence >= divergence_threshold      (default 0.15)
+          AND eval_differentiation < differentiation_threshold  (default 0.05)
+```
+
+The `divergence_threshold` is configurable per suite via the endpoint `threshold`
+query param (an operator dial, `0.0`–`1.0`). The `differentiation_threshold` is
+an eval-quality calibration kept as a module default (not surfaced on the
+endpoint).
+
+### Recommended-action routing
+
+* `has_gap=true` → `recommended_action: "improve_evals"` — the evals could not
+  tell the variants apart even though the variants genuinely differ. The problem
+  is the eval **suite**, so this routes to eval-quality improvement, not to a
+  flag.
+* `has_gap=false` → `recommended_action: "ok"` — either the variants did not
+  diverge, or the evals differentiated them adequately.
+
+### Isolation
+
+Every query injects the explicit `organisation_id = :org` predicate (BYPASSRLS
+⇒ the predicate is the ONLY isolation control). A cross-org batch or variant
+group resolves to no org-owned runs and returns `status: "insufficient_data"`
+rather than leaking another org's data.

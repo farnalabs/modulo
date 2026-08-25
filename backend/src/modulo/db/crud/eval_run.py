@@ -38,3 +38,32 @@ async def get_run_evals(
         .order_by(EvalResult.evaluated_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def get_evals_for_runs(
+    session: AsyncSession,
+    *,
+    org_id: Any,
+    run_ids: list[Any],
+) -> list[EvalResult]:
+    """Org-scoped eval results (excl. guardrails) across a set of runs.
+
+    The coverage-gap read-model groups by ``run_id`` so the same eval's score
+    spread can be measured across the variants in one batch. The explicit
+    ``organisation_id`` predicate is the BYPASSRLS isolation control (plus
+    ``set_rls_org`` as defense-in-depth), so a cross-org run can never be
+    pulled into the spread. Guardrail rows are excluded per the consumer
+    contract — their ``passed`` semantics are inverted (a match = a violation).
+    """
+    if not run_ids:
+        return []
+    result = await session.execute(
+        select(EvalResult)
+        .where(
+            EvalResult.run_id.in_(run_ids),
+            EvalResult.organisation_id == org_id,
+            non_guardrail_eval_results_clause(),
+        )
+        .order_by(EvalResult.evaluated_at)
+    )
+    return list(result.scalars().all())

@@ -25,6 +25,11 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval_engine.coverage_gap import (
+    DEFAULT_DIVERGENCE_THRESHOLD,
+    DEFAULT_MIN_RUNS,
+    compute_coverage_gap,
+)
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -58,6 +63,7 @@ _CODE_EVALS_CREATE_EVAL_RUN = "evals.create_eval_from_run"
 _CODE_EVALS_LEADERBOARD = "evals.leaderboard"
 _CODE_EVALS_TIMESERIES = "evals.timeseries"
 _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
+_CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
@@ -725,6 +731,96 @@ async def eval_timeseries(
         "summary": summary,
         "pipelines": pipelines,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/eval-coverage-gap  (FAR-381) — the eval-suite insufficiency signal
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/eval-coverage-gap",
+    status_code=status.HTTP_200_OK,
+    responses={
+        409: {"description": "Conflict"},
+        422: {"description": "Unprocessable Entity"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_COVERAGE_GAP)
+async def eval_coverage_gap(
+    variant_group_id: uuid.UUID | None = Query(None, description="Scope to a variant group"),
+    batch_id: uuid.UUID | None = Query(None, description="Scope to a single fired batch"),
+    min_runs: int = Query(DEFAULT_MIN_RUNS, ge=1, description="Minimum run count before a signal is emitted"),
+    threshold: float = Query(
+        DEFAULT_DIVERGENCE_THRESHOLD,
+        ge=0.0,
+        le=1.0,
+        description="Variant-divergence threshold above which variants count as genuinely differing",
+    ),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> dict[str, Any]:
+    """Return the eval coverage-gap signal for a batch or variant group (FAR-381).
+
+    A pure read-model over the ``VariantGroup -> Run -> EvalResult`` lineage.
+    Emits a per-eval verdict only once at least ``min_runs`` terminal runs carry
+    eval data (statistical significance — llm-judge scores are high-variance),
+    and only when variant outputs diverged past ``threshold`` while that eval
+    could not differentiate them. A gap routes to ``recommended_action =
+    "improve_evals"`` (the eval suite is the problem, not the variants); all
+    other cases are ``"ok"``. Org-scoped (explicit ``organisation_id`` predicate
+    on every query; ``set_rls_org`` remains defense-in-depth).
+    """
+    if variant_group_id is None and batch_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Provide a variant_group_id or batch_id to scope the coverage-gap signal.",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            summary = await compute_coverage_gap(
+                session,
+                org_id=principal.organisation_id,
+                batch_id=batch_id,
+                variant_group_id=variant_group_id,
+                min_runs=min_runs,
+                divergence_threshold=threshold,
+            )
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVALS_COVERAGE_GAP)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_COVERAGE_GAP)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_COVERAGE_GAP)
+        _log.warning("evals.coverage_gap_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception("evals.coverage_gap_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while computing the eval coverage-gap signal.",
+        ) from None
+
+    return summary.to_dict()
 
 
 @router.put(

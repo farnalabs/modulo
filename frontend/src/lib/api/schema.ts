@@ -5733,6 +5733,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/eval-coverage-gap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eval Coverage Gap
+         * @description Return the eval coverage-gap signal for a batch or variant group (FAR-381).
+         *
+         *     A pure read-model over the ``VariantGroup -> Run -> EvalResult`` lineage.
+         *     Emits a per-eval verdict only once at least ``min_runs`` terminal runs carry
+         *     eval data (statistical significance — llm-judge scores are high-variance),
+         *     and only when variant outputs diverged past ``threshold`` while that eval
+         *     could not differentiate them. A gap routes to ``recommended_action =
+         *     "improve_evals"`` (the eval suite is the problem, not the variants); all
+         *     other cases are ``"ok"``. Org-scoped (explicit ``organisation_id`` predicate
+         *     on every query; ``set_rls_org`` remains defense-in-depth).
+         */
+        get: operations["eval_coverage_gap_api_v1_eval_coverage_gap_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals/suites/{suite_id}/alerting": {
         parameters: {
             query?: never;
@@ -30281,6 +30310,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    eval_coverage_gap_api_v1_eval_coverage_gap_get: {
+        parameters: {
+            query?: {
+                /** @description Scope to a variant group */
+                variant_group_id?: string | null;
+                /** @description Scope to a single fired batch */
+                batch_id?: string | null;
+                /** @description Minimum run count before a signal is emitted */
+                min_runs?: number;
+                /** @description Variant-divergence threshold above which variants count as genuinely differing */
+                threshold?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Internal Server Error */
             500: {
