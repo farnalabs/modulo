@@ -76,11 +76,22 @@ def upgrade() -> None:
             """
         )
     )
+    # CREATE POLICY has no IF NOT EXISTS clause, so guard against an already
+    # existing policy to keep this reconciliation migration idempotent.
     op.execute(
         sa.text(
             """
-            CREATE POLICY rls_org_isolation ON "metrics_staging"
-            USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE tablename = 'metrics_staging'
+                      AND policyname = 'rls_org_isolation'
+                ) THEN
+                    CREATE POLICY rls_org_isolation ON "metrics_staging"
+                    USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid);
+                END IF;
+            END $$;
             """
         )
     )
