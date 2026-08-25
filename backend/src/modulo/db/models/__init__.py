@@ -5,6 +5,7 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.connector_profile import ConnectorProfile
 from modulo.db.models.cost_component import CostComponent, CostComponentKind
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.environment_profile import EnvironmentProfile
@@ -100,6 +101,7 @@ __all__ = [
     "ChatSession",
     "CompositeTemplate",
     "ConnectorInstance",
+    "ConnectorProfile",
     "CostComponent",
     "CostComponentKind",
     "DeletedDefault",

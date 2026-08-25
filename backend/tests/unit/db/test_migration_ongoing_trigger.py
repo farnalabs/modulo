@@ -33,7 +33,7 @@ from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0142_merge_heads_add_fk_indexes"
+_HEAD_MIGRATION = "0143_rest_connector_profile"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 

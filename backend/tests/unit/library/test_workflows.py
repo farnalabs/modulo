@@ -46,6 +46,7 @@ VALID_CONNECTOR_BINDING_TYPES: set[str] = {
     "observability",
     "infrastructure",
     "automation",
+    "integration",
 }
 
 
