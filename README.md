@@ -27,6 +27,10 @@
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo&amp;metric=security_rating" alt="Security"/></a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/dashboard-screenshot.png" width="960" alt="Modulo dashboard showing pipelines, runs, and spend overview"/>
+</p>
+
 > [!WARNING]
 > **Alpha software.** Modulo is under active development. Interfaces, database
 > migrations, configuration, and deployment procedures may change. Evaluate it
