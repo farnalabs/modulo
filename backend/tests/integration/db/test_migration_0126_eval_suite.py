@@ -155,8 +155,10 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     db_name = f"eval_suite_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
-        # template0 is always present and empty, so the new database starts
-        # with no inherited tables regardless of template1's state.
+        # Clone template0 (always empty) rather than the default template1,
+        # which in CI can already carry the modulo schema. A non-empty clone
+        # would make ``command.upgrade(PREV_REV)`` recreate tables and fail with
+        # ``DuplicateTable: relation "library_sync_state" already exists``.
         await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
 
