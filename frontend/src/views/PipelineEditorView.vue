@@ -1584,6 +1584,8 @@ async function saveEdgeConfig() {
         max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
         routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
         hitl_gate_config: buildHitlGateConfig(),
+        source_port: e.source_port || 'out',
+        target_port: e.target_port || 'in',
       }
     }
     return {
@@ -1593,6 +1595,8 @@ async function saveEdgeConfig() {
       edge_type: e.edge_type || 'normal',
       condition_expression: e.condition_expression || null,
       hitl_gate_config: e.hitl_gate_config || null,
+      source_port: e.source_port || 'out',
+      target_port: e.target_port || 'in',
     }
   })
 
@@ -1911,6 +1915,8 @@ async function saveGraph() {
           max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
           routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
           hitl_gate_config: e.hitl_gate_config || null,
+          source_port: e.source_port || 'out',
+          target_port: e.target_port || 'in',
         })),
       },
       signal,

@@ -35,12 +35,18 @@ from modulo.core.pipeline_engine.node_runner import (
     make_node_fn,
     make_sandbox_agent_fn,
 )
+from modulo.core.pipeline_engine.port_resolver import (
+    synthesize_node_ports,
+)
 
 # Cache key: (pipeline_id, snapshot_id, pipeline_node_timeout_seconds). The
 # third element matters because the compiled graph bakes the effective per-node
 # timeout in — without it, PATCHing node_timeout_seconds would be a no-op until
-# LRU eviction/restart.
-CacheKey = tuple[uuid.UUID, uuid.UUID, int]
+# LRU eviction/restart. The fourth element is a deterministic structural hash of
+# the graph's port topology (FAR-416 / F1): it forces a recompile when ports or
+# node types change, even though the (pipeline_id, snapshot_id, timeout) triple
+# is unchanged.
+CacheKey = tuple[uuid.UUID, uuid.UUID, int, str]
 
 # OrderedDict-based LRU cache. Accessing an entry moves it to the end;
 # when full, the least-recently-used entry (first in order) is evicted.
@@ -57,18 +63,21 @@ def get_or_compile(
     factory: Callable[[], Any],
     *,
     pipeline_node_timeout_seconds: int = 300,
+    graph_struct_hash: str = "",
 ) -> Any:
     """Return cached compiled graph or call factory() and cache the result.
 
     The cache key includes ``pipeline_node_timeout_seconds`` because the
     compiled graph embeds the effective per-node timeout (the pipeline value is
     used for every node with a null ``timeout_seconds``). Keying on it means a
-    PATCH to the pipeline setting takes effect immediately.
+    PATCH to the pipeline setting takes effect immediately. ``graph_struct_hash``
+    (FAR-416 / F1) folds the port topology into the key so a port change forces
+    a fresh compile rather than serving a stale cached graph.
 
     Uses a per-key lock so concurrent calls for the same uncached key
     compile only once.
     """
-    key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds)
+    key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
@@ -662,7 +671,11 @@ def build_graph_from_json(
     state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 
-    nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
+    # FAR-416 (FAR-402 F1): lazy backfill. Synthesize default out/in ports for
+    # legacy (port-less) nodes at load/first-compile. Ports are ADDITIVE metadata
+    # over the flat run_context/artifact dict — the runtime still reads/writes
+    # the flat dict unchanged; this only ensures every node has a port model.
+    nodes: list[dict[str, Any]] = [synthesize_node_ports(n) for n in graph_json.get("nodes", [])]
     edges: list[dict[str, Any]] = graph_json.get("edges", [])
 
     if not nodes:

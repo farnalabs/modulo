@@ -12844,6 +12844,18 @@ export interface components {
              * @description JMESPath expression for conditional edge routing. Evaluated against pipeline state; if truthy, routes to target.
              */
             condition_expression?: string | null;
+            /**
+             * Source Port
+             * @description Output port on the source node this edge originates from.
+             * @default out
+             */
+            source_port: string;
+            /**
+             * Target Port
+             * @description Input port on the target node this edge delivers into.
+             * @default in
+             */
+            target_port: string;
         };
         /** PipelineGraphNode */
         PipelineGraphNode: {
@@ -12981,6 +12993,20 @@ export interface components {
              * @description Filesystem detector: globs of sandbox paths whose change counts as activity.
              */
             watch_globs?: string[];
+            /**
+             * Inputs
+             * @description Input ports. Each entry: {port: str, schema_ref?: str}. None => backfilled with a single default 'in' port at compile time.
+             */
+            inputs?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Outputs
+             * @description Output ports. Each entry: {port: str, schema_ref?: str}. None => backfilled with a single default 'out' port at compile time.
+             */
+            outputs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {
