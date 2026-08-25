@@ -21,11 +21,11 @@ _log = logging.getLogger(__name__)
 # be BLOCKED for outbound requests by this SSRF guard — they are destination
 # filters, never connection endpoints, so hardcoding them is required and safe.
 _EXCLUDED_NETWORKS = [
-    ipaddress.ip_network("169.254.0.0/16"),  # AWS/GCP/Azure link-local metadata
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
-    ipaddress.ip_network("198.18.0.0/15"),  # benchmarking
-    ipaddress.ip_network("0.0.0.0/8"),  # current network
-    ipaddress.ip_network("100.100.100.200/32"),  # Aliyun metadata
+    ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR - AWS/GCP/Azure link-local metadata
+    ipaddress.ip_network("100.64.0.0/10"),  # NOSONAR - CGNAT
+    ipaddress.ip_network("198.18.0.0/15"),  # NOSONAR - benchmarking
+    ipaddress.ip_network("0.0.0.0/8"),  # NOSONAR - current network
+    ipaddress.ip_network("100.100.100.200/32"),  # NOSONAR - Aliyun metadata
 ]
 
 # Configurable allowlist for self-hosted deployments on private networks.
