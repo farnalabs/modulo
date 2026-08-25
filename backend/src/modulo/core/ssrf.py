@@ -375,7 +375,10 @@ def _validate_literal_ip(decoded: str, extra_allow: tuple[Network, ...] = ()) ->
 
     Returns False when ``decoded`` is a hostname (not a literal IP), signalling
     that the caller must DNS-resolve it. Raises ValueError for blocked literal
-    IPs (fail-closed).
+    IPs (fail-closed). Non-canonical IP literal encodings (decimal/hex integers,
+    mixed-base dotted strings) are rejected earlier in ``_parse_url_target`` via
+    ``_reject_noncanonical_ip_literal``, so ``decoded`` here is always a
+    canonical ``ipaddress``-parseable literal.
     """
     try:
         ip = ipaddress.ip_address(decoded)

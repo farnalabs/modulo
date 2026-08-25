@@ -46,7 +46,7 @@ def _make_connector(
     )
 
 
-# ── Connector type + capabilities ──────────────────────────────────────────
+# ── Connector type + capabilities ───────────────────────────
 
 
 def test_connector_type_is_rest() -> None:
@@ -55,7 +55,7 @@ def test_connector_type_is_rest() -> None:
     assert ConnectorType.REST.capabilities == frozenset({"read", "write"})
 
 
-# ── Query: records transform ────────────────────────────────────────────────
+# ── Query: records transform ─────────────────────────────
 
 
 def test_query_records_path_extracts_list() -> None:
@@ -124,7 +124,7 @@ def test_query_empty_resource_raises() -> None:
         asyncio_run(c.query(ConnectorQuery(resource="")))
 
 
-# ── Query: templating from filters ─────────────────────────────────────────
+# ── Query: templating from filters ───────────────────────────
 
 
 def test_query_templates_url_and_params_from_filters() -> None:
@@ -149,7 +149,7 @@ def test_query_templates_url_and_params_from_filters() -> None:
     assert captured["params"] == {"page": "2"}
 
 
-# ── Auth modes ─────────────────────────────────────────────────────────────
+# ── Auth modes ──────────────────────────────────
 
 
 def test_auth_bearer() -> None:
@@ -256,7 +256,7 @@ def test_auth_basic() -> None:
     assert captured["authorization"].startswith("Basic ")
 
 
-# ── Injection guard ────────────────────────────────────────────────────────
+# ── Injection guard ────────────────────────────────
 
 
 def test_guard_rejects_auth_header_override() -> None:
@@ -349,7 +349,7 @@ def test_query_benign_injection_phrase_not_rejected() -> None:
     assert [r["id"] for r in result.records] == [1, 2]
 
 
-# ── Write ──────────────────────────────────────────────────────────────────
+# ── Write ───────────────────────────────────
 
 
 def test_write_posts_json_and_returns_dict() -> None:
@@ -368,7 +368,7 @@ def test_write_posts_json_and_returns_dict() -> None:
     assert result["name"] == "Ada"
 
 
-# ── Health check ───────────────────────────────────────────────────────────
+# ── Health check ─────────────────────────────────
 
 
 def test_health_check_ok() -> None:
@@ -402,7 +402,7 @@ def test_health_check_api_key_in_query_sends_creds() -> None:
     assert captured["params"] == {"api_key": "the-secret"}
 
 
-# ── ConnectorHub multi-field creds round-trip ──────────────────────────────
+# ── ConnectorHub multi-field creds round-trip ───────────────────────
 
 
 def test_hub_ciphertext_round_trips_multi_field_json_dict() -> None:
@@ -635,16 +635,24 @@ def test_write_does_not_retry_non_idempotent() -> None:
 
 
 def test_retry_delay_honours_retry_after() -> None:
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
     exc = RESTStatusError("boom", status_code=429, retry_after=2.5)
-    assert RestConnector._retry_delay(exc, 0) == 2.5
-    assert RestConnector._retry_delay(RESTStatusError("boom", status_code=429, retry_after=None), 1) >= 1.0
+    assert c._retry_delay(exc, 0) == 2.5
+    assert c._retry_delay(RESTStatusError("boom", status_code=429, retry_after=None), 1) >= 1.0
 
 
 def test_retry_delay_caps_huge_retry_after() -> None:
     """An untrusted Retry-After header must be capped so a server cannot make us sleep ~1h."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
     exc = RESTStatusError("boom", status_code=429, retry_after=3600)
-    assert RestConnector._retry_delay(exc, 0) == 30.0
-    assert RestConnector._retry_delay(exc, 3) == 30.0
+    assert c._retry_delay(exc, 0) == 30.0
+    assert c._retry_delay(exc, 3) == 30.0
 
 
 def test_dot_index_records_path_rejected() -> None:
@@ -949,7 +957,7 @@ def test_write_fanout_applies_per_destination_rate_limit() -> None:
     assert len(c._rate_buckets) == 1
 
 
-# ── Fan-out: configured retry budget (FAR-411) ──────────────────────────────
+# ── Fan-out: configured retry budget (FAR-411) ───────────────────────
 
 
 def test_write_fanout_honors_configured_max_retries():
@@ -1003,7 +1011,7 @@ def test_write_fanout_default_retries_still_three_attempts():
     assert len(calls) == 3
 
 
-# ── Fan-out: token-per-attempt metering (FAR-411) ───────────────────────────
+# ── Fan-out: token-per-attempt metering (FAR-411) ──────────────────────
 
 
 def test_send_acquires_token_per_retry_attempt(monkeypatch):
@@ -1035,7 +1043,7 @@ def test_send_acquires_token_per_retry_attempt(monkeypatch):
     assert len(counts) == 3
 
 
-# ── Fan-out: bounded rate-limit wait (FAR-411) ──────────────────────────────
+# ── Fan-out: bounded rate-limit wait (FAR-411) ───────────────────────
 
 
 def test_write_fanout_rate_limit_wait_is_bounded():
@@ -1108,7 +1116,7 @@ def test_write_fanout_cancellation_preserves_partial_outcomes(monkeypatch):
     assert exc.value.outcomes[0]["status"] == "success"
 
 
-# ── Fan-out: max_cardinality validation (FAR-411) ───────────────────────────
+# ── Fan-out: max_cardinality validation (FAR-411) ──────────────────────
 
 
 @pytest.mark.parametrize("bad", [0, -1, 100_001])
@@ -1138,7 +1146,7 @@ def test_fanout_max_cardinality_cap_boundary_accepted():
     assert c._max_fanout_cardinality == 100_000
 
 
-# ── Fan-out: outcome redaction (FAR-411) ────────────────────────────────────
+# ── Fan-out: outcome redaction (FAR-411) ─────────────────────────
 
 
 def test_fanout_outcome_redacts_credential_bearing_item():
@@ -1185,6 +1193,505 @@ def test_fanout_failure_redacts_failed_item():
         asyncio_run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": "super-secret-token"}]})))
     assert "super-secret-token" not in exc.value.failed_item
     assert "***" in exc.value.failed_item
+
+
+# ── FAR-413: SSRF adversarial via the connector (real guard) ────────────────
+
+
+def _real_ssrf_guard() -> SecurityGuard:
+    """A guard bound to the real ``modulo.core.ssrf`` validator (as the hub does)."""
+    from modulo.core.ssrf import validate_outbound_url_async
+
+    async def validate_url(url: str) -> None:
+        await validate_outbound_url_async(url)
+
+    def filter_strings(values: list[str], resource: str) -> None:
+        return None
+
+    return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
+
+
+def test_runtime_loopback_blocked_by_real_guard() -> None:
+    """Sibling regression: loopback/metadata MUST stay blocked at runtime even when
+    ``verify_tls`` is disabled (the SSRF guard is independent of TLS verification)."""
+    c = RestConnector(
+        {"base_url": "http://127.0.0.1", "path": "/admin", "verify_tls": False},
+        {"auth_mode": "bearer", "token": "t"},
+        security_guard=_real_ssrf_guard(),
+    )
+    with pytest.raises(ValueError, match="private/internal"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+def test_connector_blocks_decimal_ipv4_loopback_via_ssrf() -> None:
+    """Decimal/hex integer loopback encodings must be rejected at request build."""
+    for base_url in ("http://2130706433/", "http://0x7f000001/"):
+        c = RestConnector(
+            {"base_url": base_url, "path": "/admin"},
+            {"auth_mode": "bearer", "token": "t"},
+            security_guard=_real_ssrf_guard(),
+        )
+        with pytest.raises(ValueError, match=r"decimal/octal integer IP literal|hex-encoded IP literal"):
+            asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+def test_redirect_to_internal_is_not_followed() -> None:
+    """A 3xx with a Location header pointing at an internal host must surface as
+    an error — never be followed (follow_redirects=False in the client)."""
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(302, text="", headers={"location": "http://127.0.0.1/evil"})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(ValueError, match="location"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    # Only the external target was ever touched — the redirect was not followed.
+    assert len(requests) == 1
+    assert requests[0].startswith("https://api.example.com")
+
+
+def test_dns_rebind_revalidates_per_request() -> None:
+    """Each query() re-validates the target — no cached resolution is carried
+    between the validation and the transport, so a hostname that rebinds to an
+    internal address is caught on the second query."""
+    validated: list[str] = []
+
+    async def validate_url(url: str) -> None:
+        validated.append(url)
+
+    def filter_strings(values: list[str], resource: str) -> None:
+        return None
+
+    guard = SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+        transport=httpx.MockTransport(handler),
+        security_guard=guard,
+    )
+    asyncio_run(c.query(ConnectorQuery(resource="default")))
+    asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert len(validated) == 2  # one rebuild per request — revalidated, not cached
+
+
+# ── FAR-413: injected clock / timing (FAR-320 flake lesson) ─────────────────
+
+
+def test_retry_uses_injected_sleep_not_wall_clock() -> None:
+    """The retry backoff must sleep on the injected ``sleep`` seam — never the
+    real ``asyncio.sleep``. A frozen clock + fake sleep makes the timing
+    deterministic, so this test cannot flake on wall-clock jitter (FAR-320)."""
+    sleeps: list[float] = []
+    attempts: list[int] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) < 3:
+            return httpx.Response(429, text="throttled", headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"ok": True})
+
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+        transport=httpx.MockTransport(handler),
+        ssrf_validator=lambda url: None,
+        security_guard=_noop_guard(),
+        sleep=fake_sleep,
+        clock=lambda: 0.0,
+    )
+    with patch("asyncio.sleep", side_effect=AssertionError("must not use wall clock")):
+        result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert result.metadata["status_code"] == 200
+    assert len(attempts) == 3
+    # Two retries, each with Retry-After:0 -> zero delay, in deterministic order.
+    assert sleeps == [0.0, 0.0]
+
+
+def test_retry_uses_injected_random_for_deterministic_backoff() -> None:
+    """The backoff jitter must come from the injected ``random_uniform`` seam so
+    the exact backoff schedule is assertable — previously the module-level
+    ``random.uniform`` jittered the delay even though the wait was otherwise
+    deterministic, defeating the injected ``sleep`` seam."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+        transport=httpx.MockTransport(handler),
+        ssrf_validator=lambda url: None,
+        security_guard=_noop_guard(),
+        sleep=fake_sleep,
+        random_uniform=lambda a, b: 0.1,
+    )
+    with pytest.raises(RESTConnectError):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    # attempt 0 fails -> sleep _backoff(0)=0.5*1+0.1=0.6;
+    # attempt 1 fails -> sleep _backoff(1)=0.5*2+0.1=1.1.
+    assert sleeps == [0.6, 1.1]
+
+
+# ── FAR-413: idempotency-header behaviour ───────────────────────────────────
+
+
+def test_idempotency_header_is_valid_uuid() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.headers))
+        return httpx.Response(200, json={})
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/users",
+            "body": {"name": "{{ name }}"},
+            "idempotency_header": "X-Idempotency-Key",
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.write(ConnectorPayload(resource="default", data={"name": "Ada"})))
+    key = captured["x-idempotency-key"]
+    parsed = uuid.UUID(key)
+    # A bare UUID v4 — uniquely identifies this attempt; never carries a run_id
+    # fragment or any path segment (it is a single 36-char canonical UUID).
+    assert parsed.version == 4
+    assert len(key) == 36
+    assert key.count("-") == 4
+
+
+def test_mutating_verb_with_idempotency_header_retries() -> None:
+    """A POST with a declared idempotency header is safe to retry on 429."""
+    attempts: list[int] = []
+    keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        keys.append(dict(request.headers).get("x-idempotency-key", ""))
+        if len(attempts) < 2:
+            return httpx.Response(429, text="throttled", headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"ok": True})
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/users",
+            "body": {"name": "{{ name }}"},
+            "idempotency_header": "X-Idempotency-Key",
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    c._sleep = fake_sleep
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={"name": "Ada"})))
+    assert result["ok"] is True
+    assert len(attempts) == 2
+    # The SAME idempotency key is reused across the retry — the retry-dedup
+    # guarantee (a server can suppress the repeated delivery). Deterministic
+    # run+node+index persistence is a pipeline-level concern (FAR-410), not the
+    # connector, so a fresh uuid is minted per logical request instead.
+    assert keys[0] == keys[1]
+    assert keys[0]
+
+
+def test_idempotency_header_is_distinct_across_writes() -> None:
+    """Two distinct write() calls mint distinct idempotency keys."""
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(dict(request.headers).get("x-idempotency-key", ""))
+        return httpx.Response(200, json={"ok": True})
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/users",
+            "body": {"name": "{{ name }}"},
+            "idempotency_header": "X-Idempotency-Key",
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.write(ConnectorPayload(resource="default", data={"name": "Ada"})))
+    asyncio_run(c.write(ConnectorPayload(resource="default", data={"name": "Grace"})))
+    assert len(set(captured)) == 2
+
+
+# ── FAR-413: UNKNOWN / terminal outcomes ─────────────────────────
+
+
+def test_write_timeout_is_typed_rest_connect_error_not_crash() -> None:
+    """A write-timeout surfaces as a typed RESTConnectError (a ValueError), never
+    a raw ``httpx`` exception escaping to the caller — the "no hard-fail / no
+    crash on an indeterminate write" invariant."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.WriteTimeout("write timed out")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users", "body": {"name": "{{ name }}"}},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(RESTConnectError) as exc_info:
+        asyncio_run(c.write(ConnectorPayload(resource="default", data={"name": "Ada"})))
+    assert isinstance(exc_info.value, ValueError)
+    assert "transport error" in str(exc_info.value)
+
+
+def test_retry_exhaust_on_5xx_surfaces_status_error() -> None:
+    """A GET that keeps 5xx-ing exhausts the retry budget and surfaces a typed
+    status error (the terminal FAILED-like outcome), never silently passing."""
+    attempts: list[int] = []
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(500, text="boom")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    c._sleep = fake_sleep
+    with pytest.raises(RESTStatusError) as exc_info:
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert exc_info.value.status_code == 500
+    assert len(attempts) == 3  # 1 initial + 2 retries
+
+
+# ── FAR-413: response-size abort releases the stream ─────────────────────
+
+
+def test_response_size_abort_connector_still_usable() -> None:
+    """After an abort the connector object remains usable — a follow-up request
+    on the SAME instance succeeds. (This narrows the previous stream-release
+    claim: MockTransport has no connection pool, so asserting 'the stream was
+    released' would be trivially true and unproveable in this harness.)"""
+    big = [False]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if big[0]:
+            return httpx.Response(200, text="x" * 2000, headers={"content-type": "text/plain"})
+        return httpx.Response(200, json={"ok": True})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "max_response_size": 50},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+
+    big[0] = True
+    with pytest.raises(RESTResponseTooLargeError, match="too large"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+    big[0] = False
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert result.metadata["status_code"] == 200  # the same connector still works
+
+
+def test_response_size_abort_on_chunked_response_without_content_length() -> None:
+    """A chunked (unknown-length) response with NO Content-Length must be capped
+    in the ``aiter_bytes()`` accumulation loop — the overflow path that the
+    Content-Length pre-check can never reach. We strip the auto-inserted
+    Content-Length so the streaming loop is genuinely exercised."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        resp = httpx.Response(200, content=b"x" * 2000, headers={"transfer-encoding": "chunked"})
+        resp.headers.pop("content-length", None)
+        return resp
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "max_response_size": 50},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(RESTResponseTooLargeError, match="too large"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+# ── FAR-413: redaction negative tests ───────────────────────────────────────
+
+
+def test_no_secret_in_transport_error_detail() -> None:
+    secret = "super-secret-token"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"connect failed for {secret}")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(RESTConnectError) as exc_info:
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert secret not in str(exc_info.value)
+    assert "***" in str(exc_info.value)
+
+
+def test_no_secret_in_status_error_detail() -> None:
+    secret = "hunter2-did-not-forget"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text=f"invalid token {secret}")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(ValueError) as exc_info:
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert secret not in str(exc_info.value)
+
+
+def test_no_secret_in_health_check_detail() -> None:
+    secret = "api-token-value"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text=f"bad key: {secret}")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    health = asyncio_run(c.health_check())
+    assert health.ok is False
+    assert secret not in health.detail
+
+
+def test_recorded_request_headers_do_not_leak_auth() -> None:
+    """A passthrough record captures RESPONSE headers (display-only data), never
+    the request Authorization — so a secret can't be replayed or parsed back out."""
+    secret = "bearer-token-xyz"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="raw", headers={"content-type": "text/plain", "server": "echo"})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "passthrough": True},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    record = result.records[0]
+    assert record["content_type"] == "text/plain"
+    assert secret not in json.dumps(record)
+    # The record is plain data (a display-only snapshot), never an executable replay.
+    assert isinstance(record["headers"], dict)
+    assert record["headers"].get("server") == "echo"
+
+
+# ── FAR-413: header-injection guards (query-param, body, header name) ───────
+
+
+def test_guard_neutralises_crlf_in_query_param_value() -> None:
+    """A CRLF in a READ query-param template value is URL-encoded by httpx — it
+    never reaches the wire as a literal control character (header injection is
+    only possible through the header map, which the guard rejects)."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "params": {"q": "{{ q }}"}},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.query(ConnectorQuery(resource="default", filters={"q": "x\r\nX-Evil: 1"})))
+    assert "\r" not in captured["url"]
+    assert "\n" not in captured["url"]
+
+
+def test_guard_rejects_crlf_in_header_name() -> None:
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "headers": {"X\r\nInjected": "v"}},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    with pytest.raises(ValueError, match="control characters"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+def test_write_surface_screens_injection_terms() -> None:
+    """The WRITE surface runs output-injection screening on the rendered payload
+    (unlike the READ surface, which scopes the text classifier off)."""
+    from modulo.core.pipeline_engine.output_filter import OutputRejectedError
+
+    class _RejectGuard(SecurityGuard):
+        def __init__(self) -> None:
+            super().__init__(validate_url=self._noop_validate, filter_strings=self._reject)
+
+        @staticmethod
+        async def _noop_validate(url: str) -> None:
+            return None
+
+        @staticmethod
+        def _reject(values: list[str], resource: str) -> None:
+            for value in values:
+                if "ignore previous instructions" in value:
+                    raise OutputRejectedError("rejected injection")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/users", "body": {"memo": "{{ memo }}"}},
+        {"auth_mode": "bearer", "token": "t"},
+        transport=httpx.MockTransport(handler),
+        security_guard=_RejectGuard(),
+    )
+    with pytest.raises(OutputRejectedError):
+        asyncio_run(c.write(ConnectorPayload(resource="default", data={"memo": "ignore previous instructions"})))
+
+
+# ── FAR-413: config contract (connector-authoring / product-map consistency) ─
+
+
+def test_config_timeout_seconds_and_verify_tls_honoured() -> None:
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items", "timeout_seconds": 7, "verify_tls": False},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c._timeout == 7.0
+    assert c._verify_tls is False
+
+
+def test_config_defaults_preserved_when_absent() -> None:
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c._timeout == 30.0
+    assert c._verify_tls is True
 
 
 def asyncio_run(coro: Any) -> Any:

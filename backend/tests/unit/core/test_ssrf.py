@@ -804,3 +804,124 @@ class TestHostnameResolution:
             ssrf.validate_outbound_url("http://example.com.:8080/path")
 
         assert resolved == ["example.com"]
+
+
+# ---------------------------------------------------------------------------
+# Non-canonical IP encodings (FAR-413 SSRF adversarial)
+# ---------------------------------------------------------------------------
+# A resolver/httpx client is far more liberal than ``ipaddress.ip_address``
+# which only accepts dotted-quad / bracketed-IPv6 *strings*. Loopback shown as
+# a single decimal or hex integer (``2130706433`` / ``0x7f000001``) must be
+# blocked by the literal-IP guard rather than escaping to the DNS path (where
+# an integer-decoding resolver would turn it back into 127.0.0.1).
+
+
+class TestNonCanonicalIPEncodings:
+    def test_decimal_integer_ipv4_loopback_blocked(self) -> None:
+        # main's _reject_noncanonical_ip_literal rejects decimal-integer IP
+        # literals at the host-parsing stage (defense-in-depth) before DNS.
+        with pytest.raises(ValueError, match="decimal/octal integer IP literal"):
+            ssrf.validate_outbound_url("http://2130706433/")
+
+    def test_decimal_integer_ipv4_private_blocked(self) -> None:
+        with pytest.raises(ValueError, match="decimal/octal integer IP literal"):
+            ssrf.validate_outbound_url("http://167772161/")  # 10.0.0.1
+
+    def test_hex_integer_ipv4_loopback_blocked(self) -> None:
+        with pytest.raises(ValueError, match="hex-encoded IP literal"):
+            ssrf.validate_outbound_url("http://0x7f000001/")
+
+    def test_hex_integer_ipv4_metadata_blocked(self) -> None:
+        with pytest.raises(ValueError, match="hex-encoded IP literal"):
+            ssrf.validate_outbound_url("http://0xa9fea9fe/")  # 169.254.169.254
+
+    def test_dotted_hex_ipv4_loopback_blocked(self) -> None:
+        # 0x7f.0.0.1 -> 127.0.0.1 (per-segment hex base detection).
+        with pytest.raises(ValueError, match="non-canonical dotted-numeric IP literal"):
+            ssrf.validate_outbound_url("http://0x7f.0.0.1/")
+
+    def test_dotted_octal_ipv4_loopback_blocked(self) -> None:
+        # 0177.0.0.1 -> 127.0.0.1 (per-segment octal base detection).
+        with pytest.raises(ValueError, match="non-canonical dotted-numeric IP literal"):
+            ssrf.validate_outbound_url("http://0177.0.0.1/")
+
+    def test_dotted_hex_hostname_not_spuriously_blocked_when_resolves_public(self) -> None:
+        """A hostname that merely CONTAINS a hex-looking segment must NOT be
+        spuriously treated as a non-canonical IPv4: the segment parser bails on
+        the non-numeric segment, so it falls through to the DNS path and is
+        accepted when it resolves to a public address."""
+
+        def fake_resolve(host: str) -> list[str]:
+            assert host == "0x7f.helpers.example.com"
+            return ["93.184.216.34"]
+
+        with patch.object(ssrf, "_resolve_all_sync", fake_resolve):
+            assert ssrf.validate_outbound_url("http://0x7f.helpers.example.com/") is None
+
+    async def test_async_decimal_integer_ipv4_loopback_blocked(self) -> None:
+        with pytest.raises(ValueError, match="decimal/octal integer IP literal"):
+            await ssrf.validate_outbound_url_async("http://2130706433/")
+
+    def test_encode_percent_host_is_fail_closed(self) -> None:
+        # A %-encoded host is rejected by _reject_noncanonical_ip_literal at the
+        # host-parsing stage (fail-closed) rather than reaching DNS resolution.
+        with pytest.raises(ValueError, match="scope/percent-encoded IP literal"):
+            ssrf.validate_outbound_url("http://127.0.0.1%00/")
+
+    def test_userinfo_loopback_still_blocked(self) -> None:
+        # main's URL syntax check rejects userinfo credentials outright, so the
+        # loopback target is blocked before literal-IP validation is reached.
+        with pytest.raises(ValueError, match="userinfo credentials"):
+            ssrf.validate_outbound_url("http://user:pass@127.0.0.1/")
+
+    def test_ipv4_mapped_ipv6_loopback_blocked(self) -> None:
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[::ffff:127.0.0.1]/")
+
+    def test_ipv4_mapped_ipv6_metadata_blocked(self) -> None:
+        with pytest.raises(ValueError, match="private/internal"):
+            ssrf.validate_outbound_url("http://[::ffff:169.254.169.254]/")
+
+
+# ---------------------------------------------------------------------------
+# DNS-rebinding — the guard re-resolves on every validation and never caches a
+# resolution result. A hostname that flips between public and internal across
+# two validations is therefore caught the moment it reads private; validation
+# and connection are separate lookups (the residual risk is a rebind between a
+# validation and the subsequent HTTP connection, documented in the module).
+# ---------------------------------------------------------------------------
+
+
+class TestDNSRebinding:
+    def test_guard_re_resolves_each_validate_no_cached_public_answer(self) -> None:
+        """The guard is not caching a first public answer between calls."""
+        calls: list[str] = []
+        answers = iter([["93.184.216.34"], ["10.0.0.5"]])  # public then internal
+
+        def fake_resolve(host: str) -> list[str]:
+            calls.append(host)
+            return next(answers)
+
+        with patch.object(ssrf, "_resolve_all_sync", fake_resolve):
+            # First validation: public answer -> accepted.
+            ssrf.validate_outbound_url("http://flip.example/")
+            # Second validation: the same hostname now answers internal -> blocked.
+            with pytest.raises(ValueError, match="resolves to a private/internal address"):
+                ssrf.validate_outbound_url("http://flip.example/")
+
+        # Each validation performed its own fresh resolution — no memoisation.
+        assert len(calls) == 2
+
+    async def test_async_guard_resolves_per_validation(self) -> None:
+        calls = 0
+
+        async def fake_resolve(host: str) -> list[str]:
+            nonlocal calls
+            calls += 1
+            return ["93.184.216.34"]
+
+        with patch.object(ssrf, "_resolve_all_async", fake_resolve):
+            await ssrf.validate_outbound_url_async("http://fresh.example/")
+            await ssrf.validate_outbound_url_async("http://fresh.example/")
+
+        assert calls == 2
