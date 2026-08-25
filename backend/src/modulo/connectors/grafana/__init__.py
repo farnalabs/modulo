@@ -14,9 +14,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-
-# Type aliases used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
+from modulo.types import _DICT_STR_ANY
 
 
 class GrafanaConnector(ConnectorBase):

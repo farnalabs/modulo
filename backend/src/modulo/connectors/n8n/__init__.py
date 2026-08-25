@@ -15,10 +15,10 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _DICT_STR_ANY
 
-# Repeated REST path and cast type alias (S1192).
+# Repeated REST path (S1192).
 _WORKFLOWS_PATH = "/rest/workflows"
-type _DICT_STR_ANY = dict[str, Any]
 
 
 class N8NConnector(ConnectorBase):

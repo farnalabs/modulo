@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _DICT_STR_ANY
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -23,8 +24,6 @@ GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 _ODATA_SELECT = "$select"
 _ODATA_FILTER = "$filter"
 _ODATA_ORDERBY = "$orderby"
-# Forward-ref type alias used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
 
 
 class MicrosoftTeamsConnector(ConnectorBase):

@@ -14,11 +14,9 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _DICT_STR_ANY
 
 _DISCORD_API = "https://discord.com/api/v10"
-
-# Type aliases used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
 
 
 class DiscordConnector(ConnectorBase):

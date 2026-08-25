@@ -15,12 +15,12 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _DICT_STR_ANY
 
 _BASE = "https://api.opsgenie.com/v2"
 
-# Repeated REST path and cast type alias (S1192).
+# Repeated REST path (S1192).
 _ALERTS_PATH = "/alerts"
-type _DICT_STR_ANY = dict[str, Any]
 
 
 def _paging_total_count(body: object) -> int | None:

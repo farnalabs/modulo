@@ -16,11 +16,9 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _LIST_DICT_STR_ANY
 
 _BUILDKITE_API = "https://api.buildkite.com/v2"
-
-# Type alias used in ``cast`` for response payloads (S1192).
-type _LIST_DICT_STR_ANY = list[dict[str, Any]]
 
 _STATUS_MAP: dict[str, CIRunStatus] = {
     "scheduled": CIRunStatus.QUEUED,

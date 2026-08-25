@@ -16,11 +16,9 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.types import _DICT_STR_ANY
 
 _BASE = "https://api.pagerduty.com"
-
-# Type alias used in ``cast`` for response payloads (S1192).
-type _DICT_STR_ANY = dict[str, Any]
 
 
 def _paging_total(body: object) -> int | None:
