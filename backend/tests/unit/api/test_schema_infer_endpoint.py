@@ -497,7 +497,7 @@ def test_infer_schema_emits_audit_event_with_tool_source_and_model(client: TestC
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -510,9 +510,10 @@ def test_infer_schema_emits_audit_event_with_tool_source_and_model(client: TestC
     assert resp.status_code == 200
     mock_append.assert_awaited_once()
     call = mock_append.await_args
-    assert call.kwargs["org_id"] == _ORG_ID
     assert call.kwargs["event_type"] == "schema_inference_completed"
-    payload = call.kwargs["payload_json"]
+    assert call.kwargs["resource_type"] == "connector_instance"
+    assert call.kwargs["resource_id"] == _CONNECTOR_ID
+    payload = call.kwargs["payload"]
     assert payload["connector_name"] == "Test Connector"
     assert payload["connector_type"] == "github"
     assert payload["resource"] == "issues"
@@ -545,7 +546,7 @@ def test_infer_schema_response_does_not_contain_or_persist_sample_records(client
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock),
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -594,7 +595,7 @@ def test_infer_schema_flags_rare_fields_in_response(client: TestClient) -> None:
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock),
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -633,7 +634,7 @@ def test_infer_schema_rare_fields_empty_when_all_fields_common(client: TestClien
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock),
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
