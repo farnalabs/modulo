@@ -76,6 +76,15 @@ def upgrade() -> None:
             """
         )
     )
+    # Guard the policy so this reconciliation migration is re-runnable when the
+    # schema (including the policy) already exists in the target database.
+    op.execute(
+        sa.text(
+            """
+            DROP POLICY IF EXISTS rls_org_isolation ON "metrics_staging"
+            """
+        )
+    )
     op.execute(
         sa.text(
             """
