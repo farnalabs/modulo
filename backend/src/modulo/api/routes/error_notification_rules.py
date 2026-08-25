@@ -202,6 +202,55 @@ async def create_notification_rule(
     return _serialize_rule(rule)
 
 
+def _validate_webhook_tier_for_update(req: ErrorNotificationRuleUpdate, is_team: bool) -> None:
+    if not is_team and (req.action_type == "webhook" or req.webhook_url is not None):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Webhook notification rules require the Team tier",
+        )
+
+
+def _apply_rule_updates(rule: ErrorNotificationRule, req: ErrorNotificationRuleUpdate) -> None:
+    if req.name is not None:
+        rule.name = req.name
+    if req.enabled is not None:
+        rule.enabled = req.enabled
+    if req.condition_level is not None:
+        rule.condition_level = req.condition_level
+    if req.condition_min_count is not None:
+        rule.condition_min_count = req.condition_min_count
+    if req.condition_window_seconds is not None:
+        rule.condition_window_seconds = req.condition_window_seconds
+    if req.action_type is not None:
+        rule.action_type = req.action_type
+    if req.webhook_url is not None:
+        rule.webhook_url = req.webhook_url
+    if req.cooldown_seconds is not None:
+        rule.cooldown_seconds = req.cooldown_seconds
+    rule.updated_at = datetime.now(UTC)
+
+
+def _translate_update_db_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ProgrammingError):
+        _log.exception("error_notification_rules.update_notification_rule")
+        return HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+        )
+    if isinstance(exc, SQLAlchemyError):
+        _log.exception("error_notification_rules.update_notification_rule")
+        _log.warning("error_tracking.update_rule_db_error")
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+        )
+    _log.exception("error_tracking.update_rule_error")
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+    )
+
+
 @router.put(
     "/{rule_id}",
     response_model=ErrorNotificationRuleResponse,
@@ -219,11 +268,7 @@ async def update_notification_rule(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     is_team = plan.feature_enabled("error_tracking")
-    if not is_team and (req.action_type == "webhook" or req.webhook_url is not None):
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Webhook notification rules require the Team tier",
-        )
+    _validate_webhook_tier_for_update(req, is_team)
 
     try:
         async with session.begin():
@@ -240,46 +285,12 @@ async def update_notification_rule(
             if rule is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
 
-            if req.name is not None:
-                rule.name = req.name
-            if req.enabled is not None:
-                rule.enabled = req.enabled
-            if req.condition_level is not None:
-                rule.condition_level = req.condition_level
-            if req.condition_min_count is not None:
-                rule.condition_min_count = req.condition_min_count
-            if req.condition_window_seconds is not None:
-                rule.condition_window_seconds = req.condition_window_seconds
-            if req.action_type is not None:
-                rule.action_type = req.action_type
-            if req.webhook_url is not None:
-                rule.webhook_url = req.webhook_url
-            if req.cooldown_seconds is not None:
-                rule.cooldown_seconds = req.cooldown_seconds
-
-            rule.updated_at = datetime.now(UTC)
+            _apply_rule_updates(rule, req)
             await session.flush()
     except HTTPException:
         raise
-    except ProgrammingError as exc:
-        _log.exception("error_notification_rules.update_notification_rule")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        _log.exception("error_notification_rules.update_notification_rule")
-        _log.warning("error_tracking.update_rule_db_error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
-        ) from exc
     except Exception as exc:
-        _log.exception("error_tracking.update_rule_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
-        ) from exc
+        raise _translate_update_db_error(exc) from exc
 
     return _serialize_rule(rule)
 
