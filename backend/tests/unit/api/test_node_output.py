@@ -426,3 +426,239 @@ class TestMaskOutputValue:
             deep_ref = deep_ref.get("a", {}) if isinstance(deep_ref, dict) else {}
         # Check we stopped recursing; the innermost value was NOT masked
         assert deep_ref.get("api_key") == "deep"
+
+
+class TestMaskOutputValueSecretValues:
+    """FAR-392: value-pattern masking catches secrets regardless of key name."""
+
+    def test_masks_secret_value_under_non_sensitive_key(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = {"result": "the key is AKIAIOSFODNN7EXAMPLE and also sk-Zk9f2Lm8QpXr4Tn6WbVc"}
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result["result"]
+        assert "AKIAIOSFODNN7EXAMPLE" not in result["result"]
+        assert "sk-Zk9f2Lm8QpXr4Tn6WbVc" not in result["result"]
+
+    def test_masks_secret_value_in_free_text(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = "logs show token eyJhbGciOiJIUzI1Ni.eyJzdWIiOiIxMjM0NTY3ODk.wiOWw40dij8"
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result
+        assert "eyJhbGciOiJIUzI1Ni" not in result
+
+    def test_masks_private_key_block(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        key = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD\n-----END RSA PRIVATE KEY-----"
+        value = {"debug": key}
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result["debug"]
+        assert "BEGIN RSA PRIVATE KEY" not in result["debug"]
+
+    def test_masks_connection_string_password(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = {"note": "postgres://app_user:S3cr3tP@ss@db.example.com:5432/app"}
+        result = _mask_output_value(value)
+        # The whole password (including the '@'-separated tail) must be masked.
+        assert "S3cr3tP" not in result["note"]
+        assert "ss" not in result["note"]
+        assert "app_user" in result["note"]
+        assert "db.example.com:5432/app" in result["note"]
+
+    def test_masks_connection_string_password_with_at_in_password(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        # Password itself contains '@' — the greedy capture must consume up to
+        # the FINAL '@' (host separator), not the first one.
+        value = {"note": "postgres://u:pa@ss@host:5432/db"}
+        result = _mask_output_value(value)
+        assert "pa@ss" not in result["note"]
+        assert "host:5432/db" in result["note"]
+
+    def test_masks_connection_string_password_with_colon_slash(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        # Password contains ':' and '/' — must be wholly masked.
+        value = {"note": "mysql://root:P@ass:word!@1.2.3.4/app"}
+        result = _mask_output_value(value)
+        assert "P@ass:word!" not in result["note"]
+        assert "1.2.3.4/app" in result["note"]
+
+    def test_masks_bearer_token_in_free_text(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = "Authorization failed: Bearer ya29.freshtokenvalue1234567890"
+        result = _mask_output_value(value)
+        assert "ya29.freshtokenvalue1234567890" not in result
+        assert SENSITIVE_VALUE_MASK in result
+
+    def test_does_not_overmask_legitimate_content(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = {
+            "summary": "processed 42 records successfully",
+            "url": "https://example.com/page",
+            "contact": "reach us at support@example.com",
+            "port": "http://localhost:8080/health",
+            "score": 3.14,
+        }
+        result = _mask_output_value(value)
+        assert result["summary"] == "processed 42 records successfully"
+        assert result["url"] == "https://example.com/page"
+        assert result["contact"] == "reach us at support@example.com"
+        assert result["port"] == "http://localhost:8080/health"
+        assert result["score"] == pytest.approx(3.14)
+
+    def test_does_not_overmask_host_port_followed_by_email(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        # A ``scheme://host:PORT`` with no credentials, followed later in the SAME
+        # string by an unrelated ``@`` (an email), must keep the benign span
+        # between the port and the email intact. Regression for the greedy
+        # ``(.*)`` capture that wiped everything up to the final ``@``.
+        value = {"note": "curl http://127.0.0.1:8080 health check ok; contact admin@example.com for help"}
+        result = _mask_output_value(value)
+        assert result["note"] == value["note"]
+
+        value2 = {"note": "server at http://localhost:9090; engineer joe@corp.io on call; next deploy 18:00"}
+        result2 = _mask_output_value(value2)
+        assert result2["note"] == value2["note"]
+
+        # A genuine credential-bearing connection string is still masked.
+        secret = {"note": "postgres://u:pa@ss@host:5432/db"}
+        result3 = _mask_output_value(secret)
+        assert "pa@ss" not in result3["note"]
+
+    def test_masks_secret_in_nested_list_item(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = [{"message": "xoxb-1234567890-abcdefghij-klmnopqrstuvwxyz"}]
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result[0]["message"]
+        assert "xoxb-1234567890" not in result[0]["message"]
+
+    def test_masks_fine_grained_github_pat(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        token = "github_pat_" + "A" * 50
+        value = {"log": f"cloned with {token}"}
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result["log"]
+        assert token not in result["log"]
+
+    def test_masks_aws_temp_access_key(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        value = {"log": "temp creds ASIAABCDEFGHIJKLMNOP leaked"}
+        result = _mask_output_value(value)
+        assert SENSITIVE_VALUE_MASK in result["log"]
+        assert "ASIAABCDEFGHIJKLMNOP" not in result["log"]
+
+    def test_does_not_mask_short_github_pat_like_string(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        # github_pat_ with a short (non-secret) suffix must NOT be masked by the
+        # value pattern (it requires 50+ chars after the prefix).
+        value = {"note": "github_pat_11ABC"}
+        result = _mask_output_value(value)
+        assert result["note"] == "github_pat_11ABC"
+
+    def test_does_not_truncate_long_non_secret_string(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # Regression: a long, benign string must be returned in full — the
+        # masking helper must not silently truncate content beyond 5000 chars.
+        long_plain = "plain " + "x" * 8000
+        assert mask_secret_values_in_text(long_plain) == long_plain
+        result = _mask_output_value(long_plain)
+        assert result == long_plain
+        assert len(result) == len(long_plain)
+
+    def test_masks_secret_in_long_string_without_truncating_tail(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # A secret near the start of a long string must be masked while the
+        # trailing benign content is preserved in full.
+        token = "eyJaaa.eyJbbb.ccc"
+        long_value = f"token {token} leaked " + "y" * 8000
+        masked = mask_secret_values_in_text(long_value)
+        assert token not in masked
+        assert masked.endswith("y" * 8000)
+        assert len(masked) == len(long_value) - len(token) + len(SENSITIVE_VALUE_MASK)
+        assert _mask_output_value(long_value) == masked
+
+    def test_masks_private_key_straddling_slice_boundary(self) -> None:
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # A private key whose block begins in one 5000-char slice and ends in the
+        # next must still be masked in full (regression: it was contained by
+        # neither non-overlapping slice and leaked unmasked).
+        key = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD\n-----END RSA PRIVATE KEY-----"
+        straddle = "z" * 4990 + key + "q" * 100
+        masked = mask_secret_values_in_text(straddle)
+        assert "BEGIN RSA PRIVATE KEY" not in masked
+        assert "END RSA PRIVATE KEY" not in masked
+
+    def test_masks_connection_string_straddling_slice_boundary(self) -> None:
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # A connection string beginning near the end of one 5000-char slice must
+        # be masked even though its scheme prefix falls in the previous slice.
+        conn = "postgresql://admin:super%40secret%2Fpass@db.host:5432/x"
+        straddle = "w" * 4995 + conn + "e" * 50
+        masked = mask_secret_values_in_text(straddle)
+        assert "super%40secret" not in masked
+        assert SENSITIVE_VALUE_MASK in masked
+
+    def test_masks_connection_string_password_with_at_in_password_straddling(self) -> None:
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # Regression: a connection-string password that itself contains ``@``
+        # (e.g. ``pa@ss``) must be masked in full even when the string is longer
+        # than the 5000-char ReDoS cap. The bounded window must span to the FINAL
+        # ``@`` (the host separator), not the first — otherwise the password tail
+        # after the first ``@`` leaks unmasked.
+        conn = "postgres://u:pa@ss@host:5432/db"
+        straddle = "w" * 4995 + conn + "e" * 100
+        masked = mask_secret_values_in_text(straddle)
+        assert "pa@ss" not in masked
+        assert "ss@host" not in masked
+        assert SENSITIVE_VALUE_MASK in masked
+
+    def test_masks_redis_connection_string_with_empty_username(self) -> None:
+        from modulo.core.secret_patterns import mask_secret_values_in_text
+
+        # A broker/Redis URL with an empty username (``redis://:PASSWORD@host``)
+        # must still have its password masked — the user segment may be blank.
+        masked = mask_secret_values_in_text("redis://:supersecretpass@host:6379")
+        assert "supersecretpass" not in masked
+        assert SENSITIVE_VALUE_MASK in masked
+
+    def test_masks_private_key_block_longer_than_slice_cap(self) -> None:
+        from modulo.core.secret_patterns import (
+            SECRET_VALUE_REDACT_CHAR_CAP,
+            mask_secret_values_in_text,
+        )
+
+        # A private-key block whose body exceeds the 5000-char ReDoS cap must
+        # still be masked in full. Previously its close delimiter fell outside
+        # the bounded window and the whole block leaked unmasked.
+        key = (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            + ("MIIBOgIBAAJBAKj34GkxFhD" * 200)
+            + ("X" * 4000)
+            + "\n-----END RSA PRIVATE KEY-----"
+        )
+        assert len(key) > SECRET_VALUE_REDACT_CHAR_CAP
+        text = "a" * 1000 + key + "b" * 100
+        masked = mask_secret_values_in_text(text)
+        assert "BEGIN RSA PRIVATE KEY" not in masked
+        assert "END RSA PRIVATE KEY" not in masked
+        # Benign surrounding content is preserved in full (no truncation).
+        assert masked.startswith("a" * 1000)
+        assert masked.endswith("b" * 100)

@@ -31,12 +31,22 @@ from modulo.core.guardrails import GuardrailAction
 from modulo.core.guardrails.config import GuardrailConfigItem, GuardrailDetection, RedactionRule
 from modulo.core.guardrails.policy_pack import PolicyControl, PolicyPack
 
+# CC6.1 — AWS access-key identifiers (AKIA/ASIA prefix) are sourced from the
+# canonical shared list in :mod:`modulo.core.secret_patterns` so the
+# secret-format knowledge is never duplicated or drifted across redaction sites.
+# ``GuardrailDetection`` requires a *string* pattern, so we use the compiled
+# pattern's ``.pattern`` source string rather than the compiled object.
+from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN as _AWS_ACCESS_KEY_RE
+
 # ---------------------------------------------------------------------------
 # Detection patterns (deterministic, linear — no nested quantifiers, no ReDoS)
 # ---------------------------------------------------------------------------
 
 # CC6.1 — AWS access-key identifiers: AKIA/ASIA prefix + 16 uppercase alnum.
-AWS_ACCESS_KEY_PATTERN = r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
+# Core format sourced from the canonical shared list above; word boundaries are
+# added here because the guardrail must not fire on a 21-char string that merely
+# *starts* with a valid key (see test_soc2_pack_detection_patterns...[cc61]).
+AWS_ACCESS_KEY_PATTERN = r"\b" + _AWS_ACCESS_KEY_RE.pattern + r"\b"
 
 # CC6.6 — executable / script content markers: <script> tags, javascript:
 # URI handlers, and the base64 of the DOS MZ/PE header ("TVpQ").

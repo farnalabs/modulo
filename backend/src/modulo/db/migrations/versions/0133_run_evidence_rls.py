@@ -13,7 +13,9 @@ tenant-isolation gap:
   * ENABLE + FORCE ROW LEVEL SECURITY so even the table owner is confined.
   * Add the canonical ``rls_org_isolation`` policy (org-scope USING on
     ``app.organisation_id``), mirroring every other tenant table.
-  * GRANT full DML to ``modulo_app`` (the runtime role).
+  * GRANT full DML to ``modulo_app`` (the runtime role), but only when that role
+    already exists — fresh dev/BDD DBs bootstrap roles *after* alembic runs, so
+    the grant is skipped there (mirrors the guard in 0134_dismissals_org_rls).
 
 ``run_evidence`` already exists, so this is an ALTER (not a ``modulo_migrate``
 ownership ceremony): FORCE RLS is what confines the app/owner role here, which
@@ -39,6 +41,10 @@ _APP_ROLE = "modulo_app"
 _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
 
+def _is_postgres(bind) -> bool:
+    return bind.dialect.name == "postgresql"
+
+
 def _role_exists(bind, role: str) -> bool:
     """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
     return (
@@ -49,9 +55,10 @@ def _role_exists(bind, role: str) -> bool:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if bind.dialect.name != "postgresql":
+    if not _is_postgres(bind):
         return
 
+    app_role = _role_exists(bind, _APP_ROLE)
     op.execute("SET search_path TO public")
 
     # 1. Add the column (nullable first so the backfill can run).
@@ -85,9 +92,9 @@ def upgrade() -> None:
     op.execute(sa.text('ALTER TABLE public."run_evidence" FORCE ROW LEVEL SECURITY'))
     op.execute(sa.text(f'CREATE POLICY rls_org_isolation ON public."run_evidence" USING ({_ORG_SCOPE})'))
 
-    # 5. Runtime role needs DML (skip the GRANT when the role is absent, e.g. a
-    #    fresh dev/BDD database that has not bootstrapped modulo_app yet).
-    if _role_exists(bind, _APP_ROLE):
+    # 5. Runtime role needs DML (only when the role exists — fresher dev/BDD DBs
+    #    bootstrap roles after alembic, so the grant is skipped there).
+    if app_role:
         op.execute(sa.text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON public."run_evidence" TO {_APP_ROLE}'))
 
 
