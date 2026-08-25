@@ -209,11 +209,11 @@ modulo/
 ├── .github/
 │   └── workflows/                # CI/CD pipeline definitions
 ├── docs/
-│   ├── prd.md                    # Product requirements document
 │   ├── adr/                      # Architecture decision records
 │   ├── product-map/              # Feature graph entries (see product-map/README.md)
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
+      (product map: frontend/src/manifest.yaml — feature registry + per-route refs, ADR 008)
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
 ├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability
 └── docker-compose.mariadb.yml    # MariaDB override
@@ -457,7 +457,7 @@ exist in the devtools tooling repo.
    feature graph lives in `docs/product-map/`, keyed by the `features:` registry and
    route `product_map` refs in `frontend/src/manifest.yaml`; see
    `docs/product-map/README.md`)
-5. Update the PRD if your change introduces new behaviour
+5. Update the product map (frontend/src/manifest.yaml) and relevant docs if your change introduces new behaviour
 
 ### Review requirements
 
@@ -466,7 +466,7 @@ exist in the devtools tooling repo.
   - Correctness: tests pass, coverage met
   - Architecture: follows ADRs and import contracts
   - Security: no leaked secrets, input validation, RLS enforcement
-  - Documentation: PRD and product map updated if behaviour changed
+  - Documentation: product map (frontend/src/manifest.yaml) and relevant docs updated if behaviour changed
 
 ### Merge policy
 
