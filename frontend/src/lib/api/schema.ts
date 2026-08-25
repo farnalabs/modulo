@@ -995,6 +995,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/housekeeping/checkpoints/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge Checkpoints
+         * @description Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
+         *
+         *     FAR-432: a terminal run's checkpoint rows are unread after the run finishes
+         *     and dominate DB volume. This releases them for TERMINAL runs older than
+         *     ``max_age_days`` (default ``CHECKPOINT_RETENTION_DAYS`` = 3) while leaving
+         *     the ``runs`` rows intact (outputs, telemetry, classification stay for audit
+         *     + analytics, ADR 020). Never purges a non-terminal / HITL-paused run — an
+         *     ``awaiting_human`` run keeps its interrupt checkpoint so ``resume_run``
+         *     continues the graph instead of re-running side-effectful nodes.
+         *
+         *     Requires ``confirm: true``. Scoped to the caller's organisation (RLS).
+         */
+        post: operations["purge_checkpoints_api_v1_admin_housekeeping_checkpoints_purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -8746,6 +8776,25 @@ export interface components {
             latency_ms?: number | null;
             /** Detail */
             detail?: string | null;
+        };
+        /** CheckpointRetentionPurgeRequest */
+        CheckpointRetentionPurgeRequest: {
+            /** Max Age Days */
+            max_age_days?: number | null;
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
+        };
+        /** CheckpointRetentionPurgeResponse */
+        CheckpointRetentionPurgeResponse: {
+            /** Checkpoints Purged */
+            checkpoints_purged: number;
+            /** Threads Purged */
+            threads_purged: number;
+            /** Bytes Freed */
+            bytes_freed: number;
         };
         /** CircuitBreakerResetResponse */
         CircuitBreakerResetResponse: {
@@ -19086,6 +19135,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleanupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_checkpoints_api_v1_admin_housekeeping_checkpoints_purge_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointRetentionPurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointRetentionPurgeResponse"];
                 };
             };
             /** @description Validation Error */

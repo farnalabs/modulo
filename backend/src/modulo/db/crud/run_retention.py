@@ -43,7 +43,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import bindparam, delete, func, select, text
@@ -60,6 +60,12 @@ _log = logging.getLogger(__name__)
 # size (runs fetched per page). Matches crud.run's 500 default.
 BATCH_SIZE_DEFAULT = 500
 PAGE_SIZE_DEFAULT = 500
+
+# Default checkpoint-retention window used by the Housekeeping-driven
+# ``purge_terminal_checkpoints``. Checkpoints are unread post-terminal and are
+# the bulk of DB volume, so they age out much sooner than the ``runs`` rows
+# (30 days). Kept in sync with ``org_deletion.CHECKPOINT_RETENTION_DAYS``.
+CHECKPOINT_RETENTION_DAYS = 3
 
 # The langgraph checkpoint tables created by ModuloPostgresSaver.setup(). Each
 # carries organisation_id + thread_id and has no FK to ``runs``, so they must be
@@ -529,6 +535,80 @@ async def purge_terminal_runs(
         "purged_runs": purged_runs,
         "purged_checkpoints": purged_checkpoints,
         "freed_estimated_bytes": freed_estimated_bytes,
+    }
+
+
+async def purge_terminal_checkpoints(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | None,
+    max_age_days: int = CHECKPOINT_RETENTION_DAYS,
+    batch_size: int = BATCH_SIZE_DEFAULT,
+) -> dict[str, int]:
+    """Purge LangGraph checkpoint rows for old TERMINAL runs, keeping the ``runs``.
+
+    FAR-432: the ``runs`` table carries every feature (outputs, telemetry,
+    classification), but each run's graph state lives in the ``langgraph.*``
+    checkpoint tables, which are unread post-terminal and dominate DB volume.
+    This deletes the checkpoint rows (``checkpoints``, ``checkpoint_blobs``,
+    ``checkpoint_writes``) for TERMINAL runs older than ``max_age_days`` —
+    NEVER the runs themselves, and NEVER a non-terminal (pending/running/
+    awaiting_human/claimed) run, so a HITL-paused run keeps its interrupt
+    checkpoint (``resume_run`` re-reads it on later approval).
+
+    ``org_id`` scopes the select to one org (the caller applies RLS). Unlike
+    ``purge_terminal_runs`` this does NOT touch ``trigger_events`` /
+    ``notification_delivery_log`` / ``workspace_leases`` or the ``runs`` rows —
+    the runs stay for audit + analytics (ADR 020); only the reclaimable
+    checkpoint bytes are freed.
+
+    Age is keyed on ``runs`` (``COALESCE(completed_at, created_at)``), never on
+    a checkpoint ``created_at`` column (absent in some deployed schemas —
+    FAR-432). Deletes happen per-thread via the allowlisted checkpoint-table
+    delete templates, so a missing saver table is tolerated (logged, not fatal).
+
+    Returns ``{checkpoints_purged, threads_purged, bytes_freed}``:
+    ``checkpoints_purged`` is the checkpoint-row count removed, ``threads_purged``
+    the number of terminal runs whose threads were swept, ``bytes_freed`` the
+    pre-delete estimated byte total of those checkpoint rows.
+    """
+
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+
+    checkpoints_purged = 0
+    threads_purged = 0
+    bytes_freed = 0
+
+    while True:
+        run_stmt = (
+            select(Run.langgraph_thread_id)
+            .where(
+                Run.status.in_(sorted(TERMINAL_STATUSES)),
+                func.coalesce(Run.completed_at, Run.created_at) < cutoff,
+            )
+            .order_by(Run.created_at, Run.id)
+        )
+        if org_id is not None:
+            run_stmt = run_stmt.where(Run.organisation_id == org_id)
+        thread_ids = list((await session.execute(run_stmt.limit(batch_size))).scalars().all())
+        if not thread_ids:
+            break
+
+        threads_purged += len(thread_ids)
+        bytes_by_thread, counts_by_thread = await _checkpoint_detail(session, thread_ids, org_id)
+        bytes_freed += sum(bytes_by_thread.values())
+        checkpoints_purged += sum(counts_by_thread.values())
+
+        await _delete_checkpoints(session, thread_ids, org_id)
+        await session.flush()
+
+        if len(thread_ids) < batch_size:
+            break
+
+    return {
+        "checkpoints_purged": checkpoints_purged,
+        "threads_purged": threads_purged,
+        "bytes_freed": bytes_freed,
     }
 
 

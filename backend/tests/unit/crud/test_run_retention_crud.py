@@ -326,6 +326,83 @@ class TestDeleteRunIdRows:
 
 
 # ---------------------------------------------------------------------------
+# purge_terminal_checkpoints — checkpoint-only purge, keeps the runs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPurgeTerminalCheckpoints:
+    def _run_select(self, threads: list[str]) -> MagicMock:
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = threads
+        return result
+
+    async def test_purges_only_checkpoints_keeping_runs(self) -> None:
+        """Checkpoint rows are deleted for old terminal threads; runs untouched."""
+        session = AsyncMock()
+        threads = ["org:t1", "org:t2"]
+        session.execute = AsyncMock(return_value=self._run_select(threads))
+        delete_checkpoints = AsyncMock()
+
+        with (
+            patch.object(
+                rr,
+                "_checkpoint_detail",
+                new=AsyncMock(return_value=({"org:t1": 100, "org:t2": 200}, {"org:t1": 3, "org:t2": 4})),
+            ),
+            patch.object(rr, "_delete_checkpoints", new=delete_checkpoints),
+        ):
+            result = await rr.purge_terminal_checkpoints(session, org_id=_ORG)
+
+        assert result == {"checkpoints_purged": 7, "threads_purged": 2, "bytes_freed": 300}
+        # Only checkpoint rows are deleted — never a ``runs`` row.
+        delete_checkpoints.assert_awaited_once()
+        assert delete_checkpoints.call_args.args[1] == threads
+        assert delete_checkpoints.call_args.args[2] == _ORG
+        session.flush.assert_awaited()
+
+    async def test_idempotent_when_no_matching_runs(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=self._run_select([]))
+        with (
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
+        ):
+            result = await rr.purge_terminal_checkpoints(session, org_id=_ORG)
+        assert result == {"checkpoints_purged": 0, "threads_purged": 0, "bytes_freed": 0}
+        session.flush.assert_not_called()
+
+    async def test_batches_by_thread_and_never_deletes_runs(self) -> None:
+        """More thread-ids than batch_size are processed in multiple passes."""
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                self._run_select(["org:t1", "org:t2"]),
+                self._run_select(["org:t3"]),
+                self._run_select([]),
+            ]
+        )
+        with (
+            patch.object(
+                rr,
+                "_checkpoint_detail",
+                new=AsyncMock(
+                    side_effect=[
+                        ({"org:t1": 10, "org:t2": 20}, {"org:t1": 1, "org:t2": 2}),
+                        ({"org:t3": 30}, {"org:t3": 3}),
+                    ]
+                ),
+            ),
+            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
+        ):
+            result = await rr.purge_terminal_checkpoints(session, org_id=_ORG, batch_size=2)
+        assert result["threads_purged"] == 3
+        assert result["checkpoints_purged"] == 6
+        assert result["bytes_freed"] == 60
+        assert session.flush.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # _json_bytes / _run_row_bytes — estimate helpers
 # ---------------------------------------------------------------------------
 
