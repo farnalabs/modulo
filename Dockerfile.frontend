@@ -14,7 +14,7 @@ COPY frontend/ ./
 RUN pnpm run build
 
 FROM nginx:alpine AS runtime
-RUN apk add --no-cache tzdata ca-certificates libcap
+RUN apk add --no-cache ca-certificates libcap tzdata
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
 RUN chown -R nginx:nginx /var/cache/nginx && \

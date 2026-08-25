@@ -133,8 +133,8 @@ foreach ($file in $vueFiles) {
       'title="([^"]+)"'
     )
     foreach ($pat in $attrPats) {
-      $matches = [regex]::Matches($template, $pat)
-      foreach ($m in $matches) {
+      $matchResults = [regex]::Matches($template, $pat)
+      foreach ($m in $matchResults) {
         $t = $m.Groups[1].Value.Trim()
         if (Is-UserText $t) {
           [void]$allTexts.Add(@{text = $t; file = $relKey; source = 'attr'})
@@ -183,8 +183,8 @@ foreach ($file in $vueFiles) {
       'skillError\.value\s*=\s*`([^`]+)`'
     )
     foreach ($pat in $errPats) {
-      $matches = [regex]::Matches($scriptContent, $pat)
-      foreach ($m in $matches) {
+      $matchResults = [regex]::Matches($scriptContent, $pat)
+      foreach ($m in $matchResults) {
         $val = $m.Groups[1].Value
         # For template literals, split by ${...}
         $parts = $val -split '\$\{[^}]+\}'
@@ -204,8 +204,8 @@ foreach ($file in $vueFiles) {
       'throw new Error\("([^"]{4,})"\)'
     )
     foreach ($pat in $retPats) {
-      $matches = [regex]::Matches($scriptContent, $pat)
-      foreach ($m in $matches) {
+      $matchResults = [regex]::Matches($scriptContent, $pat)
+      foreach ($m in $matchResults) {
         $t = $m.Groups[1].Value.Trim()
         if ($t.Length -ge 4 -and $t -match '[A-Z]') {
           [void]$allTexts.Add(@{text = $t; file = $relKey; source = 'return'})
@@ -219,8 +219,8 @@ foreach ($file in $vueFiles) {
       '"([A-Z][^"]{3,}?)"'
     )
     foreach ($pat in $quotPats) {
-      $matches = [regex]::Matches($scriptContent, $pat)
-      foreach ($m in $matches) {
+      $matchResults = [regex]::Matches($scriptContent, $pat)
+      foreach ($m in $matchResults) {
         $t = $m.Groups[1].Value.Trim()
         if ($t.Length -lt 3 -or $t.Length -gt 100) { continue }
         if ($t -match '^[a-z][a-z0-9_\-\./]+$') { continue }

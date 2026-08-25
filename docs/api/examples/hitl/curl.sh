@@ -27,14 +27,14 @@ echo "=== List Pending Gates (org-wide) ==="
 PENDING=$(curl -s "$BASE_URL/api/v1/hitl/pending" -H "$AUTH")
 echo "$PENDING" | jq
 GATE_COUNT=$(echo "$PENDING" | jq '.gates | length')
-if [ "$GATE_COUNT" -eq 0 ]; then
+if [[ "$GATE_COUNT" -eq 0 ]]; then
   echo "No pending gates found."
   exit 0
 fi
 
 # Grab the first unclaimed gate
 FIRST_GATE=$(echo "$PENDING" | jq '.gates | map(select(.claimed_by == null)) | .[0] // empty')
-if [ -z "$FIRST_GATE" ]; then
+if [[ -z "$FIRST_GATE" ]]; then
   echo "No available (unclaimed) gates."
   exit 0
 fi

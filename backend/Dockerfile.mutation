@@ -13,7 +13,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Build deps for psycopg, bcrypt, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev libffi-dev && \
+    gcc libffi-dev libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy dependency manifests
@@ -32,7 +32,8 @@ ENV SECRET_KEY=docker-mutation-secret-key-not-for-production
 ENV FERNET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 # Default runs all configured paths
-RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+RUN useradd --create-home --uid 10001 appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 # Run the pre-built mutmut binary directly (no `uv run`, which would re-sync
 # and execute package build/setup scripts) to keep the image SonarCloud-clean.

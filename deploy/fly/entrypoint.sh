@@ -29,59 +29,59 @@ SLIDING_WINDOW_S=300
 SLIDING_CRASH_LIMIT=5
 
 _log_crash() {
-    local EXIT_CODE=$1
-    local SIGNAL_NAME=""
-    local CRASH_REASON="unknown"
+    local exit_code=$1
+    local signal_name=""
+    local crash_reason="unknown"
     # exit code 128+N means killed by signal N
-    if [ $EXIT_CODE -gt 128 ]; then
-        local SIG=$((EXIT_CODE - 128))
-        case $SIG in
-            9)  SIGNAL_NAME="SIGKILL";   CRASH_REASON="OOM/killed";;
-            15) SIGNAL_NAME="SIGTERM";   CRASH_REASON="shutdown";;
-            2)  SIGNAL_NAME="SIGINT";    CRASH_REASON="interrupt";;
-            6)  SIGNAL_NAME="SIGABRT";   CRASH_REASON="abort";;
-            11) SIGNAL_NAME="SIGSEGV";   CRASH_REASON="segfault";;
-            *)  SIGNAL_NAME="SIG_$SIG";  CRASH_REASON="signal";;
+    if [[ $exit_code -gt 128 ]]; then
+        local sig=$((exit_code - 128))
+        case $sig in
+            9)  signal_name="SIGKILL";   crash_reason="OOM/killed";;
+            15) signal_name="SIGTERM";   crash_reason="shutdown";;
+            2)  signal_name="SIGINT";    crash_reason="interrupt";;
+            6)  signal_name="SIGABRT";   crash_reason="abort";;
+            11) signal_name="SIGSEGV";   crash_reason="segfault";;
+            *)  signal_name="SIG_$sig";  crash_reason="signal";;
         esac
-    elif [ $EXIT_CODE -ne 0 ]; then
-        CRASH_REASON="python_exception"
+    elif [[ $exit_code -ne 0 ]]; then
+        crash_reason="python_exception"
     fi
-    echo "WORKER_EXIT: code=$EXIT_CODE reason=$CRASH_REASON signal=$SIGNAL_NAME"
+    echo "WORKER_EXIT: code=$exit_code reason=$crash_reason signal=$signal_name"
 }
 
 _check_sliding_window() {
-    local CRASH_LOG="$1"
-    local NOW
-    NOW=$(date +%s)
-    local RECENT=0
-    local TS
-    if [ -f "$CRASH_LOG" ]; then
-        while IFS= read -r TS; do
-            [ -z "$TS" ] && continue
-            if [ $((NOW - TS)) -le $SLIDING_WINDOW_S ]; then
-                RECENT=$((RECENT + 1))
+    local crash_log="$1"
+    local now
+    now=$(date +%s)
+    local recent=0
+    local ts
+    if [[ -f "$crash_log" ]]; then
+        while IFS= read -r ts; do
+            [[ -z "$ts" ]] && continue
+            if [[ $((now - ts)) -le $SLIDING_WINDOW_S ]]; then
+                recent=$((recent + 1))
             fi
-        done < "$CRASH_LOG"
+        done < "$crash_log"
     fi
-    echo "$RECENT"
+    echo "$recent"
 }
 
 _record_crash() {
-    local CRASH_LOG="$1"
-    date +%s >> "$CRASH_LOG"
+    local crash_log="$1"
+    date +%s >> "$crash_log"
     # Trim entries older than the sliding window
-    local NOW
-    NOW=$(date +%s)
-    local TMP_FILE
-    TMP_FILE="${CRASH_LOG}.tmp"
-    if [ -f "$CRASH_LOG" ]; then
-        while IFS= read -r TS; do
-            [ -z "$TS" ] && continue
-            if [ $((NOW - TS)) -le $SLIDING_WINDOW_S ]; then
-                echo "$TS"
+    local now
+    now=$(date +%s)
+    local tmp_file
+    tmp_file="${crash_log}.tmp"
+    if [[ -f "$crash_log" ]]; then
+        while IFS= read -r ts; do
+            [[ -z "$ts" ]] && continue
+            if [[ $((now - ts)) -le $SLIDING_WINDOW_S ]]; then
+                echo "$ts"
             fi
-        done < "$CRASH_LOG" > "$TMP_FILE"
-        mv "$TMP_FILE" "$CRASH_LOG"
+        done < "$crash_log" > "$tmp_file"
+        mv "$tmp_file" "$crash_log"
     fi
 }
 
@@ -91,13 +91,13 @@ _record_crash() {
 echo "=== Bootstrap: fix DATABASE_URL and create alembic_version ==="
 python3 /app/deploy/fly/bootstrap_db.py
 
-if [ -f /tmp/database_url.env ]; then
+if [[ -f /tmp/database_url.env ]]; then
   FIXED_URL=$(cat /tmp/database_url.env)
   export DATABASE_URL="$FIXED_URL"
   echo "DATABASE_URL fixed: $(echo $DATABASE_URL | cut -c1-80)..."
 fi
 
-if [ -f /tmp/database_admin_url.env ]; then
+if [[ -f /tmp/database_admin_url.env ]]; then
   ADMIN_URL=$(cat /tmp/database_admin_url.env)
   export DATABASE_ADMIN_URL="$ADMIN_URL"
   echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
@@ -162,8 +162,8 @@ else
         sleep 5
     done
 fi
-if [ "$MIGRATIONS_OK" -ne 1 ]; then
-    if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
+if [[ "$MIGRATIONS_OK" -ne 1 ]]; then
+    if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
         echo "FATAL: DB migrations failed after 10 attempts -- not starting SAQ workers." >&2
         exit 1
     fi
@@ -173,7 +173,7 @@ fi
 # ============================================================================
 # Process group dispatch
 # ============================================================================
-if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
+if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
     # -----------------------------------------------------------------------
     # Worker process group -- SAQ workers only, no nginx, no uvicorn
     # -----------------------------------------------------------------------
@@ -222,12 +222,12 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
             RUNS_END=$(date +%s)
             _log_crash $RUNS_EXIT
             RUNS_ELAPSED=$((RUNS_END - RUNS_START))
-            if [ $RUNS_ELAPSED -le $SLIDING_WINDOW_S ] && [ $RUNS_EXIT -ne 0 ]; then
+            if [[ $RUNS_ELAPSED -le $SLIDING_WINDOW_S ]] && [[ $RUNS_EXIT -ne 0 ]]; then
                 _record_crash "$RUNS_CRASH_LOG"
-                RECENT=$(_check_sliding_window "$RUNS_CRASH_LOG")
-                echo "WARNING: SAQ runs worker exited after ${RUNS_ELAPSED}s (exit=$RUNS_EXIT, recent_crashes=$RECENT)"
-                if [ $RECENT -gt $SLIDING_CRASH_LIMIT ]; then
-                    echo "FATAL: SAQ runs worker: $RECENT crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
+                recent=$(_check_sliding_window "$RUNS_CRASH_LOG")
+                echo "WARNING: SAQ runs worker exited after ${RUNS_ELAPSED}s (exit=$RUNS_EXIT, recent_crashes=$recent)"
+                if [[ $recent -gt $SLIDING_CRASH_LIMIT ]]; then
+                    echo "FATAL: SAQ runs worker: $recent crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
                     exit 1
                 fi
             else
@@ -266,12 +266,12 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
             SYSTEM_END=$(date +%s)
             _log_crash $SYSTEM_EXIT
             SYSTEM_ELAPSED=$((SYSTEM_END - SYSTEM_START))
-            if [ $SYSTEM_ELAPSED -le $SLIDING_WINDOW_S ] && [ $SYSTEM_EXIT -ne 0 ]; then
+            if [[ $SYSTEM_ELAPSED -le $SLIDING_WINDOW_S ]] && [[ $SYSTEM_EXIT -ne 0 ]]; then
                 _record_crash "$SYSTEM_CRASH_LOG"
-                RECENT=$(_check_sliding_window "$SYSTEM_CRASH_LOG")
-                echo "WARNING: SAQ system worker exited after ${SYSTEM_ELAPSED}s (exit=$SYSTEM_EXIT, recent_crashes=$RECENT)"
-                if [ $RECENT -gt $SLIDING_CRASH_LIMIT ]; then
-                    echo "FATAL: SAQ system worker: $RECENT crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
+                recent=$(_check_sliding_window "$SYSTEM_CRASH_LOG")
+                echo "WARNING: SAQ system worker exited after ${SYSTEM_ELAPSED}s (exit=$SYSTEM_EXIT, recent_crashes=$recent)"
+                if [[ $recent -gt $SLIDING_CRASH_LIMIT ]]; then
+                    echo "FATAL: SAQ system worker: $recent crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
                     exit 1
                 fi
             else
