@@ -240,4 +240,14 @@ __all__ = [
     "should_degrade_to_community",
     # --- REST connector fan-out error attributes (FAR-411, consumed by operators/tests) ---
     "cardinality_over_cap",  # RESTCardinalityExceededError metric: True when a fan-out hit the cap fail-closed
+    # --- REST connector observability (FAR-413) — public metrics/rollback API
+    #     exercised by tests/unit/connectors/test_rest_observability.py. The
+    #     rollback evaluator is detection+notification only (mirrors
+    #     rollback_thresholds) and is wired to a producer when an outcome
+    #     sampler / run-stats store is added; ``record_deduplicated`` is the
+    #     dedup-count metric reserved for the pipeline-level idempotency gate
+    #     (the connector itself does not dedup, so no prod call site exists yet). ---
+    "record_deduplicated",
+    "evaluate_rest_rollback",
+    "is_unknown_like",
 ]
