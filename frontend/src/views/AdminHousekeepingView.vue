@@ -2,12 +2,12 @@
   <FeatureGate feature-name="admin_housekeeping" required-tier="community" show-disabled>
     <div class="page-wide">
       <PageHeader
-        title="Housekeeping"
-        subtitle="Scan for cleanup candidates across your organisation"
+        :title="$t('views.AdminHousekeepingView.title')"
+        :subtitle="$t('views.AdminHousekeepingView.subtitle')"
       >
-        <template #actions>
+        <template #right>
           <Button severity="secondary" outlined data-testid="hk-refresh" :disabled="loading" @click="scan">
-            {{ loading ? 'Scanning…' : 'Refresh Scan' }}
+            {{ loading ? $t('views.AdminHousekeepingView.scanning') : $t('views.AdminHousekeepingView.refresh_scan') }}
           </Button>
         </template>
       </PageHeader>
@@ -23,14 +23,14 @@
       >
         <p class="text-sm text-destructive">{{ error }}</p>
         <Button severity="secondary" outlined size="small" class="mt-2" @click="scan" data-testid="hk-retry">
-          Retry
+          {{ $t('views.AdminHousekeepingView.retry') }}
         </Button>
       </div>
 
       <EmptyState
         v-else-if="categories.length === 0"
-        title="All Clean!"
-        description="No cleanup candidates found. Everything looks tidy."
+        :title="$t('views.AdminHousekeepingView.all_clean_title')"
+        :description="$t('views.AdminHousekeepingView.all_clean_description')"
         data-testid="hk-empty"
       />
 
@@ -44,17 +44,17 @@
               data-testid="hk-select-all"
               @change="toggleSelectAll"
             />
-            Select All
+            {{ $t('views.AdminHousekeepingView.select_all') }}
           </label>
           <span class="text-sm text-muted-foreground">
-            {{ selectedCount }} of {{ totalCount }} selected
+            {{ $t('views.AdminHousekeepingView.selected_count', { count: selectedCount, total: totalCount }) }}
           </span>
           <span class="text-sm text-muted-foreground">
-            {{ totalCount }} total candidate{{ totalCount === 1 ? '' : 's' }}
+            {{ $t('views.AdminHousekeepingView.total_candidates', totalCount) }}
           </span>
           <div class="ml-auto">
             <Button v-if="selectedCount > 0" severity="danger" data-testid="hk-delete-selected" @click="confirmDelete">
-              Delete {{ selectedCount }} Selected
+              {{ $t('views.AdminHousekeepingView.delete_selected', { count: selectedCount }) }}
             </Button>
           </div>
         </div>
@@ -78,11 +78,11 @@
               <h3 class="font-semibold">{{ cat.label }}</h3>
               <p class="text-xs text-muted-foreground">{{ cat.description }}</p>
             </div>
-            <span class="text-sm text-muted-foreground">{{ cat.count }} item{{ cat.count === 1 ? '' : 's' }}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('views.AdminHousekeepingView.item_count', cat.count) }}</span>
           </div>
 
           <div v-if="cat.candidates.length === 0" class="px-4 py-3 text-sm text-muted-foreground">
-            No candidates found.
+            {{ $t('views.AdminHousekeepingView.no_candidates') }}
           </div>
 
           <div
@@ -123,17 +123,16 @@
           <div class="flex-1">
             <h3 class="font-semibold">{{ $t('views.AdminHousekeepingView.checkpoint_retention') }}</h3>
             <p class="text-xs text-muted-foreground">
-              Purge LangGraph graph-state checkpoints for terminal runs older than N days. The run rows are kept
-              (outputs, telemetry, classification survive for audit + analytics).
+              {{ $t('views.AdminHousekeepingView.checkpoint_retention_description') }}
             </p>
           </div>
           <span class="text-sm text-muted-foreground">
-            {{ checkpointCandidateCount }} run{{ checkpointCandidateCount === 1 ? '' : 's' }} reclaimable
+            {{ $t('views.AdminHousekeepingView.checkpoint_reclaimable', { count: checkpointCandidateCount }) }}
           </span>
         </div>
         <div class="flex flex-wrap items-center gap-3 px-4 py-3">
           <label class="flex items-center gap-2 text-sm">
-            Purge terminal runs older than
+            {{ $t('views.AdminHousekeepingView.checkpoint_purge_older_than') }}
             <input
               v-model.number="ckptMaxAge"
               type="number"
@@ -141,24 +140,25 @@
               class="w-20 rounded border bg-transparent px-2 py-1 text-sm text-right"
               data-testid="hk-ckpt-max-age"
             />
-            day{{ ckptMaxAge === 1 ? '' : 's' }}
+            {{ $t('views.AdminHousekeepingView.checkpoint_day', { count: ckptMaxAge }) }}
           </label>
           <Button v-if="!ckptConfirming" severity="danger" :disabled="ckptPurgeLoading || ckptMaxAge < 1" data-testid="hk-ckpt-purge" @click="ckptConfirming = true">
-            Purge Checkpoints
+            {{ $t('views.AdminHousekeepingView.checkpoint_purge_button') }}
           </Button>
           <template v-else>
-            <span class="text-sm text-muted-foreground">Confirm purge of checkpoints older than {{ ckptMaxAge }} day{{ ckptMaxAge === 1 ? '' : 's' }}?</span>
+            <span class="text-sm text-muted-foreground">{{ $t('views.AdminHousekeepingView.checkpoint_confirm_prompt', { count: ckptMaxAge }) }}</span>
             <Button severity="danger" :disabled="ckptPurgeLoading" data-testid="hk-ckpt-purge-confirm" @click="doCheckpointPurge">
-              {{ ckptPurgeLoading ? 'Purging…' : 'Confirm Purge' }}
+              {{ ckptPurgeLoading ? $t('views.AdminHousekeepingView.checkpoint_purging') : $t('views.AdminHousekeepingView.checkpoint_confirm_purge') }}
             </Button>
             <Button severity="secondary" outlined :disabled="ckptPurgeLoading" data-testid="hk-ckpt-purge-cancel" @click="ckptConfirming = false">
-              Cancel
+              {{ $t('views.AdminHousekeepingView.cancel') }}
             </Button>
           </template>
           <span v-if="ckptResult" class="text-sm text-muted-foreground" data-testid="hk-ckpt-result">
-            Purged {{ ckptResult.checkpoints_purged }} checkpoint row{{ ckptResult.checkpoints_purged === 1 ? '' : 's' }}
-            from {{ ckptResult.threads_purged }} run{{ ckptResult.threads_purged === 1 ? '' : 's' }} ·
-            freed {{ formatBytes(ckptResult.bytes_freed) }}
+            {{ $t('views.AdminHousekeepingView.checkpoint_purged_prefix') }}
+            {{ $t('views.AdminHousekeepingView.checkpoint_purged_rows', { count: ckptResult.checkpoints_purged }) }}
+            {{ $t('views.AdminHousekeepingView.checkpoint_purged_from', { count: ckptResult.threads_purged }) }}
+            {{ $t('views.AdminHousekeepingView.checkpoint_freed', { bytes: formatBytes(ckptResult.bytes_freed) }) }}
           </span>
           <span v-if="ckptError" class="text-sm text-destructive" data-testid="hk-ckpt-error">{{ ckptError }}</span>
         </div>
@@ -169,7 +169,7 @@
           <div>
             <div class="text-lg font-semibold">{{ $t('views.AdminHousekeepingView.confirm_cleanup') }}</div>
             <div class="mt-0.5 text-sm text-muted-foreground">
-              This will delete the following items. This action cannot be undone.
+              {{ $t('views.AdminHousekeepingView.delete_warning') }}
             </div>
           </div>
         </template>
@@ -181,10 +181,10 @@
         <template #footer>
           <div class="flex gap-2 justify-end">
             <Button severity="secondary" outlined @click="showConfirm = false" data-testid="hk-cancel-cleanup">
-              Cancel
+              {{ $t('views.AdminHousekeepingView.cancel') }}
             </Button>
             <Button severity="danger" :disabled="cleaningUp" data-testid="hk-confirm-cleanup" @click="doCleanup">
-              {{ cleaningUp ? 'Cleaning up…' : `Delete ${selectedCount} items` }}
+              {{ cleaningUp ? $t('views.AdminHousekeepingView.cleaning_up') : $t('views.AdminHousekeepingView.delete_items', { count: selectedCount }) }}
             </Button>
           </div>
         </template>
@@ -195,6 +195,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
@@ -241,6 +242,7 @@ interface CheckpointRetentionPurgeResponse {
 }
 
 const { get, post } = useApi()
+const { t } = useI18n()
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -283,7 +285,7 @@ async function scan() {
     totalCount.value = resp.total_count ?? 0
     selectedIds.value = new Set()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Failed to scan for housekeeping candidates'
+    error.value = e instanceof Error ? e.message : t('views.AdminHousekeepingView.scan_error')
   } finally {
     loading.value = false
   }
@@ -317,7 +319,7 @@ async function doCheckpointPurge() {
     ckptConfirming.value = false
     await scan()
   } catch (e: unknown) {
-    ckptError.value = e instanceof Error ? e.message : 'Checkpoint purge failed'
+    ckptError.value = e instanceof Error ? e.message : t('views.AdminHousekeepingView.checkpoint_purge_failed')
   } finally {
     ckptPurgeLoading.value = false
   }
@@ -413,7 +415,7 @@ async function doCleanup() {
     showConfirm.value = false
     await scan()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Cleanup failed'
+    error.value = e instanceof Error ? e.message : t('views.AdminHousekeepingView.cleanup_error')
   } finally {
     cleaningUp.value = false
   }
