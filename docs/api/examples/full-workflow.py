@@ -204,7 +204,7 @@ def main():
                 json={
                     "name": "Demo Filesystem Connector",
                     "connector_type_id": "filesystem",
-                    "config_json": {"base_path": "/tmp/modulo-demo"},
+                    "config_json": {"base_path": "/var/lib/modulo/connector-data/modulo-demo"},
                 },
                 headers=headers,
             )

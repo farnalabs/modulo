@@ -3,6 +3,29 @@ import { getAutoLoginConfig } from '../../config/runtime'
 const TOKEN_KEY = 'modulo_access_token'
 const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 
+// S8475: only store well-formed, opaque token strings in browser storage.
+// Rejects anything containing control/whitespace chars or exceeding a sane
+// length, so tainted/untrusted data can never be persisted as a token.
+const TOKEN_PATTERN = /^[A-Za-z0-9._\-]+$/
+const MAX_TOKEN_LENGTH = 8192
+
+function isValidToken(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_TOKEN_LENGTH &&
+    TOKEN_PATTERN.test(value)
+  )
+}
+
+function storeToken(key: string, token: string): void {
+  if (!isValidToken(token)) {
+    console.warn(`[auth] refusing to store invalid token for ${key}`)
+    return
+  }
+  localStorage.setItem(key, token)
+}
+
 let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
@@ -23,7 +46,7 @@ export function onAuthChange(fn: (token: string | null) => void): () => void {
 }
 
 export function setAccessToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token)
+  storeToken(TOKEN_KEY, token)
   notifyListeners()
 }
 
@@ -34,15 +57,17 @@ export function clearAccessToken(): void {
 }
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  const token = localStorage.getItem(TOKEN_KEY)
+  return isValidToken(token) ? token : null
 }
 
 export function setRefreshToken(token: string): void {
-  localStorage.setItem(REFRESH_TOKEN_KEY, token)
+  storeToken(REFRESH_TOKEN_KEY, token)
 }
 
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
+  const token = localStorage.getItem(REFRESH_TOKEN_KEY)
+  return isValidToken(token) ? token : null
 }
 
 function clearRefreshToken(): void {

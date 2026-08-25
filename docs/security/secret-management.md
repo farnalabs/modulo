@@ -23,12 +23,12 @@ Connector credentials and webhook secrets are decrypted once per run into a run-
 
 The following must never appear in the repository:
 
-- `SECRET_KEY` — JWT signing key
-- `FERNET_KEY` — Fernet encryption key
-- `DATABASE_URL` — database connection string with credentials
-- `MODULO_DB` — database type indicator
-- Any `MODULO_*_KEY` — API keys for integrations
-- `.env` files — environment variable dumps
+- `SECRET_KEY`: JWT signing key
+- `FERNET_KEY`: Fernet encryption key
+- `DATABASE_URL`: database connection string with credentials
+- `MODULO_DB`: database type indicator
+- Any `MODULO_*_KEY`: API keys for integrations
+- `.env` files: environment variable dumps
 - Service account keys or tokens
 - Any file containing plaintext credentials
 
@@ -45,7 +45,7 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 3. Restart Modulo services (rolling restart recommended).
 4. Verify: check application logs for successful startup and JWT validation.
 
-**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Rotating `FERNET_KEY` does not re-encrypt existing secrets — use `modulo restore <backup-dir> --previous-fernet-key <old-key>` to re-encrypt stored credentials under the new key.
+**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Rotating `FERNET_KEY` does not re-encrypt existing secrets: use `modulo restore <backup-dir> --previous-fernet-key <old-key>` to re-encrypt stored credentials under the new key.
 
 ### Vault Secrets
 
@@ -63,10 +63,10 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 
 If a secret is accidentally committed and pushed:
 
-1. **Immediately revoke the leaked secret** — rotate the affected credential (see rotation steps above).
+1. **Immediately revoke the leaked secret**: rotate the affected credential (see rotation steps above).
 2. **Remove the secret from git history** using `git filter-branch` or `bfg-repo-cleaner`.
 3. **Force-push the cleaned history** (coordinate with your team to rebase open branches).
-4. **Audit access logs** — check for unauthorized access between the leak time and revocation.
+4. **Audit access logs**: check for unauthorized access between the leak time and revocation.
 5. **Update the allowlist** if the leak was from a path that should be excluded from scanning.
 
 ## Gitleaks False Positive Handling

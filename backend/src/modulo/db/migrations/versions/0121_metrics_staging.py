@@ -76,21 +76,25 @@ def upgrade() -> None:
             """
         )
     )
-    # Drop first so the migration is idempotent even if the policy already
-    # exists (e.g. a freshly-bootstrapped or overlay DB that inherited the
-    # schema). Mirrors the DROP POLICY IF EXISTS guard used elsewhere.
+    # Idempotent guard: the table/index/constraint above use IF NOT EXISTS, so
+    # this reconciliation migration must not fail when re-applied against a DB
+    # that already carries the policy (e.g. a reused/persisted Postgres, or a
+    # re-run of the migration chain). CREATE POLICY has no native IF NOT EXISTS.
     op.execute(
         sa.text(
             """
-            DROP POLICY IF EXISTS rls_org_isolation ON "metrics_staging"
-            """
-        )
-    )
-    op.execute(
-        sa.text(
-            """
-            CREATE POLICY rls_org_isolation ON "metrics_staging"
-            USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'public'
+                      AND tablename = 'metrics_staging'
+                      AND policyname = 'rls_org_isolation'
+                ) THEN
+                    CREATE POLICY rls_org_isolation ON "metrics_staging"
+                    USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid);
+                END IF;
+            END $$;
             """
         )
     )

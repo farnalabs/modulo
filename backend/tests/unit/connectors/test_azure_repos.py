@@ -6,7 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_repos import AzureReposConnector, _paging_total
+from modulo.connectors._safe_page import safe_paging_total as _paging_total
+from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "azure_test_token"
@@ -291,14 +292,14 @@ async def test_query_commits_corrupt_body_no_crash(connector):
 
 
 def test_paging_total() -> None:
-    assert _paging_total({"count": 25}) == 25
-    assert _paging_total({"count": "25"}) == 25
-    assert _paging_total({"count": 1e999}) == 0
-    assert _paging_total({"count": float("nan")}) == 0
-    assert _paging_total({"count": True}) == 0
-    assert _paging_total({"count": "garbage"}) == 0
-    assert _paging_total({}) is None
-    assert _paging_total(["garbage"]) is None
+    assert _paging_total({"count": 25}, "count") == 25
+    assert _paging_total({"count": "25"}, "count") == 25
+    assert _paging_total({"count": 1e999}, "count") == 0
+    assert _paging_total({"count": float("nan")}, "count") == 0
+    assert _paging_total({"count": True}, "count") == 0
+    assert _paging_total({"count": "garbage"}, "count") == 0
+    assert _paging_total({}, "count") is None
+    assert _paging_total(["garbage"], "count") is None
 
 
 def test_auth_header_format():

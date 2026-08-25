@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors._safe_page import safe_paging_total as _paging_total_count
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.opsgenie import OpsgenieConnector, _next_offset_cursor, _paging_total_count
+from modulo.connectors.opsgenie import OpsgenieConnector, _next_offset_cursor
 
 API_KEY = "og_test_key"
 _BASE = "https://api.opsgenie.com/v2"
@@ -271,14 +272,14 @@ async def test_query_escalations_corrupt_body_no_crash(connector: OpsgenieConnec
 
 
 def test_paging_total_count() -> None:
-    assert _paging_total_count({"totalCount": 25}) == 25
-    assert _paging_total_count({"totalCount": "25"}) == 25
-    assert _paging_total_count({"totalCount": 1e999}) == 0
-    assert _paging_total_count({"totalCount": float("nan")}) == 0
-    assert _paging_total_count({"totalCount": True}) == 0
-    assert _paging_total_count({"totalCount": "garbage"}) == 0
-    assert _paging_total_count({}) is None
-    assert _paging_total_count(["garbage"]) is None
+    assert _paging_total_count({"totalCount": 25}, "totalCount") == 25
+    assert _paging_total_count({"totalCount": "25"}, "totalCount") == 25
+    assert _paging_total_count({"totalCount": 1e999}, "totalCount") == 0
+    assert _paging_total_count({"totalCount": float("nan")}, "totalCount") == 0
+    assert _paging_total_count({"totalCount": True}, "totalCount") == 0
+    assert _paging_total_count({"totalCount": "garbage"}, "totalCount") == 0
+    assert _paging_total_count({}, "totalCount") is None
+    assert _paging_total_count(["garbage"], "totalCount") is None
 
 
 def test_next_offset_cursor() -> None:

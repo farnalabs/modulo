@@ -4,6 +4,16 @@ coverage/
 playwright-report/
 test-results/
 
+# Secrets / sensitive data must never be copied into the image
+.env
+.env.*
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+.vault*
+
 .git/
 .gitignore
 .agents/

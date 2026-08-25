@@ -19,6 +19,22 @@ from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 
+
+def _write_env_file(path: str, content: str) -> None:
+    """Write *content* to *path* with owner-only (0o600) permissions.
+
+    These files hold database URLs that include credentials, so they must not be
+    world-/group-readable even though they live in the world-writable ``/tmp``
+    directory (S5443). The consuming shell scripts run as the same user, so the
+    restrictive mode does not break them.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode())
+    finally:
+        os.close(fd)
+
+
 # Strip any sslmode parameter (disable, require, prefer, etc.) — asyncpg
 # defaults to "prefer" (try SSL, fall back to plain) on Fly's private
 # networks where Postgres doesn't expect SSL, causing ConnectionResetError.
@@ -98,12 +114,9 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    # Step 3: Write the fixed URLs to files for the shell
-    with open("/tmp/database_url.env", "w") as f:
-        f.write(runtime_url)
-
-    with open("/tmp/database_admin_url.env", "w") as f:
-        f.write(admin_url)
+    # Step 3: Write the fixed URLs to files for the shell (credentials — 0o600)
+    _write_env_file("/tmp/database_url.env", runtime_url)
+    _write_env_file("/tmp/database_admin_url.env", admin_url)
 
     # MODULO_SYSTEM_DATABASE_URL: the modulo_system role (LOGIN, BYPASSRLS) URL used
     # by system crons (metrics_dump, analytics_facts_maintenance, journey_reconcile,
@@ -128,8 +141,7 @@ def main() -> None:
         os.environ["MODULO_SYSTEM_DATABASE_URL"] = system_url
         # Short-lived container bootstrap env file, consistent with the
         # /tmp/database_url.env and /tmp/database_admin_url.env files written above.
-        with open("/tmp/system_database_url.env", "w") as f:  # NOSONAR
-            f.write(system_url)
+        _write_env_file("/tmp/system_database_url.env", system_url)
 
 
 if __name__ == "__main__":

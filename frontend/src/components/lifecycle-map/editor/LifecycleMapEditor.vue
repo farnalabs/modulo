@@ -159,7 +159,17 @@ import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMa
 import Button from 'primevue/button'
 
 function genId(): string {
-  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback for environments without randomUUID — use the CSPRNG, not Math.random.
+  const arr = new Uint8Array(16)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(arr)
+  } else {
+    for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256) // NOSONAR: only when no CSPRNG exists
+  }
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 const props = defineProps<{

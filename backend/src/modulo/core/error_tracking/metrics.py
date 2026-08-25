@@ -41,6 +41,7 @@ def _get_meter() -> Any:
             return None
         return provider.get_meter("modulo.error_tracking", version="0.1.0")
     except Exception:
+        _log.debug("error_tracking.metrics.meter_unavailable")
         return None
 
 

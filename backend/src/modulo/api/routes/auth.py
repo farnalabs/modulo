@@ -834,7 +834,7 @@ def _set_csrf_cookie(response: Response, token: str, settings: Settings) -> None
     response.set_cookie(
         key="XSRF-TOKEN",
         value=token,
-        httponly=False,
+        httponly=False,  # NOSONAR S3330 — JS-readable CSRF token; SameSite=strict + secure mitigate.
         samesite="strict",
         secure=not settings.debug,
         max_age=900,
@@ -856,7 +856,7 @@ def _clear_auth_cookies(response: Response, settings: Settings) -> None:
     response.set_cookie(
         key="XSRF-TOKEN",
         value="",
-        httponly=False,
+        httponly=False,  # NOSONAR S3330 — JS-readable CSRF token; SameSite=strict + secure mitigate.
         samesite="strict",
         secure=secure,
         max_age=0,

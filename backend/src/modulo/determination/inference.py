@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from modulo.determination.scanner import ScanSample
+from modulo.determination.scanner import ScanSample, _repo_name
 
 _VALID_CONFIDENCES = frozenset({"high", "medium", "low"})
 
@@ -74,9 +74,12 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         match s.resource:
             case "repos" | "projects":
                 for rec in s.records:
-                    name = rec.get("name") or rec.get("path_with_namespace") or rec.get("full_name") or ""
+                    name = _repo_name(rec)
                     if name:
                         repo_names.append(name)
+                    desc = (rec.get("description") or "").lower()
+                    if any(ci in desc or ci in name.lower() for ci in _CI_FILES):
+                        has_ci_config = True
 
             case "pulls" | "mrs":
                 pull_requests.extend(s.records)
@@ -137,15 +140,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         )
 
     # --- Stage: CI/CD ---
-    for s in samples:
-        if s.resource in ("repos", "projects"):
-            for rec in s.records:
-                desc = (rec.get("description") or "").lower()
-                name = (rec.get("name") or rec.get("path_with_namespace") or rec.get("full_name") or "").lower()
-                if any(ci in desc or ci in name for ci in _CI_FILES):
-                    has_ci_config = True
-                    break
-
     if has_ci_config:
         findings.append(
             Finding(

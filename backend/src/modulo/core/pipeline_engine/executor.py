@@ -1687,6 +1687,7 @@ class PipelineExecutor:
                         failure_behaviour=e.failure_behaviour,
                         pass_threshold=e.pass_threshold,
                         suite_id=e.suite_id,
+                        version=e.version,
                     )
                 )
         return eval_defs_by_node
@@ -1759,6 +1760,7 @@ class PipelineExecutor:
                                 run_id=run_id,
                                 node_id=node_uuid,
                                 eval_id=eval_def.id,
+                                eval_definition_version=eval_def.version,
                                 passed=eval_result.passed,
                                 score=eval_result.score,
                                 detail=eval_result.detail,
@@ -2880,7 +2882,7 @@ class PipelineExecutor:
         # A stale ``script_executing`` lease means a script may have run —
         # requeue is forbidden (exactly-once). Only when the probe proves no
         # live lease does the run stay eligible for the fenced reset below.
-        # NOTE: the probe is computed BEFORE the gate/retry chain below so
+        # The probe is computed BEFORE the gate/retry chain below so
         # the idempotency gate stays the FIRST branch (it must suppress the
         # pending-reset when a delivery marker is present), and so the
         # pending-reset branch remains reachable for BOTH script-mode and
@@ -4037,7 +4039,7 @@ class PipelineExecutor:
         # evaluated too. If a ``block`` eval fails, ``EvalBlockedError``
         # propagates and the existing ``except EvalBlockedError`` below
         # transitions the run to ``eval_failed`` with ``error_code="eval_blocked"``.
-        # NOTE: if this node ALSO feeds a HITL gate with eval-before-interrupt,
+        # If this node ALSO feeds a HITL gate with eval-before-interrupt,
         # the evals run twice (once here post-node, once in the gate) —
         # acceptable for now, the gate's eval is a separate node.
         if ctx.eval_definitions_by_node:
