@@ -6190,6 +6190,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/run-retention/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Candidates
+         * @description List runs matching the filter set, with an estimated per-run byte size.
+         *
+         *     Returns every matching run (including non-terminal ones — the UI shows
+         *     terminal-only as purge-able), the total match count, and an estimated total
+         *     reclaimable byte count across ALL matches.
+         */
+        get: operations["candidates_api_v1_admin_run_retention_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/run-retention/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export
+         * @description Stream a JSONL file of the matching runs (metadata + full outputs).
+         *
+         *     Memory-safe: runs are streamed in pages and each run's checkpoint summary is
+         *     aggregated in a batch, so nothing accumulates. The response is a download
+         *     with a ``Content-Disposition`` attachment header.
+         */
+        post: operations["export_api_v1_admin_run_retention_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/run-retention/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge
+         * @description Delete terminal runs matching the filter set, cascading to checkpoints.
+         *
+         *     Requires ``confirm: true``. Only terminal-status runs are ever deleted; the
+         *     purge is batched (500 runs per SAVEPOINT), transactional, and idempotent.
+         *     Never deletes a pending/running/awaiting_human/claimed run. On success an
+         *     audit event is appended to the affected org's chain.
+         */
+        post: operations["purge_api_v1_admin_run_retention_purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications/in-app/dashboard": {
         parameters: {
             query?: never;
@@ -8648,6 +8721,15 @@ export interface components {
              */
             entity_type: string;
         };
+        /** CandidatesResponse */
+        CandidatesResponse: {
+            /** Runs */
+            runs: components["schemas"]["RetentionCandidate"][];
+            /** Total Count */
+            total_count: number;
+            /** Total Estimated Bytes */
+            total_estimated_bytes: number;
+        };
         /** ChangeMemberRoleRequest */
         ChangeMemberRoleRequest: {
             /** Role */
@@ -10218,6 +10300,19 @@ export interface components {
             config_used: {
                 [key: string]: unknown;
             };
+        };
+        /** ExportRequest */
+        ExportRequest: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Organisation Id */
+            organisation_id?: string | null;
         };
         /** FeatureFlagInfo */
         FeatureFlagInfo: {
@@ -13328,6 +13423,33 @@ export interface components {
             /** Verified */
             verified: boolean;
         };
+        /** PurgeRequest */
+        PurgeRequest: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Organisation Id */
+            organisation_id?: string | null;
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
+        };
+        /** PurgeResponse */
+        PurgeResponse: {
+            /** Purged Runs */
+            purged_runs: number;
+            /** Purged Checkpoints */
+            purged_checkpoints: number;
+            /** Freed Estimated Bytes */
+            freed_estimated_bytes: number;
+        };
         /** PurgeRunsRequest */
         PurgeRunsRequest: {
             /**
@@ -13665,6 +13787,21 @@ export interface components {
             schedule_type: string;
             /** Created At */
             created_at: string;
+        };
+        /** RetentionCandidate */
+        RetentionCandidate: {
+            /** Id */
+            id: string;
+            /** Created At */
+            created_at: string | null;
+            /** Status */
+            status: string;
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Estimated Bytes */
+            estimated_bytes: number;
         };
         /** RetentionConfigResponse */
         RetentionConfigResponse: {
@@ -31277,6 +31414,114 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    candidates_api_v1_admin_run_retention_candidates_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                pipeline_id?: string | null;
+                status?: string | null;
+                organisation_id?: string | null;
+                limit?: number;
+                offset?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_api_v1_admin_run_retention_export_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_api_v1_admin_run_retention_purge_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
