@@ -25,20 +25,11 @@ from modulo.connectors.rest import (
     SecurityGuard,
 )
 from tests.connectors._conformance import assert_result_shape, assert_write_result_shape
+from tests.connectors._noop_guard import make_noop_security_guard as _noop_guard
 
 
 def _default_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={})
-
-
-def _noop_guard() -> SecurityGuard:
-    async def validate_url(url: str) -> None:
-        return None
-
-    def filter_strings(values: list[str], resource: str) -> None:
-        return None
-
-    return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
 
 
 def _make_connector(
@@ -691,6 +682,61 @@ def test_transport_errors_are_typed() -> None:
     c._transport = httpx.MockTransport(handler)
     with pytest.raises(RESTConnectError, match="transport error"):
         asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+# ── Transport config wiring (timeout_seconds / verify_tls) ────────────────
+
+
+def test_timeout_seconds_in_config_overrides_default() -> None:
+    """config_json timeout_seconds must override the constructor default (FAR-412)."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "timeout_seconds": 12.0},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c._client().timeout == httpx.Timeout(12.0)
+    assert c._timeout == 12.0
+
+
+def test_default_timeout_is_30_seconds() -> None:
+    """Absent timeout_seconds keeps the default (30.0), not 0 or None (FAR-412)."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c._client().timeout == httpx.Timeout(30.0)
+    assert c._timeout == 30.0
+
+
+@pytest.mark.parametrize(
+    ("verify_tls_config", "expected_verify"),
+    [
+        ({"verify_tls": False}, False),
+        ({}, True),
+    ],
+)
+def test_verify_tls_passes_through_to_client(
+    monkeypatch: pytest.MonkeyPatch,
+    verify_tls_config: dict[str, Any],
+    expected_verify: bool,
+) -> None:
+    """config_json verify_tls must reach the AsyncClient as verify=... (FAR-412)."""
+    captured: dict[str, Any] = {}
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr("modulo.connectors.rest.httpx.AsyncClient", factory)
+    c = RestConnector(
+        {"base_url": "https://api.example.com", "path": "/items", **verify_tls_config},
+        {"auth_mode": "bearer", "token": "t"},
+        transport=httpx.MockTransport(_default_handler),
+        ssrf_validator=lambda url: None,
+        security_guard=_noop_guard(),
+    )
+    c._client()
+    assert captured.get("verify") is expected_verify
 
 
 # ── Fan-out / iterator (FAR-411) ───────────────────────────────────────────

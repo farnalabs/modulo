@@ -34,7 +34,7 @@
     >
       <template #after>
         <Button @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
-        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
+        <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 
@@ -93,7 +93,7 @@
           {{ total }} group{{ total === 1 ? '' : 's' }}
         </span>
         <div class="flex items-center gap-2">
-          <button
+          <button type="button"
             :disabled="offset <= 0"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="prevPage"
@@ -103,7 +103,7 @@
           <span class="text-sm text-muted-foreground">
             Page {{ currentPage }}
           </span>
-          <button
+          <button type="button"
             :disabled="offset + limit >= total"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="nextPage"

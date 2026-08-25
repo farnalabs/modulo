@@ -244,7 +244,7 @@ async def append_audit_event_isolated(
     principal: TenantPrincipal,
     *,
     resource_type: str,
-    resource_id: uuid.UUID,
+    resource_id: uuid.UUID | None = None,
     event_type: str,
     payload: dict[str, Any],
     log_key: str,

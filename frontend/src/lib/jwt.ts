@@ -10,7 +10,7 @@
  */
 
 export function decodeBase64Url(s: string): string {
-  s = s.replace(/-/g, '+').replace(/_/g, '/')
+  s = s.replaceAll('-', '+').replaceAll('_', '/')
   const pad = s.length % 4
   if (pad) s += '='.repeat(4 - pad)
   return atob(s)

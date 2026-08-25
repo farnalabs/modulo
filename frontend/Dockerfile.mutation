@@ -10,7 +10,8 @@ WORKDIR /app
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/.npmrc frontend/pnpm-workspace.yaml ./
 
 # Install dependencies (frozen lockfile is strict but fast — will fail if lockfile mismatch)
-RUN npm install -g pnpm@11.21.0 --ignore-scripts && pnpm install --frozen-lockfile --ignore-scripts
+RUN npm install -g pnpm@11.21.0 --ignore-scripts && \
+    pnpm install --frozen-lockfile --ignore-scripts
 
 # Copy source code and config
 COPY frontend/src/ src/

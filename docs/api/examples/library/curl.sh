@@ -36,7 +36,7 @@ echo "=== Get First Primitive Detail ==="
 PRIMITIVE_ID=$(curl -s "$BASE_URL/api/v1/libraries?page=1&page_size=1" \
   -H "$AUTH" | jq -r '.items[0].id // empty')
 
-if [ -n "$PRIMITIVE_ID" ]; then
+if [[ -n "$PRIMITIVE_ID" ]]; then
   echo "Primitive ID: $PRIMITIVE_ID"
   curl -s "$BASE_URL/api/v1/libraries/$PRIMITIVE_ID" -H "$AUTH" | jq
 

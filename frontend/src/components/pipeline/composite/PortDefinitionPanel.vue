@@ -160,7 +160,7 @@ async function detectPlaceholders() {
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold">{{ $t('components.pipeline.composite.PortDefinitionPanel.parameter_ports') }}</h3>
       <div class="flex gap-1">
-        <button
+        <button type="button"
           class="rounded-md border border-input px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
           title="Scan prompts for {{parameter.*}} placeholders"
           :disabled="detectLoading"
@@ -168,7 +168,7 @@ async function detectPlaceholders() {
         >
           {{ detectLoading ? '...' : 'Detect' }}
         </button>
-        <button
+        <button type="button"
           class="rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500"
           @click="openAddForm"
         >
@@ -215,28 +215,28 @@ async function detectPlaceholders() {
           }}</code>
         </div>
         <div class="ml-2 flex flex-col gap-1">
-          <button
+          <button type="button"
             class="rounded p-1 text-xs text-muted-foreground hover:bg-accent"
             :title="$t('components.pipeline.composite.PortDefinitionPanel.move_up')"
             @click="moveUp(index)"
           >
             &#x25B2;
           </button>
-          <button
+          <button type="button"
             class="rounded p-1 text-xs text-muted-foreground hover:bg-accent"
             :title="$t('components.pipeline.composite.PortDefinitionPanel.move_down')"
             @click="moveDown(index)"
           >
             &#x25BC;
           </button>
-          <button
+          <button type="button"
             class="rounded p-1 text-xs text-muted-foreground hover:bg-accent"
             title="Edit"
             @click="openEditForm(index)"
           >
             &#x270E;
           </button>
-          <button
+          <button type="button"
             class="rounded p-1 text-xs text-destructive hover:bg-destructive/10"
             title="Delete"
             @click="deletePort(index)"
@@ -338,7 +338,7 @@ async function detectPlaceholders() {
         </div>
 
         <div class="flex justify-end gap-2">
-          <button
+          <button type="button"
             class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs hover:bg-accent"
             @click="cancelForm"
           >

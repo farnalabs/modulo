@@ -53,7 +53,7 @@
                     @input="onDirty"
                   />
                   <div v-if="field.secret" class="mt-1">
-                    <button class="text-xs text-muted-foreground hover:text-foreground" @click="field.revealed = !field.revealed">
+                    <button type="button" class="text-xs text-muted-foreground hover:text-foreground" @click="field.revealed = !field.revealed">
                       {{ field.revealed ? $t('common.hide') : $t('common.show') }}
                     </button>
                   </div>

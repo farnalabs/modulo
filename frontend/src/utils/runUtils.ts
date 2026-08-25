@@ -62,7 +62,7 @@ export function heartbeatAgeSeconds(
   if (!heartbeatAt) return null
   if (isTerminalStatus(status)) return null
   const parsed = new Date(heartbeatAt) // nosemgrep: new-date-without-guard
-  if (isNaN(parsed.getTime())) return null
+  if (Number.isNaN(parsed.getTime())) return null
   return Math.max(0, Math.floor((nowMs - parsed.getTime()) / 1000))
 }
 

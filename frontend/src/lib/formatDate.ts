@@ -7,7 +7,7 @@ import { format } from 'date-fns'
 export function toDate(date: Date | string | number | null | undefined): Date | null {
   if (date == null) return null
   const d = date instanceof Date ? date : new Date(date) // nosemgrep: new-date-without-guard
-  return isNaN(d.getTime()) ? null : d
+  return Number.isNaN(d.getTime()) ? null : d
 }
 
 export function formatDateShort(date: Date | string | number | null | undefined): string {

@@ -174,7 +174,7 @@
           <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
-          <button
+          <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-views-delete-cancel"
             @click="deleteConfirmId = null"
