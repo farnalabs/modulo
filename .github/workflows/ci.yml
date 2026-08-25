@@ -10,6 +10,10 @@ env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Fast jobs run on ALL events (PR + push + manual)
 
