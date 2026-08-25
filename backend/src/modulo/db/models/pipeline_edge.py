@@ -35,9 +35,14 @@ class PipelineEdge(OrgScoped):
     edge_type: Mapped[str] = mapped_column(String(15), nullable=False, server_default="normal")
     # FAR-416 (FAR-402 F1): port addressing over the flat run_context/artifact
     # dict. Defaults mirror the pre-port flat-state keys so legacy edges route
-    # identically. Nullable + server_default so existing rows need no rewrite.
-    source_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="out", default="out")
-    target_port: Mapped[str] = mapped_column(String(64), nullable=False, server_default="in", default="in")
+    # identically. Migration 0141 adds these NOT NULL columns but intentionally
+    # DROPs the DB-level default so the constraint is enforced on new rows; a
+    # server_default here would make the ORM omit the column from INSERTs (and
+    # then hit the NOT NULL violation on rows that don't set a port explicitly,
+    # e.g. clone). Use a Python-side default so the value is always emitted on
+    # INSERT while still allowing explicit port values to override it.
+    source_port: Mapped[str] = mapped_column(String(64), nullable=False, default="out")
+    target_port: Mapped[str] = mapped_column(String(64), nullable=False, default="in")
     # MutableDict.as_mutable(JSON): in-place gate-config mutations are tracked
     # as dirty (hitl-gate-removal-guard-plan.md v19 §3 item 7 — defense in
     # depth so a load-then-mutate pattern can never silently bypass a write).
