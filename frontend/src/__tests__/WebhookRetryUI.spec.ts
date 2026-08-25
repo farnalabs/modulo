@@ -91,7 +91,7 @@ describe('WebhookRetryUI', () => {
       await flushPromises()
       await nextTick()
       const buttons = wrapper.findAll('[data-testid="admin-notification-log-retry"]')
-      expect(buttons.length).toBe(1)
+      expect(buttons).toHaveLength(1)
       expect(buttons[0].text()).toBe('Retry')
     })
 
@@ -100,7 +100,7 @@ describe('WebhookRetryUI', () => {
       await flushPromises()
       await nextTick()
       const buttons = wrapper.findAll('[data-testid="admin-notification-log-retry"]')
-      expect(buttons.length).toBe(1)
+      expect(buttons).toHaveLength(1)
     })
 
     it('does not render Retry button for delivered entries', async () => {
@@ -108,7 +108,7 @@ describe('WebhookRetryUI', () => {
       await flushPromises()
       await nextTick()
       const buttons = wrapper.findAll('[data-testid="admin-notification-log-retry"]')
-      expect(buttons.length).toBe(0)
+      expect(buttons).toHaveLength(0)
     })
 
     it('does not render Retry button for pending entries', async () => {
@@ -116,7 +116,7 @@ describe('WebhookRetryUI', () => {
       await flushPromises()
       await nextTick()
       const buttons = wrapper.findAll('[data-testid="admin-notification-log-retry"]')
-      expect(buttons.length).toBe(0)
+      expect(buttons).toHaveLength(0)
     })
 
     it('shows Retrying… text while retry is in progress', async () => {

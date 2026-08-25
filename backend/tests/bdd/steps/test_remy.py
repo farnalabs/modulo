@@ -72,9 +72,11 @@ def _make_mock_session(**overrides: Any) -> MagicMock:
     s = MagicMock()
     s.id = overrides.get("id", uuid.uuid4())
     s.organisation_id = overrides.get("organisation_id", ORG_ID)
-    s.account_id = overrides.get("account_id", USER_ID)
     s.user_id = overrides.get("user_id", USER_ID)
-    s.account_id = overrides.get("account_id", overrides.get("user_id", USER_ID))
+    # ``account_id`` replaced ``user_id`` as the session owner column
+    # (migration 0136). Mirror ``user_id`` so ownership checks in the routes
+    # (``chat_session.account_id != principal.account_id``) behave correctly.
+    s.account_id = overrides.get("account_id", s.user_id)
     s.name = overrides.get("name", "Test Session")
     s.provider = overrides.get("provider", "anthropic")
     s.model = overrides.get("model", "claude-sonnet-4-20250514")
@@ -106,7 +108,13 @@ def _make_mock_skill(**overrides: Any) -> MagicMock:
     s.organisation_id = overrides.get("organisation_id")
     s.account_id = overrides.get("account_id")
     s.user_id = overrides.get("user_id")
-    s.account_id = overrides.get("account_id", overrides.get("user_id"))
+    # Org-scoped skills have ``account_id is None``; user-scoped skills carry
+    # the owner ``account_id``. This mirrors the ``user_id`` → ``account_id``
+    # rename (migration 0136) and the ownership checks in the admin routes.
+    s.account_id = overrides.get(
+        "account_id",
+        s.user_id if s.organisation_id is None else None,
+    )
     s.name = overrides.get("name", "test-skill")
     s.description = overrides.get("description")
     s.triggers = overrides.get("triggers")
