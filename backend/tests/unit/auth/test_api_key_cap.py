@@ -34,6 +34,16 @@ class TestClampRole:
             ("runner", "admin", "runner"),
             ("operator", "admin", "operator"),
         ],
+        ids=[
+            "operator->operator",
+            "operator->runner",
+            "operator->viewer",
+            "runner->runner",
+            "runner->viewer",
+            "runner->operator",
+            "runner->admin",
+            "operator->admin",
+        ],
     )
     def test_clamp_never_escalates(self, minted: str, live: str, expected: str) -> None:
         assert _clamp_role(minted, live) == expected

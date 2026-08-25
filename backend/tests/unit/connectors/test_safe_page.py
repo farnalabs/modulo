@@ -88,6 +88,7 @@ def test_safe_paging_total_non_dict_mid_path_returns_none() -> None:
 @pytest.mark.parametrize(
     "bad",
     ["inf", "-inf", "nan", float("inf"), float("nan"), "not-a-number", "5x", {}],
+    ids=["inf-str", "-inf-str", "nan-str", "inf-float", "nan-float", "not-a-number", "5x", "dict"],
 )
 def test_safe_paging_total_rejects_non_finite_or_unparseable(bad: Any) -> None:
     """Non-finite floats and unparseable values fall back to the safe default (0)."""

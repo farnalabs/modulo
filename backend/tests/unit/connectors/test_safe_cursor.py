@@ -30,7 +30,11 @@ def test_safe_cursor_passes_through_non_empty_strings(value: str) -> None:
     assert safe_cursor(value) == value
 
 
-@pytest.mark.parametrize("value", [None, True, False, 0, 42, -7, 1.5, 10**30, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "value",
+    [None, True, False, 0, 42, -7, 1.5, 10**30, float("nan"), float("inf")],
+    ids=["none", "true", "false", "zero", "positive", "negative", "float", "huge", "nan", "inf"],
+)
 def test_safe_cursor_rejects_non_string_scalars(value: object) -> None:
     """bool/number cursors would be silently mis-serialised by httpx. ``True``
     is rejected even though ``True == 1``: coercion would turn a flag into a

@@ -534,6 +534,16 @@ class TestSubtractMonths:
             (date(2026, 5, 31), 1, date(2026, 4, 30)),
             (date(2026, 12, 31), 1, date(2026, 11, 30)),
         ],
+        ids=[
+            "1m-back",
+            "13m-leap-year",
+            "24m-back",
+            "jan-clamp",
+            "mar31-feb",
+            "feb29-leap",
+            "may31-apr",
+            "dec31-nov",
+        ],
     )
     def test_subtracts_months_with_day_clamping(self, day: date, months: int, expected: date) -> None:
         assert maintenance_mod._subtract_months(day, months) == expected

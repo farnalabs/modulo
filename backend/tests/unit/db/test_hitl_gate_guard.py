@@ -86,6 +86,23 @@ _GATE = {
         ({"claim_expiry_minutes": 30}, {"claim_expiry_minutes": 30}, []),
         ({"claim_expiry_minutes": 60}, {"claim_expiry_minutes": None}, ["claim_expiry_minutes"]),
     ],
+    ids=[
+        "human_only_weakened",
+        "human_only_unchanged",
+        "team_removed",
+        "team_changed",
+        "team_unchanged",
+        "team_added",
+        "condition_changed",
+        "condition_added",
+        "condition_unchanged",
+        "eval_threshold_lowered",
+        "eval_added",
+        "expiry_shortened",
+        "expiry_lengthened",
+        "expiry_unchanged",
+        "expiry_removed",
+    ],
 )
 async def test_field_weakening_detection(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
     old_cfg = {**_GATE, **old_cfg}

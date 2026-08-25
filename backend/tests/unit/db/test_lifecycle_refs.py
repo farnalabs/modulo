@@ -78,6 +78,16 @@ class TestCanonicaliseRefGithub:
             ("github_issue", "123", "123"),
             ("github_issue", "   #123   ", "123"),
         ],
+        ids=[
+            "github-pull",
+            "github-issue",
+            "github-www",
+            "issue-shorthand",
+            "pr-shorthand",
+            "issue-hash",
+            "issue-digits",
+            "issue-hash-spaced",
+        ],
     )
     def test_github_ref_forms(self, kind: str, raw: str, expected: str) -> None:
         assert canonicalise_ref(kind, raw) == expected
@@ -100,6 +110,17 @@ class TestCanonicaliseRefTracker:
             ("linear", "abc", "ABC"),
             ("jira", "far_123", "FAR_123"),
             ("linear", "far-123abc", "FAR-123ABC"),
+        ],
+        ids=[
+            "linear-spaces",
+            "linear-lower",
+            "jira-colon",
+            "linear-url",
+            "jira-hash",
+            "linear-padded",
+            "linear-upper",
+            "jira-underscore",
+            "linear-mixed",
         ],
     )
     def test_tracker_ref_forms(self, kind: str, raw: str, expected: str) -> None:

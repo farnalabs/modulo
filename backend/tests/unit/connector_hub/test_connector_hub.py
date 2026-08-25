@@ -77,6 +77,7 @@ class _FakeCI:
             ConnectorType.YOUTRACK,
         ),
     ],
+    ids=["filesystem", "github", "monday", "trello", "asana", "notion", "confluence", "shortcut", "youtrack"],
 )
 async def test_initialise_creates_connector(connector_type_id, config_json, credentials_json, expected_type, tmp_path):
     if connector_type_id == "filesystem":

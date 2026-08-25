@@ -47,6 +47,26 @@ class TestGetPricing:
             ("azure_openai", "gpt-4o-mini-2024-07-18", 0.15, 0.60),
             ("azure_openai", "o4-mini", 1.10, 4.40),
         ],
+        ids=[
+            "gpt-4o",
+            "gpt-4o-2024-08-06",
+            "gpt-4o-mini-2024-07-18",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-3.5-20241022",
+            "deepseek-chat",
+            "deepseek-v3",
+            "deepseek-r1",
+            "llama-3.3-70b-versatile",
+            "mixtral-8x7b-32768",
+            "sonar",
+            "sonar-pro",
+            "sonar-reasoning",
+            "mixtral-8x22b-instruct",
+            "llama-3.3-70b-instruct-turbo",
+            "azure-gpt-4o-2024-08-06",
+            "azure-gpt-4o-mini-2024-07-18",
+            "azure-o4-mini",
+        ],
     )
     def test_known_model_pricing(
         self, provider: str, model: str, expected_input: float, expected_output: float

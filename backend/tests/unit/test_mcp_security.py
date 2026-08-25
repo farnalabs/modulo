@@ -47,6 +47,24 @@ class TestScopeEnforcement:
             ("runner", "create_model_backend"),
             ("runner", "update_pipeline_graph"),
         ],
+        ids=[
+            "viewer-trigger_pipeline",
+            "viewer-cancel_run",
+            "viewer-create_pipeline",
+            "viewer-create_model_backend",
+            "viewer-update_pipeline_graph",
+            "viewer-review_hitl",
+            "viewer-copy_library_primitive",
+            "viewer-list_pending_hitl",
+            "viewer-get_run_output",
+            "viewer-list_trigger_events",
+            "viewer-update_trigger",
+            "viewer-delete_trigger",
+            "viewer-get_trigger",
+            "runner-create_pipeline",
+            "runner-create_model_backend",
+            "runner-update_pipeline_graph",
+        ],
     )
     def test_read_tool_blocked_for_low_role(self, role: str, tool: str) -> None:
         with pytest.raises(MCPAuthorizationError) as excinfo:
@@ -64,6 +82,16 @@ class TestScopeEnforcement:
             ("operator", "get_run_status"),
             ("admin", "list_pipelines"),
             ("admin", "get_run_status"),
+        ],
+        ids=[
+            "viewer-list_pipelines",
+            "viewer-get_run_status",
+            "runner-list_pipelines",
+            "runner-get_run_status",
+            "operator-list_pipelines",
+            "operator-get_run_status",
+            "admin-list_pipelines",
+            "admin-get_run_status",
         ],
     )
     def test_unrestricted_tools_work_for_all_roles(self, role: str, tool: str) -> None:
@@ -280,6 +308,18 @@ class TestApiKeyRoleRestrictions:
             ("operator", "update_trigger"),
             ("operator", "delete_trigger"),
             ("viewer", "list_pipelines"),
+        ],
+        ids=[
+            "runner-trigger_pipeline",
+            "operator-trigger_pipeline",
+            "admin-trigger_pipeline",
+            "operator-create_pipeline",
+            "admin-create_pipeline",
+            "runner-cancel_run",
+            "runner-get_trigger",
+            "operator-update_trigger",
+            "operator-delete_trigger",
+            "viewer-list_pipelines",
         ],
     )
     def test_role_hierarchy_permits_upward(self, role: str, tool: str) -> None:

@@ -197,6 +197,17 @@ regression that silently weakens the suite:
   (after ``ast.literal_eval``), so ``1`` and ``True`` are deliberately treated
   as distinct and only byte-identical values are flagged — an unambiguous
   duplicate
+- ``@pytest.mark.parametrize`` with a *large* literal case list (``>= 8``
+  cases) and no way to name the cases — no ``ids=`` keyword and not every
+  element carries a per-case ``pytest.param(..., id=...)``. pytest renders
+  each item's nodeid as ``test_x[arr0]``..``test_x[arrN-1]``, so a failure
+  report (and a ``.quarantine.yml`` entry, which records exactly those
+  nodeids) forces the reader to count from the top of the case list to learn
+  which input failed. ``ids=`` naming every case — or per-case
+  ``pytest.param(id=...)`` on the elements that matter — restores
+  self-documenting nodeids; small matrices, non-literal case lists, and
+  matrices where every element already carries ``pytest.param(id=...)`` are
+  left alone
 - ``@pytest.mark.skipif``/``@pytest.mark.xfail`` whose *condition* is a
   statically-foldable literal (``True``, ``0``, ``[]``, a string, ...) — the
   skip outcome is decided at source time. ``skipif(True, ...)`` permanently
@@ -2182,15 +2193,15 @@ def test_empty_container_membership_lens_flags_impossible_membership():
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]]]:
-    """Return ``(lineno, argvalues.elts)`` for every ``@...parametrize``
-    decorator whose ``argvalues`` is a statically-known ``list``/``tuple``
-    literal. Only decorator applications are considered — a bare
-    ``parametrize(...)`` call inside a body is not pytest parametrization and
-    belongs to a different lens. The parametrize-adjacent lenses derive their
-    signal from ``len(elts)`` (``== 0``, ``== 1``, ...) or from the elements
-    themselves (duplicate detection), so a new lens never re-copies the
-    decorator walk."""
+def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr], ast.Call]]:
+    """Return ``(lineno, argvalues.elts, decorator_call)`` for every
+    ``@...parametrize`` decorator whose ``argvalues`` is a statically-known
+    ``list``/``tuple`` literal. Only decorator applications are considered — a
+    bare ``parametrize(...)`` call inside a body is not pytest parametrization
+    and belongs to a different lens. The parametrize-adjacent lenses derive
+    their signal from the decorator call (its ``ids=`` keyword), from
+    ``len(elts)`` (``== 0``, ``== 1``, ...) or from the elements themselves
+    (duplicate detection), so a new lens never re-copies the decorator walk."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -2206,7 +2217,7 @@ def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]
                 argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
-            found.append((dec.lineno, argvalues.elts))
+            found.append((dec.lineno, argvalues.elts, dec))
     return found
 
 
@@ -2217,7 +2228,7 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     body is not pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
-        for lineno, elts in _parametrize_argvalue_lists(tree)
+        for lineno, elts, _dec in _parametrize_argvalue_lists(tree)
         if len(elts) == 1
     ]
 
@@ -2282,7 +2293,7 @@ def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
-        for lineno, elts in _parametrize_argvalue_lists(tree)
+        for lineno, elts, _dec in _parametrize_argvalue_lists(tree)
         if len(elts) == 0
     ]
 
@@ -3674,7 +3685,7 @@ def _duplicate_parametrize_case_violations(tree: ast.AST) -> list[tuple[int, str
     are flagged.
     """
     found = []
-    for lineno, elts in _parametrize_argvalue_lists(tree):
+    for lineno, elts, _dec in _parametrize_argvalue_lists(tree):
         keys: list[str] = []
         for element in elts:
             try:
@@ -3776,6 +3787,132 @@ def test_duplicate_parametrize_lens_flags_repeated_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _duplicate_parametrize_case_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Parametrize case-list sizes at/above which a missing ``ids=`` is flagged.
+#: Below this threshold a handful of auto-indexed ids (``arr[0]``..``arr[3]``)
+#: are still tractable to map by hand; past it, counting from the top of the
+#: case list to identify a failed input is exactly the chore ``ids=`` exists
+#: to remove. A reader (or a ``.quarantine.yml`` entry, which records these
+#: nodeids verbatim) cannot distinguish the cases of an anonymous matrix.
+_PARAMETRIZE_IDS_MIN_CASES = 8
+
+
+def _parametrize_without_ids_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize`` whose
+    literal ``argvalues`` holds ``>= _PARAMETRIZE_IDS_MIN_CASES`` cases and
+    that never names them: no ``ids=`` keyword and not every element carries a
+    per-case ``pytest.param(..., id=...)``. A large matrix without case names
+    reports failures as ``test_x[arr0]``..``test_x[arrN-1]`` — a triage must
+    count from the top of the case list to learn which input failed, and if
+    the matrix is later quarantined the recorded nodeid identifies nothing.
+    ``ids=`` naming every case, or per-case ``pytest.param(id=...)`` on the
+    elements that matter, restores self-documenting nodeids. Parametrizes with
+    a non-literal case list are left alone (the count is not statically
+    known); small matrices are left alone; a matrix where EVERY element is a
+    ``pytest.param(..., id=...)`` is already self-documented."""
+    violations = []
+    for _lineno, elts, dec in _parametrize_argvalue_lists(tree):
+        if any(kw.arg == "ids" for kw in dec.keywords):
+            continue
+        if len(elts) < _PARAMETRIZE_IDS_MIN_CASES:
+            continue
+        per_case_ids = sum(
+            1
+            for el in elts
+            if isinstance(el, ast.Call) and _decorator_name(el) == "param" and any(kw.arg == "id" for kw in el.keywords)
+        )
+        if per_case_ids == len(elts):
+            continue
+        violations.append(
+            (
+                dec.lineno,
+                f"parametrize with {len(elts)} cases and no ids= — failure nodeids are "
+                f"auto-indexed (arr[0]..arr[{len(elts) - 1}]), so triage must count "
+                "cases by hand",
+            )
+        )
+    return violations
+
+
+def test_no_large_parametrize_without_ids():
+    """A ``@pytest.mark.parametrize`` whose literal ``argvalues`` holds a large
+    case matrix (``>= 8`` cases) and that never names its cases leaves failure
+    reporting opaque: pytest renders each item as ``test_x[arr0]``,
+    ``test_x[arr1]``, ... and the reader must count from the top of the case
+    list to learn which input failed. That opacity is not merely cosmetic:
+    the auto-indexed nodeid is the identifier that surfaces in CI logs and the
+    exact string a ``.quarantine.yml`` entry would record, so an anonymous
+    matrix is indistinguishable from one whose ``ids=`` were never written.
+    ``ids=`` naming every case (or per-case ``pytest.param(..., id=...)`` when
+    only a few elements need names) restores self-describing nodeids. Small
+    matrices, non-literal case lists, and parametrizes where every element
+    already carries ``pytest.param(id=...)`` are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _parametrize_without_ids_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parametrize decorator(s) with a large case list and no ids.\n"
+        "A large unlabelled matrix reports failures as test_x[arr0]..test_x[arrN-1] — readers "
+        "and quarantine entries cannot tell the cases apart. Add ids= naming every case "
+        "(or per-case pytest.param(id=...) when only some need names).\n" + "\n".join(violations)
+    )
+
+
+def test_parametrize_without_ids_lens_flags_large_matrices():
+    """Synthetic positive/negative control for the parametrize-without-ids
+    lens: must flag a large (>= 8 case) literal matrix with neither ``ids=``
+    nor per-case ``pytest.param(id=...)`` on every element, and ignore small
+    matrices, matrices with ``ids=``, fully self-documented matrices, non-
+    literal case lists, and a bare ``parametrize(...)`` body call."""
+    positive_sources = [
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8])\n"
+            "    def test_bar(x):\n        assert x\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('a,b', [(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9)])\n"
+            "    def test_bar(a, b):\n        assert a == b\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', argvalues=['a','b','c','d','e','f','g','h','i','j'])\n"
+            "    def test_bar(x):\n        assert x\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _parametrize_without_ids_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1,2,3])\n    def test_bar(x):\n        assert x\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8],\n"
+            "        ids=['a','b','c','d','e','f','g','h'])\n"
+            "    def test_bar(x):\n        assert x\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [pytest.param(1, id='a'), pytest.param(2, id='b'), \n"
+            "        pytest.param(3, id='c'), pytest.param(4, id='d'), pytest.param(5, id='e'), \n"
+            "        pytest.param(6, id='f'), pytest.param(7, id='g'), pytest.param(8, id='h'), \n"
+            "        pytest.param(9, id='i')])\n"
+            "    def test_bar(x):\n        assert x\n"
+        ),
+        "def test_foo():\n    @pytest.mark.parametrize('x', CASES)\n    def test_bar(x):\n        assert x\n",
+        "def test_foo():\n    parametrize('x', [1,2,3,4,5,6,7,8])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _parametrize_without_ids_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _skip_condition_truthiness(node: ast.AST) -> bool | None:

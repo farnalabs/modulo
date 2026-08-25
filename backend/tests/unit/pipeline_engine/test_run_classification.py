@@ -109,6 +109,20 @@ class TestDecisionTable:
             ("budget_exceeded", (), RunClassificationValue.excluded, REASON_BUDGET_EXCEEDED),
             ("budget_exceeded", (_PR,), RunClassificationValue.excluded, REASON_BUDGET_EXCEEDED),
         ],
+        ids=[
+            "complete-no-pr",
+            "complete-with-pr",
+            "failed-no-pr",
+            "failed-with-pr",
+            "eval_failed-no-pr",
+            "eval_failed-with-pr",
+            "stalled-no-pr",
+            "stalled-with-pr",
+            "cancelled-no-pr",
+            "cancelled-with-pr",
+            "budget_exceeded-no-pr",
+            "budget_exceeded-with-pr",
+        ],
     )
     def test_terminal_status_matrix(
         self,
@@ -165,6 +179,17 @@ class TestPrUrlValidity:
             ("not a url", False),
             ("github.com/farnalabs/modulo/pull/3", False),
             ("", False),
+        ],
+        ids=[
+            "github-pull",
+            "github-repo",
+            "http-example",
+            "scheme-only-https",
+            "scheme-only-http",
+            "ftp-blocked",
+            "not-a-url",
+            "bare-host",
+            "empty",
         ],
     )
     def test_validity(self, url: str, valid: bool) -> None:

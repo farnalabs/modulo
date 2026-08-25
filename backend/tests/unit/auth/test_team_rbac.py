@@ -55,6 +55,20 @@ class TestEffectiveAccessModel:
             ("admin", "runner", "runner"),
             ("admin", "operator", "operator"),
         ],
+        ids=[
+            "viewer.viewer",
+            "viewer.runner",
+            "viewer.operator",
+            "runner.viewer",
+            "runner.runner",
+            "runner.operator",
+            "operator.viewer",
+            "operator.runner",
+            "operator.operator",
+            "admin.viewer",
+            "admin.runner",
+            "admin.operator",
+        ],
     )
     def test_effective_team_role(self, org_role: str, team_role: str, expected: str) -> None:
         assert get_effective_team_role(org_role, team_role) == expected
