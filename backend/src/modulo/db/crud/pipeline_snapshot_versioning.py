@@ -270,6 +270,8 @@ async def rollback_to_snapshot(
             target_node_id=edge_data["target_node_id"],
             edge_type=edge_data["edge_type"],
             hitl_gate_config=edge_data["hitl_gate_config"],
+            source_port=edge_data.get("source_port", "out"),
+            target_port=edge_data.get("target_port", "in"),
         )
         session.add(new_edge)
     await session.flush()

@@ -595,6 +595,8 @@ def _edge_to_plain_dict(e: PipelineEdge) -> dict[str, Any]:
         "target_node_id": e.target_node_id,
         "edge_type": e.edge_type,
         "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+        "source_port": e.source_port,
+        "target_port": e.target_port,
     }
 
 
