@@ -77,6 +77,7 @@ class ConnectorType(StrEnum):
     ONEPASSWORD = "onepassword"
     PYPI = "pypi"
     N8N = "n8n"
+    REST = "rest"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -307,6 +308,12 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
             case ConnectorType.N8N:
                 return frozenset({Capability.AUTOMATION, Capability.READ, Capability.WRITE})
+            case ConnectorType.REST:
+                # A verb-agnostic REST connector: query() is the READ surface
+                # (ACL "read") and write() is the WRITE surface (ACL "write").
+                # PUT/DELETE/PATCH are neither cleanly read nor write, but they
+                # MUTATE the remote system, so they live on the write surface.
+                return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.TICKET_TRACKER:
                 return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
             case ConnectorType.LINEAR:

@@ -14,6 +14,7 @@ Sensitive data (credentials, API keys, user content) is never included in span a
 
 import asyncio
 import copy
+import inspect
 import json
 import logging
 import uuid
@@ -65,6 +66,7 @@ from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.pypi import PyPIConnector
+from modulo.connectors.rest import RestConnector, SecurityGuard
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shell import ShellConnector
@@ -135,7 +137,28 @@ class ConnectorHub:
         return self
 
     async def __aexit__(self, *_: object) -> None:
+        await self._close_connectors()
         self.close()
+
+    async def _close_connectors(self) -> None:
+        """Close every held connector's async resources (e.g. pooled clients).
+
+        Consumers that serve streaming/connection-pooled connectors (REST's
+        ``httpx.AsyncClient``) need their async ``close()`` awaited at teardown or
+        keepalive sockets leak. Only connectors that expose a ``close()`` are
+        touched; a connector that does not is left to garbage collection. A
+        failing ``close()`` is logged and does not abort the teardown of the rest.
+        """
+        for connector in self._connectors.values():
+            close = getattr(connector, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.warning("Failed to close connector", exc_info=True)
 
     def close(self) -> None:
         """Release every held connector and its decrypted credentials.
@@ -146,6 +169,10 @@ class ConnectorHub:
         is marked uninitialised; a subsequent ``initialise()`` rebuilds it
         for the next run. Safe to call multiple times and without an
         ``async with`` block.
+
+        Note: asynchronous connector resources (e.g. the REST connector's pooled
+        ``httpx.AsyncClient``) are closed by :meth:`_close_connectors`, which the
+        ``async with`` teardown path awaits before this synchronous pruning.
         """
         self._connectors.clear()
         self._acls.clear()
@@ -183,8 +210,19 @@ class ConnectorHub:
 
                                 _settings = get_settings()
                                 f = Fernet(_settings.fernet_key.encode())
-                                plaintext = f.decrypt(ciphertext)
-                                raw_str = json.dumps({"api_key": plaintext.decode()})
+                                plaintext = f.decrypt(ciphertext).decode("utf-8")
+                                # Multi-field creds round-trip: a JSON dict in the
+                                # ciphertext is used as-is (REST auth_mode/token/
+                                # api_key/...); a bare scalar falls back to the
+                                # legacy single api_key wrapper.
+                                try:
+                                    parsed_plain = json.loads(plaintext)
+                                except json.JSONDecodeError:
+                                    parsed_plain = None
+                                if isinstance(parsed_plain, dict):
+                                    raw_str = plaintext
+                                else:
+                                    raw_str = json.dumps({"api_key": plaintext})
                             except Exception:
                                 logger.warning(
                                     "Failed to decrypt credentials_ciphertext for connector %s", ci.id, exc_info=True
@@ -456,6 +494,34 @@ def _require_config(config: dict[str, Any] | None, key: str, label: str) -> str:
     return value
 
 
+def _core_security_guard() -> SecurityGuard:
+    """Wire the production ``modulo.core`` SSRF + output-injection guards at the root.
+
+    The REST connector depends on the (connector-local) ``SecurityGuard`` port
+    rather than importing ``modulo.core`` directly; this is the single place that
+    binds the port to the real ``modulo.core`` implementations. Imports are lazy
+    to avoid pulling ``pipeline_engine`` / ``ssrf`` at connector-hub import time.
+    """
+
+    async def validate_url(url: str) -> None:
+        from modulo.core.ssrf import validate_outbound_url_async
+
+        await validate_outbound_url_async(url)
+
+    def filter_strings(values: Sequence[str], resource: str) -> None:
+        from modulo.core.pipeline_engine.output_filter import (
+            OutputRejectedError,
+            filter_output_for_injection,
+        )
+
+        for value in values:
+            result = filter_output_for_injection(value)
+            if not result.passed:
+                raise OutputRejectedError(f"{result.reason} (REST resource: {resource!r})")
+
+    return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
+
+
 def _build_connector(
     type_id: str,
     config: dict[str, Any] | None,
@@ -616,6 +682,12 @@ def _build_connector(
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", _LOCALHOST_5678),
             )
+        case "rest":
+            # Generic REST connector: config_json + decrypted creds dict.
+            # Multi-field auth (auth_mode/token/api_key/username/password/...)
+            # arrives as a JSON dict via secrets_backend OR credentials_ciphertext
+            # — not the single api_key fallback (see initialise()).
+            return RestConnector(config=config, creds=creds, security_guard=_core_security_guard())
         case "ticket-tracker":
             provider = config.get("provider", "github")
             if provider == "github":
