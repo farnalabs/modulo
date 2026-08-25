@@ -67,15 +67,15 @@ def _fake_engine(*, used_bytes: int | None = 42_000_000, raise_on_connect: bool 
 @pytest.mark.parametrize(
     ("percent", "expected"),
     [
-        (None, "ok"),
-        (0.0, "ok"),
-        (79.9, "ok"),
-        (80.0, "warn"),
-        (89.9, "warn"),
-        (90.0, "critical"),
-        (97.9, "critical"),
-        (98.0, "full"),
-        (100.0, "full"),
+        pytest.param(None, "ok", id="none"),
+        pytest.param(0.0, "ok", id="zero_percent"),
+        pytest.param(79.9, "ok", id="just_below_warn"),
+        pytest.param(80.0, "warn", id="at_warn_threshold"),
+        pytest.param(89.9, "warn", id="just_below_critical"),
+        pytest.param(90.0, "critical", id="at_critical_threshold"),
+        pytest.param(97.9, "critical", id="just_below_full"),
+        pytest.param(98.0, "full", id="at_full_threshold"),
+        pytest.param(100.0, "full", id="max_percent"),
     ],
 )
 def test_alert_level_boundaries(percent: float | None, expected: str) -> None:
