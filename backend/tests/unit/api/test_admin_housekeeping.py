@@ -358,6 +358,66 @@ class TestPerformCleanup:
         assert len(resp.errors) == 1
 
 
+class TestPurgeCheckpoints:
+    URL = "/api/v1/admin/housekeeping/checkpoints/purge"
+
+    def test_purges_checkpoints_and_reports_bytes(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                new=AsyncMock(return_value={"checkpoints_purged": 12, "threads_purged": 3, "bytes_freed": 4096}),
+            ),
+            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+        ):
+            resp = client.post(self.URL, json={"max_age_days": 5, "confirm": True})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["checkpoints_purged"] == 12
+        assert body["threads_purged"] == 3
+        assert body["bytes_freed"] == 4096
+
+    def test_scopes_purge_to_caller_org_with_requested_age(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                new=AsyncMock(return_value={"checkpoints_purged": 0, "threads_purged": 0, "bytes_freed": 0}),
+            ) as purge_mock,
+            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+        ):
+            client.post(self.URL, json={"max_age_days": 7, "confirm": True})
+
+        purge_mock.assert_awaited_once()
+        args = purge_mock.await_args
+        assert args is not None
+        assert args.kwargs["org_id"] == _ORG_ID
+        assert args.kwargs["max_age_days"] == 7
+
+    def test_requires_confirm(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+            resp = client.post(self.URL, json={"max_age_days": 5})
+        assert resp.status_code == 400
+
+    def test_returns_403_for_non_admin(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post(self.URL, json={"max_age_days": 5, "confirm": True})
+        assert resp.status_code == 403
+
+    def test_returns_401_when_unauthenticated(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.post(self.URL, json={"max_age_days": 5, "confirm": True})
+        assert resp.status_code == 401
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table"))),
+            ),
+            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+        ):
+            resp = client.post(self.URL, json={"max_age_days": 5, "confirm": True})
+        assert resp.status_code == 501
+
+
 def _make_begin_nested(*, raise_on_enter: bool = False) -> MagicMock:
     cm = MagicMock()
     if raise_on_enter:

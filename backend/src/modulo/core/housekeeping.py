@@ -11,6 +11,7 @@ from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
@@ -23,7 +24,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.schema import Schema
 from modulo.db.models.secret import Secret
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
@@ -741,6 +742,59 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
     return candidates
 
 
+async def _scan_checkpoint_retention(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Detect terminal runs whose LangGraph checkpoint rows are reclaimable.
+
+    FAR-432: a terminal run's checkpoint rows (``checkpoints``,
+    ``checkpoint_blobs``, ``checkpoint_writes``) are unread after the run
+    finishes and dominate DB volume (~7.9GB). Reads ``runs`` for TERMINAL runs
+    older than ``CHECKPOINT_RETENTION_DAYS``, estimates the checkpoint bytes each
+    owns, and returns one Candidate per run. DETECTION-ONLY (``entity_type`` is
+    left empty and the category is registered with ``entity_type=None``): the
+    purge is a bulk age-based action, so candidates here are informational and
+    are cleared through the dedicated
+    ``/api/v1/admin/housekeeping/checkpoints/purge`` endpoint rather than the
+    generic per-item cleanup.
+    """
+
+    cutoff = datetime.now(UTC) - timedelta(days=CHECKPOINT_RETENTION_DAYS)
+    runs = (
+        (
+            await session.execute(
+                select(Run)
+                .where(
+                    Run.organisation_id == org_id,
+                    Run.status.in_(sorted(TERMINAL_STATUSES)),
+                    func.coalesce(Run.completed_at, Run.created_at) < cutoff,
+                )
+                .order_by(Run.created_at)
+                .limit(1000)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not runs:
+        return []
+
+    thread_ids = [r.langgraph_thread_id for r in runs]
+    bytes_by_thread, _counts = await _checkpoint_detail(session, thread_ids, org_id)
+
+    candidates: list[Candidate] = []
+    for run in runs:
+        est = int(bytes_by_thread.get(run.langgraph_thread_id, 0) or 0)
+        if est > 0:
+            candidates.append(
+                Candidate(
+                    id=run.langgraph_thread_id,
+                    name=f"Run {run.run_number}",
+                    detail=f"Terminal run ({run.status}) — ~{est} bytes of checkpoint data beyond retention",
+                    created_at=run.created_at.isoformat() if run.created_at else None,
+                )
+            )
+    return candidates
+
+
 _SCANNERS: list[Scanner] = [
     Scanner(
         category="orphan_secrets",
@@ -861,6 +915,16 @@ _SCANNERS: list[Scanner] = [
         description=(
             "Tenant-scoped rows whose organisation_id references a non-existent "
             "organisation (orphaned data) — surfaced for triage, not auto-deleted."
+        ),
+        entity_type=None,
+    ),
+    Scanner(
+        category="checkpoint_retention",
+        scanner=_scan_checkpoint_retention,
+        label="Checkpoint Retention",
+        description=(
+            "Terminal runs with LangGraph graph-state checkpoints beyond the retention "
+            "window — surfaced for purge via the Checkpoint Retention panel (bulk, age-based)."
         ),
         entity_type=None,
     ),

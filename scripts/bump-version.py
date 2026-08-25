@@ -32,6 +32,11 @@ def bump(version: str, part: str) -> str:
 
 
 def write_version(path: Path, old_version: str, new_version: str):
+    # Defense in depth: only ever write version files that live inside the project
+    # root, so user-controlled inputs can never redirect the write elsewhere.
+    resolved = path.resolve()
+    if resolved != PROJECT_ROOT and PROJECT_ROOT not in resolved.parents:
+        raise ValueError(f"refusing to write version outside project root: {path}")
     content = path.read_text()
     if path.suffix == ".toml":
         content = content.replace(f'version = "{old_version}"', f'version = "{new_version}"')
@@ -41,8 +46,14 @@ def write_version(path: Path, old_version: str, new_version: str):
     print(f"  {path.name}: {old_version} -> {new_version}")
 
 
+_VALID_PARTS = {"major", "minor", "patch"}
+
+
 def main():
     part = sys.argv[1] if len(sys.argv) > 1 else "patch"
+    if part not in _VALID_PARTS:
+        print(f"ERROR: invalid part {part!r} (expected one of: {', '.join(sorted(_VALID_PARTS))})")
+        sys.exit(1)
     old = read_version(BACKEND_PYPROJECT)
     if old is None:
         print("ERROR: could not read version from backend/pyproject.toml")

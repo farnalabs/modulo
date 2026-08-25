@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Numeric, String, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -49,6 +49,14 @@ class EvalDefinition(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
+    # Eval-definition versioning (FAR-382): each definition carries an integer
+    # ``version`` starting at 1, bumped on every create and update so a rubric
+    # change is an explicitly version-scoped event. ``pre_version_raw`` snapshots
+    # the raw config as it existed BEFORE the current version was stamped, so a
+    # reversal is reconstructable from the column pair rather than lost. It is
+    # NULL for definitions that have never been updated since versioning.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Two-step soft-delete (FAR-309 PR B): a guardrail eval definition is
     # SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
     # removed, so snapshot pins that reference it keep resolving to a

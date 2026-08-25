@@ -322,8 +322,15 @@ def apply_redaction_masks(
             )
             continue
         if policy.mode == FieldRedactionMode.DROP:
-            redacted = _delete_static_path(redacted, path)
-            entries.append(RedactionEntry(path=path, mode=policy.mode.value, applied=True, reason="dropped"))
+            dropped = _delete_static_path(redacted, path)
+            entries.append(
+                RedactionEntry(
+                    path=path,
+                    mode=policy.mode.value,
+                    applied=dropped,
+                    reason="dropped" if dropped else "field-absent",
+                )
+            )
             continue
         # transform (default): masks-only
         set_static_path(redacted, path, REDACTION_MASK)
@@ -331,18 +338,26 @@ def apply_redaction_masks(
     return redacted, entries
 
 
-def _delete_static_path(payload: dict[str, Any], path: str) -> dict[str, Any]:
+def _delete_static_path(payload: dict[str, Any], path: str) -> bool:
+    """Delete *path* from a caller-owned dict (mirrors :func:`set_static_path`).
+
+    Returns ``True`` when a key was actually removed, ``False`` when the path
+    was absent or could not be resolved. The dict is mutated in place (callers
+    always pass a deep copy), but the boolean return makes the outcome explicit
+    instead of always returning the input payload.
+    """
     segments = _split_path(path)
     if not segments:
-        return payload
+        return False
     current = payload
     for segment in segments[:-1]:
         if not isinstance(current, dict) or segment not in current:
-            return payload
+            return False
         current = current[segment]
     if isinstance(current, dict) and segments[-1] in current:
         del current[segments[-1]]
-    return payload
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

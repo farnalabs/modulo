@@ -3,7 +3,7 @@
 ## Principles
 
 Every FastAPI endpoint must validate all inputs at the boundary. Trust nothing
-from the wire — not path params, not query params, not the request body.
+from the wire: not path params, not query params, not the request body.
 
 1. **Body**: Always use a Pydantic `BaseModel`. Never access `request.json()`,
    `request.form()`, or `request.body()` directly in a route handler.
@@ -19,7 +19,7 @@ from the wire — not path params, not query params, not the request body.
 |---|---|---|
 | Name / display_name | 1 | 255 |
 | Slug | 1 | 255 |
-| Description | — | 2000 |
+| Description | None | 2000 |
 | URL | 1 | 2048 |
 | Provider / model_id / connector_type_id | 1 | 128 |
 | Email | 1 | 320 |

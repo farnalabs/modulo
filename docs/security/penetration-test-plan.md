@@ -1,10 +1,10 @@
-# Penetration Test Plan — Modulo
+# Penetration Test Plan: Modulo
 
 | Field | Value |
 |---|---|
 | Document owner | Security Team |
 | Applies to | Modulo (AI SDLC agent governance platform) |
-| Classification | Internal — Confidential |
+| Classification | Internal (Confidential) |
 | Version | 1.0 |
 | Last updated | 2026-06-28 |
 
@@ -24,7 +24,7 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | **MCP Server** | JSON-RPC over SSE for agent tool invocation, including tool authorisation, scope enforcement, and input validation | MCP endpoint on `app.modulo.run` |
 | **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://app.modulo.run/ws/` |
 | **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `app.modulo.run` |
-| **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin) — handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
+| **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
 | **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/modulo` |
 | **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/*` |
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
@@ -51,10 +51,10 @@ Full external penetration tests are conducted **quarterly** (every 3 months). A 
 
 | Quarter | Window | Status |
 |---|---|---|
-| Q3 2026 | 2026-07-20 — 2026-08-02 | Upcoming |
-| Q4 2026 | 2026-10-19 — 2026-11-01 | Planned |
-| Q1 2027 | 2027-01-18 — 2027-01-31 | Planned |
-| Q2 2027 | 2027-04-19 — 2027-05-02 | Planned |
+| Q3 2026 | 2026-07-20 to 2026-08-02 | Upcoming |
+| Q4 2026 | 2026-10-19 to 2026-11-01 | Planned |
+| Q1 2027 | 2027-01-18 to 2027-01-31 | Planned |
+| Q2 2027 | 2027-04-19 to 2027-05-02 | Planned |
 
 ### 2.2 Remediation Windows
 
@@ -160,7 +160,7 @@ Testing follows the **OWASP Web Security Testing Guide (WSTG) v5.0** with additi
 - **Fernet encryption**: Key management, rotation procedure, ciphertext tampering
 - **TLS**: Certificate chain validation, weak cipher suites, protocol downgrade (TLS <1.2)
 - **Secrets management**: API key storage, encryption at rest, key vault integration
-- **Random number generation**: Session tokens, CSRF tokens, nonces — entropy analysis
+- **Random number generation**: Session tokens, CSRF tokens, nonces: entropy analysis
 - **Password storage**: bcrypt/argon2 cost factor verification
 
 ### 3.9 Business Logic Testing (WSTG-BUS)
@@ -224,7 +224,7 @@ All identified vulnerabilities are recorded in the findings log below. The teste
 | **High** | Significant security control bypass, limited data access, or privilege escalation requiring some precondition. |
 | **Medium** | Information disclosure, cross-tenant data leakage under limited conditions, or security control weakening. |
 | **Low** | Minor information leakage, missing security headers with low exploitation likelihood, or configuration hardening opportunities. |
-| **Info** | Informational observation — does not represent a current risk but may be relevant in combination with other findings. |
+| **Info** | Informational observation: does not represent a current risk but may be relevant in combination with other findings. |
 
 ### Severity Matrix
 
@@ -254,10 +254,10 @@ Severity is assigned based on the intersection of **Impact** and **Likelihood**:
 
 The technical report must include:
 
-1. **Executive summary** — non-technical overview for management, including risk rating and key metrics
-2. **Scope summary** — what was tested, what was excluded, and any deviations from this plan
-3. **Methodology** — testing approach with WSTG references
-4. **Findings** — one section per finding, ordered by severity (highest first), each containing:
+1. **Executive summary**: non-technical overview for management, including risk rating and key metrics
+2. **Scope summary**: what was tested, what was excluded, and any deviations from this plan
+3. **Methodology**: testing approach with WSTG references
+4. **Findings**: one section per finding, ordered by severity (highest first), each containing:
    - Finding ID and severity
    - Endpoint and HTTP method
    - Detailed description and reproduction steps
@@ -266,8 +266,8 @@ The technical report must include:
    - Remediation recommendation
    - CVSS v3.1 score and vector string
    - References to CWE/CVE where applicable
-5. **Retest results** — for any previously identified findings being retested
-6. **Appendices** — raw scan outputs, payload lists, full request/response dumps
+5. **Retest results**: for any previously identified findings being retested
+6. **Appendices**: raw scan outputs, payload lists, full request/response dumps
 
 ### 6.3 Remediation Tracking
 

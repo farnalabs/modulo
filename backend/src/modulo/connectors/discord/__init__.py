@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
@@ -14,7 +15,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.types import _DICT_STR_ANY
 
 _DISCORD_API = "https://discord.com/api/v10"
 

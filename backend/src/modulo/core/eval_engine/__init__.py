@@ -81,6 +81,9 @@ class EvalDefinition(BaseModel):
     failure_behaviour: FailureBehaviour = "warn"
     pass_threshold: float | None = Field(default=None, ge=0.0, le=1.0)  # 0.0-1.0, minimum pass rate for the suite
     suite_id: str | None = None  # groups evals into suites
+    # Definition version snapshot (FAR-382) — carried through so the
+    # ``EvalResult`` write sites can stamp ``eval_definition_version``.
+    version: int = 1
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

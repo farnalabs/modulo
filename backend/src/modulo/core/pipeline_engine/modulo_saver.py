@@ -172,6 +172,53 @@ _log = logging.getLogger(__name__)
 # sites re-raise the ORIGINAL error instead (see aput / aput_writes).
 _RECONNECT_TIMEOUT_SECONDS = 10.0
 
+# Bound on the number of the most recent conversation messages retained in a
+# checkpoint. LangGraph re-persists the ENTIRE growing ``messages`` /
+# ``__root__`` channel value at every superstep, so a long interactive run's
+# checkpoints grow quadratically (each superstep re-dumps the whole
+# accumulated transcript). For an interactive (HITL) pipeline the checkpoint
+# exists so an interrupted run can resume at the human-approval point; the
+# state needed for that resume is carried in ``run_context`` / ``artifacts``
+# / ``_hitl_decision``, NOT the full chat transcript. Bounding the tail keeps
+# resume correct while capping steady-state size (FAR-432 item 4b).
+_CHECKPOINT_MESSAGE_TRIM_TAIL = 100
+
+
+def _trim_checkpoint_channels(checkpoint: Checkpoint) -> Checkpoint:
+    """Trim the voluminous conversational channel(s) in a checkpoint payload.
+
+    Applied just before serialization in :meth:`ModuloPostgresSaver.aput` so
+    the persisted checkpoint never re-dumps the full accumulated conversation.
+    Only the conversational ``messages`` list is bounded — every other channel
+    (``run_context``, ``artifacts``, ``_hitl_decision``, …) is preserved, so a
+    resume sees the identical state apart from a truncated, redundant
+    transcript.
+
+    Handles both shapes LangGraph produces for a conversational state:
+      - a top-level ``channel_values["messages"]`` list, and
+      - a ``channel_values["__root__"]`` dict (an ``Annotated[dict, reducer]``
+        state schema is stored under the root channel) whose value nests a
+        ``messages`` list.
+
+    The value is trimmed to the last :data:`_CHECKPOINT_MESSAGE_TRIM_TAIL`
+    entries. Mutates ``checkpoint`` in place and returns it (the checkpoint is
+    a per-superstep snapshot handed to the checkpointer; the in-memory graph
+    state is unaffected, so the running graph still sees the full history and
+    only the persisted copy is bounded).
+    """
+    channel_values = checkpoint.get("channel_values")
+    if not isinstance(channel_values, dict):
+        return checkpoint
+    messages = channel_values.get("messages")
+    if isinstance(messages, (list, tuple)) and len(messages) > _CHECKPOINT_MESSAGE_TRIM_TAIL:
+        channel_values["messages"] = messages[-_CHECKPOINT_MESSAGE_TRIM_TAIL:]
+    root = channel_values.get("__root__")
+    if isinstance(root, dict):
+        root_messages = root.get("messages")
+        if isinstance(root_messages, (list, tuple)) and len(root_messages) > _CHECKPOINT_MESSAGE_TRIM_TAIL:
+            root["messages"] = root_messages[-_CHECKPOINT_MESSAGE_TRIM_TAIL:]
+    return checkpoint
+
 
 class ModuloPostgresSaver(AsyncPostgresSaver):
     """PostgresSaver with org_id isolation, SET LOCAL enforcement, and encryption.
@@ -497,7 +544,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             current = nv.get(channel) if nv else None
             checkpoint_id = self.get_next_version(current, channel)  # type: ignore[arg-type]
 
-        encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
+        encrypted_checkpoint = self._encrypt_checkpoint(_trim_checkpoint_channels(checkpoint))
 
         await self._aput_write_with_retry(
             thread_id=thread_id,

@@ -114,6 +114,56 @@
         </div>
       </div>
 
+      <div
+        id="checkpoint-retention"
+        class="mb-4 rounded-lg border bg-card shadow-sm"
+        data-testid="hk-checkpoint-retention"
+      >
+        <div class="flex items-center gap-3 border-b px-4 py-3">
+          <div class="flex-1">
+            <h3 class="font-semibold">{{ $t('views.AdminHousekeepingView.checkpoint_retention') }}</h3>
+            <p class="text-xs text-muted-foreground">
+              Purge LangGraph graph-state checkpoints for terminal runs older than N days. The run rows are kept
+              (outputs, telemetry, classification survive for audit + analytics).
+            </p>
+          </div>
+          <span class="text-sm text-muted-foreground">
+            {{ checkpointCandidateCount }} run{{ checkpointCandidateCount === 1 ? '' : 's' }} reclaimable
+          </span>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 px-4 py-3">
+          <label class="flex items-center gap-2 text-sm">
+            Purge terminal runs older than
+            <input
+              v-model.number="ckptMaxAge"
+              type="number"
+              min="1"
+              class="w-20 rounded border bg-transparent px-2 py-1 text-sm text-right"
+              data-testid="hk-ckpt-max-age"
+            />
+            day{{ ckptMaxAge === 1 ? '' : 's' }}
+          </label>
+          <Button v-if="!ckptConfirming" severity="danger" :disabled="ckptPurgeLoading || ckptMaxAge < 1" data-testid="hk-ckpt-purge" @click="ckptConfirming = true">
+            Purge Checkpoints
+          </Button>
+          <template v-else>
+            <span class="text-sm text-muted-foreground">Confirm purge of checkpoints older than {{ ckptMaxAge }} day{{ ckptMaxAge === 1 ? '' : 's' }}?</span>
+            <Button severity="danger" :disabled="ckptPurgeLoading" data-testid="hk-ckpt-purge-confirm" @click="doCheckpointPurge">
+              {{ ckptPurgeLoading ? 'Purging…' : 'Confirm Purge' }}
+            </Button>
+            <Button severity="secondary" outlined :disabled="ckptPurgeLoading" data-testid="hk-ckpt-purge-cancel" @click="ckptConfirming = false">
+              Cancel
+            </Button>
+          </template>
+          <span v-if="ckptResult" class="text-sm text-muted-foreground" data-testid="hk-ckpt-result">
+            Purged {{ ckptResult.checkpoints_purged }} checkpoint row{{ ckptResult.checkpoints_purged === 1 ? '' : 's' }}
+            from {{ ckptResult.threads_purged }} run{{ ckptResult.threads_purged === 1 ? '' : 's' }} ·
+            freed {{ formatBytes(ckptResult.bytes_freed) }}
+          </span>
+          <span v-if="ckptError" class="text-sm text-destructive" data-testid="hk-ckpt-error">{{ ckptError }}</span>
+        </div>
+      </div>
+
       <Dialog v-if="showConfirm" :visible="showConfirm" :modal="true" :dismissable-mask="true" data-testid="hk-confirm-dialog" @update:visible="showConfirm = false">
         <template #header>
           <div>
@@ -184,6 +234,12 @@ interface CleanupResponse {
   errors: { entity_type?: string; id?: string; error: string }[]
 }
 
+interface CheckpointRetentionPurgeResponse {
+  checkpoints_purged: number
+  threads_purged: number
+  bytes_freed: number
+}
+
 const { get, post } = useApi()
 
 const loading = ref(false)
@@ -194,10 +250,28 @@ const selectedIds = ref<Set<string>>(new Set())
 const showConfirm = ref(false)
 const cleaningUp = ref(false)
 
+const ckptMaxAge = ref(3)
+const ckptConfirming = ref(false)
+const ckptPurgeLoading = ref(false)
+const ckptResult = ref<CheckpointRetentionPurgeResponse | null>(null)
+const ckptError = ref<string | null>(null)
+
+// The Checkpoint Retention category is a bulk age-based action, not a
+// per-candidate delete — exclude it from the generic select/cleanup flow.
+const NON_GENERIC_CATEGORIES = new Set(['checkpoint_retention'])
+
 function formatDate(iso: string): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return iso
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const idx = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / Math.pow(1024, idx)
+  return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`
 }
 
 async function scan() {
@@ -218,12 +292,36 @@ async function scan() {
 const allCandidates = computed<{ id: string; category: string; entity_type: string }[]>(() => {
   const result: { id: string; category: string; entity_type: string }[] = []
   for (const cat of categories.value) {
+    if (NON_GENERIC_CATEGORIES.has(cat.category)) continue
     for (const c of cat.candidates) {
       result.push({ id: c.id, category: cat.category, entity_type: c.entity_type })
     }
   }
   return result
 })
+
+const checkpointCandidateCount = computed(() => {
+  const cat = categories.value.find(c => c.category === 'checkpoint_retention')
+  return cat ? cat.count : 0
+})
+
+async function doCheckpointPurge() {
+  ckptPurgeLoading.value = true
+  ckptError.value = null
+  try {
+    const resp = await post<CheckpointRetentionPurgeResponse>('/api/v1/admin/housekeeping/checkpoints/purge', {
+      max_age_days: ckptMaxAge.value,
+      confirm: true,
+    })
+    ckptResult.value = resp
+    ckptConfirming.value = false
+    await scan()
+  } catch (e: unknown) {
+    ckptError.value = e instanceof Error ? e.message : 'Checkpoint purge failed'
+  } finally {
+    ckptPurgeLoading.value = false
+  }
+}
 
 const allSelected = computed(() => {
   return allCandidates.value.length > 0 && allCandidates.value.every(c => selectedIds.value.has(c.id))

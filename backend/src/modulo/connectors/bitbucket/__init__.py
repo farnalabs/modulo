@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -17,21 +17,6 @@ from modulo.connectors.base import (
 )
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
-
-
-def _paging_total(body: object) -> int | None:
-    """Extract Bitbucket's ``size`` field as a safe int.
-
-    Guards against non-finite floats (``inf``/``nan``) which otherwise poison
-    aggregation — Python's json parser produces ``inf`` for overflowing
-    literals such as ``1e999``, so a corrupt or hostile response must not be
-    able to poison the reported total. A non-dict body is treated as absent,
-    and a missing ``size`` keeps the historical ``None`` behaviour.
-    """
-    raw = body.get("size") if isinstance(body, dict) else None
-    if raw is None:
-        return None
-    return _safe_int(raw)
 
 
 class BitbucketConnector(ConnectorBase):
@@ -124,7 +109,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=_safe_records(body, "values"),
-                        total=_paging_total(body),
+                        total=_safe_paging_total(body, "size"),
                     )
                 case "file":
                     workspace = q.filters.get("workspace")
@@ -160,7 +145,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=_safe_records(body, "values"),
-                        total=_paging_total(body),
+                        total=_safe_paging_total(body, "size"),
                     )
                 case "issues":
                     workspace = q.filters.get("workspace")
@@ -180,7 +165,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=_safe_records(body, "values"),
-                        total=_paging_total(body),
+                        total=_safe_paging_total(body, "size"),
                     )
                 case _:
                     raise ValueError(f"Unsupported Bitbucket resource: {q.resource!r}")

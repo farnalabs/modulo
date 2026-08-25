@@ -23,9 +23,9 @@ URL="https://github.com/$REPO/releases/$VERSION/download/modulo-$OS-$ARCH.tar.gz
 echo "Downloading from $URL..."
 
 if command -v curl &>/dev/null; then
-    curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" modulo
+    curl -fsSL --proto '=https' --tlsv1.2 "$URL" | tar xz -C "$INSTALL_DIR" modulo
 elif command -v wget &>/dev/null; then
-    wget -qO- "$URL" | tar xz -C "$INSTALL_DIR" modulo
+    wget -q --https-only -O- "$URL" | tar xz -C "$INSTALL_DIR" modulo
 else
     echo "Error: need curl or wget"
     exit 1
