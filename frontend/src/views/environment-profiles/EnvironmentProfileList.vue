@@ -81,7 +81,7 @@
               <Button severity="secondary" outlined size="small" data-testid="envprofile-list-edit" @click="$router.push(`/environment-profiles/${profile.id}/edit`)">
                 Edit
               </Button>
-              <button
+              <button type="button"
                 class="ml-auto rounded p-1 text-destructive hover:bg-destructive/10 transition-colors"
                 data-testid="envprofile-list-delete"
                 :aria-label="'Delete profile'"
@@ -102,7 +102,7 @@
             <Button :disabled="deleting" severity="danger" size="small" data-testid="envprofile-list-delete-confirm" @click="doDelete">
               {{ deleting ? 'Deleting...' : 'Delete' }}
             </Button>
-            <button
+            <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               data-testid="envprofile-list-delete-cancel"
               @click="deleteConfirmId = null"

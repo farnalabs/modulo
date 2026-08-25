@@ -27,7 +27,7 @@
         </div>
         <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
           {{ myTeamsError }}
-          <button class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
+          <button type="button" class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
         </div>
         <div v-else-if="myTeams.length === 0" class="py-2 text-sm text-muted-foreground">
           {{ $t('views.MyProfileView.not_a_member_of_any_team') }}
@@ -145,7 +145,7 @@ const userInitial = computed(() => {
 
 function formatMemberSince(dateStr: string): string {
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '—'
+  if (Number.isNaN(d.getTime())) return '—'
   return formatDateShort(d)
 }
 

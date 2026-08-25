@@ -188,7 +188,7 @@ const anomalies = ref<AnomalyResponse[]>([])
 
 const totalSpend = computed(() => {
   const ot = (data.value as CostReportResponse)?.org_total
-  if (ot != null) return parseFloat(ot)
+  if (ot != null) return Number.parseFloat(ot)
   return items.value.reduce((sum, i) => sum + i.total_spend_usd, 0)
 })
 const totalRuns = computed(() => {

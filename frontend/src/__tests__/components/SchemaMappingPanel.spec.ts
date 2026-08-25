@@ -21,7 +21,7 @@ vi.mock('../../components/ui/tabs/TabsTrigger.vue', () => ({
   default: {
     name: 'TabsTrigger',
     props: ['value'],
-    template: '<button data-testid="mock-tabs-trigger"><slot /></button>',
+    template: '<button type="button" data-testid="mock-tabs-trigger"><slot /></button>',
   },
 }))
 

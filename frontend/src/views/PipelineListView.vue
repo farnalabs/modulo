@@ -243,7 +243,7 @@
       >
           <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.move_to_folder') }}</h3>
           <div class="space-y-3">
-            <button
+            <button type="button"
               v-for="f in foldersList"
               :key="f.id"
               class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
@@ -253,7 +253,7 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
               {{ f.name }}
             </button>
-            <button
+            <button type="button"
               class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
               :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
               @click="moveToFolderId = null"
@@ -746,7 +746,7 @@ const filteredPipelines = computed(() => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
+  if (Number.isNaN(d.getTime())) return dateStr
   return formatDateShort(d)
 }
 

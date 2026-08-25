@@ -195,7 +195,7 @@
                         <LoadingSpinner v-if="refsLoading && expandedBackendId === backend.id" />
                         <div v-else-if="refsError && expandedBackendId === backend.id" class="flex items-center gap-2 text-sm text-destructive">
                           <span>{{ refsError }}</span>
-                          <button
+                          <button type="button"
                             class="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
                             :data-testid="`admin-model-backends-refs-retry-${backend.id}`"
                             @click="fetchPipelineRefs(backend.id, 1)"
@@ -233,7 +233,7 @@
                             </table>
                             <div v-if="refsData.total > refsData.page_size" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                               <span>{{ $t('views.AdminModelBackendsView.refs_page_info', { page: refsData.page, total: Math.ceil(refsData.total / refsData.page_size) }) }}</span>
-                              <button
+                              <button type="button"
                                 v-if="refsData.page > 1"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
                                 :data-testid="`admin-model-backends-refs-prev-${backend.id}`"
@@ -241,7 +241,7 @@
                               >
                                 {{ $t('views.AdminModelBackendsView.previous') }}
                               </button>
-                              <button
+                              <button type="button"
                                 v-if="refsData.page < Math.ceil(refsData.total / refsData.page_size)"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
                                 :data-testid="`admin-model-backends-refs-next-${backend.id}`"

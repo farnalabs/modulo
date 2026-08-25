@@ -91,7 +91,7 @@
             <Button :disabled="actioningId === p.id" data-testid="proposal-publish" @click="publishProposal(p)">
               {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.publishing') : $t('views.EvalProposalsQueueView.publish') }}
             </Button>
-              <button
+              <button type="button"
                 :disabled="actioningId === p.id"
                 data-testid="proposal-dismiss"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"

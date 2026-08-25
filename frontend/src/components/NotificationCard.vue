@@ -95,7 +95,7 @@ const relativeTime = computed(() => {
   const raw = props.notification.created_at;
   if (!raw) return "";
   const created = new Date(raw);
-  if (isNaN(created.getTime())) return "";
+  if (Number.isNaN(created.getTime())) return "";
   return formatDistanceToNow(created, { addSuffix: true });
 });
 

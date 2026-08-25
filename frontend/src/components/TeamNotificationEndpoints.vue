@@ -8,7 +8,7 @@
 
     <div v-else-if="error" class="mb-3 text-sm text-destructive">
       {{ error }}
-      <button
+      <button type="button"
         class="ml-2 underline"
         data-testid="team-notif-retry"
         @click="loadEndpoints"
@@ -70,7 +70,7 @@
               />
               {{ ep.auto_disabled ? "Disabled" : "Active" }}
             </span>
-            <button
+            <button type="button"
               class="rounded p-1 text-muted-foreground hover:bg-accent"
               data-testid="team-notif-edit"
               title="Edit"
@@ -79,7 +79,7 @@
             >
               <Pencil class="h-4 w-4" />
             </button>
-            <button
+            <button type="button"
               class="rounded p-1 text-muted-foreground hover:text-destructive"
               data-testid="team-notif-test"
               title="Test"
@@ -88,7 +88,7 @@
             >
               <Play class="h-4 w-4" />
             </button>
-            <button
+            <button type="button"
               class="rounded p-1 text-destructive hover:bg-destructive/10"
               data-testid="team-notif-delete"
               title="Delete"
@@ -130,7 +130,7 @@
             This will stop all notifications to this URL.
           </p>
           <div class="mt-3 flex items-center gap-2">
-            <button
+            <button type="button"
               :disabled="deleting"
               data-testid="team-notif-delete-confirm"
               class="rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
@@ -138,7 +138,7 @@
             >
               {{ deleting ? "Deleting..." : "Delete" }}
             </button>
-            <button
+            <button type="button"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
               @click="deleteConfirmId = null"
             >
@@ -210,7 +210,7 @@
             <Button :disabled="!editForm.url.trim() || saving" data-testid="team-notif-edit-save" @click="saveEdit">
               {{ saving ? "Saving..." : "Save" }}
             </Button>
-            <button
+            <button type="button"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
               data-testid="team-notif-edit-cancel"
               @click="cancelEdit"
@@ -281,7 +281,7 @@
           <Button :disabled="!addForm.url.trim() || adding" data-testid="team-notif-add-save" @click="addEndpoint">
             {{ adding ? "Adding..." : "Add" }}
           </Button>
-          <button
+          <button type="button"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
             data-testid="team-notif-add-cancel"
             @click="cancelAdd"
@@ -291,7 +291,7 @@
         </div>
       </div>
 
-      <button
+      <button type="button"
         v-if="canManage && !showAddForm && !editingId"
         class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
         data-testid="team-notif-add-button"

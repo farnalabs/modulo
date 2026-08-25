@@ -11,7 +11,7 @@
     @click="onToggle"
     @keydown.enter="onToggle"
     @keydown.space.prevent="onToggle"
-    :class="toggling ? 'bg-muted-foreground/50' : (checked ? 'bg-primary' : 'bg-input')"
+    :class="switchClass"
   >
     <span
       class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
@@ -21,6 +21,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
+
 const props = defineProps<{
   checked: boolean
   label: string
@@ -37,4 +39,9 @@ function onToggle() {
   if (props.disabled) return
   emit('toggle', !props.checked)
 }
+
+const switchClass = computed(() => {
+  if (props.toggling) return 'bg-muted-foreground/50'
+  return props.checked ? 'bg-primary' : 'bg-input'
+})
 </script>
