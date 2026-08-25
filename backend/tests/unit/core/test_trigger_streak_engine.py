@@ -660,7 +660,7 @@ class TestEnforceSweep:
             patch.object(ts, "_record_streak_mass_cascade", new_callable=AsyncMock) as record,
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
         ):
-            alerted = await ts._maybe_alert_mass_cascade(factory, ORG, redis_client=None)
+            alerted = await ts._maybe_alert_mass_cascade(factory, ORG)
         assert alerted is True
         record.assert_awaited_once_with(ORG, 5)
         ingest.assert_awaited_once()
