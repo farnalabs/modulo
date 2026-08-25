@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _LIST_DICT_STR_ANY
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -16,7 +17,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.types import _LIST_DICT_STR_ANY
 
 _BUILDKITE_API = "https://api.buildkite.com/v2"
 

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo._types import _DICT_STR_ANY
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -16,7 +17,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.types import _DICT_STR_ANY
 
 _BASE = "https://api.pagerduty.com"
 
