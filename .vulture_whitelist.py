@@ -238,4 +238,6 @@ __all__ = [
     # --- Product analytics enforcement (FAR-361) ---
     "is_enforcement_active",
     "should_degrade_to_community",
+    # --- REST connector fan-out error attributes (FAR-411, consumed by operators/tests) ---
+    "cardinality_over_cap",  # RESTCardinalityExceededError metric: True when a fan-out hit the cap fail-closed
 ]
