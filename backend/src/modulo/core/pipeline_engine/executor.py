@@ -591,6 +591,45 @@ def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
     return False
 
 
+# Node types that can PAUSE a run for human input and therefore REQUIRE a
+# LangGraph checkpointer to be able to resume. Any pipeline containing one is
+# "interactive". Everything else (agent / connector / sandbox_agent) is a
+# batch pipeline that never pauses, so its checkpoints are pure overhead.
+_INTERACTIVE_NODE_TYPES: frozenset[str] = frozenset({"manual"})
+
+
+def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
+    """True when the graph needs checkpoint persistence (HITL/interactive).
+
+    A checkpoint is only useful for a run that can PAUSE and RESUME. Two graph
+    shapes make a pipeline interactive, matching exactly the LangGraph paths
+    that call ``interrupt()`` (node_runner):
+      - an edge carrying ``hitl_gate_config`` (a HITL gate is inserted between
+        source and target and interrupts for human approval / review), and
+      - a node with ``node_type == "manual"`` (a manual-input node that
+        interrupts and waits for human output).
+
+    Batch pipelines (pure ``agent`` / ``connector`` / ``sandbox_agent`` nodes,
+    no HITL gates) never pause, so persisting a checkpoint after every
+    superstep is pure overhead (FAR-432: drive persist-off for them).
+
+    When the graph cannot be inspected (None / not a dict) we are conservative
+    and return True so a genuinely interactive pipeline is never broken by
+    lacking a checkpointer — the only caller (``_execute_stream``) always has a
+    real ``graph_json``.
+    """
+    if not isinstance(graph_json, dict):
+        return True
+    any_interactive_node = any(
+        isinstance(node, dict) and str(node.get("node_type", "")).strip() in _INTERACTIVE_NODE_TYPES
+        for node in graph_json.get("nodes", []) or []
+    )
+    any_hitl_gate_edge = any(
+        isinstance(edge, dict) and edge.get("hitl_gate_config") for edge in graph_json.get("edges", []) or []
+    )
+    return any_interactive_node or any_hitl_gate_edge
+
+
 async def _script_lease_probe_ok(
     session_factory: Callable[..., Any] | None,
     run_id: str,
@@ -3167,7 +3206,15 @@ class PipelineExecutor:
                 {"rid": str(run_id)},
             )
 
-        if self._checkpointer_conn_string:
+        # FAR-432 (item 4a): a checkpointer is ONLY attached when the pipeline
+        # is HITL/interactive. The decision is DERIVED from the graph at
+        # execution time (a HITL gate edge or a ``manual`` input node → resume
+        # must work → persist). Batch pipelines never pause, so their
+        # per-superstep checkpoints are pure overhead — derive persistence off.
+        # ``compiled`` is shared via the graph cache, so the checkpointer is
+        # explicitly cleared in the non-interactive branch to avoid leaking a
+        # previously-attached saver into a batch run of the same snapshot.
+        if self._checkpointer_conn_string and _graph_is_interactive(graph_json):
             from modulo.settings import get_settings
 
             _settings = get_settings()
@@ -3193,6 +3240,7 @@ class PipelineExecutor:
                     node_type_map=node_type_map,
                 )
         else:
+            compiled.checkpointer = None
             final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                 compiled,
                 initial_state,
