@@ -169,45 +169,70 @@ def _apply_renames(result: dict[str, Any], renames: dict[str, str]) -> dict[str,
       forwarded before the field is overwritten.
     """
     cycles = _detect_rename_cycles(renames)
-    for cycle in cycles:
-        saved = {name: result.get(name) for name in cycle}
-        for i, name in enumerate(cycle):
-            predecessor = cycle[i - 1]
-            if predecessor in result:
-                result[name] = saved[predecessor]
-        _log.warning(
-            "Circular rename chain detected: %s -> %s; applied as value rotation",
-            " -> ".join(cycle),
-            cycle[0],
-        )
+    _apply_cycle_rotations(result, cycles)
 
     cyclic_nodes = {name for cycle in cycles for name in cycle}
-    sources = set(renames)
     pending = {old: new for old, new in renames.items() if old not in cyclic_nodes}
+    _apply_pending_renames(result, pending, sources=set(renames))
 
+    return result
+
+
+def _apply_cycle_rotations(result: dict[str, Any], cycles: list[list[str]]) -> None:
+    """Rotate values along each rename cycle so no field is lost (see module doc)."""
+    for cycle in cycles:
+        _apply_single_cycle(result, cycle)
+
+
+def _apply_single_cycle(result: dict[str, Any], cycle: list[str]) -> None:
+    saved = {name: result.get(name) for name in cycle}
+    for i, name in enumerate(cycle):
+        predecessor = cycle[i - 1]
+        if predecessor in result:
+            result[name] = saved[predecessor]
+    _log.warning(
+        "Circular rename chain detected: %s -> %s; applied as value rotation",
+        " -> ".join(cycle),
+        cycle[0],
+    )
+
+
+def _apply_pending_renames(
+    result: dict[str, Any],
+    pending: dict[str, str],
+    sources: set[str],
+) -> None:
+    """Apply non-cyclic renames tail-first, warning on irreducible cycles."""
     while pending:
-        progressed = False
-        for old_name, new_name in list(pending.items()):
-            if new_name in pending:
-                continue
-            if old_name in result:
-                if new_name in result and new_name not in sources:
-                    _log.warning(
-                        "Rename %s -> %s: target field already exists, overwriting",
-                        old_name,
-                        new_name,
-                    )
-                result[new_name] = result.pop(old_name)
-            del pending[old_name]
-            progressed = True
-        if not progressed:
+        if not _advance_pending_renames(result, pending, sources):
             _log.warning(
                 "Rename plan has an irreducible cycle: %s",
                 ", ".join(f"{old} -> {new}" for old, new in pending.items()),
             )
             break
 
-    return result
+
+def _advance_pending_renames(
+    result: dict[str, Any],
+    pending: dict[str, str],
+    sources: set[str],
+) -> bool:
+    """Apply one pass of resolvable renames. Return True if any progressed."""
+    progressed = False
+    for old_name, new_name in list(pending.items()):
+        if new_name in pending:
+            continue
+        if old_name in result:
+            if new_name in result and new_name not in sources:
+                _log.warning(
+                    "Rename %s -> %s: target field already exists, overwriting",
+                    old_name,
+                    new_name,
+                )
+            result[new_name] = result.pop(old_name)
+        del pending[old_name]
+        progressed = True
+    return progressed
 
 
 def apply_migration(data: dict[str, Any], plan: MigrationPlan) -> dict[str, Any]:
