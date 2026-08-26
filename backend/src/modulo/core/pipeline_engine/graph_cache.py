@@ -38,6 +38,11 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.port_resolver import (
     synthesize_node_ports,
 )
+from modulo.core.pipeline_engine.scatter_join import (
+    run_join_node,
+    run_scatter_node,
+    validate_scatter_join_node,
+)
 
 # Cache key: (pipeline_id, snapshot_id, pipeline_node_timeout_seconds). The
 # third element matters because the compiled graph bakes the effective per-node
@@ -357,15 +362,14 @@ def _count_sandbox_nodes(nodes: list[dict[str, Any]]) -> bool:
     return sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
 
 
-def _add_node_to_graph(
-    graph: StateGraph[Any],
+def _make_node_fn(
     node_def: dict[str, Any],
     *,
     timeout: int,
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
-) -> None:
-    """Add a single node to the graph based on its type and config."""
+) -> Any:
+    """Build the LangGraph node function for a single node def (no graph add)."""
     node_id: str = str(node_def["id"])
     role: str | None = node_def.get("role")
     node_type: str = node_def.get("node_type", "agent")
@@ -377,29 +381,181 @@ def _add_node_to_graph(
 
     connector_binding = node_def.get("connector_binding")
 
-    node_fn: Any
     if node_type == "sandbox_agent":
-        node_fn = make_sandbox_agent_fn(
+        return make_sandbox_agent_fn(
             node_def,
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
         )
-    elif connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
-        node_fn = make_connector_fn(node_def, timeout=timeout)
-    elif node_type == "manual":
-        node_fn = make_manual_node_fn(node_def, timeout=timeout)
-    else:
-        # agent nodes (with or without a frozen agent_id) and connector nodes
-        # without a binding default to the general agent node factory.
-        node_fn = make_node_fn(
-            node_def,
-            role=role,
-            timeout=timeout,
-            max_input_length=max_input_length,
-            token_budget=token_budget,
+    if connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
+        return make_connector_fn(node_def, timeout=timeout)
+    if node_type == "manual":
+        return make_manual_node_fn(node_def, timeout=timeout)
+    # agent nodes (with or without a frozen agent_id) and connector nodes
+    # without a binding default to the general agent node factory.
+    return make_node_fn(
+        node_def,
+        role=role,
+        timeout=timeout,
+        max_input_length=max_input_length,
+        token_budget=token_budget,
+    )
+
+
+def make_scatter_node_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: int,
+    session_factory: Callable[..., Any] | None = None,
+    single_sandbox_node: bool = False,
+) -> Any:
+    """Build the runtime node function for a scatter (fan-out) node.
+
+    At execution the split source port is read from ``state``; it is expanded
+    into N child branches (each a unique ``child_id``) which are executed
+    sequentially by the standard node factory in P3. Per-child outputs are
+    written back into state keyed by their child id, plus a
+    ``__scatter_manifest__`` map so a downstream join can locate them. An empty
+    split source succeeds vacuously (no child calls).
+    """
+    parent_id = str(node_def["id"])
+    fan_out = node_def["fan_out"]
+    split = fan_out.get("split") if isinstance(fan_out, dict) else fan_out.split
+
+    async def _fn(state: dict[str, Any]) -> dict[str, Any]:
+        items = state.get(split) or [] if split is not None else []
+        status_map: dict[str, str] = {}
+
+        async def execute_child(child_def: dict[str, Any]) -> Any:
+            child_fn = _make_node_fn(
+                child_def,
+                timeout=timeout,
+                session_factory=session_factory,
+                single_sandbox_node=single_sandbox_node,
+            )
+            child_id = str(child_def["id"])
+            item = child_def.get("scatter_item")
+            # Deliver the per-item payload to the child so each branch processes
+            # its OWN item rather than an identical copy of the parent state.
+            # The item is injected as the child's run_context input (the
+            # conventional agent input channel, rendered into the prompt as
+            # ``{{ input }}``) and mirrored under ``__scatter_item__`` for direct
+            # template reference (``{{ state.__scatter_item__ }}``).
+            child_state = dict(state)
+            run_ctx = dict(child_state.get("run_context") or {})
+            run_ctx["input"] = item
+            child_state["run_context"] = run_ctx
+            child_state["__scatter_item__"] = item
+            try:
+                out = await child_fn(child_state)
+                status_map[child_id] = "succeeded"
+                return out
+            except Exception as exc:  # record per-branch failure
+                # A child failure must NOT abort the whole scatter: record the
+                # failed branch so a downstream join can apply its partial-failure
+                # policy (``join_partial_policy="fail"`` raises; the default
+                # ``collect_and_proceed`` aggregates the partial result). This is
+                # what makes ``__scatter_read`` statuses real at runtime (FAR-402
+                # §4 B).
+                status_map[child_id] = "failed"
+                return {"error": str(exc), "_scatter_child_failed": True}
+
+        results = await run_scatter_node(node_def, items=list(items), execute_child=execute_child)
+        manifest = [str(k) for k in results]
+        update: dict[str, Any] = dict(results)
+        if manifest:
+            update["__scatter_manifest__"] = {parent_id: manifest}
+        if status_map:
+            update["__scatter_status__"] = status_map
+        return update
+
+    return _fn
+
+
+def make_join_node_fn(
+    node_def: dict[str, Any],
+) -> Any:
+    """Build the runtime node function for a join (fan-in) node.
+
+    Gathers each collected branch's output from ``state`` (located via the
+    ``__scatter_manifest__`` written by the upstream scatter node), then
+    aggregates them per the node's ``aggregate`` spec. The aggregated value is
+    written back under the join node's own id.
+    """
+    node_id = str(node_def["id"])
+    collect = node_def.get("collect") or []
+
+    def _fn(state: dict[str, Any]) -> dict[str, Any]:
+        manifest_map = state.get("__scatter_manifest__", {})
+        status_map = state.get("__scatter_status__", {})
+        collected: list[dict[str, Any]] = []
+        for spec in collect:
+            parent_id = spec.get("node") if isinstance(spec, dict) else spec.node
+            child_ids = manifest_map.get(parent_id, [])
+            for child_id in child_ids:
+                collected.append(
+                    {
+                        "node_id": child_id,
+                        "output": state.get(child_id),
+                        "status": status_map.get(child_id, "succeeded"),
+                    }
+                )
+        result = run_join_node(node_def, collected=collected)
+        return {node_id: result.get("aggregated")}
+
+    return _fn
+
+
+def _add_node_to_graph(
+    graph: StateGraph[Any],
+    node_def: dict[str, Any],
+    *,
+    timeout: int,
+    session_factory: Callable[..., Any] | None,
+    single_sandbox_node: bool,
+) -> None:
+    """Add a single node to the graph based on its type and config."""
+    node_type: str = node_def.get("node_type", "agent")
+    node_id: str = str(node_def["id"])
+
+    # FAR-402 P3 / FAR-417: compile-time fail-closed validation of scatter/join
+    # configuration (typed error surfaces before any execution).
+    validate_scatter_join_node(node_def)
+
+    if node_type == "join":
+        # FAR-402 P3 / FAR-417: a join node is a pure convergence node. Its child
+        # branches are executed by the upstream scatter node (or are real graph
+        # nodes); the join simply aggregates their collected outputs from state.
+        graph.add_node(node_id, make_join_node_fn(node_def))
+        return
+
+    if node_def.get("fan_out") is not None and node_type in ("agent", "sandbox_agent"):
+        # FAR-402 P3 / FAR-417: a scatter node expands its split source into N
+        # child branches at runtime, each with a unique correlation id.
+        # Both agent and sandbox_agent nodes are executable as children, so
+        # fan_out is honored for both (composite is rejected at validation
+        # because it has no runtime child factory).
+        graph.add_node(
+            node_id,
+            make_scatter_node_fn(
+                node_def,
+                timeout=timeout,
+                session_factory=session_factory,
+                single_sandbox_node=single_sandbox_node,
+            ),
         )
-    graph.add_node(node_id, node_fn)
+        return
+
+    graph.add_node(
+        node_id,
+        _make_node_fn(
+            node_def,
+            timeout=timeout,
+            session_factory=session_factory,
+            single_sandbox_node=single_sandbox_node,
+        ),
+    )
 
 
 def _build_reject_targets(edges: list[dict[str, Any]]) -> dict[str, str]:

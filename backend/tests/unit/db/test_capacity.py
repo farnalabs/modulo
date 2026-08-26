@@ -77,6 +77,17 @@ def _fake_engine(*, used_bytes: int | None = 42_000_000, raise_on_connect: bool 
         pytest.param(98.0, "full", id="at_full_threshold"),
         pytest.param(100.0, "full", id="max_percent"),
     ],
+    ids=[
+        "none",
+        "zero",
+        "below_warn_boundary",
+        "warn_boundary",
+        "below_critical_boundary",
+        "critical_boundary",
+        "below_full_boundary",
+        "full_boundary",
+        "over_full",
+    ],
 )
 def test_alert_level_boundaries(percent: float | None, expected: str) -> None:
     assert _alert_level(percent) == expected

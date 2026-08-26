@@ -41,6 +41,11 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
 )
 from modulo.core.graph_validator import GraphValidator
+from modulo.core.pipeline_engine.scatter_join import (
+    FanOutConfig,
+    JoinAggregateSpec,
+    JoinCollectSpec,
+)
 from modulo.core.reports.quality_report import (
     deliver_quality_report,
     generate_quality_report,
@@ -592,7 +597,7 @@ class CapabilityScope(BaseModel):
 
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "join"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -702,6 +707,20 @@ class PipelineGraphNode(BaseModel):
         default_factory=list,
         description="Filesystem detector: globs of sandbox paths whose change counts as activity.",
     )
+    # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
+    # sandbox_agent / composite node (NOT a new node_type). When set, the node
+    # splits its `split` source port into N parallel branches. The compile step
+    # expands this into N distinct child node identities with unique ids.
+    fan_out: FanOutConfig | None = None
+    # FAR-402 P3 / FAR-417: join (fan-in). Only valid on a `join` node_type.
+    # `collect` lists the upstream branches to gather; `aggregate` declares how
+    # to fold them.
+    collect: list[JoinCollectSpec] | None = None
+    aggregate: JoinAggregateSpec | None = None
+    # Policy when some collected branches failed (non-empty, non-timeout).
+    # "collect_and_proceed" (default) marks failed branches in the output;
+    # "fail" raises. Deadline (seconds) for waiting on slow/partial branches.
+    join_partial_policy: Literal["collect_and_proceed", "fail"] = "collect_and_proceed"
     # FAR-416 (FAR-402 F1): ports are ADDITIVE metadata over the flat
     # run_context/artifact dict. A port name maps 1:1 to the flat-state key the
     # node already uses (identity mapping). When absent, the lazy backfill
@@ -725,8 +744,17 @@ class PipelineGraphNode(BaseModel):
             "composite": self._validate_composite_node,
             "sandbox_agent": self._validate_sandbox_agent_node,
             "agent": self._validate_agent_node,
+            "join": self._validate_join_node,
         }
         node_validators[self.node_type]()
+        # FAR-402 P3 / FAR-417: fan_out / collect / aggregate cross-checks.
+        if self.fan_out is not None and self.node_type == "join":
+            raise ValueError("A join node cannot also declare fan_out")
+        if self.fan_out is not None and self.node_type not in (
+            "agent",
+            "sandbox_agent",
+        ):
+            raise ValueError("fan_out is only allowed on agent / sandbox_agent nodes")
         # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
         # A non-sandbox node that sets them is rejected ÔÇö the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
@@ -813,6 +841,22 @@ class PipelineGraphNode(BaseModel):
     def _validate_agent_node(self) -> None:
         if self.agent_id is None:
             raise ValueError("Agent nodes require an agent")
+
+    def _validate_join_node(self) -> None:
+        # A join node is a pure convergence node — it has no agent, no connector
+        # binding, and no manual output schema of its own.
+        if self.agent_id is not None:
+            raise ValueError("Join nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Join nodes cannot have connector bindings")
+        if not self.collect:
+            raise ValueError("Join nodes require a non-empty 'collect' list")
+        if self.aggregate is None:
+            raise ValueError("Join nodes require an 'aggregate'")
+        if self.aggregate.kind == "merge_by_key" and not self.aggregate.key:
+            raise ValueError("Join aggregate merge_by_key requires an explicit 'key'")
+        if self.aggregate.kind == "map" and not self.aggregate.map_expression:
+            raise ValueError("Join aggregate map requires a 'map_expression'")
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:
