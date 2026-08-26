@@ -61,7 +61,7 @@ without managing servers or databases.
 
 ```bash
 # One-time
-fly launch --image ghcr.io/anomalyco/modulo
+fly launch --image ghcr.io/farnalabs/modulo
 fly postgres create --name modulo-db
 fly redis create --name modulo-redis
 fly secrets set \
@@ -74,7 +74,7 @@ fly secrets set \
 fly deploy
 ```
 
-A `fly.toml` template is in `deploy/fly/`.
+A `fly.toml` is at the repository root (`deploy/fly/` holds bootstrap and entrypoint scripts only).
 
 ### Option B: Railway
 
