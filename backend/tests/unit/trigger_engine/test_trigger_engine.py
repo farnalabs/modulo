@@ -626,9 +626,15 @@ class TestTriggerEngineEvaluateCondition:
     def polling_env(self):
         settings = MagicMock()
         settings.fernet_key = _VALID_32
+        # FAR-442: evaluate_condition now resolves a shared rate-limit Redis client.
+        # A truthy MagicMock redis_url would attempt a real Redis.from_url build (and
+        # fail on the MagicMock url); indicate Redis is NOT configured so the resolver
+        # short-circuits to None (the connector-local bucket is correct here).
+        settings.redis_url = ""
+        settings.modulo_db = "postgresql"
         with (
             patch("modulo.settings.get_settings", return_value=settings),
-            patch("modulo.core.trigger_engine.create_secrets_backend") as mock_sb,
+            patch("modulo.core.secrets_backend.create_secrets_backend") as mock_sb,
             patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock_build,
             patch("modulo.core.trigger_engine.polling.evaluate_condition") as mock_eval,
         ):
@@ -641,10 +647,11 @@ class TestTriggerEngineEvaluateCondition:
             query_result.records = [{"number": 1}]
             query_result.total = 1
             connector.query.return_value = query_result
+            connector.close = AsyncMock()
             mock_build.return_value = connector
 
             mock_eval.return_value = True
-            yield mock_sb, mock_build, mock_eval, connector
+            yield mock_sb, mock_eval, connector
 
     @staticmethod
     def _session(instance: Any) -> AsyncMock:
@@ -679,7 +686,7 @@ class TestTriggerEngineEvaluateCondition:
         assert result["total"] == 1
 
     async def test_no_match_returns_records(self, polling_env) -> None:
-        _sb, _build, mock_eval, _connector = polling_env
+        _sb, mock_eval, _connector = polling_env
         mock_eval.return_value = False
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
@@ -687,7 +694,7 @@ class TestTriggerEngineEvaluateCondition:
         assert result["records"] == [{"number": 1}]
 
     async def test_connector_init_failed_returns_error(self, polling_env) -> None:
-        mock_sb, _build, _eval, _connector = polling_env
+        mock_sb, _eval, _connector = polling_env
         mock_sb.side_effect = RuntimeError("fernet key invalid")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
@@ -695,7 +702,7 @@ class TestTriggerEngineEvaluateCondition:
         assert "Connector init failed" in result["error"]
 
     async def test_query_failed_returns_error(self, polling_env) -> None:
-        _sb, _build, _eval, connector = polling_env
+        _sb, _eval, connector = polling_env
         connector.query.side_effect = RuntimeError("upstream 500")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
@@ -703,7 +710,7 @@ class TestTriggerEngineEvaluateCondition:
         assert "Query failed" in result["error"]
 
     async def test_condition_evaluation_failed_returns_error(self, polling_env) -> None:
-        _sb, _build, mock_eval, _connector = polling_env
+        _sb, mock_eval, _connector = polling_env
         mock_eval.side_effect = ValueError("Invalid JMESPath expression")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
@@ -715,7 +722,7 @@ class TestTriggerEngineEvaluateCondition:
         ["connector_init", "query", "condition_eval"],
     )
     async def test_cancelled_error_propagates(self, polling_env, stage: str) -> None:
-        mock_sb, _build, mock_eval, connector = polling_env
+        mock_sb, mock_eval, connector = polling_env
         if stage == "connector_init":
             mock_sb.side_effect = asyncio.CancelledError()
         elif stage == "query":

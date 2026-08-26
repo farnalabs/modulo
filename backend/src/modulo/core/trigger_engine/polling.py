@@ -9,8 +9,10 @@ and tests keep importing ``polling.fire_polling_trigger``. The old duplicated
 removed in PR C of the Celery->SAQ migration.
 """
 
+import asyncio
 import datetime
 import hashlib
+import inspect
 import logging
 import uuid
 from decimal import Decimal
@@ -36,11 +38,26 @@ _ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 # ---------------------------------------------------------------------------
 
 
-def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+def _build_polling_connector(
+    type_id: str,
+    config: dict[str, Any],
+    creds: dict[str, Any],
+    *,
+    redis_client: Any = None,
+    tenant_id: str | None = None,
+) -> ConnectorBase:
     """Build a one-shot connector for polling queries.
 
     Mirrors ``modulo.core.connector_hub._build_connector()`` but does not
     wrap in a ``_TracedConnector`` since polling runs outside a normal run context.
+
+    When ``redis_client`` and ``tenant_id`` (the organisation id) are supplied the
+    REST connector is wired to the SHARED fleet-wide per-destination rate budget
+    (FAR-442): trigger-invoked REST connectors enforce the SAME budget as
+    run-executor connectors, and each org gets its own budget (no cross-tenant
+    ``"default"`` key). Without them the connector stays on the per-process local
+    bucket (single-worker dev / no-fleet), which is correct when no shared budget
+    exists to multiply.
     """
     from modulo.connectors.filesystem import FilesystemConnector
     from modulo.connectors.github import GitHubConnector
@@ -83,9 +100,92 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
                 config=config,
                 creds=creds,
                 security_guard=_core_security_guard(),
+                redis_client=redis_client,
+                tenant_id=tenant_id,
             )
         case _:
             raise ValueError(f"Unsupported connector type for polling: {type_id!r}")
+
+
+async def _build_polling_connector_from_instance(
+    session: AsyncSession,
+    connector_instance: Any,
+    org_id: uuid.UUID | str,
+) -> tuple[ConnectorBase, Any]:
+    """Wire a polling REST connector to the shared fleet-wide rate budget.
+
+    Shared by the cron fire path (``cron_helpers``) and the sync one-off
+    ``TriggerEngine.evaluate_condition`` so the three-step wiring
+    (``create_secrets_backend`` -> ``get_secret`` -> ``resolve_shared_rate_limit_redis``
+    -> ``_build_polling_connector``) can never fork again (FAR-442).
+
+    Returns ``(connector, redis_client)``. The caller OWNS both and MUST release
+    them via :func:`_close_polling_resources` in a ``finally`` — otherwise a
+    fresh ``Redis.from_url`` is built and left unclosed on every fire (FAR-442
+    client leak). ``redis_client`` may be ``None`` (Redis genuinely not
+    configured / a non-tenant probe), in which case the connector stays on its
+    per-process local bucket — correct when no shared budget exists to multiply.
+
+    Raises :class:`SharedBudgetUnavailableError` (fail-closed) when the shared
+    budget is configured but unresolvable; the caller surfaces that per its own
+    contract rather than degrading to the per-process bucket (which would
+    reconstruct the fleet-wide ``N x burst`` fail-open FAR-439 removed).
+    """
+    import json
+
+    from modulo.core.connector_hub import resolve_shared_rate_limit_redis
+    from modulo.core.secrets_backend import create_secrets_backend
+    from modulo.settings import get_settings
+
+    settings = get_settings()
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
+    creds: dict[str, Any] = json.loads(raw_creds)
+    redis_client = resolve_shared_rate_limit_redis(str(org_id))
+    try:
+        connector = _build_polling_connector(
+            connector_instance.connector_type_id,
+            connector_instance.config_json,
+            creds,
+            redis_client=redis_client,
+            tenant_id=str(org_id),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The connector build raised (bad config, missing file, KeyError on
+        # creds, unsupported type). ``redis_client`` was resolved before the
+        # build and never reaches the caller, so merely re-raising would
+        # ORPHAN the fresh ``Redis.from_url`` pool on every fire (FAR-442
+        # client leak). Close it here so a misconfigured connector leaks nothing.
+        if redis_client is not None:
+            await redis_client.aclose()
+        raise
+    return connector, redis_client
+
+
+async def _close_polling_resources(connector: ConnectorBase | None, redis_client: Any | None) -> None:
+    """Release a polling connector's async resources + its shared Redis client.
+
+    Mirrors ``ConnectorHub._close_connectors`` so the polling path never leaks a
+    pooled ``httpx.AsyncClient`` or the fresh ``Redis.from_url`` built per fire
+    (FAR-442). A failing ``close()``/``aclose()`` is logged, never raised — a
+    teardown failure must not mask the query outcome.
+    """
+    if connector is not None:
+        close = getattr(connector, "close", None)
+        if close is not None:
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                _log.warning("Failed to close polling connector", exc_info=True)
+    if redis_client is not None:
+        try:
+            await redis_client.aclose()
+        except Exception:
+            _log.warning("Failed to close shared Redis client", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

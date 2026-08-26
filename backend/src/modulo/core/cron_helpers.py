@@ -43,6 +43,7 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
@@ -832,24 +833,41 @@ async def _build_polling_connector(
     trigger: Any,
     org_id: uuid.UUID,
     trigger_id: uuid.UUID,
-) -> Any:
-    """Build the polling connector from stored creds; None on init failure."""
-    import json
+) -> tuple[Any, Any]:
+    """Build the polling connector from stored creds; ``(None, None)`` on init failure.
 
-    from modulo.core.secrets_backend import create_secrets_backend
-    from modulo.core.trigger_engine.polling import _build_polling_connector as _build_connector
+    FAR-442: REST connectors invoked via a polling trigger are wired to the SHARED
+    fleet-wide per-destination rate budget (same as run-executor connectors) by
+    resolving a shared Redis client keyed to ``tenant_id=str(org_id)``. Each org
+    gets its own budget (no cross-tenant ``"default"`` key). Delegates the wiring
+    to the single shared helper (:func:`_build_polling_connector_from_instance`)
+    so the trigger path can never fork from the executor path again.
 
-    settings = get_settings()
+    Returns ``(connector, redis_client)`` where ``redis_client`` may be ``None``
+    (Redis not configured). The caller OWNS both — it MUST release them via
+    :func:`_close_polling_resources` in a ``finally`` (the connector is a fresh
+    per-fire build and the Redis client is a fresh ``Redis.from_url``).
+
+    When Redis is configured but the shared budget cannot be resolved
+    (settings-read failure or client-construction failure) the resolver RAISES
+    SharedBudgetUnavailableError, which is deliberately NOT swallowed here — a
+    trigger must fail closed rather than silently fall back to the local bucket
+    (which would reconstruct the fleet-wide ``N x burst`` fail-open FAR-439
+    removed).
+    """
+    from modulo.core.trigger_engine.polling import (
+        _build_polling_connector_from_instance,
+    )
+
     try:
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
-        creds: dict[str, Any] = json.loads(raw_creds)
-        return _build_connector(
-            connector_instance.connector_type_id,
-            connector_instance.config_json,
-            creds,
-        )
+        connector, redis_client = await _build_polling_connector_from_instance(session, connector_instance, org_id)
+        return connector, redis_client
     except asyncio.CancelledError:
+        raise
+    except SharedBudgetUnavailableError:
+        # Fail-closed: a configured-but-unresolvable shared budget must NOT be
+        # downgraded to the per-process local bucket. Propagate so the fire job
+        # surfaces the outage rather than silently enforcing a per-worker cap.
         raise
     except Exception as exc:
         _log.warning("Failed to initialise connector for polling trigger %s: %s", trigger_id, str(exc)[:200])
@@ -860,7 +878,7 @@ async def _build_polling_connector(
             result="poll_error",
             error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
         )
-        return None
+        return None, None
 
 
 async def _run_poll_query(
@@ -892,6 +910,13 @@ async def _run_poll_query(
         )
         return None, {"status": "error", "reason": "query_timeout"}
     except asyncio.CancelledError:
+        raise
+    except SharedBudgetUnavailableError:
+        # Fail-closed (FAR-442): the shared Redis rate budget is configured but
+        # could not be charged during the poll query. Re-raise so the fire job
+        # surfaces the outage instead of degrading to a "query_failed" skip — the
+        # connector must never fall back to a per-process bucket under a shared
+        # budget. The request was never sent on an unaccountable budget.
         raise
     except Exception as exc:
         _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200])
@@ -1208,75 +1233,114 @@ async def fire_polling_trigger(
             )
             return {"status": "error", "reason": "connector_not_found"}
 
-        connector = await _build_polling_connector(
-            session,
-            connector_instance,
-            trigger,
-            org_id,
-            trigger_id,
-        )
-        if connector is None:
-            return {"status": "error", "reason": "connector_init_failed"}
+        # The connector + its shared Redis client are fresh per-fire builds
+        # (FAR-442) — the caller owns both and must release them regardless of
+        # outcome (a poll hit, a fail-closed budget outage, or an exception).
+        from modulo.core.trigger_engine.polling import _close_polling_resources
 
-        query_result, query_skip = await _run_poll_query(session, connector, trigger, org_id, trigger_id, poll_query)
-        if query_skip is not None:
-            return query_skip
+        connector = None
+        redis_client = None
+        try:
+            connector, redis_client = await _build_polling_connector(
+                session,
+                connector_instance,
+                trigger,
+                org_id,
+                trigger_id,
+            )
+            if connector is None:
+                return {"status": "error", "reason": "connector_init_failed"}
 
-        condition_met, condition_error = await _evaluate_poll_condition(
-            session, query_result, trigger, org_id, trigger_id, condition_expression
-        )
-        if condition_error is not None:
-            return {"status": "error", "reason": "condition_eval_failed", "error": condition_error}
+            query_result, query_skip = await _run_poll_query(
+                session, connector, trigger, org_id, trigger_id, poll_query
+            )
+            if query_skip is not None:
+                return query_skip
 
-        if not condition_met:
+            condition_met, condition_error = await _evaluate_poll_condition(
+                session, query_result, trigger, org_id, trigger_id, condition_expression
+            )
+            if condition_error is not None:
+                return {"status": "error", "reason": "condition_eval_failed", "error": condition_error}
+
+            if not condition_met:
+                await _log_poll_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    result="no_match",
+                )
+                return {"status": "no_match"}
+
+            config = trigger.config_json or {}
+            snapshot_id_str = config.get("snapshot_id")
+            try:
+                snapshot_id = uuid.UUID(str(snapshot_id_str)) if snapshot_id_str else uuid.UUID(int=0)
+            except (ValueError, TypeError):
+                snapshot_id = uuid.UUID(int=0)
+
+            input_payload: dict[str, Any] = {
+                "records": query_result.records,
+                "total": query_result.total,
+                "poll_query": poll_query,
+            }
+
+            try:
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="polling",
+                    trigger_id=trigger_id,
+                    input_payload=input_payload,
+                )
+            except TriggersPausedError:
+                _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
+                return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+
+            event = await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="condition_met",
+                run_id=run.id,
+            )
+
+            # last_fired_at only — next_fire_at was advanced at enqueue time.
+            await session.execute(
+                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+            )
+
+            _log.info("Polling trigger %s fired -> run %s (condition met)", trigger_id, run.id)
+            return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id)}
+        except asyncio.CancelledError:
+            raise
+        except SharedBudgetUnavailableError as exc:
+            # Fail-closed (FAR-442): the shared Redis rate budget is configured but
+            # could not be charged during the poll query. The connector must never
+            # fall back to a per-process bucket under a shared budget; the epoch was
+            # ALREADY claimed at enqueue time, so treat this as "epoch NOT consumed"
+            # — reset next_fire_at to due-now so the next fire_due_triggers tick
+            # re-selects and re-enqueues it instead of silently dropping the cadence
+            # when the outage outlasts FIRE_JOB_RETRIES.
+            await session.execute(
+                update(Trigger).where(Trigger.id == trigger_id).values(next_fire_at=datetime.now(UTC))
+            )
             await _log_poll_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
-                result="no_match",
+                result="poll_error",
+                error_detail=f"shared rate-limit budget unavailable: {exc}",
             )
-            return {"status": "no_match"}
-
-        config = trigger.config_json or {}
-        snapshot_id_str = config.get("snapshot_id")
-        try:
-            snapshot_id = uuid.UUID(str(snapshot_id_str)) if snapshot_id_str else uuid.UUID(int=0)
-        except (ValueError, TypeError):
-            snapshot_id = uuid.UUID(int=0)
-
-        input_payload: dict[str, Any] = {
-            "records": query_result.records,
-            "total": query_result.total,
-            "poll_query": poll_query,
-        }
-
-        try:
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="polling",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
-        except TriggersPausedError:
-            _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-
-        event = await _log_poll_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            result="condition_met",
-            run_id=run.id,
-        )
-
-        # last_fired_at only — next_fire_at was advanced at enqueue time.
-        await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC)))
-
-        _log.info("Polling trigger %s fired -> run %s (condition met)", trigger_id, run.id)
-        return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id)}
+            return {
+                "status": "error",
+                "reason": "shared_budget_unavailable",
+                "error": f"shared rate-limit budget unavailable: {exc}",
+            }
+        finally:
+            await _close_polling_resources(connector, redis_client)
 
     return {"status": "error", "reason": "unexpected"}
 

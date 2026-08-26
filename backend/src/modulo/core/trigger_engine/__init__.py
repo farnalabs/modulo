@@ -62,7 +62,6 @@ from modulo.core.release_channels import (
     is_routable_channel,
     resolve_channel_binding,
 )
-from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
 )
@@ -704,19 +703,19 @@ class TriggerEngine:
           - ``status``: ``"condition_met"`` | ``"no_match"`` | ``"error"``
           - ``records``: query result records (only on success)
           - ``error``: error detail (only on error)
+          - ``fail_closed``: ``True`` only on a shared-rate-budget outage (FAR-442)
 
         This is a sync-friendly evaluation meant for testing or manual one-off
         checks. For automatic scheduled evaluation use the SAQ fire job path.
         """
+        from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
         from modulo.core.trigger_engine.polling import (
-            _build_polling_connector,
+            _build_polling_connector_from_instance,
+            _close_polling_resources,
         )
         from modulo.core.trigger_engine.polling import (
             evaluate_condition as _evaluate_condition,
         )
-        from modulo.settings import get_settings
-
-        settings = get_settings()
 
         conn_result = await session.execute(
             select(ConnectorInstance).where(
@@ -731,40 +730,61 @@ class TriggerEngine:
                 "error": f"Connector instance {connector_instance_id} not found",
             }
 
+        connector = None
+        redis_client = None
         try:
-            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-            raw_creds = await secrets_backend.get_secret(str(instance.id))
-            creds: dict[str, Any] = json.loads(raw_creds)
-            connector = _build_polling_connector(
-                instance.connector_type_id,
-                instance.config_json,
-                creds,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return {"status": "error", "error": f"Connector init failed: {str(exc)[:200]}"}
+            try:
+                connector, redis_client = await _build_polling_connector_from_instance(session, instance, org_id)
+            except asyncio.CancelledError:
+                raise
+            except SharedBudgetUnavailableError as exc:
+                # Fail-closed (FAR-442): a configured-but-unresolvable shared rate
+                # budget must not be downgraded to the per-process local bucket.
+                # Return the error contract dict rather than raising — this is a
+                # diagnostics path, and a raised failure would surface as a generic
+                # 500 instead of an explicit, actionable budget error. The connector
+                # is closed in the finally below.
+                return {
+                    "status": "error",
+                    "error": f"shared rate-limit budget unavailable: {exc}",
+                    "fail_closed": True,
+                }
+            except Exception as exc:
+                return {"status": "error", "error": f"Connector init failed: {str(exc)[:200]}"}
 
-        try:
-            query = ConnectorQuery(resource=poll_query)
-            query_result = await connector.query(query)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return {"status": "error", "error": f"Query failed: {str(exc)[:200]}"}
+            try:
+                query = ConnectorQuery(resource=poll_query)
+                query_result = await connector.query(query)
+            except asyncio.CancelledError:
+                raise
+            except SharedBudgetUnavailableError as exc:
+                # Fail-closed (FAR-442): the shared Redis rate budget is configured
+                # but could not be charged during the query. Return the error dict
+                # (the request was never sent on an unaccountable budget).
+                return {
+                    "status": "error",
+                    "error": f"shared rate-limit budget unavailable: {exc}",
+                    "fail_closed": True,
+                }
+            except Exception as exc:
+                return {"status": "error", "error": f"Query failed: {str(exc)[:200]}"}
 
-        try:
-            matched = _evaluate_condition(query_result, condition_expression)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return {"status": "error", "error": f"Condition evaluation failed: {str(exc)[:200]}"}
+            try:
+                matched = _evaluate_condition(query_result, condition_expression)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return {"status": "error", "error": f"Condition evaluation failed: {str(exc)[:200]}"}
 
-        return {
-            "status": "condition_met" if matched else "no_match",
-            "records": query_result.records,
-            "total": query_result.total,
-        }
+            return {
+                "status": "condition_met" if matched else "no_match",
+                "records": query_result.records,
+                "total": query_result.total,
+            }
+        finally:
+            # The connector + shared Redis client are fresh builds (FAR-442) — the
+            # caller owns both and must release them regardless of outcome.
+            await _close_polling_resources(connector, redis_client)
 
     # ------------------------------------------------------------------
     # Dedup cleanup
