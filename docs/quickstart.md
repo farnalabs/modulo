@@ -100,7 +100,7 @@ Everything above gets you a running stack. Now you'll build and run your first r
 2. Click **Add Model Backend** and fill in the form: a name, a display name, a **Provider** (e.g. `openai` or `anthropic`), a **Model ID**, and the provider's **API key**.
 3. Click **Create**. The new backend runs a best-effort health check on save and shows a **Configured** badge once its credentials are stored.
 
-No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown — it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`:
+No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`:
 
 ```powershell
 curl -X POST http://localhost:8000/api/v1/model-backends `
@@ -115,18 +115,18 @@ curl -X POST http://localhost:8000/api/v1/model-backends `
 
 1. Go to **Schemas** (`/schemas`). The page has three tabs: **Browse**, **Editor**, and **Infer**.
 2. Open the **Editor** (`/schemas/editor`) and create an input schema and an output schema for your pipeline stage: give each a name and version, add fields, and click **Save**. Saving validates the JSON Schema and publishes a versioned definition.
-3. Already connected a data source? Use the **Infer** tab (`/schemas/infer`) to derive a draft schema from a connected connector — pick the connector and resource type, click **Infer Schema**, then review and save the draft. (API: `POST /api/v1/schemas/infer`.)
+3. Already connected a data source? Use the **Infer** tab (`/schemas/infer`) to derive a draft schema from a connected connector: pick the connector and resource type, click **Infer Schema**, then review and save the draft. (API: `POST /api/v1/schemas/infer`.)
 
 **3. Build a pipeline**
 
-1. Go to **Pipelines** (`/pipelines`) and click **New Pipeline** — this takes you to the **Library** (`/library`). Pick a template and click **Create Pipeline**; the wizard creates the pipeline in your workspace.
-2. Open it in the editor (`/pipelines/:id/editor`). Click **Add Node** to drop a node onto the canvas, then select it to open the **Node Properties** panel. A node runs as an **Agent** bound to a model backend with input/output schemas — bind it to an agent via the agent picker (agents and connectors are defined through the API: `POST /api/v1/agents`, `POST /api/v1/connectors`).
+1. Go to **Pipelines** (`/pipelines`) and click **New Pipeline**. This takes you to the **Library** (`/library`). Pick a template and click **Create Pipeline**; the wizard creates the pipeline in your workspace.
+2. Open it in the editor (`/pipelines/:id/editor`). Click **Add Node** to drop a node onto the canvas, then select it to open the **Node Properties** panel. A node runs as an **Agent** bound to a model backend with input/output schemas; bind it to an agent via the agent picker (agents and connectors are defined through the API: `POST /api/v1/agents`, `POST /api/v1/connectors`).
 3. Add a second node the same way, then connect the two by dragging between the nodes' ports. To add a human-in-the-loop gate, select the edge between them and enable the **HITL Gate** section with a label (e.g. "Review before deploy").
 4. Click **Save** to persist the graph (`PATCH /api/v1/pipelines/{pipeline_id}/graph`).
 
 **4. Trigger a run**
 
-With the pipeline open in the editor, click **Run Pipeline** (a dialog opens — enter a prompt or leave it blank) and confirm. You can also trigger from the pipelines list via the **Run** button on a pipeline card. Both call `POST /api/v1/runs` with a `pipeline_id` and `input_payload`:
+With the pipeline open in the editor, click **Run Pipeline** (a dialog opens; enter a prompt or leave it blank) and confirm. You can also trigger from the pipelines list via the **Run** button on a pipeline card. Both call `POST /api/v1/runs` with a `pipeline_id` and `input_payload`:
 
 ```powershell
 curl -X POST http://localhost:8000/api/v1/runs `
@@ -139,9 +139,9 @@ The request returns immediately; the run executes in the background via the SAQ 
 
 **5. Watch the run**
 
-1. Go to **Runs** (`/runs`) to see run history — filter by status or trigger type, or use the **Stop** button to cancel an in-flight run.
+1. Go to **Runs** (`/runs`) to see run history: filter by status or trigger type, or use the **Stop** button to cancel an in-flight run.
 2. Open the run (`/runs/:id`): you'll see the live status, per-node progress chips, and the **Execution Trace** table with per-node input/output (expand the **IO** cell), token counts, cost, logs, and prompt.
-3. If your edge has a HITL gate, the run pauses at `awaiting_human` and the page shows a **HITL Gate** section — **Claim Gate** to take it, then **Approve** or **Reject**.
+3. If your edge has a HITL gate, the run pauses at `awaiting_human` and the page shows a **HITL Gate** section: **Claim Gate** to take it, then **Approve** or **Reject**.
 4. Every lifecycle event is written to the immutable audit log ? see **Audit Log** (`/admin/audit`) and filter by the `run.started`, `run.completed`, and `run.failed` event types.
 
 ## Next steps
@@ -152,4 +152,4 @@ The request returns immediately; the run executes in the background via the SAQ 
 - See [System Requirements](./system-requirements.md) for production hardware and platform requirements
 - Plan your public launch with the [Launch Checklist](./public-launch-checklist.md)
 - Learn the [Upgrade Process](./upgrade-process.md) for existing deployments
-- Browse the [PRD](./prd.md) for full feature specifications
+- Read [Core Principles](./core-principles.md) for the product's design pillars
