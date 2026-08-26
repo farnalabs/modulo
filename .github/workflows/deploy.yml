@@ -695,8 +695,12 @@ jobs:
           if [ "$EXIT" -eq 1 ]; then
             echo "::error::DAST gate BLOCKED: high/critical finding(s) detected on staging. Review zap-gate/zap-gate-report.html."
             exit 1
+          elif [ "$EXIT" -gt 3 ]; then
+            echo "::error::DAST gate BLOCKED: scan could not run (zap exit ${EXIT}) - promotion blocked (fail closed)."
+            exit 1
+          else
+            echo "::notice::DAST gate passed (zap exit ${EXIT} - no high/critical findings)."
           fi
-          echo "::notice::DAST gate passed (zap exit ${EXIT} - no high/critical findings)."
 
       - name: Upload DAST gate report
         if: always()
