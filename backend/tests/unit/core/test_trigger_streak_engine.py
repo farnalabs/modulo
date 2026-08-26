@@ -303,7 +303,9 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        assert heads == ["0148_pipeline_snapshot_versioning_far420"], f"expected a single head, got {heads}"
+        # FAR-377 (0149_suite_run_trigger_kind) is the current single head,
+        # chained off main's 0148_pipeline_snapshot_versioning_far420.
+        assert heads == ["0149_suite_run_trigger_kind"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

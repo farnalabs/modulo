@@ -41,6 +41,9 @@ class Trigger(SoftDeleteMixin, OrgScoped):
             "trigger_type <> 'ongoing' OR (max_concurrent_runs BETWEEN 1 AND 20)",
             name="ck_triggers_ongoing_target_range",
         ),
+        # FAR-377 run-kind discriminator: 'run' (the existing behaviour, fires a
+        # pipeline Run) or 'suite_run' (fires a SuiteRun execution instead).
+        CheckConstraint("run_kind IN ('run', 'suite_run')", name="ck_triggers_run_kind"),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -75,4 +78,13 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     # row.
     streak_epoch: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=True
+    )
+    # FAR-377 run-kind discriminator. 'run' (DEFAULT) fires a pipeline Run;
+    # 'suite_run' fires a SuiteRun execution. Additive — existing rows are 'run'.
+    run_kind: Mapped[str] = mapped_column(String(20), nullable=False, server_default="run")
+    # FAR-377: the eval suite a 'suite_run' trigger executes. The eval dataset +
+    # schedule config + model backend + scenario inputs live in ``config_json``;
+    # ``pipeline_id`` remains NOT NULL as the suite's owning/placeholder pipeline.
+    eval_suite_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("eval_suites.id", ondelete="RESTRICT"), nullable=True, index=True
     )

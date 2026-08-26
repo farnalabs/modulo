@@ -288,6 +288,78 @@ read-check-write race cannot overshoot. `suite_runs` carries `ENABLE` + `FORCE
 ROW LEVEL SECURITY` + `rls_org_isolation` (owned by `modulo_migrate`), so the
 `OrgScoped` mixin alone is not the isolation boundary.
 
+## Scheduled / event-driven eval execution — FAR-377
+
+A `SuiteRun` can be scheduled (cron) or event-driven by reusing the existing
+**Trigger** machinery with a run-kind discriminator. This wires Eval-Suite
+END-TO-END execution: a trigger with `run_kind = 'suite_run'` fires a SuiteRun
+instead of a pipeline `Run`.
+
+### Run-kind trigger model
+
+* `triggers.run_kind` — `'run'` (DEFAULT, existing behaviour) or `'suite_run'`.
+  When `'suite_run'`, the cron/event dispatch path enqueues a **SuiteRun**
+  execution rather than a `Run`.
+* `triggers.eval_suite_id` — nullable FK to `eval_suites`. `pipeline_id` stays
+  NOT NULL (the suite's owning/placeholder pipeline, satisfying the existing FK
+  + constraints).
+* The eval `dataset_id`, pinned `model_backend_id`, optional `scenario_inputs`,
+  `entity_thresholds`, per-suite `suite_ceiling`, `cost_per_llm_case` and
+  `eval_definition_version` all live in the trigger's `config_json`.
+
+### Artifact contract (dataset-driven)
+
+A SuiteRun executes the suite against an `EvalDataset`'s **active** cases. The
+existing runner (`core/eval_engine/execute_suite_run.py`) builds the run from
+the suite + dataset + pinned model backend, snapshots the immutable baseline
+tuple (dataset version + definition checksum + scenario signature), and iterates
+each active case through `EvalEngine.evaluate`, persisting a per-case
+`EvalResult` with `suite_run_id` + the `eval_definition_version` stamp. It then
+reconciles the `passed/failed/excluded` counts, transitions
+`running -> completed | partial | failed`, and calls `record_completion`
+(comparison + regression alerting).
+
+* An **empty** dataset refuses loudly (`SuiteRunEmptyDatasetError`) — never a
+  silent pass.
+* A suite with **no active** definitions refuses loudly.
+* `partial` means some cases **errored** (excluded); a run that executed every
+  case — even one whose evals failed — is `completed`, with failures counted in
+  `failed_cases`.
+
+### Loop guard
+
+A finished eval must **never** re-trigger another eval. Two mechanisms:
+
+1. **Write surface** — a SuiteRun execution writes ONLY to `suite_runs` and
+   `eval_results`. It never creates a `Run`, never writes a `TriggerEvent`, and
+   never writes a `WebhookPayload`/dedup row (the fire path skips TriggerEvent
+   logging too), so nothing enters the trigger-watch/dedup event set. This is the
+   enforcement: there is no watchable event produced by a finished eval.
+2. **Watch-set filter** — `exclude_eval_families` (and `is_eval_trigger`) are
+   exposed *helpers* for the forward event-watch wiring; they drop the
+   eval/feedback event families (`eval_regression`, `eval_blocked`,
+   `suite_run`, `eval_result`, `feedback`) from a watch set before it decides
+   what re-fires a trigger. The current cron dispatch routes on
+   `run_kind == 'suite_run'` directly; the loop guard holds today via the write
+   surface rather than this filter.
+
+### Separate spend pool
+
+The `suite_run` trigger uses its **own** `daily_spend_limit`, summed over
+`suite_runs` (never `runs`), enforced independently of production pipeline
+triggers. Concurrency is likewise a **separate pool** — the count is over
+non-terminal `suite_runs` for the trigger's suite + dataset, not the production
+`Run` pool. A per-suite cumulative ledger (row-locked `claim_suite_run_cost`)
+prevents a read-check-write spend race from overshooting the per-run ceiling.
+
+### Failure sink (monitored)
+
+An orchestration failure transitions the run to `failed`, populates
+`error_detail` (a missed run is never rendered as current), and escalates a
+monitored error event to the Error Dashboard (source = `suite_run`). The SAQ
+`execute_suite_run` job re-raises after the run is terminalised so the SAQ
+`after_process` hook sinks it too.
+
 ### Feature flag
 
 The SuiteRun / comparison ENDPOINTS and UI are gated behind the existing

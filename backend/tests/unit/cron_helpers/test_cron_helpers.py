@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.core import cron_helpers as ch
+from modulo.db.models.eval_suite_run import SuiteRun
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
@@ -1321,6 +1322,195 @@ class TestEnqueueFireJob:
         q.enqueue = AsyncMock(return_value=None)
         job_id = await ch._enqueue_fire_job_async(q, "f", "fire:x:1")
         assert job_id is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-377 run-kind routing (cron due-row dispatch)
+# ---------------------------------------------------------------------------
+
+
+class TestSuiteRunDispatchRouting:
+    @pytest.mark.asyncio
+    async def test_suite_run_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``run_kind == 'suite_run'`` cron row routes to the SuiteRun fire job.
+
+        Prove-the-fix: without the FAR-377 discriminator the due-row enqueue
+        would always call ``fire_cron_trigger`` (building a pipeline ``Run``).
+        The discriminator must route a ``suite_run`` row to
+        ``fire_suite_run_trigger`` and NOT pass a ``snapshot_id`` (the suite run
+        resolves its own dataset/backend from the trigger config).
+        """
+        _patch_env(monkeypatch)
+        q = MagicMock()
+        redis_client = AsyncMock()
+        now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+        org_id = ORG
+        suite_row = SimpleNamespace(
+            id=TRIGGER_A,
+            pipeline_id=uuid.uuid4(),
+            config_json={"eval_suite_id": str(uuid.uuid4())},
+            cron_expression="0 0 * * *",
+            cron_timezone=None,
+            next_fire_at=now - timedelta(hours=1),
+            run_kind="suite_run",
+        )
+        advanced_this_tick: set[uuid.UUID] = set()
+        summary: dict[str, int] = {"cron_enqueued": 0}
+
+        with (
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1") as enqueue,
+            patch.object(ch, "_mark_catchup_fired", new_callable=AsyncMock),
+        ):
+            ok = await ch._enqueue_cron_fire(
+                q,
+                redis_client,
+                now,
+                org_id,
+                suite_row,
+                snapshot_id=str(uuid.uuid4()),
+                advanced_this_tick=advanced_this_tick,
+                summary=summary,
+            )
+
+        assert ok is True
+        assert summary["cron_enqueued"] == 1
+        assert TRIGGER_A in advanced_this_tick
+        enqueue.assert_awaited_once()
+        args = enqueue.await_args.args
+        kwargs = enqueue.await_args.kwargs
+        assert args[1] == "modulo.core.saq_worker.fire_suite_run_trigger"
+        assert args[2].startswith(f"suite_fire:{TRIGGER_A}:")
+        # The suite-run path never passes a snapshot_id / cron_expression.
+        assert "snapshot_id" not in kwargs
+        assert "cron_expression" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_run_row_enqueues_fire_cron_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A plain ``run_kind == 'run'`` row keeps routing to ``fire_cron_trigger``
+        with its snapshot — the discriminator is opt-in, never a regression."""
+        _patch_env(monkeypatch)
+        q = MagicMock()
+        redis_client = AsyncMock()
+        now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+        org_id = ORG
+        run_row = SimpleNamespace(
+            id=TRIGGER_A,
+            pipeline_id=uuid.uuid4(),
+            config_json={"snapshot_id": str(uuid.uuid4())},
+            cron_expression="0 0 * * *",
+            cron_timezone=None,
+            next_fire_at=now - timedelta(hours=1),
+            run_kind="run",
+        )
+        advanced_this_tick: set[uuid.UUID] = set()
+        summary: dict[str, int] = {"cron_enqueued": 0}
+
+        with (
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1") as enqueue,
+            patch.object(ch, "_mark_catchup_fired", new_callable=AsyncMock),
+        ):
+            ok = await ch._enqueue_cron_fire(
+                q,
+                redis_client,
+                now,
+                org_id,
+                run_row,
+                snapshot_id=str(uuid.uuid4()),
+                advanced_this_tick=advanced_this_tick,
+                summary=summary,
+            )
+
+        assert ok is True
+        args = enqueue.await_args.args
+        kwargs = enqueue.await_args.kwargs
+        assert args[1] == "modulo.core.saq_worker.fire_cron_trigger"
+        assert "snapshot_id" in kwargs
+        assert "cron_expression" in kwargs
+
+    @pytest.mark.asyncio
+    async def test_suite_run_polling_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``run_kind == 'suite_run'`` POLLING row routes to the SuiteRun fire
+        job (mirroring the cron scan) — never ``fire_polling_trigger`` (which
+        runs a connector poll query + ``create_run`` and would write a pipeline
+        ``Run``). The write-surface loop guard depends on this discriminator.
+        """
+        _patch_env(monkeypatch)
+        q = MagicMock()
+        now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+        org_id = ORG
+        suite_row = SimpleNamespace(
+            id=TRIGGER_POLL,
+            pipeline_id=uuid.uuid4(),
+            config_json={"poll_query": "select 1"},
+            run_kind="suite_run",
+        )
+        summary: dict[str, int] = {"polling_enqueued": 0, "enqueue_failures": 0}
+
+        with patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1") as enqueue:
+            ok = await ch._enqueue_polling_fire(
+                q, now, org_id, suite_row, suite_row.config_json, connector_instance_id=None, summary=summary
+            )
+
+        assert ok is True
+        assert summary["polling_enqueued"] == 1
+        args = enqueue.await_args.args
+        kwargs = enqueue.await_args.kwargs
+        assert args[1] == "modulo.core.saq_worker.fire_suite_run_trigger"
+        assert args[2].startswith(f"suite_fire:{TRIGGER_POLL}:")
+        # The suite-run path passes no connector/poll args.
+        assert "connector_instance_id" not in kwargs
+        assert "poll_query" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_suite_run_ongoing_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``run_kind == 'suite_run'`` ONGOING row routes to the SuiteRun fire
+        job — never ``fire_ongoing_trigger`` (which tops up + dispatches pipeline
+        ``Run`` s via ``create_run``). It must not pass a snapshot id; the suite
+        run resolves its own dataset/backend from the trigger config.
+        """
+        _patch_env(monkeypatch)
+        session = MagicMock()
+        q = MagicMock()
+        now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+        org_id = ORG
+        suite_row = SimpleNamespace(
+            id=TRIGGER_A,
+            pipeline_id=uuid.uuid4(),
+            config_json={"scan_interval_seconds": 60},
+            run_kind="suite_run",
+        )
+        summary: dict[str, int] = {
+            "ongoing_due": 0,
+            "ongoing_enqueued": 0,
+            "ongoing_enqueue_failures": 0,
+            "enqueue_failures": 0,
+        }
+
+        with (
+            patch.object(ch, "_advance_ongoing_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1") as enqueue,
+        ):
+            returned = await ch._process_one_ongoing_row(
+                session,
+                q,
+                now,
+                org_id,
+                org_paused=False,
+                row=suite_row,
+                ongoing_latest_snapshots={},
+                summary=summary,
+                ongoing_enqueued=0,
+            )
+
+        assert returned == 1
+        assert summary["ongoing_enqueued"] == 1
+        args = enqueue.await_args.args
+        kwargs = enqueue.await_args.kwargs
+        assert args[1] == "modulo.core.saq_worker.fire_suite_run_trigger"
+        assert args[2].startswith(f"suite_fire:{TRIGGER_A}:")
+        # The suite-run path never passes a snapshot id (the suite run resolves
+        # its own dataset/backend from the trigger config).
+        assert "latest_snapshot_id" not in kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -2804,3 +2994,425 @@ class TestGetSystemEngine:
             assert "MODULO_SYSTEM_DATABASE_URL not set" in extra["reason"]
         finally:
             ch._SYSTEM_ENGINE = None
+
+
+class TestFireSuiteRunTriggerPersists:
+    """``fire_suite_run_trigger`` must persist a JSON-serialisable ``run.extra``.
+
+    The fire path previously wrote a raw ``decimal.Decimal`` into ``run.extra``
+    (a plain ``JSON`` column with no ``default=str`` serializer), which raises
+    ``TypeError`` at flush — every fire rolled back inside ``session.begin()``
+    and no ``SuiteRun`` was ever created. This class round-trips the real
+    function against a session double whose ``flush()`` mimics the Postgres JSON
+    bind (``json.dumps`` on ``run.extra``), proving the bug is fixed without a
+    live database.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fired_run_extra_is_json_serialisable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+
+        org_id = ORG
+        trigger_id = TRIGGER_A
+        suite_id = uuid.uuid4()
+        dataset_id = uuid.uuid4()
+        model_backend_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+
+        trigger = MagicMock()
+        trigger.id = trigger_id
+        trigger.organisation_id = org_id
+        trigger.active = True
+        trigger.deleted_at = None
+        trigger.run_kind = "suite_run"
+        trigger.eval_suite_id = suite_id
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {
+            "dataset_id": str(dataset_id),
+            "model_backend_id": str(model_backend_id),
+            "cost_per_llm_case": "0.005",
+            "suite_ceiling": "5.00",
+            "entity_thresholds": {"min_pass_rate": 0.8},
+            "scenario_inputs": {"temperature": 0.2},
+            "eval_definition_version": 1,
+        }
+
+        captured: list[SuiteRun] = []
+
+        def fake_build_suite_run(session: object, **kwargs: object) -> SuiteRun:
+            run = SuiteRun(
+                id=run_id,
+                organisation_id=org_id,
+                suite_id=suite_id,
+                dataset_id=dataset_id,
+                dataset_version=1,
+                definition_checksum="deadbeef",
+                model_backend_id=model_backend_id,
+                state="pending",
+                version=0,
+            )
+            captured.append(run)
+            return run
+
+        # Session double. ``execute`` pops canned results in call order:
+        # advisory lock -> trigger select -> active_count -> Trigger update.
+        # ``flush`` mimics the DB JSON bind so a non-serialisable extra fails here.
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = 0
+        update_res = MagicMock()
+
+        class _FireSession(_MockSession):
+            def __init__(self) -> None:
+                super().__init__([advisory, trigger_res, count_res, update_res])
+
+            async def flush(self) -> None:
+                # Mirror what the Postgres JSON bind does at flush time.
+                json.dumps(captured[0].extra)
+
+        session = _FireSession()
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+                side_effect=fake_build_suite_run,
+            ),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[],
+            ),
+        ):
+            result = await ch.fire_suite_run_trigger(
+                org_id=org_id,
+                trigger_id=trigger_id,
+                pipeline_id=None,
+            )
+
+        assert result["status"] == "fired"
+        assert result["suite_run_id"] == str(run_id)
+        # The original bug: ``cost_per_llm_case`` was a ``Decimal`` -> not
+        # JSON-serialisable. It must now be stored as a JSON-native str.
+        assert isinstance(captured[0].extra["cost_per_llm_case"], str)
+        assert captured[0].extra["cost_per_llm_case"] == "0.005"
+        # ``suite_ceiling`` must round-trip as a JSON-native str too.
+        assert captured[0].extra["suite_ceiling"] == "5.00"
+        # And the whole extra must survive a JSON round-trip (flush simulated).
+        assert json.loads(json.dumps(captured[0].extra))["cost_per_llm_case"] == "0.005"
+
+    @pytest.mark.asyncio
+    async def test_default_cost_is_stored_when_config_omits_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When ``cost_per_llm_case`` is absent, the module default is used and
+        stored JSON-safely (regression guard for the hard-coded ``0.001``)."""
+        _patch_env(monkeypatch)
+
+        org_id = ORG
+        trigger_id = TRIGGER_B
+        suite_id = uuid.uuid4()
+        dataset_id = uuid.uuid4()
+        model_backend_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+
+        trigger = MagicMock()
+        trigger.id = trigger_id
+        trigger.organisation_id = org_id
+        trigger.active = True
+        trigger.deleted_at = None
+        trigger.run_kind = "suite_run"
+        trigger.eval_suite_id = suite_id
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        # No ``cost_per_llm_case`` / ``suite_ceiling`` keys.
+        trigger.config_json = {
+            "dataset_id": str(dataset_id),
+            "model_backend_id": str(model_backend_id),
+        }
+
+        captured: list[SuiteRun] = []
+
+        def fake_build_suite_run(session: object, **kwargs: object) -> SuiteRun:
+            run = SuiteRun(
+                id=run_id,
+                organisation_id=org_id,
+                suite_id=suite_id,
+                dataset_id=dataset_id,
+                dataset_version=1,
+                definition_checksum="deadbeef",
+                model_backend_id=model_backend_id,
+                state="pending",
+                version=0,
+            )
+            captured.append(run)
+            return run
+
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = 0
+        update_res = MagicMock()
+
+        class _FireSession(_MockSession):
+            def __init__(self) -> None:
+                super().__init__([advisory, trigger_res, count_res, update_res])
+
+            async def flush(self) -> None:
+                json.dumps(captured[0].extra)
+
+        session = _FireSession()
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+                side_effect=fake_build_suite_run,
+            ),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[],
+            ),
+        ):
+            result = await ch.fire_suite_run_trigger(
+                org_id=org_id,
+                trigger_id=trigger_id,
+                pipeline_id=None,
+            )
+
+        assert result["status"] == "fired"
+        # Defaults resolve to the module constant (0.001) and are stored as str.
+        assert captured[0].extra["cost_per_llm_case"] == "0.001"
+        assert captured[0].extra["suite_ceiling"] is None
+
+    @pytest.mark.asyncio
+    async def test_llm_judge_suite_is_rejected_at_fire_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``run_kind='suite_run'`` trigger whose suite contains an ``llm_judge``
+        definition must be skipped at the fire boundary (never built into a doomed
+        ``pending`` run that hard-fails at execution). The scheduled path does not
+        wire a judge callable, so such config must not promise a run it cannot
+        deliver (FAR-377 reviewer finding).
+        """
+        _patch_env(monkeypatch)
+
+        org_id = ORG
+        trigger_id = TRIGGER_A
+        suite_id = uuid.uuid4()
+        dataset_id = uuid.uuid4()
+        model_backend_id = uuid.uuid4()
+
+        trigger = MagicMock()
+        trigger.id = trigger_id
+        trigger.organisation_id = org_id
+        trigger.active = True
+        trigger.deleted_at = None
+        trigger.run_kind = "suite_run"
+        trigger.eval_suite_id = suite_id
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {
+            "dataset_id": str(dataset_id),
+            "model_backend_id": str(model_backend_id),
+        }
+
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = 0
+        update_res = MagicMock()
+
+        # EvalDefinitionRow-shaped double carrying an ``llm_judge`` eval_type.
+        llm_judge_def = MagicMock()
+        llm_judge_def.eval_type = "llm_judge"
+
+        session = _MockSession([advisory, trigger_res, count_res, update_res])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[llm_judge_def],
+            ) as load_defs,
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+            ) as build_suite_run,
+        ):
+            result = await ch.fire_suite_run_trigger(
+                org_id=org_id,
+                trigger_id=trigger_id,
+                pipeline_id=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "llm_judge_unsupported"
+        assert result["suite_id"] == str(suite_id)
+        # The run must NOT be built — the fire is rejected before build.
+        load_defs.assert_awaited_once()
+        build_suite_run.assert_not_called()
+
+
+class TestFireSuiteRunTriggerSpendPool:
+    """``fire_suite_run_trigger`` enforces the daily spend pool PER TRIGGER.
+
+    FAR-377 reviewer (major): the suite-run ``daily_spend_limit`` must be enforced
+    against the trigger's OWN runs (extra->>'trigger_id'), not the org-wide
+    suite-run total. Two suite-run triggers in one org must be independently
+    rate-limited, and a spend/concurrency skip must record the attempt
+    (skip-not-defer) so it doesn't trip spurious missed-fire alerts.
+    """
+
+    def _trigger(self, trigger_id: uuid.UUID, *, daily_spend_limit: Any = None) -> MagicMock:
+        trigger = MagicMock()
+        trigger.id = trigger_id
+        trigger.organisation_id = ORG
+        trigger.active = True
+        trigger.deleted_at = None
+        trigger.run_kind = "suite_run"
+        trigger.eval_suite_id = uuid.uuid4()
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = daily_spend_limit
+        trigger.config_json = {
+            "dataset_id": str(uuid.uuid4()),
+            "model_backend_id": str(uuid.uuid4()),
+        }
+        return trigger
+
+    @pytest.mark.asyncio
+    async def test_fire_passes_trigger_id_to_spend_pool(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The per-trigger spend pool is fed ``trigger_id`` (not the org-wide pool)."""
+        _patch_env(monkeypatch)
+        from decimal import Decimal
+
+        org_id = ORG
+        trigger_id = TRIGGER_A
+        trigger = self._trigger(trigger_id, daily_spend_limit=Decimal("100.00"))
+
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = 0
+        update_res = MagicMock()
+        session = _MockSession([advisory, trigger_res, count_res, update_res])
+        factory = MagicMock(return_value=session)
+
+        spend = AsyncMock(return_value=Decimal("3.00"))
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+                return_value=MagicMock(id=uuid.uuid4()),
+            ),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[],
+            ),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.suite_run_daily_spend_used_for_trigger",
+                spend,
+            ),
+        ):
+            result = await ch.fire_suite_run_trigger(org_id=org_id, trigger_id=trigger_id, pipeline_id=None)
+
+        # Under its own limit -> fires, and the pool was scoped to THIS trigger.
+        assert result["status"] == "fired"
+        spend.assert_awaited_once()
+        assert spend.call_args.args[1] == org_id
+        assert spend.call_args.args[2] == trigger_id
+
+    @pytest.mark.asyncio
+    async def test_spend_limit_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A spend-limited fire is skipped AND marks ``last_fired_at`` (skip-not-defer)."""
+        _patch_env(monkeypatch)
+        from decimal import Decimal
+
+        org_id = ORG
+        trigger_id = TRIGGER_B
+        trigger = self._trigger(trigger_id, daily_spend_limit=Decimal("5.00"))
+
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = 0
+        update_res = MagicMock()
+        session = _MockSession([advisory, trigger_res, count_res, update_res])
+        factory = MagicMock(return_value=session)
+
+        # Today's OWN spend already exceeds the limit -> skip, but record attempt.
+        spend = AsyncMock(return_value=Decimal("50.00"))
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[],
+            ),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.suite_run_daily_spend_used_for_trigger",
+                spend,
+            ),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_suite_run_trigger(org_id=org_id, trigger_id=trigger_id, pipeline_id=None)
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        # A Trigger UPDATE touching last_fired_at was issued (skip-not-defer).
+        assert any("last_fired_at" in str(stmt) for stmt, _ in session.executed)
+
+    @pytest.mark.asyncio
+    async def test_concurrency_limit_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A concurrency-limited fire is skipped AND marks ``last_fired_at``."""
+        _patch_env(monkeypatch)
+        from decimal import Decimal
+
+        org_id = ORG
+        trigger_id = TRIGGER_A
+        trigger = self._trigger(trigger_id, daily_spend_limit=Decimal("100.00"))
+
+        advisory = MagicMock()
+        advisory.scalar_one.return_value = True
+        trigger_res = MagicMock()
+        trigger_res.scalar_one_or_none.return_value = trigger
+        # active_count at the concurrency ceiling -> skip.
+        count_res = MagicMock()
+        count_res.scalar_one.return_value = trigger.max_concurrent_runs
+        update_res = MagicMock()
+        session = _MockSession([advisory, trigger_res, count_res, update_res])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+                return_value=[],
+            ),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_suite_run_trigger(org_id=org_id, trigger_id=trigger_id, pipeline_id=None)
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "concurrency_limit"
+        assert any("last_fired_at" in str(stmt) for stmt, _ in session.executed)
