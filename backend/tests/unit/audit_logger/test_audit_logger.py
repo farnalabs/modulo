@@ -1,13 +1,16 @@
 """Unit tests for cryptographic audit chaining."""
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import (
     BATCH_MAX_SIZE,
     LIST_MAX_LIMIT,
@@ -15,6 +18,7 @@ from modulo.core.audit_logger import (
     _compute_event_hash,
     _get_chain_head_locked,
     append_audit_event,
+    append_audit_event_isolated,
     export_chain,
     get_audit_events_batch,
     get_chain_head,
@@ -1154,6 +1158,153 @@ class TestAppendAuditEventErrors:
 
         with pytest.raises(SQLAlchemyError):
             await append_audit_event(session, org_id=uuid.uuid4(), event_type="test.event")
+
+
+class TestAppendAuditEventIsolated:
+    """append_audit_event_isolated — the shared post-commit audit helper.
+
+    Route modules (api_keys, feedback, model_backends, schemas) mock this
+    helper in their own tests, so its contracts were only ever exercised
+    indirectly. This class pins them directly: a fresh transaction with RLS
+    re-established, ``CancelledError`` always propagating, and any other
+    failure being logged under ``log_key`` and swallowed.
+    """
+
+    @staticmethod
+    def _principal() -> TenantPrincipal:
+        return TenantPrincipal(
+            username="svc",
+            organisation_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
+            org_role="admin",
+        )
+
+    @staticmethod
+    def _session() -> "_IsolatedSession":
+        return _IsolatedSession()
+
+    async def test_appends_event_and_reestablishes_rls(self, monkeypatch):
+        from modulo.core import audit_logger as mod
+
+        set_org = AsyncMock()
+        set_ctx = AsyncMock()
+        append = AsyncMock()
+        monkeypatch.setattr(mod, "set_rls_org", set_org)
+        monkeypatch.setattr(mod, "set_rls_user_context", set_ctx)
+        monkeypatch.setattr(mod, "append_audit_event", append)
+
+        session = self._session()
+        principal = self._principal()
+        resource_id = uuid.uuid4()
+
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="api_key",
+            resource_id=resource_id,
+            event_type="api_key.created",
+            payload={"name": "k"},
+            log_key="audit.api_key.created_failed",
+        )
+
+        # The POST-commit transaction has no RLS context (SET LOCAL reverts on
+        # COMMIT), so the helper must open a fresh transaction and re-establish
+        # the org + user context before appending, or the STRICT-RLS INSERT is
+        # rejected.
+        assert session.begin_calls == 1
+        set_org.assert_awaited_once_with(session, principal.organisation_id)
+        set_ctx.assert_awaited_once_with(session, principal.account_id, principal.org_role)
+        append.assert_awaited_once_with(
+            session,
+            org_id=principal.organisation_id,
+            event_type="api_key.created",
+            actor_user_id=principal.account_id,
+            resource_type="api_key",
+            resource_id=resource_id,
+            payload_json={"name": "k"},
+        )
+
+    async def test_cancelled_error_propagates(self, monkeypatch):
+        from modulo.core import audit_logger as mod
+
+        async def _cancel(*args, **kwargs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(mod, "append_audit_event", _cancel)
+        monkeypatch.setattr(mod, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(mod, "set_rls_user_context", AsyncMock())
+
+        # Documented contract: CancelledError always propagates — it must not
+        # be confused with telemetry/audit failure and swallowed by the
+        # broad fail-open handler.
+        with pytest.raises(asyncio.CancelledError):
+            await append_audit_event_isolated(
+                self._session(),
+                self._principal(),
+                resource_type="model_backend",
+                event_type="model_backend.updated",
+                payload={},
+                log_key="audit.model_backend.updated_failed",
+            )
+
+    async def test_failure_is_fail_open_and_logged(self, monkeypatch, caplog):
+        from modulo.core import audit_logger as mod
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(mod, "append_audit_event", _boom)
+        monkeypatch.setattr(mod, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(mod, "set_rls_user_context", AsyncMock())
+
+        principal = self._principal()
+        resource_id = uuid.uuid4()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.core.audit_logger"):
+            # Must not raise: a broken append must never fail the already-
+            # completed operation.
+            await append_audit_event_isolated(
+                self._session(),
+                principal,
+                resource_type="feedback",
+                resource_id=resource_id,
+                event_type="feedback.created",
+                payload={},
+                log_key="audit.feedback.created_failed",
+            )
+
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        assert record.message == "audit.feedback.created_failed"
+        assert record.org_id == str(principal.organisation_id)
+        assert record.resource_id == str(resource_id)
+        assert record.event_type == "feedback.created"
+
+
+class _IsolatedBegin:
+    """Async context manager returned by ``_IsolatedSession.begin()``."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _IsolatedSession:
+    """Minimal session stand-in supporting ``async with session.begin():``.
+
+    A plain ``AsyncMock`` cannot drive that statement (``session.begin()`` on
+    an AsyncMock returns a coroutine, not a context manager), so the isolated
+    audit helper gets a real async-CM session with exception-passing semantics.
+    """
+
+    def __init__(self) -> None:
+        self.begin_calls = 0
+
+    def begin(self) -> _IsolatedBegin:
+        self.begin_calls += 1
+        return _IsolatedBegin()
 
 
 class TestChainHeadLocking:

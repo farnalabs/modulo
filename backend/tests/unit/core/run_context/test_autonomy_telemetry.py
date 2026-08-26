@@ -154,3 +154,98 @@ async def test_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
     # RLS context is still set before the (failing) write.
     assert set_org.await_count == 1
     assert set_ctx.await_count == 1
+
+
+async def test_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import modulo.core.audit_logger as al
+
+    async def _cancel(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(al, "append_audit_event", _cancel)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+
+    # Documented contract: cancellation is NOT a telemetry failure. The
+    # broad fail-open handler must never swallow CancelledError, or a run
+    # that is being torn down would keep emitting on a dead loop.
+    with pytest.raises(asyncio.CancelledError):
+        await at.emit_autonomy_telemetry(
+            _session_factory,
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            gate_id="g1",
+            autonomy_level="manual_approval",
+            gate_outcome="fired",
+        )
+
+
+async def test_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.audit_logger as al
+
+    mock = AsyncMock()
+    monkeypatch.setattr(al, "append_audit_event", mock)
+    set_org = AsyncMock()
+    set_ctx = AsyncMock()
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+
+    await at.emit_autonomy_telemetry(
+        _session_factory,
+        org_id=None,
+        run_id=uuid.uuid4(),
+        gate_id="g1",
+        autonomy_level="manual_approval",
+        gate_outcome="fired",
+    )
+    assert mock.await_count == 0
+    assert set_org.await_count == 0
+    assert set_ctx.await_count == 0
+
+
+async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.audit_logger as al
+
+    append = AsyncMock()
+    monkeypatch.setattr(al, "append_audit_event", append)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+
+    await at.emit_autonomy_telemetry(
+        _session_factory,
+        org_id=uuid.uuid4(),
+        run_id=None,
+        gate_id="g1",
+        autonomy_level="manual_approval",
+        gate_outcome="fired",
+        pipeline_id=None,
+    )
+
+    _, kwargs = append.call_args
+    assert kwargs["resource_id"] is None
+    assert kwargs["payload_json"]["pipeline_id"] is None
+    assert kwargs["payload_json"]["human_only"] is False
+
+
+async def test_human_only_flag_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.audit_logger as al
+
+    append = AsyncMock()
+    monkeypatch.setattr(al, "append_audit_event", append)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+
+    await at.emit_autonomy_telemetry(
+        _session_factory,
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gate_id="g1",
+        autonomy_level="manual_approval",
+        gate_outcome="fired",
+        human_only=True,
+    )
+
+    _, kwargs = append.call_args
+    assert kwargs["payload_json"]["human_only"] is True
