@@ -74,6 +74,11 @@ def _session(*, execute_side_effect) -> SimpleNamespace:
     session.refresh = AsyncMock()
     session.begin = MagicMock(return_value=_acm())
     session.begin_nested = MagicMock(return_value=_acm())
+    # backfill_facts / run_maintenance probe the dialect via
+    # ``session.connection().dialect.name`` (e.g. to pick jsonb_* vs json_*
+    # functions) — provide a generic (non-Postgres) connection double so those
+    # code paths can run without a live engine.
+    session.connection = AsyncMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     return session
 
 
