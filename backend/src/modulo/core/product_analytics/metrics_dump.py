@@ -128,38 +128,20 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
         return {"skipped": "jitter_skip"}
 
     # Instance-level gate (design doc section 5).
-    instance_enabled = await _check_instance_switch(factory)
-    if not instance_enabled:
+    if not await _check_instance_switch(factory):
         _log.info("product_analytics.instance_switch_off")
         return {"skipped": "instance_switch_off"}
 
     # Find consenting orgs.
     async with factory() as session, session.begin():
         orgs = await _get_consenting_orgs(session)
-
     if not orgs:
         _log.info("product_analytics.no_consenting_orgs")
         return {"skipped": "no_consenting_orgs"}
 
-    # Determine dump window.
+    # Determine the dump window from the watermark and consent dates.
     dump_date = datetime.now(UTC).date()
-    async with factory() as session, session.begin():
-        last_dumped = await read_system_config(session, _WATERMARK_KEY)
-
-    if last_dumped is not None:
-        if isinstance(last_dumped, str):
-            last_dumped = date.fromisoformat(last_dumped)
-        start_date = last_dumped + timedelta(days=1)
-    else:
-        earliest_consent = min(
-            (o["level_changed_at"] for o in orgs if o["level_changed_at"] is not None),
-            default=dump_date,
-        )
-        if isinstance(earliest_consent, str):
-            earliest_consent = date.fromisoformat(earliest_consent)
-        backfill_start = max(earliest_consent, dump_date - timedelta(days=_BACKFILL_MAX_DAYS))
-        start_date = backfill_start
-
+    start_date, last_dumped = await _resolve_start_date(factory, orgs, dump_date)
     if start_date > dump_date:
         _log.info("product_analytics.up_to_date", extra={"last_dumped": str(last_dumped)})
         return {"skipped": "up_to_date", "last_dumped": str(last_dumped)}
@@ -171,6 +153,65 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
         _log.warning("product_analytics.missing_vendor_config")
         return {"skipped": "missing_vendor_config"}
 
+    succeeded_dates = await _dump_date_range(factory, orgs, start_date, dump_date, endpoint_url, instance_secret)
+
+    # Advance watermark (design doc section 8).
+    if succeeded_dates:
+        new_watermark = max(succeeded_dates)
+        async with factory() as session, session.begin():
+            await acquire_kv_lock(session, _WATERMARK_KEY)
+            await write_system_config(session, _WATERMARK_KEY, new_watermark.isoformat())
+
+    return {
+        "dumped_dates": [str(d) for d in succeeded_dates],
+        "org_count": len(orgs),
+    }
+
+
+async def _resolve_start_date(
+    factory: Any,
+    orgs: list[dict[str, Any]],
+    dump_date: date,
+) -> tuple[date, date | None]:
+    """Resolve the first date that still needs dumping.
+
+    Returns ``(start_date, last_dumped)`` where ``last_dumped`` is the previous
+    watermark (or ``None`` on first run).  On a fresh instance the start is the
+    earliest consent date, capped by the backfill window; otherwise it is the
+    day after the last successfully dumped date.
+    """
+    async with factory() as session, session.begin():
+        last_dumped = await read_system_config(session, _WATERMARK_KEY)
+
+    if last_dumped is not None:
+        if isinstance(last_dumped, str):
+            last_dumped = date.fromisoformat(last_dumped)
+        return last_dumped + timedelta(days=1), last_dumped
+
+    earliest_consent = min(
+        (o["level_changed_at"] for o in orgs if o["level_changed_at"] is not None),
+        default=dump_date,
+    )
+    if isinstance(earliest_consent, str):
+        earliest_consent = date.fromisoformat(earliest_consent)
+    backfill_start = max(earliest_consent, dump_date - timedelta(days=_BACKFILL_MAX_DAYS))
+    return backfill_start, None
+
+
+async def _dump_date_range(
+    factory: Any,
+    orgs: list[dict[str, Any]],
+    start_date: date,
+    dump_date: date,
+    endpoint_url: str,
+    instance_secret: str,
+) -> list[date]:
+    """Build and POST one payload per day in ``[start_date, dump_date]``.
+
+    Stops early (leaving later dates undumped) on the first failed POST so the
+    watermark is not advanced past un-sent data.  Returns the dates whose POST
+    succeeded, in order.
+    """
     client = VendorClient(endpoint_url, instance_secret)
     succeeded_dates: list[date] = []
     try:
@@ -203,18 +244,7 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
             current_date += timedelta(days=1)
     finally:
         await client.close()
-
-    # Advance watermark (design doc section 8).
-    if succeeded_dates:
-        new_watermark = max(succeeded_dates)
-        async with factory() as session, session.begin():
-            await acquire_kv_lock(session, _WATERMARK_KEY)
-            await write_system_config(session, _WATERMARK_KEY, new_watermark.isoformat())
-
-    return {
-        "dumped_dates": [str(d) for d in succeeded_dates],
-        "org_count": len(orgs),
-    }
+    return succeeded_dates
 
 
 async def _check_instance_switch(factory: Any) -> bool:
