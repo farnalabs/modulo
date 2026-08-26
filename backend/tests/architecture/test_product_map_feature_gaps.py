@@ -65,6 +65,21 @@ def _frontmatter_id(path: Path) -> str | None:
     return match.group(1)
 
 
+def _entry_frontmatter(path: Path) -> dict:
+    """Parse a behaviour-tracker entry's full YAML frontmatter block."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return {}
+    try:
+        loaded = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def _product_map_entry_paths() -> list[Path]:
     """Every behaviour-tracker entry (``*.md`` except the graph index)."""
     if not PRODUCT_MAP_DIR.is_dir():
@@ -145,6 +160,39 @@ def test_graph_entry_feature_ids_are_unique():
         )
         assert entry_id not in seen, f"duplicate docs/product-map entry id {entry_id!r}"
         seen[entry_id] = entry
+
+
+#: Behaviour-tracker frontmatter fields whose values are repo-relative file paths.
+_CITATION_FIELDS = ("code", "unit-tests", "bdd", "adr")
+
+
+def test_entry_file_references_resolve():
+    """Every ``code:`` / ``unit-tests:`` / ``bdd:`` / ``adr:`` reference resolves.
+
+    The feature-graph contract (``docs/product-map/README.md``) points these
+    fields at the code paths, test files and BDD feature files that implement
+    each behaviour. A value that names a file that does not exist is a stale
+    citation: the entry either claims coverage someone deleted, or (the reverse
+    drift the snapshot entries suffered) under-reports a surface that lives in a
+    file it never names. A trailing-slash value names a directory. ``feat-*``
+    and task ids appear only in ``depends-on``/``delivery-tasks``, which are not
+    file fields and are deliberately not checked here.
+    """
+    missing: dict[str, list[str]] = {}
+    for entry in _product_map_entry_paths():
+        frontmatter = _entry_frontmatter(entry)
+        for field in _CITATION_FIELDS:
+            for ref in frontmatter.get(field) or []:
+                if not isinstance(ref, str) or not ref.strip():
+                    continue
+                resolved = REPO_ROOT / ref.rstrip("/")
+                if not resolved.is_file() and not resolved.is_dir():
+                    missing.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(f"{field}: {ref}")
+    assert not missing, (
+        "docs/product-map entries cite paths that do not exist in the repo"
+        " (stale code/bdd/unit-test coverage claims):\n"
+        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(missing.items()))
+    )
 
 
 def test_feature_references_resolve():
