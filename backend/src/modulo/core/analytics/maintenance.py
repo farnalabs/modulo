@@ -195,15 +195,16 @@ async def backfill_facts(session: Any, day: date) -> int:
     )
     # Graph-derived fields from the snapshot's ``graph_json`` (the serialised
     # pipeline graph: a dict with a ``nodes`` list). ``graph_json`` is the
-    # native Postgres ``json`` type, so the ``json_*`` functions apply; all
+    # native Postgres ``jsonb`` type (SQLAlchemy's ``JSON`` maps to ``jsonb`` on
+    # Postgres), so the ``jsonb_*`` functions apply; all
     # three degrade to defaults when the graph is malformed/absent — backfilled
     # rows must NEVER carry NULL here (NULL facts on backfilled rows are a bug).
     graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
     node_count_expr = sa.case(
-        (graph_nodes_json.is_not(None), sa.func.coalesce(sa.func.json_array_length(graph_nodes_json), 0)),
+        (graph_nodes_json.is_not(None), sa.func.coalesce(sa.func.jsonb_array_length(graph_nodes_json), 0)),
         else_=0,
     )
-    _node_arr = sa.func.json_array_elements(graph_nodes_json).table_valued("value")
+    _node_arr = sa.func.jsonb_array_elements(graph_nodes_json).table_valued("value")
     _node_value = _node_arr.c.value
     sandbox_count_subq = (
         sa.select(sa.func.count())
