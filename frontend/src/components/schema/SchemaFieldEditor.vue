@@ -9,20 +9,20 @@
           <button type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
             :disabled="isFirst"
-            :title="$t('views.SchemaEditorView.move_up')"
+            :aria-label="$t('views.SchemaEditorView.move_up')"
             data-testid="schema-editor-field-move-up"
             @click="$emit('move-up')"
           >
-            <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg>
+            <ChevronUp class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
           <button type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
             :disabled="isLast"
-            :title="$t('views.SchemaEditorView.move_down')"
+            :aria-label="$t('views.SchemaEditorView.move_down')"
             data-testid="schema-editor-field-move-down"
             @click="$emit('move-down')"
           >
-            <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+            <ChevronDown class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
           <span class="text-xs font-medium text-muted-foreground">#{{ index + 1 }}</span>
         </div>
@@ -101,10 +101,10 @@
       <button type="button"
         class="shrink-0 rounded p-1 text-destructive hover:bg-destructive/10"
         data-testid="schema-editor-field-remove"
-        :title="$t('views.SchemaEditorView.remove_field')"
+        :aria-label="$t('views.SchemaEditorView.remove_field')"
         @click="$emit('remove')"
       >
-        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+        <Trash2 class="h-4 w-4" aria-hidden="true" />
       </button>
     </div>
   </div>
@@ -113,6 +113,7 @@
 <script setup lang="ts">
 import type { SchemaField } from '../../utils/schema-definition'
 import Select from 'primevue/select'
+import { ChevronUp, ChevronDown, Trash2 } from '@lucide/vue'
 
 const field = defineModel<SchemaField>('field', { required: true })
 
