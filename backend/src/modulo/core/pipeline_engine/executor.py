@@ -30,7 +30,7 @@ import random
 import socket
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -1362,6 +1362,11 @@ class PipelineExecutor:
         # write out from under a successor. Seeded into LangGraph state as
         # ``_claim_lease`` for the sandbox dispatch marker.
         self._claim_token: str | None = None
+        # FAR-435: the run-level connector fetch scope (``allowed_connectors``),
+        # computed once at run start from the graph (node capability_scope union
+        # Agent connector_type_refs grants) and reused by the compensation hub
+        # so both run paths apply the same deny-by-default fetch gate.
+        self._run_connector_scope: list[str] | None = None
         # Cancellation-intent signals wired by run_executor_with_watchdog so the
         # NodeCancelledError retry handler can tell a watchdog stall / supersession
         # from a genuine transient node cancellation and skip the pending-reset.
@@ -1916,18 +1921,21 @@ class PipelineExecutor:
     async def _init_connector_hub(
         self,
         org_id: uuid.UUID,
-        allowed_connectors: Sequence[str] | None = None,
+        *,
+        graph_json: dict[str, Any] | None = None,
     ) -> Any | None:
         """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
 
         Sets the hub on the current ContextVar so make_connector_fn can access it.
         Returns the hub (or None if no connectors are configured).
 
-        *allowed_connectors* (FAR-418) wires fetch-time capability scoping into the
-        production run path: when every node in the run is connector-scoped the hub
-        decrypts ONLY those connectors, so out-of-scope credentials are never
-        disclosed. Pass ``None`` (the default) to fetch every active org connector,
-        preserving the pre-scope behaviour (used for compensation and unscoped runs).
+        When *graph_json* is provided (the run-start path), the hub applies a
+        run-level fetch scope (deny-by-default, FAR-435 building on FAR-418): the
+        union of every node's ``capability_scope.allowed_connectors`` and the
+        referenced Agents' ``connector_type_refs`` grants. The hub decrypts ONLY
+        those connectors, so out-of-scope credentials are never disclosed. The scope
+        is cached on the executor and reused by the compensation path (which has no
+        graph) so both apply the same deny-by-default fetch gate.
 
         Contract (fail-closed on the configured path):
           - If NO active connectors are configured for this run, returns None —
@@ -1956,7 +1964,45 @@ class PipelineExecutor:
                 await set_rls_execution_context(session)
                 from sqlalchemy import select
 
+                from modulo.core.capability_scope import (
+                    agent_granted_connector_types,
+                    compute_run_fetch_scope,
+                )
+                from modulo.db.models.agent import Agent
                 from modulo.db.models.connector_instance import ConnectorInstance
+
+                allowed_connectors: list[str] | None = None
+                if graph_json is not None:
+                    agent_ids: list[uuid.UUID] = []
+                    for node in graph_json.get("nodes", []) or []:
+                        if not isinstance(node, dict):
+                            continue
+                        agent_id = node.get("agent_id")
+                        if agent_id:
+                            try:
+                                agent_ids.append(uuid.UUID(str(agent_id)))
+                            except (TypeError, ValueError):
+                                continue
+                    grants: dict[str, set[str]] = {}
+                    if agent_ids:
+                        agent_rows = (
+                            (
+                                await session.execute(
+                                    select(Agent).where(
+                                        Agent.id.in_(agent_ids),
+                                        Agent.organisation_id == org_id,
+                                    )
+                                )
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        for agent in agent_rows:
+                            grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
+                    allowed_connectors = compute_run_fetch_scope(graph_json, grants)
+                    self._run_connector_scope = allowed_connectors
+                else:
+                    allowed_connectors = self._run_connector_scope
 
                 rows = (
                     (
@@ -3274,16 +3320,19 @@ class PipelineExecutor:
         # Load model backends for this run's org — provides LLM access to agent nodes.
         model_backend_hub = await self._init_model_backend_hub(org_id)
         # Load connector hub for this run's org — provides connector access to connector nodes.
-        # FAR-418: wire fetch-time capability scoping — when every graph node is
-        # connector-scoped the hub decrypts ONLY the union of their allowed
-        # connectors, so out-of-scope credentials are never disclosed.
-        from modulo.core.capability_scope import compute_run_fetch_scope
-
+        # FAR-418/FAR-435: wire fetch-time capability scoping — the run-level
+        # allowed_connectors (node capability_scope union Agent
+        # connector_type_refs grants) is computed from the graph at run start so
+        # the hub decrypts ONLY those connectors; out-of-scope credentials are
+        # never disclosed. The scope is computed by
+        # ``modulo.core.capability_scope.compute_run_fetch_scope``. CONTRACT
+        # CHANGE (FAR-435 tightening vs the old fall-back behaviour): a run that
+        # MIXES connector-scoped and connector-unrestricted nodes no longer falls
+        # back to fetch-everything — it fetches only the scoped union. The legacy
+        # fetch-everything behaviour survives ONLY for fully-unrestricted runs
+        # (no node contributes any connector), where the union is empty → None.
         try:
-            connector_hub = await self._init_connector_hub(
-                org_id,
-                allowed_connectors=compute_run_fetch_scope(graph_json),
-            )
+            connector_hub = await self._init_connector_hub(org_id, graph_json=graph_json)
         except (Exception, asyncio.CancelledError):
             # FAR-439: a configured-path connector-hub failure RAISES (fail closed).
             # Catch the run-abort paths (Exception + asyncio.CancelledError) but not

@@ -174,38 +174,65 @@ def filter_run_context_scope(run_context: dict[str, Any], context_scope: list[st
     return {k: v for k, v in run_context.items() if k in allowed or k in _CONTEXT_ALWAYS_KEPT}
 
 
-def compute_run_fetch_scope(graph_json: dict[str, Any] | None) -> list[str] | None:
-    """Derive the ConnectorHub *fetch-time* scope for an entire run.
+def compute_run_fetch_scope(
+    graph_json: dict[str, Any] | None,
+    agent_connector_grants: dict[str, set[str]] | None = None,
+) -> list[str] | None:
+    """Derive the ConnectorHub *fetch-time* scope for an entire run (FAR-435).
 
-    The hub decrypts credentials once per run, so the fetch set is run-wide: it
-    is the union of every node's ``allowed_connectors``. A single run can only be
-    as restrictive as its most permissive node, so we stay conservative:
+    The hub decrypts credentials once per run, so the fetch set is run-wide: the
+    UNION of every node's connector needs. The scope is a SUPERSET of every
+    contributing node's needs, so a per-node narrow-gate can never be silently
+    defeated by an over-tight run scope.
 
-    * If EVERY node declares a non-empty ``capability_scope.allowed_connectors``
-      (connector-scoped), return the union of all of them. The hub then decrypts
-      ONLY those connectors — credentials outside the scope are genuinely never
-      decrypted (deny-by-default). A node can still only *use* the connectors in
-      its own scope via the ``is_connector_allowed`` gate.
-    * If ANY node is connector-unrestricted (no ``capability_scope``, or a scope
-      with an empty/absent ``allowed_connectors``), return ``None``. The hub
-      fetches every active org connector, preserving the pre-scope behaviour
-      exactly so an unrestricted node never loses access.
+    Per-node contribution (FAR-418: credentials outside a node's scope are never
+    decrypted):
 
-    This makes the documented "never decrypts excluded credentials" guarantee
-    real in the production run path instead of dead code.
+    * A node that declares a non-empty ``capability_scope.allowed_connectors``
+      contributes EXACTLY those connectors. Its Agent's broader ``connector_type_refs``
+      grants are NOT unioned in — widening a narrowed node would be a FAR-418
+      regression, and any other (unrestricted) node that needs those grants
+      contributes them independently.
+    * A node that is connector-unrestricted (no ``capability_scope``, or a scope
+      with an empty/absent ``allowed_connectors``) but is bound to an Agent
+      contributes that Agent's ``connector_type_refs`` grants — an agent node has
+      no static connector binding and tool-calls the hub at runtime, so its grants
+      must be fetched for its runtime access to survive. This is WITHIN scope: an
+      unrestricted agent node may use everything its grant allows.
+    * A connector-unrestricted node with NO agent scope contributes nothing and is
+      subject to the union.
+
+    Returns the sorted union, or ``None`` when the union is EMPTY — the
+    unrestricted/legacy default (no narrowing; the hub fetches every active org
+    connector). This is a DELIBERATE tightening vs the earlier contract: a run that
+    MIXES scoped and unscoped nodes no longer falls back to ``None``/fetch-everything
+    — it fetches only the scoped union. The legacy "fetch everything" behaviour is
+    preserved ONLY for runs in which no node contributes any connector (fully
+    unrestricted runs). ``agent_connector_grants`` maps ``agent_id`` (string) → the
+    granted connector-type strings (see :func:`agent_granted_connector_types`).
     """
     nodes = (graph_json or {}).get("nodes", [])
     if not nodes:
         return None
-    fetch: set[str] = set()
+    scope: set[str] = set()
     for node in nodes:
-        scope = (node or {}).get("capability_scope") or {}
-        allowed = scope.get("allowed_connectors")
-        if not allowed:
-            # A connector-unrestricted node needs every connector the hub has.
-            return None
-        fetch.update(allowed)
-    return list(fetch)
+        if not isinstance(node, dict):
+            continue
+        cap_scope = node.get("capability_scope") or {}
+        allowed = cap_scope.get("allowed_connectors") if isinstance(cap_scope, dict) else None
+        if allowed:
+            # Node-level narrow scope — never widen beyond it with agent grants.
+            scope.update(str(entry) for entry in allowed if entry)
+            continue
+        # Connector-unrestricted: an agent node needs its full grants; a
+        # non-agent unrestricted node contributes nothing and is subject to the
+        # union (FAR-435 least-privilege tightening).
+        agent_id = node.get("agent_id")
+        if agent_id is not None and agent_connector_grants:
+            grants = agent_connector_grants.get(str(agent_id))
+            if grants:
+                scope.update(grants)
+    return sorted(scope) if scope else None
 
 
 def _is_connector_object(value: Any) -> bool:
