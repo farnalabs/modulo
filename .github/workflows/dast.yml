@@ -1,0 +1,74 @@
+name: "DAST (OWASP ZAP)"
+
+on:
+  schedule:
+    # Nightly against staging, 02:25 UTC. Report-only harness; does not block deploys.
+    - cron: '25 2 * * *'
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL to scan'
+        required: false
+        default: 'https://staging.modulo.run'
+      scan_type:
+        description: 'baseline (fast) or full (deep)'
+        required: false
+        default: 'baseline'
+
+permissions:
+  contents: read
+
+jobs:
+  dast:
+    name: OWASP ZAP scan
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OWASP ZAP scan
+        id: zap
+        shell: bash
+        run: |
+          TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
+          SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
+          mkdir -p zap-report
+          if [ "$SCAN_TYPE" = "full" ]; then
+            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a
+          else
+            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json -a
+          fi
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report-${{ github.run_id }}
+          path: zap-report/
+          if-no-files-found: ignore
+
+      - name: Summarize findings
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          path = "zap-report/zap-report.json"
+          if not os.path.exists(path):
+              print("No JSON report generated - check the scan step output.")
+              sys.exit(0)
+          with open(path) as f:
+              data = json.load(f)
+          totals = {}
+          for site in data.get("site", []):
+              for alert in site.get("alerts", []):
+                  risk = alert.get("riskdesc", "?")
+                  name = alert.get("name", "?")
+                  cnt = alert.get("count", 1)
+                  key = f"{risk} | {name}"
+                  totals[key] = totals.get(key, 0) + cnt
+          print("=== ZAP findings summary ===")
+          for key in sorted(totals):
+              print(f"{totals[key]:>3} x {key}")
+          print(f"=== Total distinct findings: {len(totals)} ===")
+          PYEOF

@@ -89,7 +89,7 @@ routes:
         name: pipeline-list
         breadcrumb: Pipelines
         parent: /
-        product_map: [feat-pipelines]
+        product_map: [feat-pipelines, feat-router]
         sidebar_group: build
         sidebar_order: 2
         type: list_page
@@ -3054,17 +3054,21 @@ features:
 
             # Retry / Idempotency / Concurrency
             - "[x] Idempotent verbs (GET/HEAD) retry on 429/5xx and transient transport failures with exponential backoff + jitter, honouring a Retry-After capped at 30s; mutating verbs retry only when the operation declares an idempotency_header, and never retry otherwise (idempotency key reuse across retries asserted in test_mutating_verb_with_idempotency_header_retries)"
-            - "[x] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination TokenBucket — one bucket per connector instance, keyed by the connector's base_url"
-            - "[x] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close(), and is not Redis-backed"
+            - "[x] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination rate bucket — a local per-process TokenBucket keyed by canonical rate key (base_url + path) with no Redis wired, or a SHARED Redis-atomic bucket keyed <tenant_id>:<destination> when a redis_client is provided (FAR-439)"
+            - "[x] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close() — the shared client is not Redis-backed (only the per-destination rate limiter may be, via the composition-root redis_client)"
             - "[x] The fan-out budget (max_cardinality x per_item_timeout x (max_retries + 1)) is reconciled against the node's timeout_seconds budget by the graph validator at save/run time (validator tests assert the multiplier in test_node_send_budget_*)"
             - "[x] A per-request timeout (default 30s, override via timeout_seconds) applies to both the read and write surfaces; the fan-out path uses its own per_item_timeout (default = connector timeout) (write-timeout surfacing a RESTConnectError asserted in test_write_timeout_is_typed_rest_connect_error_not_crash)"
 
             # Redaction
             - "[x] Fan-out outcome records persist only a bounded, redacted item_summary / result_summary — never the raw item payload — so a credential-bearing item is not echoed into logs or the persisted run result"
+
+            # Shared per-destination rate limiting (FAR-439) + per-connector OTel metrics (FAR-413)
+            - "[x] A shared, Redis-atomic per-destination rate limiter (PerDestinationRateLimiter + RedisTokenBucket, Lua CTL with server-side redis.call('TIME') refill) enforces ONE budget per <tenant_id>:<destination> across a fleet of uvicorn/SAQ workers; a configured shared limiter FAILS CLOSED on Redis outage (SharedBudgetUnavailableError) — it never falls back to a per-process bucket that would multiply the effective cap by N workers (covered by tests/integration/test_rate_bucket_redis.py)"
+            - "[x] Shared vs local limiting composes safely: no redis_client wired => the per-process TokenBucket is authoritative (single-worker/dev parity); a shared limiter without a real tenant_id is rejected at the composition root (never a cross-tenant 'default' budget)"
+            - "[x] Per-connector OpenTelemetry METRICS are emitted (modulo.connectors.rest.rest_metrics, lazy-initialised + exception-swallowed so metrics never surface as a connector failure): modulo_rest_request_duration_seconds histogram (host/method/outcome, one sample per logical operation), modulo_rest_outcome_total counter (closed cause-code taxonomy, labelled host), modulo_rest_retry_total, modulo_rest_ssrf_blocked_total and modulo_rest_redaction_events_total"
         deferrals:
             - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork — fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
-            - Redis-backed per-destination rate limiting — the token bucket is per-process (each uvicorn / SAQ worker owns its buckets), NOT shared across workers (future work)
-            - "Per-connector call-count / latency METRICS (per-item fan-out outcome spans, per-destination counters) — not emitted in v1. Per-operation OTel trace spans ARE wired (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration); only per-item outcome spans and call-count-per-destination metrics are deferred"
+            - "Per-ITEM fan-out outcome trace SPANS — operation-level OTel trace spans (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration) and per-destination outcome/latency METRICS are emitted in v1; only per-item trace spans are deferred"
             - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is deferred to FAR-404)
 
     feat-costs:
@@ -3081,6 +3085,8 @@ features:
         description: Guardrail policies
     feat-hitl:
         description: Human-in-the-loop approval gates and review
+    feat-router:
+        description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:
         description: Reusable pipeline templates and the template library
     feat-license:

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
+    deny_break_glass_mint,
     get_db_session,
     get_or_create_engine,
     get_or_create_session_factory,
@@ -74,6 +75,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @router.post(
     "/rotate-key",
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(deny_break_glass_mint)],
     responses={
         409: {"description": "Conflict"},
         500: {"description": "Internal Server Error"},

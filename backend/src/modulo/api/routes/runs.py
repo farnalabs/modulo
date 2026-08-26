@@ -1395,7 +1395,7 @@ async def get_run_io_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
             snapshot = await _load_snapshot_for_run(session, run)
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
@@ -1448,7 +1448,7 @@ async def export_run_fixture(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
             snapshot = await _load_snapshot_for_run(session, run)
@@ -1696,7 +1696,7 @@ async def get_run_node_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.get_run_node_output")
         raise HTTPException(
@@ -1843,7 +1843,7 @@ async def observe_run_node(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
@@ -2475,7 +2475,7 @@ async def reveal_node_prompt(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
 
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
@@ -2587,8 +2587,8 @@ async def diff_node_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run_a = await get_run(session, req.run_id_a)
-            run_b = await get_run(session, req.run_id_b)
+            run_a = await get_run(session, req.run_id_a, organisation_id=principal.organisation_id)
+            run_b = await get_run(session, req.run_id_b, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.diff_node_output")
         raise HTTPException(

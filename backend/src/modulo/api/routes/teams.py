@@ -600,7 +600,7 @@ async def get_team_endpoint(
             detail="An unexpected error occurred while fetching the team.",
         ) from None
 
-    if team is None:
+    if team is None or team.organisation_id != current_user.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
     return TeamResponse(
@@ -882,7 +882,7 @@ async def list_members_endpoint(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
-            if team is None:
+            if team is None or team.organisation_id != current_user.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except IntegrityError as exc:

@@ -1,10 +1,13 @@
 """BDD step definitions: Filesystem & GitHub connector."""
 
 import contextlib
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
+
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/filesystem.feature")
@@ -335,6 +338,8 @@ def get_connector_health(connector_id, request):
         or getattr(request.node, "_auth_org", None) is not None
     )
     ci = MagicMock() if connector_present else None
+    if ci is not None:
+        ci.organisation_id = ORG_ID
     client = getattr(request.node, "_client", None)
     if client is None:
         raise RuntimeError("No client set; authenticate before calling the health endpoint")

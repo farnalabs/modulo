@@ -223,7 +223,10 @@ def test_list_schemas_passes_folder_id_filter(client: TestClient) -> None:
 def test_move_schema_to_folder_round_trip(client: TestClient) -> None:
     schema = _make_schema()
     schema.folder_id = None
-    with patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", return_value=schema) as mock_move:
+    with (
+        patch(f"{_SCHEMAS_PATCH_PREFIX}get_schema", return_value=schema),
+        patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", return_value=schema) as mock_move,
+    ):
         resp = client.patch(f"/api/v1/schemas/{_SCHEMA_ID}/folder", json={"folder_id": str(_FOLDER_ID)})
     mock_move.assert_called_once()
     assert resp.status_code == 200
@@ -231,13 +234,19 @@ def test_move_schema_to_folder_round_trip(client: TestClient) -> None:
 
 
 def test_move_schema_to_folder_unknown_folder_returns_422(client: TestClient) -> None:
-    with patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", side_effect=ValueError("Folder not found")):
+    with (
+        patch(f"{_SCHEMAS_PATCH_PREFIX}get_schema", return_value=_make_schema()),
+        patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", side_effect=ValueError("Folder not found")),
+    ):
         resp = client.patch(f"/api/v1/schemas/{_SCHEMA_ID}/folder", json={"folder_id": str(uuid.uuid4())})
     assert resp.status_code == 422
 
 
 def test_move_schema_to_folder_missing_schema_returns_404(client: TestClient) -> None:
-    with patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", return_value=None):
+    with (
+        patch(f"{_SCHEMAS_PATCH_PREFIX}get_schema", return_value=_make_schema()),
+        patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", return_value=None),
+    ):
         resp = client.patch(f"/api/v1/schemas/{uuid.uuid4()}/folder", json={"folder_id": None})
     assert resp.status_code == 404
 

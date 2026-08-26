@@ -78,6 +78,7 @@ from modulo.core.pipeline_engine.decorator import (
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, sanitize_error_text
+from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.evidence import (
     EvidenceProvider,
@@ -2901,6 +2902,14 @@ class PipelineExecutor:
             )
         except asyncio.CancelledError:
             raise
+        except RouterNoMatchError as exc:
+            # FAR-402 P1 (F2-A): a Router node had no matching rule and no
+            # default — terminalize the run with the dedicated router_no_match
+            # status (terminal, non-failure; classified as excluded/notify).
+            _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": str(exc)})
+            final_status = "router_no_match"
+            error_code = "router.no_match"
+            error_detail = _sanitize_detail(str(exc), limit=5000)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
             # Transient node cancellation / sandbox-infra failure (e.g. an E2B
             # sandbox command wait cancelled from outside, a stall, or a command
@@ -4459,6 +4468,22 @@ class PipelineExecutor:
                 "failed",
                 "schema_validation_failure",
                 scrubbed,
+                node_token_usage,
+            )
+        if isinstance(exc, RouterNoMatchError):
+            # FAR-402 P1 (F2-A): a Router node had no matching rule and no
+            # default — terminalize the run with the dedicated router_no_match
+            # status (terminal, non-failure; classified as excluded/notify).
+            # NOT retryable: a no-match is a definitive outcome, not a transient
+            # infra failure. ``_stream_graph`` catches the exception BEFORE it
+            # reaches execute()'s dedicated except, so the mapping lives here.
+            error_detail = _sanitize_detail(exc, limit=5000)
+            _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": error_detail})
+            return _terminal_failure(
+                broker,
+                "router_no_match",
+                "router.no_match",
+                error_detail,
                 node_token_usage,
             )
         _tb = _traceback_detail(exc, limit=5000)

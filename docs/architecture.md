@@ -80,7 +80,7 @@ Includes:
 
 ### Pipeline Engine (`modulo/core/pipeline_engine/`)
 
-Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Nodes map to agents; edges carry HITL gate config or rejection routing.
+Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path — FAR-402 P1), and `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path — FAR-402 P1). `connector` is an internal engine resolution, never an API-authored node type. Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
 Key design:
 - Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction
@@ -111,6 +111,7 @@ Features:
 - `required_team_id` – restricts claims to specific team members
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
+- `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
 
 ### Connector Hub (`modulo/connectors/`)
 

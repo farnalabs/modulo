@@ -50,7 +50,7 @@ DEFAULT_SCHEMA_VERSION = "1.0"
 _IMPORTED_SUFFIX = "(imported)"
 DEFAULT_NODE_TIMEOUT = 300
 _MAX_NAME_RETRIES = 5
-VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional"})
+VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional", "loop"})
 
 # ---------------------------------------------------------------------------
 # Shared value objects

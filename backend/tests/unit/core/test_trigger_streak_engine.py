@@ -264,7 +264,10 @@ class TestDeactivateSQL:
         drained (never counted, never breaking the walk; never cancelled). The
         status set is derived from TERMINAL_STATUSES (single source of truth)."""
         sql = ts._NO_DELIVERY_DEACTIVATE_SQL
-        _terminal = "'budget_exceeded','cancelled','complete','cost_ceiling_exceeded','eval_failed','failed','stalled'"
+        _terminal = (
+            "'budget_exceeded','cancelled','complete','cost_ceiling_exceeded',"
+            "'eval_failed','failed','router_no_match','stalled'"
+        )
         assert f"r.status IN ({_terminal})" in sql
         assert f"r3.status IN ({_terminal})" in sql
         assert "pending" not in sql
@@ -303,9 +306,7 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        # FAR-377 (0149_suite_run_trigger_kind) is the current single head,
-        # chained off main's 0148_pipeline_snapshot_versioning_far420.
-        assert heads == ["0149_suite_run_trigger_kind"], f"expected a single head, got {heads}"
+        assert heads == ["0150_add_router_no_match_status"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

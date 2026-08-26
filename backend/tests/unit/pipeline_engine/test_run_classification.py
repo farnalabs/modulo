@@ -35,6 +35,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_NO_DELIVERY,
     REASON_NO_WORK,
     REASON_PARSE_ERROR,
+    REASON_ROUTER_NO_MATCH,
     REASON_SOURCE_ERROR,
     ClassificationResult,
     RunClassificationValue,
@@ -108,6 +109,8 @@ class TestDecisionTable:
             ("cancelled", (_PR,), RunClassificationValue.excluded, REASON_CANCELLED),
             ("budget_exceeded", (), RunClassificationValue.excluded, REASON_BUDGET_EXCEEDED),
             ("budget_exceeded", (_PR,), RunClassificationValue.excluded, REASON_BUDGET_EXCEEDED),
+            ("router_no_match", (), RunClassificationValue.excluded, REASON_ROUTER_NO_MATCH),
+            ("router_no_match", (_PR,), RunClassificationValue.excluded, REASON_ROUTER_NO_MATCH),
         ],
         ids=[
             "complete-no-pr",
@@ -122,6 +125,8 @@ class TestDecisionTable:
             "cancelled-with-pr",
             "budget_exceeded-no-pr",
             "budget_exceeded-with-pr",
+            "router_no_match-no-pr",
+            "router_no_match-with-pr",
         ],
     )
     def test_terminal_status_matrix(
@@ -137,6 +142,16 @@ class TestDecisionTable:
         assert result.value == expected
         if expected_reason is not None:
             assert result.reason == expected_reason
+
+    def test_router_no_match_is_not_mislabeled_budget_exceeded(self) -> None:
+        """Regression guard (FAR-415): a ``router_no_match`` run is an excluded
+        terminal status but must NOT inherit the ``budget_exceeded`` reason — a
+        distinct, user-visible mislabel that would otherwise surface in
+        analytics/reporting as a budget attribution. It gets its own reason."""
+        result = classify_run("router_no_match", None)
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_ROUTER_NO_MATCH
+        assert result.reason != REASON_BUDGET_EXCEEDED
 
     def test_complete_with_invalid_pr_url_is_no_delivery(self) -> None:
         # A pr_url that does not parse as http(s) + netloc is NOT a delivery.

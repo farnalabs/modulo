@@ -819,6 +819,45 @@ class TestEnrichedColumns:
         assert bucket["avg_final_idle_ms"] == 120000.0
         assert bucket["avg_output_bytes"] == 4096.0
 
+    async def test_status_filter_accepts_router_no_match_and_budget_exceeded_round_trip(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        # The analytics status filter must accept every terminal run status that
+        # the executor can write to run_daily_facts — including the newer
+        # ``router_no_match`` and ``budget_exceeded`` statuses. A stale backend
+        # AnalyticsStatus enum returns 422 for these (FAR-415 regression guard).
+        day = date(2026, 7, 21)
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            status="router_no_match",
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            status="budget_exceeded",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        for status_value in ("router_no_match", "budget_exceeded"):
+            resp = await integration_client.get(
+                f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&status={status_value}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200, (
+                f"status={status_value} must be a valid analytics filter, got {resp.status_code}: {resp.text}"
+            )
+            total = sum(b["count"] for b in resp.json()["buckets"])
+            assert total == 1, f"status={status_value} filter must return its one fact, got {total}"
+
     async def test_query_multi_pipeline_filter(
         self,
         integration_client: AsyncClient,
