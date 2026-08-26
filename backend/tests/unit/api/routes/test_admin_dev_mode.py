@@ -93,7 +93,7 @@ async def test_set_dev_mode_runs_write_inside_begin() -> None:
     fake = _AutobeginAwareSession()
     result = await set_dev_mode(
         req=SetDevModeRequest(enabled=True),
-        settings=_make_settings(),
+        _settings=_make_settings(),
         session=fake,
         _=_principal(),
     )

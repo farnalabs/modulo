@@ -89,7 +89,7 @@ async def sso_providers(
 @handle_db_errors("sso.oidc_login")
 async def oidc_login(
     provider: str,
-    request: Request,
+    _request: Request,
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> Any:
@@ -184,10 +184,10 @@ async def oidc_callback(
 @router.get("/saml/login")
 @handle_db_errors("sso.saml_login")
 async def saml_login(
-    request: Request,
+    _request: Request,
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
+    _session: AsyncSession = Depends(get_db_session),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
     public_url = settings.modulo_public_url.rstrip("/")
@@ -278,7 +278,7 @@ async def saml_acs(
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 @handle_db_errors("sso.saml_metadata")
 async def saml_metadata(
-    request: Request,
+    _request: Request,
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> str:

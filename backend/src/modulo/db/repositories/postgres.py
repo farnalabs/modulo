@@ -17,5 +17,5 @@ class PostgresRepository(BaseRepository):
     already filters every query on ``organisation_id``.
     """
 
-    def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
+    def apply_tenant_filter(self, stmt: Select[Any], _org_id: uuid.UUID) -> Select[Any]:
         return stmt

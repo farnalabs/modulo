@@ -936,7 +936,7 @@ async def _record_ledger_with_retry(
 
 
 async def _reduced_escape(
-    session: AsyncSession,
+    _session: AsyncSession,
     ctx: _LedgerEscapeContext,
 ) -> None:
     """The REDUCED terminalize-without-ledger escape (§4.2).

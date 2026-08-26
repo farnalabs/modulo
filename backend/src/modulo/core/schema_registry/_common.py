@@ -52,7 +52,7 @@ def _extract_content(response: BaseMessage, *, context: str, error_cls: type[Exc
     try:
         content = response.content
     except AttributeError:
-        _log.error(
+        _log.exception(
             "Backend returned response without .content attribute for schema %s (response type: %s)",
             context,
             type(response).__name__,
@@ -60,7 +60,7 @@ def _extract_content(response: BaseMessage, *, context: str, error_cls: type[Exc
         raise error_cls("Backend returned unexpected response type") from None
 
     if not isinstance(content, str):
-        _log.error("Backend returned non-string content for schema %s (got %s)", context, type(content).__name__)
+        _log.exception("Backend returned non-string content for schema %s (got %s)", context, type(content).__name__)
         raise error_cls(f"Expected string response, got {type(content).__name__}")
 
     return content
@@ -88,7 +88,7 @@ async def invoke_and_parse(
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            _log.error("Schema %s timed out after %ss (attempt %d/%d)", context, timeout, attempt, _MAX_RETRIES)
+            _log.exception("Schema %s timed out after %ss (attempt %d/%d)", context, timeout, attempt, _MAX_RETRIES)
             if attempt == _MAX_RETRIES:
                 raise error_cls(f"LLM call timed out after {timeout}s") from None
         except Exception as exc:

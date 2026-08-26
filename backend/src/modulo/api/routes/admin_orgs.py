@@ -366,7 +366,7 @@ def _create_org_user_response(account: Any, membership: Any) -> "CreateOrgUserRe
 async def admin_create_org_user(
     org_id: uuid.UUID,
     req: CreateOrgUserRequest,
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
     _validate_org_role(req.org_role)
@@ -752,7 +752,7 @@ class SetOrgGuardrailsKillSwitchResponse(BaseModel):
 @handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
 async def admin_get_org_guardrails_kill_switch(
     org_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
         "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
     ),
     session: AsyncSession = Depends(get_db_session),

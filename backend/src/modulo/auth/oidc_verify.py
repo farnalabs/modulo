@@ -157,7 +157,7 @@ def _decode_jwt_header(token: str) -> dict[str, Any]:
     try:
         padded = parts[0] + "=" * (-len(parts[0]) % 4)
         return dict(json.loads(base64.urlsafe_b64decode(padded)))
-    except (ValueError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise OidcVerifyError(f"Failed to decode JWT header: {exc}") from exc
 
 

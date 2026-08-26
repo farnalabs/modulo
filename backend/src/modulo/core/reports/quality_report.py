@@ -30,7 +30,7 @@ _WEEK_OVER_WEEK_THRESHOLD = 5.0
 async def generate_quality_report(
     session: AsyncSession,
     org_id: uuid.UUID,
-    config: dict[str, Any] | None = None,
+    _config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a weekly quality report for the organisation.
 

@@ -813,7 +813,7 @@ async def _run_retention_loop(interval_seconds: int = 3600) -> None:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Configure structured JSON logging first so all startup logs are structured.
     configure_logging()
 

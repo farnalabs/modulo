@@ -289,7 +289,7 @@ class TestSubmitForReview:
                 return_value=updated,
             ),
         ):
-            result = await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
+            result = await submit_contribution_for_review(session, org_id, prim_id, _created_by=created_by)
 
         assert result.contribution_status == CONTRIBUTION_REVIEW_QUEUE
         assert result is updated
@@ -308,7 +308,7 @@ class TestSubmitForReview:
             ),
             pytest.raises(ContributionNotFoundError, match=str(prim_id)),
         ):
-            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, _created_by=uuid.uuid4())
 
     async def test_submit_when_already_published_raises(self):
         session = _mock_session()
@@ -325,7 +325,7 @@ class TestSubmitForReview:
             ),
             pytest.raises(ContributionInvalidTransitionError, match=str(prim_id)),
         ):
-            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, _created_by=uuid.uuid4())
 
     async def test_submit_when_already_in_review_queue_raises(self):
         session = _mock_session()
@@ -342,7 +342,7 @@ class TestSubmitForReview:
             ),
             pytest.raises(ContributionInvalidTransitionError),
         ):
-            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, _created_by=uuid.uuid4())
 
     async def test_submit_update_returns_none_raises_not_found(self):
         """If the update returns None (e.g. concurrent delete), raise."""
@@ -366,7 +366,7 @@ class TestSubmitForReview:
             ),
             pytest.raises(ContributionNotFoundError),
         ):
-            await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
+            await submit_contribution_for_review(session, org_id, prim_id, _created_by=created_by)
 
 
 class TestPublish:

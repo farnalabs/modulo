@@ -86,7 +86,7 @@ async def complete_model_backend_setup(
             try:
                 fernet = Fernet(fernet_key.encode())
             except (InvalidToken, ValueError, TypeError) as exc:
-                _log.error("Failed to initialise Fernet: %s", exc)
+                _log.exception("Failed to initialise Fernet: %s", exc)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail={"error": "encryption_error", "detail": "Failed to initialise encryption"},

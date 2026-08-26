@@ -43,7 +43,7 @@ class ConfigEntry(BaseModel):
 )
 @handle_db_errors("admin.system_config.admin_list_config")
 async def admin_list_config(
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ConfigEntry]:
     try:
@@ -144,7 +144,7 @@ async def admin_set_config(
 @handle_db_errors("admin.system_config.admin_delete_config")
 async def admin_delete_config(
     key: str,
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:

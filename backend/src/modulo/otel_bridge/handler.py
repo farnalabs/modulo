@@ -277,7 +277,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> Any:
         name = self._serialized_name(serialized)
         self._start_span(
@@ -294,7 +294,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id)
 
@@ -303,8 +303,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id, error=error)
 
@@ -320,8 +320,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: UUID | None = None,
         tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
+        _metadata: dict[str, Any] | None = None,
+        **_kwargs: Any,
     ) -> None:
         name = self._serialized_name(serialized)
         self._start_span(
@@ -365,8 +365,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         response: LLMResult,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._finalize_llm_span(run_id, response.llm_output)
 
@@ -375,8 +375,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id, error=error)
 
@@ -395,8 +395,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: UUID | None = None,
         tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
+        _metadata: dict[str, Any] | None = None,
+        **_kwargs: Any,
     ) -> None:
         name = self._serialized_name(serialized)
         msg_count = sum(len(msgs) for msgs in messages) if messages else 0
@@ -416,8 +416,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         response: ChatResult,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._finalize_llm_span(run_id, response.llm_output)
 
@@ -426,8 +426,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id, error=error)
 
@@ -445,7 +445,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         inputs: dict[str, Any] | None = None,
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> Any:
         name = self._serialized_name(serialized)
         self._start_span(
@@ -462,7 +462,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id)
 
@@ -471,7 +471,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
+        _parent_run_id: UUID | None = None,
+        **_kwargs: Any,
     ) -> None:
         self._end_span(run_id, error=error)

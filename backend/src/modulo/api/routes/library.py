@@ -404,7 +404,7 @@ def _validate_primitive_items(items: list[LibraryPrimitive]) -> list[LibraryPrim
     except Exception:
         _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(items))
         if items:
-            _log.error(
+            _log.exception(
                 "first item type=%s id=%s",
                 type(items[0]).__name__,
                 getattr(items[0], "id", "?"),
@@ -1118,7 +1118,7 @@ async def confirm_import_endpoint(
     """
     try:
         bundle = json.loads(req.bundle_json)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid bundle JSON",

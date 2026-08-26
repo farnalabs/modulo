@@ -136,7 +136,7 @@ def _compiled(stmt: object, *, render_postcompile: bool = False) -> str:
 
 class TestBuildClaimUpdate:
     def test_single_atomic_update_with_returning(self) -> None:
-        stmt = pe.build_claim_update(stale_seconds=450)
+        stmt = pe.build_claim_update(_stale_seconds=450)
         sql = _compiled(stmt)
         assert "UPDATE runs" in sql
         assert "SET status='running'" in sql
@@ -147,7 +147,7 @@ class TestBuildClaimUpdate:
         assert sql.count("UPDATE") == 1
 
     def test_claimable_statuses_and_staleness_gate(self) -> None:
-        stmt = pe.build_claim_update(stale_seconds=450)
+        stmt = pe.build_claim_update(_stale_seconds=450)
         sql = _compiled(stmt)
         # pending runs are always claimable; running runs need a stale heartbeat
         assert "status = 'pending'" in sql
@@ -156,7 +156,7 @@ class TestBuildClaimUpdate:
         assert "stale_seconds" in sql
 
     def test_claim_cap_is_bound(self) -> None:
-        stmt = pe.build_claim_update(stale_seconds=450, claim_cap=20)
+        stmt = pe.build_claim_update(_stale_seconds=450, _claim_cap=20)
         sql = _compiled(stmt)
         assert "claim_count <" in sql
 

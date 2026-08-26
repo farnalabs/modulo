@@ -167,7 +167,7 @@ async def receive_webhook(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
-    engine: AsyncEngine = Depends(_get_engine),
+    _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
     """Receive an incoming webhook and enqueue a pipeline run.
 
@@ -418,7 +418,7 @@ async def replay_webhook(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
-    engine: AsyncEngine = Depends(_get_engine),
+    _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
     """Re-fire a webhook run from a previous TriggerEvent log entry.
 

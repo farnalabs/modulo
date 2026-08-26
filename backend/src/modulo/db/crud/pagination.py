@@ -10,7 +10,6 @@ Usage::
 """
 
 import base64
-import binascii
 import logging
 import uuid
 from datetime import datetime
@@ -64,7 +63,7 @@ class CursorPaginator:
             decoded = base64.urlsafe_b64decode(padded.encode()).decode()
             sort_val_str, id_str = decoded.rsplit(":", 1)
             return sort_val_str, uuid.UUID(id_str)
-        except (ValueError, TypeError, binascii.Error) as exc:
+        except (ValueError, TypeError) as exc:
             raise ValueError("Invalid cursor value") from exc
 
     def _parse_cursor_value(self, raw: str) -> Any:

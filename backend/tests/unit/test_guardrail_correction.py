@@ -603,8 +603,8 @@ async def test_resume_revalidates_produced_output_never_reruns_lm():
 
     outcome = await resume_interrupted_correction(
         correction=correction,
-        guardrail=guardrail,
-        backend=_Boom(),
+        _guardrail=guardrail,
+        _backend=_Boom(),
         state=state,
     )
     assert outcome.verdict == CorrectionVerdict.RESOLVED
@@ -622,8 +622,8 @@ async def test_resume_budget_exhausted_mid_resume_records_interrupted():
     }
     outcome = await resume_interrupted_correction(
         correction=correction,
-        guardrail=guardrail,
-        backend=_StubCorrectionBackend({}),
+        _guardrail=guardrail,
+        _backend=_StubCorrectionBackend({}),
         state=state,
     )
     # attempt >= max_attempts and re-validation still fails -> interrupted.
@@ -660,8 +660,8 @@ async def test_resume_round_trips_engine_persisted_state():
 
     resumed = await resume_interrupted_correction(
         correction=correction,
-        guardrail=guardrail,
-        backend=_Boom(),
+        _guardrail=guardrail,
+        _backend=_Boom(),
         state=outcome.state,
     )
     assert resumed.verdict == CorrectionVerdict.RESOLVED

@@ -175,7 +175,7 @@ async def rotate_key(
 )
 @handle_db_errors("admin.rotation.rotation_status")
 async def rotation_status(
-    current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
     try:

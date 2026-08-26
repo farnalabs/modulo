@@ -99,7 +99,7 @@ async def _should_dump_now(factory: Any, now: datetime | None = None) -> bool:
     return offset <= current_minute_of_day < offset + _DUMP_EXECUTION_WINDOW_MINUTES
 
 
-async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
+async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     """SAQ system-cron job -- daily metrics dump.
 
     The SAQ cron ticks every 10 minutes (``*/10 * * * *``); the per-instance
@@ -437,7 +437,7 @@ async def _get_or_create_instance_id(factory: Any) -> str:
     return await _get_or_create_system_config(factory, key, _create_id)
 
 
-async def _build_instance_metadata(factory: Any) -> dict[str, Any]:
+async def _build_instance_metadata(_factory: Any) -> dict[str, Any]:
     import os
 
     from modulo.version import get_version

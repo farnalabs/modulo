@@ -126,7 +126,7 @@ async def _fetch_blob(sha256: str) -> dict[str, Any] | None:
             logger.warning("community.install.blob_hash_mismatch")
             return None
         content: Any = json.loads(blob.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except ValueError:
         logger.warning("community.install.blob_not_json")
         return None
     finally:

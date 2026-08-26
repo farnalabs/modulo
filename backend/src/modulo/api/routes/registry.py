@@ -220,7 +220,7 @@ async def get_registry_primitive_endpoint(
 @handle_db_errors("registry.publish_primitive_endpoint")
 async def publish_primitive_endpoint(
     req: PublishRequest,
-    principal: TenantPrincipal = require_permission("registry.publish"),
+    _principal: TenantPrincipal = require_permission("registry.publish"),
 ) -> RegistryEntryResponse:
     """Publish a new primitive to the registry (in-memory for alpha)."""
     try:
@@ -401,7 +401,7 @@ class VerifyResponseV2(BaseModel):
 @handle_db_errors("registry.publish_primitive_v2")
 async def publish_primitive_v2(
     req: PublishRequestV2,
-    principal: TenantPrincipal = require_permission("registry.publish"),
+    _principal: TenantPrincipal = require_permission("registry.publish"),
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
 
@@ -645,7 +645,7 @@ async def verify_registry_primitive_v2(
 @handle_db_errors("registry.register_publisher_endpoint")
 async def register_publisher_endpoint(
     req: RegisterPublisherRequest,
-    principal: TenantPrincipal = require_permission("registry.publisher.manage"),
+    _principal: TenantPrincipal = require_permission("registry.publisher.manage"),
 ) -> dict[str, str]:
     """Register a verified publisher (admin operation)."""
     pub = register_publisher(
@@ -661,7 +661,7 @@ async def register_publisher_endpoint(
 @handle_db_errors("registry.revoke_publisher_endpoint")
 async def revoke_publisher_endpoint(
     fingerprint_hex: str,
-    principal: TenantPrincipal = require_permission("registry.publisher.manage"),
+    _principal: TenantPrincipal = require_permission("registry.publisher.manage"),
 ) -> dict[str, str]:
     """Revoke a publisher's trust status."""
     ok = revoke_publisher(fingerprint_hex)

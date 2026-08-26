@@ -343,7 +343,7 @@ async def test_provider_connection(
     _: object = require_feature("sso"),
     current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
+    _settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
     try:
         async with session.begin():

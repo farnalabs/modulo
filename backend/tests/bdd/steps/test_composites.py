@@ -625,7 +625,7 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
             composite_parameter_values=composite_node.get("composite_parameter_values"),
         )
         request.node._validation_error = None
-    except (ValueError, Exception) as e:
+    except Exception as e:
         errors.append(str(e))
 
     # Check template existence

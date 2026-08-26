@@ -313,7 +313,7 @@ class TestClaimTokenFence:
 class TestEventLoopStallRefusal:
     def test_claim_sql_requires_stale_heartbeat_for_running_rows(self) -> None:
         sql = str(
-            pe.build_claim_update(stale_seconds=450, claim_token="tok-a").compile(
+            pe.build_claim_update(_stale_seconds=450, claim_token="tok-a").compile(
                 dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True}
             )
         )

@@ -8,7 +8,6 @@ table.
 from __future__ import annotations
 
 import asyncio
-import binascii
 import logging
 import uuid
 from typing import TYPE_CHECKING
@@ -67,7 +66,7 @@ class FernetSecretsBackend(SecretsBackend):
         """
         try:
             return Fernet(fernet_key.encode())
-        except (binascii.Error, ValueError) as exc:
+        except ValueError as exc:
             raise ValueError(
                 f"FernetSecretsBackend: invalid {field}: must be a base64-encoded 32-byte Fernet key"
             ) from exc

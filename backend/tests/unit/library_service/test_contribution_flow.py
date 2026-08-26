@@ -353,7 +353,7 @@ class TestSubmitContributionForReview:
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
         ):
-            result = await submit_contribution_for_review(session, uuid.uuid4(), prim_id, created_by=uuid.uuid4())
+            result = await submit_contribution_for_review(session, uuid.uuid4(), prim_id, _created_by=uuid.uuid4())
 
         assert result.contribution_status == CONTRIBUTION_REVIEW_QUEUE
 
@@ -365,7 +365,7 @@ class TestSubmitContributionForReview:
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
-            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
 
     async def test_raises_invalid_transition_for_non_draft(self) -> None:
         session = _mock_session()
@@ -376,7 +376,7 @@ class TestSubmitContributionForReview:
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
             pytest.raises(ContributionInvalidTransitionError, match="expected status 'draft'"),
         ):
-            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
 
     async def test_raises_not_found_when_update_returns_none(self) -> None:
         session = _mock_session()
@@ -388,7 +388,7 @@ class TestSubmitContributionForReview:
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
-            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
 
     async def test_programming_error_propagates(self) -> None:
         session = _mock_session()
@@ -402,7 +402,7 @@ class TestSubmitContributionForReview:
             ),
             pytest.raises(ProgrammingError),
         ):
-            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

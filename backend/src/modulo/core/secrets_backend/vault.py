@@ -128,18 +128,18 @@ class VaultSecretsBackend(SecretsBackend):
             logger.warning("VaultSecretsBackend: permission denied reading secret %s", key)
             raise PermissionError("VaultSecretsBackend: permission denied reading secret") from exc
         except TimeoutError:
-            logger.error("VaultSecretsBackend: timeout reading secret %s", key)
+            logger.exception("VaultSecretsBackend: timeout reading secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout reading secret") from None
         except _hvac.exceptions.VaultError as exc:
             if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
                 logger.warning("VaultSecretsBackend: rate-limited reading secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited reading secret") from exc
-            logger.error("VaultSecretsBackend: Vault error reading secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: Vault error reading secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error reading secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("VaultSecretsBackend: unexpected error reading secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: unexpected error reading secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error reading secret") from exc
 
         data: dict[str, Any] = response.get("data", {})
@@ -165,18 +165,18 @@ class VaultSecretsBackend(SecretsBackend):
                 timeout_seconds=_TIMEOUT,
             )
         except TimeoutError:
-            logger.error("VaultSecretsBackend: timeout writing secret %s", key)
+            logger.exception("VaultSecretsBackend: timeout writing secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout writing secret") from None
         except _hvac.exceptions.VaultError as exc:
             if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
                 logger.warning("VaultSecretsBackend: rate-limited writing secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited writing secret") from exc
-            logger.error("VaultSecretsBackend: Vault error writing secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: Vault error writing secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error writing secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("VaultSecretsBackend: unexpected error writing secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: unexpected error writing secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error writing secret") from exc
 
     async def delete_secret(self, key: str) -> None:
@@ -194,16 +194,16 @@ class VaultSecretsBackend(SecretsBackend):
         except _hvac.exceptions.InvalidPath:
             pass
         except TimeoutError:
-            logger.error("VaultSecretsBackend: timeout deleting secret %s", key)
+            logger.exception("VaultSecretsBackend: timeout deleting secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout deleting secret") from None
         except _hvac.exceptions.VaultError as exc:
             if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
                 logger.warning("VaultSecretsBackend: rate-limited deleting secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited deleting secret") from exc
-            logger.error("VaultSecretsBackend: Vault error deleting secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: Vault error deleting secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error deleting secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("VaultSecretsBackend: unexpected error deleting secret %s: %s", key, exc)
+            logger.exception("VaultSecretsBackend: unexpected error deleting secret %s: %s", key, exc)
             raise RuntimeError("VaultSecretsBackend: unexpected error deleting secret") from exc

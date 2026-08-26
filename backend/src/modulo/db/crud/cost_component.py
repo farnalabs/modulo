@@ -32,7 +32,7 @@ __all__ = [
 
 
 async def _duplicate_exists(
-    session: AsyncSession, org_id: uuid.UUID, *, name: str, report_key: str | None, kind: str
+    session: AsyncSession, org_id: uuid.UUID, *, name: str, report_key: str | None, _kind: str
 ) -> bool:
     """Org-scoped duplicate pre-check (409). Explicit parens pin the precedence."""
     row = await session.execute(
@@ -82,7 +82,7 @@ async def create_cost_component(
 ) -> CostComponent:
     if await count_active_components(session, org_id) >= max_components:
         raise ValueError("org_cap")
-    if await _duplicate_exists(session, org_id, name=name, report_key=report_key, kind=kind):
+    if await _duplicate_exists(session, org_id, name=name, report_key=report_key, _kind=kind):
         raise ValueError("duplicate_component")
 
     component = CostComponent(
@@ -167,7 +167,7 @@ async def update_cost_component(
     # duplicate check (excludes self: the name/report_key are compared against
     # OTHER active rows).
     if (new_name != component.name or new_report_key != component.report_key) and await _duplicate_exists(
-        session, component.organisation_id, name=new_name, report_key=new_report_key, kind=new_kind
+        session, component.organisation_id, name=new_name, report_key=new_report_key, _kind=new_kind
     ):
         raise ValueError("duplicate_component")
 

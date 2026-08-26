@@ -790,7 +790,7 @@ class TestSaqWorkerWiring:
             "modulo.core.cron_helpers.fire_ongoing_trigger", new_callable=AsyncMock, return_value=summary
         ) as chf:
             result = await sw.fire_ongoing_trigger(
-                ctx={},
+                _ctx={},
                 trigger_id=str(TRIGGER_ID),
                 org_id=str(ORG),
                 pipeline_id=str(PIPELINE_ID),

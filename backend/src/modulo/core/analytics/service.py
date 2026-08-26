@@ -444,7 +444,7 @@ async def run_analytics_query(
 
 async def _resolve_pool_reference(
     factory: async_sessionmaker[AsyncSession],
-    settings: Settings,
+    _settings: Settings,
     *,
     org_id: uuid.UUID,
     account_id: uuid.UUID | None,

@@ -826,7 +826,7 @@ async def _require_valid_entry_agent(session: AsyncSession, entry_node: dict[str
 async def _validate_run_input_basics(
     session: AsyncSession,
     graph_json: dict[str, Any],
-    snapshot: PipelineSnapshot,
+    _snapshot: PipelineSnapshot,
     input_payload: dict[str, Any],
 ) -> None:
     """Basic pre-run input health checks (not full schema validation).
@@ -933,7 +933,7 @@ async def _create_manual_run(
 async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),
-    engine: AsyncEngine = Depends(_get_engine),
+    _engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
@@ -2262,7 +2262,7 @@ def _decrypt_checkpoint(raw_checkpoint: Any, fernet_key: str | None) -> Any:
                     decrypted = f.decrypt(parsed["data"].encode())
                     return json.loads(decrypted.decode())
                 return parsed
-        except (json.JSONDecodeError, Exception) as exc:
+        except Exception as exc:
             _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
     elif isinstance(raw_checkpoint, dict) and raw_checkpoint.get("__encrypted__") and fernet_key:
         try:
