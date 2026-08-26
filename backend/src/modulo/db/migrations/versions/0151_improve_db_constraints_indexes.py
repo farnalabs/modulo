@@ -1,7 +1,7 @@
 """Add missing FK constraints, status lookup indexes, and a sort-order CHECK.
 
-Revision ID: 0150_improve_db_constraints_indexes
-Revises: 0149_suite_run_trigger_kind
+Revision ID: 0151_improve_db_constraints_indexes
+Revises: 0150_add_router_no_match_status
 Create Date: 2026-08-26
 
 Schema-quality fixes from the improve-database pass over
@@ -37,8 +37,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0150_improve_db_constraints_indexes"
-down_revision: str | None = "0149_suite_run_trigger_kind"
+revision: str = "0151_improve_db_constraints_indexes"
+down_revision: str | None = "0150_add_router_no_match_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

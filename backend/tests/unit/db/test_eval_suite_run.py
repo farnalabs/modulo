@@ -573,7 +573,9 @@ def test_single_migration_head() -> None:
     # -> 0147_json_to_jsonb_standardize (db-jsonb-standardize renumber from 0145
     #    to avoid colliding with main's 0145_spend_ceiling, chains off 0146).
     # -> 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147_json_to_jsonb_standardize.
-    # -> 0149_suite_run_trigger_kind (FAR-377) chains off 0148_pipeline_snapshot_versioning_far420 and is the head.
+    # -> 0149_suite_run_trigger_kind (FAR-377) chains off 0148_pipeline_snapshot_versioning_far420;
+    # -> 0150_add_router_no_match_status (main) chains off 0149;
+    # -> 0151_improve_db_constraints_indexes (this PR) chains off 0150 and is the head.
     chaining_off_0131 = [p for p in revisions if parents[p] == "0131_eval_dataset_corpus"]
     assert [_basename(p) for p in chaining_off_0131] == ["0132_agent_connector_report_soft_delete_audit.py"]
     chaining_off_0132 = [p for p in revisions if parents[p] == "0132_agent_connector_report_soft_delete_audit"]
@@ -606,7 +608,8 @@ def test_single_migration_head() -> None:
     # 0145_spend_ceiling (FAR-391) chains off 0144, 0146_extend_runs_status_cost_ceiling
     # chains off 0145, 0147_json_to_jsonb_standardize chains off 0146,
     # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147,
-    # and 0149_suite_run_trigger_kind (FAR-377) chains off 0148 and is the head.
+    # and 0149_suite_run_trigger_kind (FAR-377) chains off 0148; 0150_add_router_no_match_status
+    # (main) chains off 0149; 0151_improve_db_constraints_indexes (this PR) chains off 0150 and is the head.
     chaining_off_0143 = [p for p in revisions if parents[p] == "0143_rest_connector_profile"]
     assert [_basename(p) for p in chaining_off_0143] == ["0144_broaden_notification_status_in_app.py"]
     # What chains off 0144 (broaden notification status) -> 0145_spend_ceiling (FAR-391).
@@ -616,21 +619,24 @@ def test_single_migration_head() -> None:
     chaining_off_0145 = [p for p in revisions if parents[p] == "0145_spend_ceiling"]
     assert [_basename(p) for p in chaining_off_0145] == ["0146_extend_runs_status_cost_ceiling.py"]
     # 0146 -> 0147_json_to_jsonb_standardize; 0147 -> 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6);
-    # 0148 -> 0149_suite_run_trigger_kind (FAR-377).
+    # 0148 -> 0149_suite_run_trigger_kind (FAR-377) -> 0150_add_router_no_match_status (main) -> 0151_improve_db_constraints_indexes (this PR).
     chaining_off_0146 = [p for p in revisions if parents[p] == "0146_extend_runs_status_cost_ceiling"]
     assert [_basename(p) for p in chaining_off_0146] == ["0147_json_to_jsonb_standardize.py"]
     # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147.
     chaining_off_0147 = [p for p in revisions if parents[p] == "0147_json_to_jsonb_standardize"]
     assert [_basename(p) for p in chaining_off_0147] == ["0148_pipeline_snapshot_versioning_far420.py"]
-    # 0149_suite_run_trigger_kind (FAR-377, main) chains off 0148.
+    # 0149_suite_run_trigger_kind (FAR-377) chains off 0148.
     chaining_off_0148 = [p for p in revisions if parents[p] == "0148_pipeline_snapshot_versioning_far420"]
     assert [_basename(p) for p in chaining_off_0148] == ["0149_suite_run_trigger_kind.py"]
-    # 0150_add_router_no_match_status (this PR) chains off 0149 and is the single head.
+    # 0150_add_router_no_match_status (main) chains off 0149.
     chaining_off_0149 = [p for p in revisions if parents[p] == "0149_suite_run_trigger_kind"]
     assert [_basename(p) for p in chaining_off_0149] == ["0150_add_router_no_match_status.py"]
-    # Nothing chains off 0150 -> it is the single head.
+    # 0151_improve_db_constraints_indexes (this PR) chains off 0150 and is the single head.
     chaining_off_0150 = [p for p in revisions if parents[p] == "0150_add_router_no_match_status"]
-    assert chaining_off_0150 == []
+    assert [_basename(p) for p in chaining_off_0150] == ["0151_improve_db_constraints_indexes.py"]
+    # Nothing chains off 0151 -> it is the single head.
+    chaining_off_0151 = [p for p in revisions if parents[p] == "0151_improve_db_constraints_indexes"]
+    assert chaining_off_0151 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
