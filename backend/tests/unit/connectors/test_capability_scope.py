@@ -354,6 +354,75 @@ def test_assert_no_secret_objects_allows_plain_data():
     assert_no_secret_objects({"connector_id": str(uuid.uuid4()), "records": [{"ok": True}]}, node_id="n1")
 
 
+# Save-time (route-level) narrow-not-widen control (FAR-418 MINOR-1)
+# ---------------------------------------------------------------------------
+
+
+class _FakeAgent:
+    """Minimal stand-in for the db Agent model — only connector_type_refs is read."""
+
+    def __init__(self, connector_type_refs: list[str]) -> None:
+        self.connector_type_refs = connector_type_refs
+
+
+def _scope_node(agent_id: uuid.UUID, allowed_connectors: list[str] | None):
+    """Build a PipelineGraphNode with a capability_scope for save-time tests."""
+    from modulo.api.routes.pipelines import CapabilityScope, PipelineGraphNode
+
+    payload = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(agent_id),
+        "position": {"x": 0.0, "y": 0.0},
+    }
+    if allowed_connectors is not None:
+        payload["capability_scope"] = CapabilityScope(allowed_connectors=allowed_connectors)
+    return PipelineGraphNode.model_validate(payload)
+
+
+def test_validate_capability_scopes_rejects_widen_at_save_time():
+    """The save-time compile-time check is the route's primary security control:
+    a node that WIDENS its Agent's connector grants (names a type the Agent was
+    not granted) must be rejected. The route converts this typed
+    ScopeViolationError into HTTP 422 on pipeline save."""
+
+    from modulo.api.routes.pipelines import _validate_capability_scopes
+
+    agent_id = uuid.uuid4()
+    # Agent granted only 'github'.
+    node = _scope_node(agent_id, ["github", "linear"])
+    with pytest.raises(ScopeViolationError):
+        _validate_capability_scopes([node], {agent_id: _FakeAgent(["github"])})
+
+
+def test_validate_capability_scopes_accepts_narrow_subset():
+    """A node that narrows (a strict subset of the Agent's grants) is accepted."""
+
+    from modulo.api.routes.pipelines import _validate_capability_scopes
+
+    agent_id = uuid.uuid4()
+    node = _scope_node(agent_id, ["github"])
+    # A strict subset of the Agent's grants is accepted: the check returns
+    # normally (None) and does not raise.
+    result = _validate_capability_scopes([node], {agent_id: _FakeAgent(["github", "linear"])})
+    assert result is None
+
+
+def test_validate_capability_scopes_unrestricted_node_is_skipped():
+    """An UNRESTRICTED node (no scope) is not subject to the widen check."""
+
+    from modulo.api.routes.pipelines import _validate_capability_scopes
+
+    agent_id = uuid.uuid4()
+    node = _scope_node(agent_id, None)
+    # No scope → skipped by the widen check; the call returns normally (None).
+    result = _validate_capability_scopes([node], {agent_id: _FakeAgent(["github"])})
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+
+
 # ---------------------------------------------------------------------------
 # Backcompat: no capability_scope -> unchanged pipeline behaviour
 # ---------------------------------------------------------------------------

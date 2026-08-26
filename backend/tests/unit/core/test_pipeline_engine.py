@@ -293,3 +293,59 @@ class TestRunContextPromptTemplates:
         finally:
             set_model_backend_hub(None)
             await hub.__aexit__(None, None, None)
+
+    async def test_context_scope_gates_state_run_context_view(self) -> None:
+        """FAR-418 MAJOR-3 fix: ``context_scope`` must also bind the
+        ``state.run_context`` view, not just the ``run_context`` template var.
+        A template reading ``{{ state.run_context.<key> }}`` for a gated key must
+        receive an empty value — otherwise a node could trivially bypass the
+        need-to-know boundary.
+        """
+        node_id = str(uuid.uuid4())
+        backend_id = uuid.uuid4()
+        node_def = {
+            "id": node_id,
+            "prompt_template": "tier={{ run_context.model_tier }}|leak={{ state.run_context.secret }}",
+            "model_backend_id": str(backend_id),
+            "capability_scope": {"context_scope": ["model_tier"]},
+        }
+        node_fn = make_node_fn(node_def, role="agent")
+
+        captured: dict[str, str] = {}
+
+        class _CaptureAdapter:
+            def __init__(self) -> None:
+                self._inner = StubModelBackend({"tier=tier-2|leak=": json.dumps({"ok": True})})
+
+            async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+                captured["prompt"] = messages[-1].content
+                return await self._inner.ainvoke(messages, **kwargs)
+
+            async def stream(self, messages: list[BaseMessage], **kwargs: Any) -> AsyncIterator[BaseMessage]:
+                yield await self._inner.ainvoke(messages, **kwargs)
+
+            @property
+            def backend_id(self) -> str:
+                return "stub"
+
+        hub = ModelBackendHub()
+        await hub.__aenter__()
+        hub.register(backend_id, _CaptureAdapter())
+        set_model_backend_hub(hub)
+
+        state: dict[str, Any] = {
+            "run_context": {"model_tier": "tier-2", "secret": "X"},
+            "artifacts": [],
+        }
+
+        try:
+            result = await node_fn(state)
+            assert result["artifacts"][0]["status"] == "completed"
+        finally:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)
+
+        # The scoped key must be visible, but the gated key must NOT leak via
+        # the state.run_context view.
+        assert "tier=tier-2" in captured["prompt"]
+        assert "leak=X" not in captured["prompt"]
