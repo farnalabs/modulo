@@ -195,3 +195,87 @@ def test_read_before_write_fails_open_on_missing_or_malformed_run_ref() -> None:
     assert read_before_write_suppression(markers, run_ref="", node_ref="node-a") is False
     # Non-dict markers are ignored.
     assert read_before_write_suppression(["not-a-dict"], run_ref="pipeline:9", node_ref="node-a") is False
+
+
+def test_read_before_write_first_attempt_failure_not_suppressed() -> None:
+    """A first-attempt failure stamp carries the matching key but NO
+    ``delivery_done`` — it must NOT suppress (the write never delivered, so the
+    run must retry rather than be marked COMPLETE).
+
+    This is the FAR-438 regression: the marker is stamped with ``idempotency_key``
+    on EVERY failure (right before the raise), so requiring ONLY the key match
+    would let a legitimate first-attempt transient failure suppress itself.
+    """
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    failed_key = node_idempotency_key(persisted, "node-a", index=0)
+    failed_marker = {"attempt-0": {"_modulo_marker": True, "status": "failed", "idempotency_key": failed_key}}
+    # delivery_done absent => the failure must NOT suppress.
+    assert read_before_write_suppression(failed_marker, run_ref=persisted, node_ref="node-a", index=0) is False
+    # delivery_done explicitly False => still NOT suppressed.
+    failed_marker["attempt-0"]["delivery_done"] = False
+    assert read_before_write_suppression(failed_marker, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_index_payload_item_keys_do_not_collide() -> None:
+    """Two fan-out items (index 0 vs 1) for the SAME node derive DIFFERENT keys:
+    item B's marker never suppresses item A, so a re-run of item A is not hidden
+    by item B's applied key."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    item_a_key = node_idempotency_key(persisted, "node-a", index=0)
+    item_b_key = node_idempotency_key(persisted, "node-a", index=1)
+    assert item_a_key != item_b_key
+    # A marker applied for item B must not suppress the item A probe.
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": item_b_key}}
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=1) is True
+
+
+def test_read_before_write_changed_payload_derives_different_key() -> None:
+    """A genuinely-edited content-edit payload yields a DIFFERENT key: an edited
+    re-run probe is NOT suppressed by the unedited marker (the edit is no longer
+    silently deduped/dropped), while the untouched re-run IS suppressed."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    original_key = node_idempotency_key(persisted, "node-a", index=0, payload="v1")
+    edited_key = node_idempotency_key(persisted, "node-a", index=0, payload="v2")
+    assert original_key != edited_key
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": original_key}}
+    # Edited payload probe => different key => not suppressed.
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v2") is False
+    # Unchanged payload probe => same key + delivery_done => suppressed.
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v1") is True
+
+
+def test_run_ref_shape_regex_consistent_with_db_layer() -> None:
+    """The core (``_RUN_REF_RE``) and DB-layer (``_RUN_IDEMPOTENCY_REF_RE``)
+    run-ref shape regexes are mirrored deliberately (import-linter forbids
+    ``modulo.db`` importing ``modulo.core``), so they must accept/reject the
+    SAME samples — a divergent copy would silently break key read-back."""
+    samples = [
+        "pipeline:42",  # valid
+        "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7",  # valid (uuid:number)
+        "some_pipeline-name:1",  # valid (slug:number)
+        "pipeline:0",  # valid (0 is a number)
+        "pipeline:not-a-number",  # invalid (non-numeric)
+        "pipeline",  # invalid (no :number)
+        "pipeline:",  # invalid (empty number)
+        ":42",  # invalid (empty id)
+        "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f",  # invalid (bare uuid)
+        "",  # invalid (empty)
+    ]
+
+    def _accepted_by_core(sample: str) -> bool:
+        try:
+            stable_idempotency_key(run_ref=sample, node_ref="node-a")
+            return True
+        except ValueError:
+            return False
+
+    def _accepted_by_db(sample: str) -> bool:
+        try:
+            run_idempotency_key(sample)
+            return True
+        except ValueError:
+            return False
+
+    for sample in samples:
+        assert _accepted_by_core(sample) == _accepted_by_db(sample), f"regex divergence for {sample!r}"

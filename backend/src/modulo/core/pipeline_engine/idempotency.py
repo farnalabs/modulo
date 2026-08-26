@@ -21,6 +21,19 @@ identical per-node keys via :func:`node_idempotency_key`. The derivation
 primitive (:func:`stable_idempotency_key`) is the delivered contract;
 :func:`read_before_write_suppression` is the read-before-write dedupe that
 consumes it.
+
+SCOPE LIMITATION (connector-write dedupe, FAR-438): the read-before-write
+dedupe (:func:`read_before_write_suppression`) is currently wired ONLY to the
+sandbox single-node transient-recovery path (the executor's
+``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
+suppression for a ``single_sandbox_node`` graph on the sandbox transient
+retry). It is NOT yet wired to the connector-write UNKNOWN-recovery surface
+(the actual FAR-410 scenario this module was framed around): a connector node
+whose write reached upstream but whose outcome was reported UNKNOWN is not
+currently deduped. The derivation primitive + the suppression decision function
+are the portable contract — wiring the connector-write surface to consume them
+is deferred (see the TODO below) and should land with the connector
+UNKNOWN-recovery path + its tests.
 """
 
 from __future__ import annotations
@@ -37,9 +50,17 @@ _IDEMPOTENCY_NAMESPACE = "modulo"
 # UUID fork of the pipeline and would mint a NEW key on every re-run — silently
 # defeating the idempotency contract. Validate the ``<id>:<number>`` shape here
 # so a naive ``run_id`` fails loudly instead of silently breaking dedupe.
-# NOTE: this regex is mirrored by ``_RUN_REF_RE`` in ``modulo.db.crud.run`` (the
-# DB layer cannot import this module, so the two copy the shape deliberately).
+# NOTE: this regex is mirrored by ``_RUN_IDEMPOTENCY_REF_RE`` in
+# ``modulo.db.crud.run`` (the DB layer cannot import this module, so the two
+# copy the shape deliberately). ``test_idempotency`` asserts both accept/reject
+# the same samples so the mirror cannot drift from this definition.
 _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
+
+# TODO(FAR-438): wire :func:`read_before_write_suppression` into the
+# connector-write UNKNOWN-recovery path. Today the dedupe runs only on the
+# sandbox single-node transient-recovery surface (see the SCOPE LIMITATION note
+# in the module docstring); the connector write that actually reaches upstream
+# but reports UNKNOWN is NOT deduped. Add tests alongside the wiring.
 
 
 def stable_idempotency_key(
@@ -120,11 +141,28 @@ def read_before_write_suppression(
 ) -> bool:
     """READ-BEFORE-WRITE dedupe (FAR-438): should this write be suppressed?
 
-    True when a re-run reused the run's PERSISTED idempotency key and the
-    recorded markers already stamped the SAME derived per-node key as applied
-    (``marker["idempotency_key"] == node_idempotency_key(run_ref, node_ref, ...)``).
-    This is what makes "re-run with the same key" actually suppress a duplicate
-    write (no double-submit) rather than re-applying it as a fresh operation.
+    True ONLY when a re-run reused the run's PERSISTED idempotency key AND the
+    recorded markers already carry BOTH:
+      - ``marker["idempotency_key"] == node_idempotency_key(run_ref, node_ref, ...)``
+        (the same derived per-node key, computed with the SAME ``index`` /
+        ``payload`` as the marker write), AND
+      - ``marker["delivery_done"] is True`` — the FAR-228 sentinel that the
+        side-effecting delivery actually happened.
+
+    ``delivery_done is True`` is REQUIRED for suppression. A marker that carries
+    the matching ``idempotency_key`` but NOT ``delivery_done`` is a mere
+    FAILURE stamp (written right before the raise; nothing was delivered) —
+    suppressing on it would mark an unexecuted run COMPLETE and never retry it.
+    Requiring the delivery sentinel is what makes "re-run with the same key"
+    suppress a duplicate write (no double-submit) ONLY when a delivery genuinely
+    occurred, while a first-attempt failure (no delivery) is never suppressed
+    and retries.
+
+    ``index`` / ``payload`` are threaded into the derivation exactly as on the
+    marker-write side, so per-item (fan-out cardinality) and content-version
+    keys are computed consistently on BOTH sides — a marker for fan-out item B
+    never suppresses item A, and an edited content payload derives a fresh key
+    that is not already applied.
 
     Fail-open: a missing/None ``run_ref``, a malformed ``run_ref``, or a
     non-dict ``markers`` never suppresses (the write proceeds), so a
@@ -139,4 +177,7 @@ def read_before_write_suppression(
     except ValueError:
         # A malformed persisted run key must fail open (never silently suppress).
         return False
-    return any(isinstance(marker, dict) and marker.get("idempotency_key") == derived for marker in markers.values())
+    return any(
+        isinstance(marker, dict) and marker.get("delivery_done") is True and marker.get("idempotency_key") == derived
+        for marker in markers.values()
+    )

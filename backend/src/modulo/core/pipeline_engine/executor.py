@@ -3146,6 +3146,12 @@ class PipelineExecutor:
             stalled=stalled,
             cancellation_requested=cancellation_requested,
             single_sandbox_node=single_sandbox_node,
+            # FAR-438: the transient path has no separate fan-out / content-edit
+            # context (exc.node_id already encodes parent+index for fan-out
+            # children; there is no connector payload to fold), so index/payload
+            # are None here — consistent with the marker-write side's defaults.
+            index=None,
+            payload=None,
         )
         # Only SandboxNodeFailedError carries a node_id — the gate is
         # keyed on it, so a None node_id (plain NodeCancelledError) can
@@ -3608,6 +3614,8 @@ class PipelineExecutor:
         stalled: bool,
         cancellation_requested: bool,
         single_sandbox_node: bool,
+        index: int | str | None = None,
+        payload: str | bytes | None = None,
     ) -> bool:
         """FAR-228 guard B + FAR-438 read-before-write — should a transient retry be suppressed?
 
@@ -3617,6 +3625,26 @@ class PipelineExecutor:
         already-applied per-node key (``read_before_write_suppression``). The
         second branch is the UNKNOWN-recovery path: an operator re-run with the
         SAME persisted key must NOT double-submit the write.
+
+        ``index`` / ``payload`` (FAR-438) are the item-cardinality position and
+        content-version payload handed to ``read_before_write_suppression`` so the
+        derived per-node key matches the key the marker-write side stamped. They
+        must be the SAME arguments the write side used — the transient path has no
+        separate fan-out/content-edit context here (``exc.node_id`` already encodes
+        ``parent+index`` for fan-out children, and there is no connector content
+        payload to fold), so they default to ``None`` and stay consistent with the
+        sandbox marker write.
+
+        TOCTOU note (known, documented): ``run_markers`` is the run's
+        ``raw_output_markers`` read by ``_load_transient_state`` via plain
+        ``get_run`` — NOT under ``SELECT ... FOR UPDATE``. Two executors racing
+        on the same run could both read ``delivery_done`` absent and both decide
+        to suppress/retry. The marker WRITE side (``_write_raw_output_marker``)
+        DOES take ``with_for_update`` on the run row before persisting, so a
+        concurrent writer is serialised there; this read is a bounded, best-effort
+        gate (guarded by ``pipeline.idempotency_gate.check_failed``). If the
+        TOCTOU window becomes a real double-write risk, take ``with_for_update``
+        on this read too.
         """
         from modulo.settings import get_settings
 
@@ -3624,11 +3652,19 @@ class PipelineExecutor:
         try:
             node_id = getattr(exc, "node_id", None)
             delivered = _should_skip_retry(node_id, run_markers, str(run_id))
-            replay_suppressed = read_before_write_suppression(
-                run_markers,
-                run_ref=idempotency_key,
-                node_ref=node_id,
-            )
+            # read_before_write_suppression is typed ``str`` for both refs and
+            # fail-opens (returns False) on a None/empty run_ref or node_ref —
+            # guard here so a None idempotency_key (no persisted key) never
+            # even attempts the derivation, and to satisfy mypy's arg-types.
+            replay_suppressed = False
+            if idempotency_key and node_id:
+                replay_suppressed = read_before_write_suppression(
+                    run_markers,
+                    run_ref=idempotency_key,
+                    node_ref=node_id,
+                    index=index,
+                    payload=payload,
+                )
             gate_ok = (
                 (delivered or replay_suppressed)
                 and not superseded
