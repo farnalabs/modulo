@@ -168,6 +168,135 @@ async def _dispatch_audit_warning(
         )
 
 
+async def _raise_if_state_cancelled(fn_name: str, run_ctx: dict[str, Any]) -> None:
+    """1a. State-based cancellation check (fast path — no DB roundtrip)."""
+    if run_ctx.get("cancelled", False):
+        raise RunCancelledError(f"Run cancelled before node {fn_name!r} could execute.")
+
+
+async def _raise_if_db_cancelled(fn_name: str) -> None:
+    """1b. DB-backed cancellation check (authoritative source).
+
+    Hook failures are caught, logged as warnings, and the run continues
+    (conservative degrade). asyncio.CancelledError propagates.
+    """
+    db_check = _get_cancellation_check()
+    if db_check is None:
+        return
+    try:
+        db_cancelled = await db_check()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "run_context.cancellation_check_failed",
+            extra={"node_name": fn_name},
+            exc_info=True,
+        )
+        return
+    if db_cancelled:
+        raise RunCancelledError(f"Run cancelled (DB check) before node {fn_name!r} could execute.")
+
+
+async def _execute_node(
+    fn: Callable[..., Any],
+    state: dict[str, Any],
+    kwargs: dict[str, Any],
+    timeout_seconds: float | None,
+    fn_name: str,
+) -> dict[str, Any]:
+    """2. Timeout-wrapped execution of the wrapped node coroutine."""
+    coro = fn(state, **kwargs)
+    if timeout_seconds is not None:
+        try:
+            result: dict[str, Any] = await asyncio.wait_for(coro, timeout=timeout_seconds)
+        except TimeoutError:
+            raise TimeoutError(f"Node {fn_name!r} exceeded {timeout_seconds}s timeout.") from None
+    else:
+        result = await coro
+    return result
+
+
+def _strip_reserved_keys(fn_name: str, result_rc: dict[str, Any]) -> list[str]:
+    """Strip reserved keys a context-setter may not modify; return those stripped."""
+    attempted_reserved = [k for k in result_rc if k in _RESERVED_RUN_CONTEXT_KEYS]
+    for k in attempted_reserved:
+        result_rc.pop(k)
+    if attempted_reserved:
+        _log.warning(
+            "run_context.reserved_key_attempt",
+            extra={
+                "node_name": fn_name,
+                "reserved_keys": attempted_reserved,
+            },
+        )
+    return attempted_reserved
+
+
+def _record_write_log(
+    state: dict[str, Any],
+    result: dict[str, Any],
+    fn_name: str,
+    role: str | None,
+    result_rc: dict[str, Any],
+) -> None:
+    """Append an ordered write-log entry for a context-setter's run_context write."""
+    write_log: list[dict[str, Any]] = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
+    written_fields = list(result_rc.keys())
+    write_log.append(
+        {
+            "node_name": fn_name,
+            "role": role,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "written_fields": written_fields,
+        }
+    )
+    result[_RUN_CONTEXT_WRITE_LOG_KEY] = write_log
+    _log.info(
+        "run_context.write",
+        extra={
+            "node_name": fn_name,
+            "fields": written_fields,
+        },
+    )
+
+
+async def _handle_context_setter(
+    result: dict[str, Any],
+    state: dict[str, Any],
+    fn_name: str,
+    role: str | None,
+) -> None:
+    """3. Apply context-setter guard: strip reserved keys and record the write log."""
+    result_rc: dict[str, Any] = result["run_context"]
+    _strip_reserved_keys(fn_name, result_rc)
+    if result_rc:
+        _record_write_log(state, result, fn_name, role, result_rc)
+    result["run_context"] = result_rc
+
+
+async def _raise_context_violation(
+    result: dict[str, Any],
+    fn_name: str,
+    role: str | None,
+) -> None:
+    """3. Non-context-setter violation — dispatch audit event, log, and raise."""
+    attempted = list(result["run_context"].keys())
+    await _dispatch_audit_warning(fn_name, role, attempted)
+    _log.warning(
+        "run_context.violation",
+        extra={
+            "node_name": fn_name,
+            "role": role,
+            "attempted_fields": attempted,
+        },
+    )
+    raise ContextSetterViolationError(
+        f"Node {fn_name!r} (role={role!r}) returned a 'run_context' update. "
+        "Only nodes with role='context_setter' may modify run_context."
+    )
+
+
 def cancellable_node(
     *,
     timeout: float | None = None,
@@ -184,93 +313,18 @@ def cancellable_node(
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
         async def wrapper(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-            # 1a. State-based cancellation check (fast path — no DB roundtrip)
             run_ctx: dict[str, Any] = state.get("run_context") or {}
-            if run_ctx.get("cancelled", False):
-                raise RunCancelledError(f"Run cancelled before node {fn.__name__!r} could execute.")
+            await _raise_if_state_cancelled(fn.__name__, run_ctx)
+            await _raise_if_db_cancelled(fn.__name__)
 
-            # 1b. DB-backed cancellation check (authoritative source)
-            db_check = _get_cancellation_check()
-            if db_check is not None:
-                try:
-                    db_cancelled = await db_check()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "run_context.cancellation_check_failed",
-                        extra={"node_name": fn.__name__},
-                        exc_info=True,
-                    )
-                    db_cancelled = False
-                if db_cancelled:
-                    raise RunCancelledError(f"Run cancelled (DB check) before node {fn.__name__!r} could execute.")
-
-            # 2. Timeout-wrapped execution
-            coro = fn(state, **kwargs)
-            if timeout is not None:
-                try:
-                    result: dict[str, Any] = await asyncio.wait_for(coro, timeout=timeout)
-                except TimeoutError:
-                    raise TimeoutError(f"Node {fn.__name__!r} exceeded {timeout}s timeout.") from None
-            else:
-                result = await coro
+            result = await _execute_node(fn, state, kwargs, timeout, fn.__name__)
 
             # 3. Context-setter guard and write log
             if result and "run_context" in result and result["run_context"] is not None:
                 if role == "context_setter":
-                    # Strip reserved keys that context-setters may not modify.
-                    result_rc: dict[str, Any] = result["run_context"]
-                    attempted_reserved = [k for k in result_rc if k in _RESERVED_RUN_CONTEXT_KEYS]
-                    for k in attempted_reserved:
-                        result_rc.pop(k)
-                    if attempted_reserved:
-                        _log.warning(
-                            "run_context.reserved_key_attempt",
-                            extra={
-                                "node_name": fn.__name__,
-                                "reserved_keys": attempted_reserved,
-                            },
-                        )
-                    # Only record write-log entry if there are non-reserved keys to persist.
-                    if result_rc:
-                        write_log: list[dict[str, Any]] = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
-                        written_fields = list(result_rc.keys())
-                        write_log.append(
-                            {
-                                "node_name": fn.__name__,
-                                "role": role,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                                "written_fields": written_fields,
-                            }
-                        )
-                        result[_RUN_CONTEXT_WRITE_LOG_KEY] = write_log
-
-                        _log.info(
-                            "run_context.write",
-                            extra={
-                                "node_name": fn.__name__,
-                                "fields": written_fields,
-                            },
-                        )
-                    result["run_context"] = result_rc
+                    await _handle_context_setter(result, state, fn.__name__, role)
                 else:
-                    # Non-context-setter violation — dispatch audit event, log
-                    # warning and raise.
-                    attempted = list(result["run_context"].keys())
-                    await _dispatch_audit_warning(fn.__name__, role, attempted)
-                    _log.warning(
-                        "run_context.violation",
-                        extra={
-                            "node_name": fn.__name__,
-                            "role": role,
-                            "attempted_fields": attempted,
-                        },
-                    )
-                    raise ContextSetterViolationError(
-                        f"Node {fn.__name__!r} (role={role!r}) returned a 'run_context' update. "
-                        "Only nodes with role='context_setter' may modify run_context."
-                    )
+                    await _raise_context_violation(result, fn.__name__, role)
 
             return result
 
