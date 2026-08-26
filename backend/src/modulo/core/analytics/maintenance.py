@@ -32,7 +32,6 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.analytics.metrics import (
