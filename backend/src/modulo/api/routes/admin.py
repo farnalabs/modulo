@@ -3033,22 +3033,21 @@ class StorageInfoResponse(BaseModel):
     estimated_saved_bytes: int
 
 
-@router.get(
-    "/runs/retention",
-    dependencies=[require_feature("admin_run_retention")],
-)
-async def admin_get_retention(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> RetentionConfigResponse:
-    _require_admin(current_user, "view retention")
+async def _load_org_retention_setting(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> Any | None:
+    """Read the organisation's ``settings_json`` retention setting.
+
+    RLS is set before the read; DB failures are mapped to the same error
+    responses the route previously raised inline. Extracted so the route's
+    control flow stays shallow (SonarQube S3776).
+    """
     try:
         async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            result = await session.execute(
-                select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
-            )
-            row = result.scalar_one_or_none()
+            await set_rls_org(session, org_id)
+            result = await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+            return result.scalar_one_or_none()
     except asyncio.CancelledError:
         raise
     except IntegrityError:
@@ -3067,6 +3066,9 @@ async def admin_get_retention(
 
         _raise_unexpected(MSG_UNEXPECTED_ERROR)
 
+
+def _retention_days_from_setting(row: Any) -> int:
+    """Return the effective retention window (days) stored in ``row``, else 90."""
     retention_days = 90
     if isinstance(row, dict):
         raw = row.get("retention_days", 90)
@@ -3076,7 +3078,20 @@ async def admin_get_retention(
             retention_days = raw
         elif isinstance(raw, str) and raw.isdigit():
             retention_days = int(raw)
-    return RetentionConfigResponse(retention_days=retention_days)
+    return retention_days
+
+
+@router.get(
+    "/runs/retention",
+    dependencies=[require_feature("admin_run_retention")],
+)
+async def admin_get_retention(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RetentionConfigResponse:
+    _require_admin(current_user, "view retention")
+    row = await _load_org_retention_setting(session, current_user.organisation_id)
+    return RetentionConfigResponse(retention_days=_retention_days_from_setting(row))
 
 
 @router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
