@@ -6387,8 +6387,13 @@ export interface paths {
          * @description List runs matching the filter set, with an estimated per-run byte size.
          *
          *     Returns every matching run (including non-terminal ones — the UI shows
-         *     terminal-only as purge-able), the total match count, and an estimated total
-         *     reclaimable byte count across ALL matches.
+         *     terminal-only as purge-able), the total match count, an estimated total
+         *     reclaimable byte count across ALL matches, and — most importantly for the
+         *     purge confirm dialog — a terminal-only ``terminal_total`` and
+         *     ``terminal_estimated_bytes``. The purge deletes *every* matching terminal run
+         *     (unbounded), so the client must derive its confirm count and reclaimable
+         *     figure from these server-side terminal totals, never from the page-capped
+         *     candidate list it happens to hold.
          */
         get: operations["candidates_api_v1_admin_run_retention_candidates_get"];
         put?: never;
@@ -8914,6 +8919,16 @@ export interface components {
             total_count: number;
             /** Total Estimated Bytes */
             total_estimated_bytes: number;
+            /**
+             * Terminal Total
+             * @default 0
+             */
+            terminal_total: number;
+            /**
+             * Terminal Estimated Bytes
+             * @default 0
+             */
+            terminal_estimated_bytes: number;
         };
         /**
          * CapabilityScope

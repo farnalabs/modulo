@@ -609,7 +609,7 @@ routes:
         product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 5
-        type: form_page
+        type: page
         deprecated: false
 
         <<: *team
@@ -1465,23 +1465,41 @@ elements:
         type: input
         dynamic_testid: false
     /admin/run-retention:
-      - testid: admin-run-retention-save
+      - testid: admin-run-retention-refresh
         type: button
         dynamic_testid: false
-      - testid: admin-run-retention-purge-now
+      - testid: admin-run-retention-export
         type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-purge
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-apply
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-run-retention-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-run-retention-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: admin-run-retention-status
+        type: select
         dynamic_testid: false
       - testid: admin-run-retention-total-runs
         type: element
         dynamic_testid: false
-      - testid: admin-run-retention-estimated-saved
+      - testid: admin-run-retention-total-bytes
         type: element
         dynamic_testid: false
-      - testid: admin-run-retention-days
-        type: input
+      - testid: admin-run-retention-terminal-runs
+        type: element
         dynamic_testid: false
-      - testid: admin-run-retention-purge-age
-        type: input
+      - testid: admin-run-retention-purge-confirm
+        type: button
         dynamic_testid: false
     /admin/sandbox-concurrency:
       - testid: admin-sandbox-concurrency-save

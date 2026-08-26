@@ -343,19 +343,59 @@ async def list_retention_candidates(
             }
         )
 
-    total_estimated_bytes = await _estimate_total_bytes(session, conditions, org_id)
+    total_estimated_bytes = await _estimate_total_bytes(
+        session,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        pipeline_id=pipeline_id,
+        status=status,
+        statuses=None,
+    )
+
+    # Terminal-only totals drive the purge UI. The purge deletes every matching
+    # TERMINAL run (unbounded — it pages the whole set), so the confirm dialog
+    # and reclaimable figure must come from a server-side terminal count, never
+    # from the page-capped candidate list the client happens to hold.
+    terminal_conditions = _retention_conditions(
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        pipeline_id=pipeline_id,
+        status=status,
+        statuses=TERMINAL_STATUSES,
+    )
+    terminal_total = (
+        await session.execute(select(func.count()).select_from(Run).where(*terminal_conditions))
+    ).scalar_one() or 0
+    terminal_estimated_bytes = await _estimate_total_bytes(
+        session,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        pipeline_id=pipeline_id,
+        status=status,
+        statuses=TERMINAL_STATUSES,
+    )
 
     return {
         "runs": runs_out,
         "total_count": total_count,
         "total_estimated_bytes": total_estimated_bytes,
+        "terminal_total": terminal_total,
+        "terminal_estimated_bytes": terminal_estimated_bytes,
     }
 
 
 async def _estimate_total_bytes(
     session: AsyncSession,
-    conditions: list[Any],
+    *,
     org_id: uuid.UUID | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    pipeline_id: uuid.UUID | None,
+    status: str | None,
+    statuses: frozenset[str] | None = None,
 ) -> int:
     """Estimate the total reclaimable bytes across ALL matching runs.
 
@@ -364,8 +404,20 @@ async def _estimate_total_bytes(
     the run-daily-fact / journey-fact tables are intentionally left in place
     (ADR 020), so they are never counted as reclaimable here. The matching runs
     are streamed in pages so the estimate stays bounded in memory.
+
+    ``statuses`` narrows the estimate to a status whitelist (e.g.
+    ``TERMINAL_STATUSES``) so the UI can show a terminal-only reclaimable figure
+    that matches what the purge will actually delete.
     """
 
+    conditions = _retention_conditions(
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        pipeline_id=pipeline_id,
+        status=status,
+        statuses=statuses,
+    )
     total = 0
     page_size = BATCH_SIZE_DEFAULT
     offset = 0

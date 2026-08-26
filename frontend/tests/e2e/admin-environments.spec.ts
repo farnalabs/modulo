@@ -28,7 +28,7 @@ test.describe('Admin Run Retention', { tag: "@regression" }, () => {
     await page.goto('/admin/run-retention')
     await expect(page.locator('h1')).toContainText('Run Retention')
     if (env.name === 'local') {
-      await expect(page.getByTestId('admin-run-retention-days')).toBeVisible()
+      await expect(page.getByTestId('admin-run-retention-refresh')).toBeVisible()
     }
   })
 })
