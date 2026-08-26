@@ -287,7 +287,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `SECRET_KEY` | **Yes** | – | 32+ byte random string for JWT signing |
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
 | `MODULO_USERS` | Alpha | – | Comma-separated `user:pass` pairs for initial user seed |
-| `MODULO_DB` | No | `postgres` | Database backend (`postgres` or `sqlite`) |
+| `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
 | `REDIS_URL` | For multi-replica | – | `redis://host:port/db` for SAQ broker |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
@@ -347,7 +347,7 @@ curl https://modulo.run/install.sh | bash
 | Rate limiting | In-memory no-op (default) or Redis sliding window (with Redis) |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
+If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. `REDIS_URL` is required: if it is set to an empty value, startup aborts with a `RuntimeError` instead of falling back to in-process behavior.
 
 ### Kubernetes (production, multi-replica)
 
