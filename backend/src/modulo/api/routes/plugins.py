@@ -50,7 +50,7 @@ def _to_response(manifest: PluginManifest, health: PluginHealth) -> PluginRespon
 
 @router.get("", dependencies=[require_feature("plugin_management")])
 async def list_plugins_endpoint(
-    principal: TenantPrincipal = require_permission("plugin.list"),
+    _principal: TenantPrincipal = require_permission("plugin.list"),
 ) -> list[PluginResponse]:
     try:
         registry = get_plugin_registry()
@@ -70,7 +70,7 @@ async def list_plugins_endpoint(
 @router.get("/{plugin_id}/health", dependencies=[require_feature("plugin_management")])
 async def plugin_health_endpoint(
     plugin_id: str,
-    principal: TenantPrincipal = require_permission("plugin.list"),
+    _principal: TenantPrincipal = require_permission("plugin.list"),
 ) -> PluginHealth:
     try:
         registry = get_plugin_registry()

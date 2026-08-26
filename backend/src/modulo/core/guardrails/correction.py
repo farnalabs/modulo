@@ -1306,8 +1306,8 @@ def _resume_revalidation_failure(
 async def resume_interrupted_correction(
     *,
     correction: CorrectionDefinition,
-    guardrail: EvalDefinition,
-    backend: CorrectionBackend,
+    _guardrail: EvalDefinition,
+    _backend: CorrectionBackend,
     engine: EvalEngine | None = None,
     state: Mapping[str, Any] | None = None,
     revalidation_config: dict[str, Any] | None = None,

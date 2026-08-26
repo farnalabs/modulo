@@ -414,7 +414,7 @@ def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:
 
 
 def _validate_sandbox_wallclock_budget_config(
-    wallclock_budget_seconds: Any, sandbox_timeout_seconds: Any, node_id: str
+    wallclock_budget_seconds: Any, _sandbox_timeout_seconds: Any, node_id: str
 ) -> None:
     """Validate the wall-clock spend budget (FAR-296 Phase 4a).
 

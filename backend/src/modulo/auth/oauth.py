@@ -106,7 +106,7 @@ class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
         expected = _hash_secret(client_secret)
         return hmac.compare_digest(expected, self._client.client_secret_hash)
 
-    def check_endpoint_auth_method(self, method: str, endpoint: str) -> bool:
+    def check_endpoint_auth_method(self, method: str, _endpoint: str) -> bool:
         return method == "client_secret_basic"
 
     def check_grant_type(self, grant_type: str) -> bool:
@@ -418,7 +418,7 @@ async def create_consent_state(
 
 
 async def consume_consent_state(
-    session: AsyncSession, *, state: str, org_id: uuid.UUID, account_id: uuid.UUID
+    session: AsyncSession, *, state: str, _org_id: uuid.UUID, account_id: uuid.UUID
 ) -> OAuthConsentState | None:
     """Atomically claim and return an unexpired, unconsumed consent state.
 

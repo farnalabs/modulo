@@ -546,7 +546,7 @@ async def _bump_dead_letter_count(session: AsyncSession, ep: NotificationEndpoin
 @router.get("/available-events")
 @handle_db_errors("admin.notifications.list_available_events")
 async def list_available_events(
-    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
+    _principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> list[str]:
     return AVAILABLE_EVENTS
 

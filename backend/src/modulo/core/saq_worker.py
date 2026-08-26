@@ -253,7 +253,7 @@ def _build_queue(queue_name: str) -> RedisQueue:
     return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
 
 
-def _check_redis_connection(redis_client: aioredis.Redis, max_retries: int = 3) -> None:
+def _check_redis_connection(_redis_client: aioredis.Redis, max_retries: int = 3) -> None:
     """Validate Redis connectivity on worker startup with exponential backoff.
 
     Synchronous — called from the settings factory before the event loop is
@@ -496,15 +496,18 @@ async def resume_run(
     run_id: str,
     org_id: str,
     resume_data: dict[str, Any] | None = None,
-    claim_token: str | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume.
 
     The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
     by a previous attempt (PR #1003). SAQ retries re-invoke this function with
-    ``**job.kwargs``, so the kwarg is accepted and intentionally IGNORED here —
-    the core claim (``claim_resume_run_async``) generates its own fresh token.
+    ``**job.kwargs``, so the kwarg must be accepted here — it is intentionally
+    IGNORED (the core claim ``claim_resume_run_async`` generates its own fresh
+    token). Popping it from ``kwargs`` keeps the SAQ re-invocation contract
+    intact while avoiding an unused-parameter lint.
     """
+    kwargs.pop("claim_token", None)
     from modulo.core.pipeline_execution import resume_run as resume_run_core
 
     aeng = _get_async_engine()
@@ -544,7 +547,7 @@ async def _dispatch_created_run(result: dict[str, Any], *, org_id: str, log_cont
 
 
 async def fire_cron_trigger(
-    ctx: dict[str, Any],
+    _ctx: dict[str, Any],
     *,
     trigger_id: str,
     org_id: str,
@@ -566,7 +569,7 @@ async def fire_cron_trigger(
 
 
 async def fire_polling_trigger(
-    ctx: dict[str, Any],
+    _ctx: dict[str, Any],
     *,
     trigger_id: str,
     org_id: str,
@@ -589,7 +592,7 @@ async def fire_polling_trigger(
     return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
-async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
+async def fire_report_trigger(_ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
     """Per-item report fire job — generate + deliver (SAQ bounded job)."""
     from modulo.core import cron_helpers as _ch
 
@@ -597,7 +600,7 @@ async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: st
 
 
 async def fire_ongoing_trigger(
-    ctx: dict[str, Any],
+    _ctx: dict[str, Any],
     *,
     trigger_id: str,
     org_id: str,
@@ -627,21 +630,21 @@ async def fire_ongoing_trigger(
 # ---------------------------------------------------------------------------
 
 
-async def fire_due_triggers(ctx: dict[str, Any]) -> dict[str, Any]:
+async def fire_due_triggers(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — read due rows, atomic next_fire_at advance, enqueue fire jobs."""
     from modulo.core import cron_helpers as _ch
 
     return await _ch.fire_due_triggers()
 
 
-async def dispatcher_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
+async def dispatcher_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s)."""
     from modulo.core import cron_helpers as _ch
 
     return await _ch.dispatcher_reconcile()
 
 
-async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
+async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
     from modulo.core.hitl_manager.expiry_job import expire_stale_claims
     from modulo.core.notifier import Notifier
@@ -657,7 +660,7 @@ async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"expired": len(expired)}
 
 
-async def hitl_overdue(ctx: dict[str, Any]) -> dict[str, Any]:
+async def hitl_overdue(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — dispatch ``hitl_overdue`` notifications for HITL gates that
     have been waiting past the overdue threshold (idempotent per claim).
     """
@@ -675,7 +678,7 @@ async def hitl_overdue(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"dispatched": len(dispatched)}
 
 
-async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
 
     Deletes terminal ``runs`` rows older than the retention window (via
@@ -723,7 +726,7 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"deleted": deleted, "checkpoints_deleted": checkpoints_deleted}
 
 
-async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — purge old webhook trigger events (30-day retention).
 
     The system session factory is ``autobegin=False`` (the codebase DI
@@ -746,7 +749,7 @@ async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"deleted": total}
 
 
-async def trigger_events_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — age-based retention for trigger_events (90-day default).
 
     Deletes ``trigger_events`` rows whose ``received_at`` is older than the
@@ -785,7 +788,7 @@ STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
 STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
 
 
-async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
+async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1).
 
     The sweep itself (``pipeline_execution.stale_run_recovery_sweep``) returns a
@@ -816,7 +819,7 @@ async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
     return recovered
 
 
-async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
+async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — the cost-tracking probe (spec Â§4.7, every 5 min, retries=0).
 
     The verification canary for the ledger/report system: samples the N=50 most
@@ -830,7 +833,7 @@ async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_probe(_make_session_factory())
 
 
-async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
+async def analytics_facts_maintenance(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
 
     System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
@@ -841,7 +844,7 @@ async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_maintenance(_make_system_session_factory())
 
 
-async def journey_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
+async def journey_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — hourly bounded journey reconciliation sweep (FAR-143).
 
     Re-derives ``journeys`` evidence from terminal runs whose journey rows are
@@ -859,7 +862,7 @@ async def journey_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"advanced": advanced}
 
 
-async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
+async def check_missed_fire_alerts_cron(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — hourly missed-fire probe for silent low-cadence triggers.
 
     Delegates to :func:`modulo.core.error_tracking.check_missed_fire_alerts`,
@@ -878,7 +881,7 @@ async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"emitted": emitted}
 
 
-async def library_sync(ctx: dict[str, Any]) -> dict[str, Any]:
+async def library_sync(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — periodic community-library sync (FAR-363).
 
     No-op when ``modulo_library_endpoint`` is empty (library not configured).

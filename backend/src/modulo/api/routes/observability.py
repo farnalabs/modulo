@@ -242,7 +242,7 @@ async def update_observability_settings(
 @router.post("/test", dependencies=[require_feature("observability")])
 async def test_otel_connection(
     req: TestOtelConfig,
-    principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
+    _principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
 ) -> TestSpanResult:
     endpoint = req.otlp_endpoint.rstrip("/")
     if not endpoint:

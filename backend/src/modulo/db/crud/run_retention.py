@@ -451,7 +451,7 @@ async def purge_terminal_runs(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     pipeline_id: uuid.UUID | None = None,
-    status: str | None = None,
+    _status: str | None = None,
     batch_size: int = BATCH_SIZE_DEFAULT,
 ) -> dict[str, int]:
     """Delete terminal runs matching the filter set, cascading to checkpoints.

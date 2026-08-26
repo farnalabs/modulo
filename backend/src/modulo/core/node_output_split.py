@@ -197,7 +197,7 @@ def resolve_node_contract_output(
 # ---------------------------------------------------------------------------
 
 
-def node_return(outputs_json: Any, telemetry_json: Any, node_id: str) -> Any:
+def node_return(outputs_json: Any, _telemetry_json: Any, node_id: str) -> Any:
     """The PURE agent return for *node_id* -- legacy-safe.
 
     When a telemetry entry exists for the node (a P1+ row) the value in

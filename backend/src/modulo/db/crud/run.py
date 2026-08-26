@@ -625,7 +625,7 @@ def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
 async def _run_guardrail_interception_pass(
     *,
     org_id: uuid.UUID,
-    run_id: uuid.UUID,
+    _run_id: uuid.UUID,
     guardrail_defs: list[Any],
     payload: dict[str, Any],
     is_replay: bool | None,
@@ -925,7 +925,7 @@ async def _intercept_guardrails(
                     guardrail_blocking_eval_name,
                 ) = await _run_guardrail_interception_pass(
                     org_id=org_id,
-                    run_id=run_id,
+                    _run_id=run_id,
                     guardrail_defs=guardrail_defs,
                     payload=payload,
                     is_replay=is_replay,

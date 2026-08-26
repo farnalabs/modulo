@@ -338,8 +338,8 @@ async def test_claim_run_async_rls_scoped_claim_requires_set_config(
     )
 
     claim_sql = pe.build_claim_update(
-        stale_seconds=450,
-        claim_cap=20,
+        _stale_seconds=450,
+        _claim_cap=20,
         claim_token="tok-no-context",
     )
     async with app_engine.connect() as conn, conn.begin():

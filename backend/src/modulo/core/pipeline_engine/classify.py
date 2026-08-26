@@ -614,7 +614,7 @@ async def persist_classification(
     except asyncio.CancelledError:
         raise
     except TimeoutError:
-        _log.error("classification.persist_timeout run=%s", run.id)
+        _log.exception("classification.persist_timeout run=%s", run.id)
         _record_classification_failure("persist_timeout")
         return False
     except Exception:

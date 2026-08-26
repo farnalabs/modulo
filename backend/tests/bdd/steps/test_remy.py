@@ -41,7 +41,7 @@ try:
     scenarios("../features/remy/remy_access_control.feature")
     scenarios("../features/remy/remy_context_window.feature")
     scenarios("../features/remy/remy_ui_commands.feature")
-except (FileNotFoundError, OSError):
+except OSError:
     pass
 
 _NOW = datetime.fromisoformat("2025-06-01T12:00:00+00:00")

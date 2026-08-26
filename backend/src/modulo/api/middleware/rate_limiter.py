@@ -43,7 +43,7 @@ _RE_VARIABLE_SEGMENT = re.compile(
 class _NoopRateLimiter:
     """No-op rate limiter used when Redis is unavailable — allows all requests."""
 
-    async def check(self, key: str, max_requests: int, window_s: int = 60) -> bool:
+    async def check(self, _key: str, max_requests: int, window_s: int = 60) -> bool:
         return True
 
 

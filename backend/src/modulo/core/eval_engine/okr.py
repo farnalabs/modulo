@@ -185,7 +185,7 @@ async def track_okr_progress(
         }
         trend_row = (await session.execute(trend_q, trend_params)).first()
     except TimeoutError:
-        _log.error(
+        _log.exception(
             "OKR progress query timed out for suite %s (org %s)",
             _sanitise_log_value(suite_id),
             _sanitise_log_value(org_id),

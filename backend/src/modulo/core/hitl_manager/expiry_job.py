@@ -231,10 +231,7 @@ class ClaimExpiryJob:
                 raise
             except Exception:
                 _log.exception("hitl.expiry_job.tick_failed")
-            try:
-                await asyncio.sleep(POLL_INTERVAL)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(POLL_INTERVAL)
 
     async def _expire_once(self) -> list[dict[str, Any]]:
         """Run one expiry pass.  Returns list of expired gate identifiers."""

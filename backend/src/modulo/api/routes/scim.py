@@ -264,8 +264,8 @@ class ScimListResponse(BaseModel):
 
 @router.get("/ServiceProviderConfig", dependencies=[Depends(require_scim_feature)])
 async def get_service_provider_config(
-    settings: Settings = Depends(get_settings),
-    principal: ScimPrincipal = Depends(get_scim_principal),
+    _settings: Settings = Depends(get_settings),
+    _principal: ScimPrincipal = Depends(get_scim_principal),
 ) -> dict[str, object]:
     return {
         "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],
@@ -667,7 +667,7 @@ async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
+    _settings: Settings = Depends(get_settings),
 ) -> None:
     try:
         async with session.begin():
@@ -1204,7 +1204,7 @@ async def delete_group(
     group_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
+    _settings: Settings = Depends(get_settings),
 ) -> None:
     try:
         async with session.begin():

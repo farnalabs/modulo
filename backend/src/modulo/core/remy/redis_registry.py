@@ -71,7 +71,7 @@ class RemyRedisRegistry:
             tools = _json_object_list(data.get("tools", "[]"))
             if tools is None:
                 raise ValueError("permission tools must be a list of objects")
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             logger.warning("Invalid JSON in permission request tools for %s", _sanitise_log_value(request_id))
             tools = []
         return {"session_id": data.get("session_id", ""), "tools": tools}
@@ -86,7 +86,7 @@ class RemyRedisRegistry:
         await _redis_result(self._redis.delete(f"remy:decision:{request_id}"))
         try:
             return _json_object(val)
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             logger.warning("Invalid JSON in permission decision for %s", request_id)
             return None
 
@@ -103,7 +103,7 @@ class RemyRedisRegistry:
         await _redis_result(self._redis.delete(key))
         try:
             return _json_object_list(val) or []
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             logger.warning("Invalid JSON in UI command results for %s", session_id)
             return []
 
@@ -133,7 +133,7 @@ class RemyRedisRegistry:
             return (
                 data.get("page_path") == page_path and isinstance(expires_at, (int, float)) and expires_at > time.time()
             )
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             return False
 
     async def clear_session_approvals(self, session_id: str) -> None:
@@ -157,7 +157,7 @@ class RemyRedisRegistry:
             if message and message.get("data"):
                 try:
                     return _json_object(message["data"])
-                except (ValueError, TypeError, json.JSONDecodeError):
+                except (ValueError, TypeError):
                     logger.warning("Invalid JSON in permission pubsub response for %s", request_id)
                     return None
             return None

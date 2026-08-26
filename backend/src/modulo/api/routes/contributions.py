@@ -136,7 +136,7 @@ async def submit_for_review(
                 session,
                 principal.organisation_id,
                 primitive_id,
-                created_by=principal.account_id,
+                _created_by=principal.account_id,
             )
     except ProgrammingError:
         _log.exception("contributions.submit_for_review")

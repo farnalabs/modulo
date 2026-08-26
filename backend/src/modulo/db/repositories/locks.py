@@ -113,7 +113,7 @@ class GenericLock(BaseLockService):
 
     async def acquire_lock(
         self,
-        session: AsyncSession,
+        _session: AsyncSession,
         key: str,
         lock_timeout: float | None = None,
     ) -> None:
@@ -137,7 +137,7 @@ class GenericLock(BaseLockService):
                 lock.release()
             raise
 
-    async def release_lock(self, session: AsyncSession, key: str) -> None:
+    async def release_lock(self, _session: AsyncSession, key: str) -> None:
         owner = id(asyncio.current_task())
         async with _generic_dict_lock:
             actual = _generic_owners.get(key)

@@ -58,7 +58,7 @@ async def get_dev_mode(
 @router.put("", response_model=DevModeResponse, responses={500: {"description": "Internal Server Error"}})
 async def set_dev_mode(
     req: SetDevModeRequest,
-    settings: Settings = Depends(get_settings),
+    _settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     _: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> dict[str, Any]:

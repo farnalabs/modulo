@@ -306,7 +306,7 @@ async def approve_consent(
             state_row = await consume_consent_state(
                 session,
                 state=req.state,
-                org_id=principal.organisation_id,
+                _org_id=principal.organisation_id,
                 account_id=principal.account_id,
             )
             if state_row is None:

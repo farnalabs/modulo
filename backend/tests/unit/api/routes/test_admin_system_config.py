@@ -88,7 +88,7 @@ class _BeginCtx:
 
 async def test_admin_list_config_runs_query_inside_begin() -> None:
     fake = _AutobeginAwareSession(scalars_all=[])
-    result = await admin_list_config(current_user=_principal(), session=fake)
+    result = await admin_list_config(_current_user=_principal(), session=fake)
     assert result == []
 
 
@@ -107,5 +107,5 @@ async def test_admin_set_config_runs_write_inside_begin() -> None:
 async def test_admin_delete_config_runs_write_inside_begin() -> None:
     existing = SystemConfig(key="del_key", value="val")
     fake = _AutobeginAwareSession(scalar_one_or_none=existing)
-    result = await admin_delete_config(key="del_key", current_user=_principal(), session=fake)
+    result = await admin_delete_config(key="del_key", _current_user=_principal(), session=fake)
     assert result is None

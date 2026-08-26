@@ -75,12 +75,12 @@ class _GenRandomUuid(expression.FunctionElement[str]):
 
 
 @compiles(_GenRandomUuid)
-def _compile_postgres_default(element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
+def _compile_postgres_default(_element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
     return "gen_random_uuid()::text"
 
 
 @compiles(_GenRandomUuid, "sqlite")
-def _compile_sqlite_default(element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
+def _compile_sqlite_default(_element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
     return "lower(hex(randomblob(16)))"
 
 

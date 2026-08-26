@@ -658,7 +658,7 @@ class TestTriggerEngineEvaluateCondition:
     async def _run(session: AsyncMock, instance_id: uuid.UUID) -> dict[str, Any]:
         return await TriggerEngine.evaluate_condition(
             session,
-            trigger=MagicMock(),
+            _trigger=MagicMock(),
             org_id=uuid.uuid4(),
             connector_instance_id=instance_id,
             poll_query="issues",
@@ -1780,7 +1780,7 @@ async def test_schedule_polling_trigger_default_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
-    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, org_id=_ORG)
+    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
 
     assert trigger.next_fire_at is not None
     delta = (trigger.next_fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
@@ -1793,7 +1793,7 @@ async def test_schedule_polling_trigger_custom_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
-    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, org_id=_ORG)
+    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
 
     delta = (trigger.next_fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
     assert 115 <= delta <= 125
@@ -1803,7 +1803,7 @@ async def test_schedule_polling_trigger_custom_interval() -> None:
 async def test_schedule_polling_trigger_invalid_interval(bad_interval: Any) -> None:
     trigger = _make_trigger(extra_config={"poll_interval_seconds": bad_interval})
     with pytest.raises(ValueError, match="poll_interval_seconds must be >= 1"):
-        await TriggerEngine().schedule_polling_trigger(AsyncMock(), trigger=trigger, org_id=_ORG)
+        await TriggerEngine().schedule_polling_trigger(AsyncMock(), trigger=trigger, _org_id=_ORG)
 
 
 async def test_schedule_polling_trigger_none_interval_defaults() -> None:
@@ -1811,7 +1811,7 @@ async def test_schedule_polling_trigger_none_interval_defaults() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
-    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, org_id=_ORG)
+    await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
 
     assert trigger.next_fire_at is not None
     session.flush.assert_awaited_once()

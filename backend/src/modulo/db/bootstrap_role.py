@@ -405,7 +405,7 @@ def main() -> None:
         asyncio.run(_bootstrap(admin_url, app_url))
         _log.info("Role bootstrap complete")
     except Exception as exc:
-        _log.error("Role bootstrap failed: %s", exc)
+        _log.exception("Role bootstrap failed: %s", exc)
         sys.exit(1)
 
 

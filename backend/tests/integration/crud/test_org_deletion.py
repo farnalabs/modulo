@@ -182,7 +182,7 @@ class TestRequestOrgDeletion:
                 await request_org_deletion(
                     session,
                     org_id=uuid.uuid4(),
-                    actor_user_id=uuid.uuid4(),
+                    _actor_user_id=uuid.uuid4(),
                 )
 
     async def test_raises_when_already_deleted(self, db_engine: AsyncEngine) -> None:

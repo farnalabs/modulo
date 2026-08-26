@@ -190,7 +190,7 @@ async def get_remy_config(
 @router.get("/available-providers")
 @handle_db_errors("admin.remy.get_available_providers")
 async def get_available_providers(
-    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
+    _principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> AvailableProvidersResponse:
     try:
         from modulo.api.routes.remy import SUPPORTED_PROVIDERS

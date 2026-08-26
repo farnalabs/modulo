@@ -493,7 +493,7 @@ class Notifier:
         try:
             raw_secret = self._fernet.decrypt(endpoint.secret_ciphertext)
         except InvalidToken:
-            _log.error(
+            _log.exception(
                 "notifier.decrypt_failed",
                 extra={"endpoint_id": str(endpoint.id), "org_id": str(endpoint.organisation_id)},
             )

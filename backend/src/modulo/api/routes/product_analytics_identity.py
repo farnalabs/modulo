@@ -91,7 +91,7 @@ class RotateResponse(BaseModel):
 )
 async def get_identity(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> IdentityResponse:
     """Return instance_id and whether a secret exists (never the secret itself).
 
@@ -141,7 +141,7 @@ async def rotate_identity_secret(
     req: RotateRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RotateResponse:
     """Rotate the shared secret, authenticated by the old secret.
 

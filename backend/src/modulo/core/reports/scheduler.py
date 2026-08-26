@@ -214,7 +214,7 @@ async def _fire_scheduled_report(
             try:
                 next_send = compute_next_send(report.cron_expression, after=now)
             except (ValueError, TypeError, KeyError) as exc:
-                _log.error(
+                _log.exception(
                     "Invalid cron expression '%s' for report %s: %s",
                     report.cron_expression,
                     report_id,

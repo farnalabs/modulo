@@ -214,7 +214,7 @@ async def append_audit_event(
                 exc_info=True,
             )
             if attempt == APPEND_MAX_RETRIES - 1:
-                _log.error(
+                _log.exception(
                     "append_audit_event: exhausted %d retries for org=%s event_type=%s",
                     APPEND_MAX_RETRIES,
                     org_id,
@@ -223,7 +223,7 @@ async def append_audit_event(
                 raise
             await asyncio.sleep(RETRY_BASE_DELAY_S * (attempt + 1))
         except ProgrammingError:
-            _log.error(
+            _log.exception(
                 "append_audit_event: ProgrammingError (missing table) for org=%s event_type=%s",
                 org_id,
                 event_type,

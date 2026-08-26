@@ -32,7 +32,7 @@ def _make_blocker(model_class: type, table_name: str, mutation: str) -> Callable
     """Create an ORM event listener that blocks UPDATE or DELETE."""
 
     def _block(
-        mapper: object,
+        _mapper: object,
         _: object,
         target: object,
     ) -> None:

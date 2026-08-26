@@ -89,7 +89,7 @@ def _merge(entry: Any | None) -> dict[str, Any]:
 @handle_db_errors("admin.monitor_config.get_monitor_config")
 async def get_monitor_config(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     try:
         async with session.begin():
