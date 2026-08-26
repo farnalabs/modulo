@@ -949,6 +949,10 @@ def test_admin_can_strip_guardrail_binding_via_snapshot_rollback(client: TestCli
     new_snapshot.notes = None
     new_snapshot.created_at = _NOW
     new_snapshot.account_id = uuid.uuid4()
+    new_snapshot.version_kind = "run"
+    new_snapshot.created_kind = "run"
+    new_snapshot.draft = False
+    new_snapshot.channel = "none"
 
     with (
         patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot),

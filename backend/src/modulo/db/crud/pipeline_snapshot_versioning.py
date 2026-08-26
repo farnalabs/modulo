@@ -11,6 +11,13 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.pipeline_impact import (
+    check_port_change_breaking,
+    compute_port_change_impact,
+    diff_edge_ports,
+    diff_node_ports,
+    normalise_edge_port_delta,
+)
 from modulo.db.crud.hitl_gate_guard import (
     HitlGateWeakeningDenied,
     apply_gated_edge_diff,
@@ -121,6 +128,37 @@ async def get_snapshot(
 ) -> PipelineSnapshot | None:
     """Get a single snapshot by ID."""
     result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id))
+    return result.scalar_one_or_none()
+
+
+async def resolve_snapshot_for_channel(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    channel: str,
+    organisation_id: uuid.UUID | None = None,
+) -> PipelineSnapshot | None:
+    """Resolve the LATEST snapshot that was created under a release channel.
+
+    FAR-402 P6 release-channel hook: a trigger binding a channel resolves to the
+    latest snapshot for that channel, so a canary-tagged run executes the
+    newest canary version rather than the live graph. Returns ``None`` when no
+    snapshot is tagged for the channel (or the pipeline/org scoping excludes it)
+    — the caller then falls back to pinning the live graph.
+    """
+    stmt = (
+        select(PipelineSnapshot)
+        .where(
+            PipelineSnapshot.pipeline_id == pipeline_id,
+            PipelineSnapshot.channel == channel,
+            PipelineSnapshot.draft.is_(False),
+        )
+        .order_by(PipelineSnapshot.snapshot_version.desc())
+        .limit(1)
+    )
+    if organisation_id is not None:
+        stmt = stmt.where(PipelineSnapshot.organisation_id == organisation_id)
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -276,7 +314,15 @@ async def rollback_to_snapshot(
         session.add(new_edge)
     await session.flush()
 
-    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, account_id=account_id)
+    new_snapshot = await create_snapshot_from_live_graph(
+        session,
+        pipeline_id=pipeline_id,
+        account_id=account_id,
+        # FAR-402 P6: a rollback produces a live-edit version that is
+        # provenance-discriminated as a role-back pointer swap.
+        version_kind="edit",
+        created_kind="rollback",
+    )
     if new_snapshot is not None:
         new_snapshot.tag = f"rollback-v{target.snapshot_version}"
         new_snapshot.notes = f"Rollback to snapshot version {target.snapshot_version}"
@@ -303,6 +349,11 @@ def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, A
             "old": na.get("environment_binding"),
             "new": nb.get("environment_binding"),
         }
+    # FAR-402 P6: surface PORT-SIGNATURE deltas (inputs/outputs port names +
+    # schema_refs) alongside the scalar field changes.
+    port_changes = diff_node_ports(na, nb)
+    if port_changes:
+        changes["ports"] = port_changes
     return changes
 
 
@@ -364,6 +415,10 @@ async def diff_snapshots(
                 "old": ea.get("hitl_gate_config"),
                 "new": eb.get("hitl_gate_config"),
             }
+        # FAR-402 P6: surface source_port/target_port deltas.
+        edge_ports = diff_edge_ports(ea, eb)
+        if edge_ports:
+            edge_changes["ports"] = edge_ports
         if edge_changes:
             source = k[0]
             target = k[1]
@@ -387,6 +442,8 @@ async def diff_snapshots(
                     "output_schema_id": n.get("output_schema_id"),
                     "connector_binding": n.get("connector_binding"),
                     "environment_binding": n.get("environment_binding"),
+                    "inputs": n.get("inputs"),
+                    "outputs": n.get("outputs"),
                 }
                 for n in graph.get("nodes", [])
             ],
@@ -397,10 +454,44 @@ async def diff_snapshots(
                     "target_node_id": e.get("target") or e.get("target_node_id", ""),
                     "edge_type": e.get("edge_type", e.get("type", "normal")),
                     "hitl_gate_config": e.get("hitl_gate_config"),
+                    "source_port": e.get("source_port"),
+                    "target_port": e.get("target_port"),
                 }
                 for e in graph.get("edges", [])
             ],
         }
+
+    # FAR-402 P6: semantic layer — aggregate port-signature deltas across the
+    # node/edge sets, then run the deterministic impact oracle. ``port_changes``
+    # is the union of per-node and per-edge port deltas; ``impacted_nodes`` is
+    # the downstream reachability projection (which nodes a port change breaks);
+    # ``breaking_changes`` flags port changes that would drop/alter data read by
+    # a downstream edge (severity ``block`` vs ``warning``).
+    port_changes: list[dict[str, Any]] = []
+    for m in modified_nodes:
+        port_changes += m.get("changes", {}).get("ports", [])
+    for m in modified_edges:
+        # ``changes["ports"]`` is a ``diff_edge_ports`` delta dict (no node_id),
+        # so normalise it to the node-change shape the oracle can consume.
+        edge_port_delta: Any = m.get("changes", {}).get("ports")
+        if edge_port_delta:
+            port_changes += normalise_edge_port_delta(m["edge"], edge_port_delta)
+    for node in added_nodes:
+        port_changes += diff_node_ports({}, node)
+    for edge in added_edges:
+        delta = diff_edge_ports({}, edge)
+        if delta:
+            port_changes += normalise_edge_port_delta(edge, delta)
+
+    graph_b_for_impact: dict[str, Any] = {
+        "nodes": b.graph_json.get("nodes", []),
+        "edges": b.graph_json.get("edges", []),
+    }
+    impacted_nodes: set[str] = set()
+    breaking_changes: list[dict[str, Any]] = []
+    if port_changes:
+        impacted_nodes = compute_port_change_impact(graph_b_for_impact, port_changes)
+        breaking_changes = check_port_change_breaking(graph_b_for_impact, port_changes)
 
     return {
         "snapshot_a": {
@@ -423,4 +514,9 @@ async def diff_snapshots(
         "edges_added": added_edges,
         "edges_removed": removed_edges,
         "edges_modified": modified_edges,
+        "semantic": {
+            "port_changes": port_changes,
+            "impacted_nodes": sorted(impacted_nodes),
+            "breaking_changes": breaking_changes,
+        },
     }

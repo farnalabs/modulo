@@ -46,6 +46,7 @@ from modulo.core.pipeline_engine.scatter_join import (
     JoinAggregateSpec,
     JoinCollectSpec,
 )
+from modulo.core.release_channels import VALID_RELEASE_CHANNELS
 from modulo.core.reports.quality_report import (
     deliver_quality_report,
     generate_quality_report,
@@ -83,6 +84,7 @@ from modulo.db.crud.pipeline import (
     update_pipeline,
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
+from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
@@ -2160,6 +2162,13 @@ class SnapshotResponse(BaseModel):
     notes: str | None
     created_at: datetime | None
     created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
+    # FAR-402 P6: live-edit history + release-channel discriminator. Additive
+    # fields default to the legacy run-kind/none-channel snapshot so older
+    # clients that ignore them keep working.
+    version_kind: str = "run"
+    created_kind: str = "run"
+    draft: bool = False
+    channel: str = "none"
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -2184,6 +2193,18 @@ class SnapshotListResponse(BaseModel):
     total: int
 
 
+class SnapshotCreateEdit(BaseModel):
+    """Body for a live-edit save (FAR-402 P6).
+
+    ``draft`` marks an in-progress editor auto-save (``False`` = a committed
+    edit). ``channel`` optionally tags the edit's release channel (default
+    ``none`` — the live-edit chain is not channel-routed unless set).
+    """
+
+    draft: bool = False
+    channel: str | None = None
+
+
 class SnapshotDiffQuery(BaseModel):
     snapshot_a_id: uuid.UUID
     snapshot_b_id: uuid.UUID
@@ -2198,6 +2219,9 @@ class SnapshotDiffResponse(BaseModel):
     edges_added: list[dict[str, Any]]
     edges_removed: list[dict[str, Any]]
     edges_modified: list[dict[str, Any]]
+    # FAR-402 P6: semantic-diff + impact layer (port-signature deltas,
+    # downstream-impact oracle, save-time breaking-change warnings).
+    semantic: dict[str, Any] = Field(default_factory=dict)
 
 
 def _snapshot_to_response(s: Any) -> SnapshotResponse:
@@ -2209,6 +2233,10 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
         notes=s.notes,
         created_at=s.created_at,
         created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
     )
 
 
@@ -2221,6 +2249,10 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         notes=s.notes,
         created_at=s.created_at,
         created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
         graph_json=s.graph_json,
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,
@@ -2255,6 +2287,54 @@ async def list_snapshot_endpoint(
         items=[_snapshot_to_response(s) for s in snapshots],
         total=total,
     )
+
+
+@router.post(
+    "/{pipeline_id}/snapshots",
+    dependencies=[require_feature("pipeline_diff_rollback")],
+)
+@handle_db_errors("pipelines.save_edit_snapshot")
+async def save_edit_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    req: SnapshotCreateEdit,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotResponse:
+    """Save a LIVE-EDIT snapshot of the current graph (FAR-402 P6).
+
+    Creates a new snapshot row tagged ``version_kind='edit'`` so the editor's
+    save history is distinct from run-frozen snapshots; the prior snapshot row
+    stays immutable, so rollback remains a pointer swap to a prior version. A
+    ``draft`` save marks an in-progress editor auto-save; ``channel`` optionally
+    tags the edit's release channel.
+    """
+    channel = str(req.channel or "none").strip().lower()
+    if channel not in VALID_RELEASE_CHANNELS:
+        valid = ", ".join(sorted(VALID_RELEASE_CHANNELS))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid release channel: {req.channel!r}. Must be one of {valid}.",
+        )
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+            snapshot = await create_snapshot_edit(
+                session,
+                pipeline_id=pipeline_id,
+                account_id=principal.account_id,
+                draft=req.draft,
+                channel=channel,
+            )
+    except ProgrammingError:
+        _raise_db_migration_error()
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
+    return _snapshot_to_response(snapshot)
 
 
 @router.get("/{pipeline_id}/snapshots/{snapshot_id}")

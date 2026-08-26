@@ -2005,7 +2005,17 @@ export interface paths {
         /** List Snapshot Endpoint */
         get: operations["list_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_get"];
         put?: never;
-        post?: never;
+        /**
+         * Save Edit Snapshot Endpoint
+         * @description Save a LIVE-EDIT snapshot of the current graph (FAR-402 P6).
+         *
+         *     Creates a new snapshot row tagged ``version_kind='edit'`` so the editor's
+         *     save history is distinct from run-frozen snapshots; the prior snapshot row
+         *     stays immutable, so rollback remains a pointer swap to a prior version. A
+         *     ``draft`` save marks an in-progress editor auto-save; ``channel`` optionally
+         *     tags the edit's release channel.
+         */
+        post: operations["save_edit_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -15188,6 +15198,23 @@ export interface components {
             /** Active */
             active?: boolean | null;
         };
+        /**
+         * SnapshotCreateEdit
+         * @description Body for a live-edit save (FAR-402 P6).
+         *
+         *     ``draft`` marks an in-progress editor auto-save (``False`` = a committed
+         *     edit). ``channel`` optionally tags the edit's release channel (default
+         *     ``none`` — the live-edit chain is not channel-routed unless set).
+         */
+        SnapshotCreateEdit: {
+            /**
+             * Draft
+             * @default false
+             */
+            draft: boolean;
+            /** Channel */
+            channel?: string | null;
+        };
         /** SnapshotDetailResponse */
         SnapshotDetailResponse: {
             /**
@@ -15210,6 +15237,26 @@ export interface components {
             created_at: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Version Kind
+             * @default run
+             */
+            version_kind: string;
+            /**
+             * Created Kind
+             * @default run
+             */
+            created_kind: string;
+            /**
+             * Draft
+             * @default false
+             */
+            draft: boolean;
+            /**
+             * Channel
+             * @default none
+             */
+            channel: string;
             /** Graph Json */
             graph_json?: {
                 [key: string]: unknown;
@@ -15284,6 +15331,10 @@ export interface components {
             edges_modified: {
                 [key: string]: unknown;
             }[];
+            /** Semantic */
+            semantic?: {
+                [key: string]: unknown;
+            };
         };
         /** SnapshotListResponse */
         SnapshotListResponse: {
@@ -15314,6 +15365,26 @@ export interface components {
             created_at: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Version Kind
+             * @default run
+             */
+            version_kind: string;
+            /**
+             * Created Kind
+             * @default run
+             */
+            created_kind: string;
+            /**
+             * Draft
+             * @default false
+             */
+            draft: boolean;
+            /**
+             * Channel
+             * @default none
+             */
+            channel: string;
         };
         /** SnapshotTagUpdate */
         SnapshotTagUpdate: {
@@ -21758,6 +21829,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_edit_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnapshotCreateEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotResponse"];
                 };
             };
             /** @description Validation Error */
