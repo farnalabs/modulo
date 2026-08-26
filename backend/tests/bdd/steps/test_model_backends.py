@@ -876,6 +876,11 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
             patch("modulo.api.routes.model_backends.set_rls_org"),
             patch("modulo.api.routes.model_backends.set_rls_user_context"),
             patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+            patch(
+                "modulo.api.routes.model_backends.get_model_backend",
+                new_callable=AsyncMock,
+                return_value=mb,
+            ),
         ):
             if method == "POST":
                 with patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb):

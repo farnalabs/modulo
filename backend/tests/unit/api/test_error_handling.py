@@ -1114,6 +1114,7 @@ def test_model_backend_update_persists_health_check_on_key_rotation(client: Test
     )
 
     with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=mb),
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=mb),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),

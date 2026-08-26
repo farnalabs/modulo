@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import ORG_ID
+
 scenarios("../features/agents/crud.feature")
 
 _AGENT_ID: uuid.UUID | None = None
@@ -28,7 +30,7 @@ _AGENT_BODY: dict = {
 def _make_mock_agent(name: str = "test") -> MagicMock:
     a = MagicMock()
     a.id = uuid.uuid4()
-    a.organisation_id = uuid.uuid4()
+    a.organisation_id = ORG_ID
     a.name = name
     a.description = "Test agent description"
     a.is_executable = True

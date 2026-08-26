@@ -74,6 +74,7 @@ def _pending_backend() -> MagicMock:
     mb.id = _BACKEND_ID
     mb.name = "Test Backend"
     mb.status = "pending_setup"
+    mb.organisation_id = _ORG_ID
     return mb
 
 
@@ -174,6 +175,31 @@ class TestCompleteModelBackendSetup:
                 return_value=_consumed_token(),
             ),
             patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=None),
+            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
+                json={"token": "token", "api_key": "sk-x"},
+            )
+
+        assert resp.status_code == 404
+        assert "backend_not_found" in resp.json()["detail"]
+
+    def test_complete_setup_foreign_org_returns_404(self, client: TestClient) -> None:
+        """IDOR regression: completing setup for a model backend owned by a
+        foreign org must be denied with 404 (backend_not_found), not succeed or
+        surface a 500. The endpoint already has a None-branch test; this proves
+        the ownership (organisation_id) branch too."""
+        foreign_backend = _pending_backend()
+        foreign_backend.organisation_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch(
+                "modulo.api.routes.mcp_setup.consume_handoff",
+                new_callable=AsyncMock,
+                return_value=_consumed_token(),
+            ),
+            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=foreign_backend),
             patch("modulo.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(

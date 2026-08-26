@@ -35,6 +35,16 @@ def _make_settings() -> Settings:
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_get_agent() -> Generator[None, None, None]:
+    """The IDOR ownership check in ``apply_optimized_prompt`` reads the agent via
+    ``get_agent`` before the write CRUD, but the apply tests only mock
+    ``add_prompt_version``. Supply a same-org agent so the ownership check passes
+    for the legitimate (same-org) principal these tests use."""
+    with patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()):
+        yield
+
+
 def _make_agent() -> MagicMock:
     a = MagicMock()
     a.id = _AGENT_ID

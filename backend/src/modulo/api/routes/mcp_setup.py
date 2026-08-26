@@ -64,7 +64,7 @@ async def complete_model_backend_setup(
                 )
 
             existing = await get_model_backend(session, backend_id)
-            if existing is None:
+            if existing is None or existing.organisation_id != principal.organisation_id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"error": "backend_not_found", "backend_id": str(backend_id)},
