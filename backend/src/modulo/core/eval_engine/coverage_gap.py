@@ -227,6 +227,95 @@ def _variant_key(run: object) -> str | None:
     return None
 
 
+def _insufficient_summary(
+    *,
+    run_count: int,
+    batch_id: UUID | None = None,
+    variant_group_id: UUID | None = None,
+    min_runs: int = DEFAULT_MIN_RUNS,
+    divergence_threshold: float = DEFAULT_DIVERGENCE_THRESHOLD,
+    differentiation_threshold: float = DEFAULT_DIFFERENTIATION_THRESHOLD,
+) -> CoverageGapSummary:
+    """Build the ``insufficient_data`` summary shared by both callers."""
+    return CoverageGapSummary(
+        status="insufficient_data",
+        batch_id=batch_id,
+        variant_group_id=variant_group_id,
+        run_count=run_count,
+        min_runs=min_runs,
+        variant_divergence=0.0,
+        divergence_threshold=divergence_threshold,
+        differentiation_threshold=differentiation_threshold,
+        evals=[],
+    )
+
+
+def _insufficient_data_gap(eval_id: UUID, eval_names: Mapping[UUID, str], variant_divergence: float) -> EvalCoverageGap:
+    """Eval verdict when fewer than two distinct variants carry a value.
+
+    A single-sample eval is a data-coverage artifact, NOT an eval-quality
+    deficiency — never emit a gap for it (Major 1).
+    """
+    return EvalCoverageGap(
+        eval_id=eval_id,
+        eval_name=eval_names.get(eval_id, "unknown"),
+        variant_divergence=variant_divergence,
+        eval_score_spread=0.0,
+        has_gap=False,
+        reason=(
+            "Only one distinct variant has data for this eval; a "
+            "coverage-gap verdict needs at least two. Marked "
+            "insufficient_data."
+        ),
+        recommended_action="ok",
+        status="insufficient_data",
+    )
+
+
+def _verdict_for_eval(
+    eval_id: UUID,
+    values_by_variant: Mapping[str, float],
+    *,
+    eval_names: Mapping[UUID, str],
+    variant_divergence: float,
+    divergence_threshold: float,
+    differentiation_threshold: float,
+) -> EvalCoverageGap:
+    """Compute the coverage-gap verdict for one eval definition.
+
+    One value per distinct variant (the same population that produced
+    ``variant_divergence``), so the two sides of the ``has_gap`` AND measure the
+    same entities (Major 3).
+    """
+    values = list(values_by_variant.values())
+    if len(values) < 2:
+        return _insufficient_data_gap(eval_id, eval_names, variant_divergence)
+
+    differentiation = compute_eval_differentiation(values)
+    spread = round(max(values) - min(values), 4)
+
+    has_gap = variant_divergence >= divergence_threshold and differentiation < differentiation_threshold
+    if has_gap:
+        reason = "Variants diverged but this eval could not differentiate them; route to eval-quality improvement."
+        action: Literal["improve_evals", "ok"] = "improve_evals"
+    elif variant_divergence >= divergence_threshold:
+        reason = "Variants diverged and this eval differentiated them adequately."
+        action = "ok"
+    else:
+        reason = "Variants did not diverge, so no coverage gap exists for this eval."
+        action = "ok"
+
+    return EvalCoverageGap(
+        eval_id=eval_id,
+        eval_name=eval_names.get(eval_id, "unknown"),
+        variant_divergence=variant_divergence,
+        eval_score_spread=spread,
+        has_gap=has_gap,
+        reason=reason,
+        recommended_action=action,
+    )
+
+
 def evaluate_coverage_gap(
     runs: Sequence[object],
     eval_results: Sequence[object],
@@ -266,16 +355,13 @@ def evaluate_coverage_gap(
     run_count = len(data_point_run_ids)
 
     if run_count < min_runs:
-        return CoverageGapSummary(
-            status="insufficient_data",
+        return _insufficient_summary(
+            run_count=run_count,
             batch_id=batch_id,
             variant_group_id=variant_group_id,
-            run_count=run_count,
             min_runs=min_runs,
-            variant_divergence=0.0,
             divergence_threshold=divergence_threshold,
             differentiation_threshold=differentiation_threshold,
-            evals=[],
         )
 
     # --- Variant divergence ----------------------------------------------
@@ -324,52 +410,14 @@ def evaluate_coverage_gap(
 
     evals: list[EvalCoverageGap] = []
     for eval_id, values_by_variant in results_by_eval_variant.items():
-        values = list(values_by_variant.values())
-        if len(values) < 2:
-            # Major 1 gate: an eval with a result on fewer than two distinct
-            # variants cannot differentiate anything — it is a data-coverage
-            # artifact, not an eval-quality deficiency. Never emit a gap for it.
-            evals.append(
-                EvalCoverageGap(
-                    eval_id=eval_id,
-                    eval_name=eval_names.get(eval_id, "unknown"),
-                    variant_divergence=variant_divergence,
-                    eval_score_spread=0.0,
-                    has_gap=False,
-                    reason=(
-                        "Only one distinct variant has data for this eval; a "
-                        "coverage-gap verdict needs at least two. Marked "
-                        "insufficient_data."
-                    ),
-                    recommended_action="ok",
-                    status="insufficient_data",
-                )
-            )
-            continue
-
-        differentiation = compute_eval_differentiation(values)
-        spread = round(max(values) - min(values), 4)
-
-        has_gap = variant_divergence >= divergence_threshold and differentiation < differentiation_threshold
-        if has_gap:
-            reason = "Variants diverged but this eval could not differentiate them; route to eval-quality improvement."
-            action: Literal["improve_evals", "ok"] = "improve_evals"
-        elif variant_divergence >= divergence_threshold:
-            reason = "Variants diverged and this eval differentiated them adequately."
-            action = "ok"
-        else:
-            reason = "Variants did not diverge, so no coverage gap exists for this eval."
-            action = "ok"
-
         evals.append(
-            EvalCoverageGap(
-                eval_id=eval_id,
-                eval_name=eval_names.get(eval_id, "unknown"),
+            _verdict_for_eval(
+                eval_id,
+                values_by_variant,
+                eval_names=eval_names,
                 variant_divergence=variant_divergence,
-                eval_score_spread=spread,
-                has_gap=has_gap,
-                reason=reason,
-                recommended_action=action,
+                divergence_threshold=divergence_threshold,
+                differentiation_threshold=differentiation_threshold,
             )
         )
 
@@ -412,16 +460,12 @@ async def compute_coverage_gap(
 
     runs = await _load_runs(session, org_id=org_id, batch_id=batch_id, variant_group_id=variant_group_id)
     if not runs:
-        return CoverageGapSummary(
-            status="insufficient_data",
+        return _insufficient_summary(
+            run_count=0,
             batch_id=batch_id,
             variant_group_id=variant_group_id,
-            run_count=0,
             min_runs=min_runs,
-            variant_divergence=0.0,
             divergence_threshold=divergence_threshold,
-            differentiation_threshold=DEFAULT_DIFFERENTIATION_THRESHOLD,
-            evals=[],
         )
 
     run_ids = [run.id for run in runs]

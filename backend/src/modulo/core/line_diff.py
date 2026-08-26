@@ -16,8 +16,6 @@ LineDiffKind = Literal["unchanged", "removed", "added"]
 # A single diff row: (kind, content, source line number, other line number).
 # Line numbers are 1-based; ``None`` marks a line with no counterpart in the
 # other listing.
-LineDiffT = tuple[LineDiffKind, str, int | None, int | None]
-
 LineDiffRow = tuple[LineDiffKind, str, int | None, int | None]
 
 
@@ -68,7 +66,7 @@ def _yield_replaced_and_added(
     return line_a, line_b
 
 
-def iter_line_diffs(lines_a: Sequence[str], lines_b: Sequence[str]) -> Iterator[LineDiffT]:
+def iter_line_diffs(lines_a: Sequence[str], lines_b: Sequence[str]) -> Iterator[LineDiffRow]:
     """Yield ``(kind, content, line_a, line_b)`` rows describing a line-wise diff.
 
     ``lines_a`` and ``lines_b`` may keep trailing newlines; each yielded ``content``
