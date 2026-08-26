@@ -20,7 +20,15 @@
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
-            <Button severity="secondary" outlined size="small" class="text-xs" @click="addNode">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <Select
+              v-model="newNodeType"
+              :options="nodeTypeOptions"
+              option-label="label"
+              option-value="value"
+              class="w-36 text-xs"
+              aria-label="New node type"
+            />
+            <Button severity="secondary" outlined size="small" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
         <!-- Toolbar -->
@@ -201,14 +209,22 @@
             </dialog>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
+          <Select
+            v-model="newNodeType"
+            :options="nodeTypeOptions"
+            option-label="label"
+            option-value="value"
+            class="w-36 text-xs"
+            aria-label="New node type"
+          />
           <button
             type="button"
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
-            @click="addNode"
+            @click="addNode()"
             title="Add node"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add Node
+            {{ $t('views.PipelineEditorView.add_node') }}
           </button>
           <span class="mx-2 h-4 w-px bg-border" />
           <button
@@ -315,6 +331,14 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
+          <template #node-router="nodeProps"><div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
+                  </div></template>
+          <template #node-hitl="nodeProps"><div class="rounded-lg border-2 border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
+                  </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">HITL</span>
@@ -346,9 +370,13 @@
               <span
                 :class="selectedNodeData.node_type === 'manual'
                   ? 'badge badge-status-warning'
-                  : 'badge badge-status-primary'"
+                  : selectedNodeData.node_type === 'router'
+                    ? 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
+                    : selectedNodeData.node_type === 'hitl'
+                      ? 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
+                      : 'badge badge-status-primary'"
               >
-                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? 'Sandbox Agent' : $t('views.PipelineEditorView.agent') }}
+                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? $t('views.PipelineEditorView.sandbox_agent') : selectedNodeData.node_type === 'router' ? $t('views.PipelineEditorView.node_router_label') : selectedNodeData.node_type === 'hitl' ? $t('views.PipelineEditorView.node_hitl_label') : $t('views.PipelineEditorView.agent') }}
               </span>
             </dd>
           </div>
@@ -1143,7 +1171,7 @@ const flowEdges = ref<any[]>([])
 const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
-const nodeTypes = { agent: 'agent', manual: 'manual' }
+const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl' }
 const { fitView } = useVueFlow()
 
 const agents = ref<any[]>([])
@@ -1581,7 +1609,11 @@ async function loadParamSets() {
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
 function convertBackendNode(n: any): any {
-  const nodeType = n.node_type === 'manual' ? 'manual' : 'agent'
+  const nodeType =
+    n.node_type === 'manual' ? 'manual'
+    : n.node_type === 'router' ? 'router'
+    : n.node_type === 'hitl' ? 'hitl'
+    : 'agent'
   return {
     id: n.id,
     type: nodeType,
@@ -1589,6 +1621,7 @@ function convertBackendNode(n: any): any {
     data: {
       label: n.label || 'Node ' + shortId(n.id),
       description: n.description || '',
+      node_type: n.node_type,
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
@@ -1808,6 +1841,8 @@ async function saveEdgeConfig() {
         nodes: rawNodes.value.map((n: any) => ({
           id: n.id,
           node_type: n.node_type || 'agent',
+          router_config: n.router_config ?? null,
+          hitl_config: n.hitl_config ?? null,
           mode: n.mode || 'llm',
           label: n.label || null,
           description: n.description || null,
@@ -1864,18 +1899,27 @@ function onPaneClick() {
   capabilityContextInput.value = ''
 }
 
-function addNode() {
+const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
+const nodeTypeOptions = [
+  { value: 'agent', label: t('views.PipelineEditorView.agent') },
+  // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
+  // router_config/hitl_config the backend requires, so exposing them here
+  // produces unsavable (422) nodes. Imported router/HITL graphs still render
+  // correctly via convertBackendNode. Re-add once a config editor lands.
+]
+
+function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
   const id = `node-${Date.now()}`
   const newNode = {
     id,
-    type: 'agent',
+    type: nodeType,
     position: { x: 250, y: 100 },
-    data: { label: 'New Node', description: '' },
+    data: { label: 'New Node', description: '', node_type: nodeType },
   }
   flowNodes.value = [...flowNodes.value, newNode]
   rawNodes.value = [...rawNodes.value, {
     id,
-    node_type: 'agent',
+    node_type: nodeType,
     label: 'New Node',
     description: '',
     position: { x: 250, y: 100 },
@@ -2096,6 +2140,8 @@ async function saveGraph() {
         nodes: rawNodes.value.map((n: any) => ({
           id: n.id,
           node_type: n.node_type || 'agent',
+          router_config: n.router_config ?? null,
+          hitl_config: n.hitl_config ?? null,
           mode: n.mode || 'llm',
           label: n.label || null,
           description: n.description || null,

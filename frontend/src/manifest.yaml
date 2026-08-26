@@ -89,7 +89,7 @@ routes:
         name: pipeline-list
         breadcrumb: Pipelines
         parent: /
-        product_map: [feat-pipelines]
+        product_map: [feat-pipelines, feat-router]
         sidebar_group: build
         sidebar_order: 2
         type: list_page
@@ -3085,6 +3085,8 @@ features:
         description: Guardrail policies
     feat-hitl:
         description: Human-in-the-loop approval gates and review
+    feat-router:
+        description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:
         description: Reusable pipeline templates and the template library
     feat-license:

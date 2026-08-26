@@ -72,6 +72,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "eval_failed",
         "stalled",
         "budget_exceeded",
+        "router_no_match",
         "cost_ceiling_exceeded",
     }
 )
@@ -86,8 +87,10 @@ PAUSE_EXEMPT_TRIGGER_TYPES = frozenset({"manual", "correction"})
 # per-day "failed" bucket also counts the legacy ``expired`` spelling (a run
 # demoted before the status-set cleanup), while the failure-reason breakdown
 # only attributes genuinely failed executions (a cancelled run has no reason).
-_FAILURE_BUCKET_STATUSES: frozenset[str] = frozenset({"failed", "cancelled", "eval_failed", "expired", "stalled"})
-_FAILURE_REASON_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled"})
+_FAILURE_BUCKET_STATUSES: frozenset[str] = frozenset(
+    {"failed", "cancelled", "eval_failed", "expired", "stalled", "router_no_match"}
+)
+_FAILURE_REASON_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled", "router_no_match"})
 
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
@@ -1597,7 +1600,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
     "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'cost_ceiling_exceeded') THEN now() "
+    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -1685,7 +1688,8 @@ async def _update_run_status_fenced(
 _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
     "completed_at = CASE WHEN CAST(:target AS text) IN "
-    "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'cost_ceiling_exceeded') "
+    "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', "
+    "'router_no_match', 'cost_ceiling_exceeded') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "

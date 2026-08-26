@@ -84,7 +84,7 @@ __all__ = [
 # Advancing terminal statuses — the ONLY statuses that move evidence. Mirrors
 # ``advancement._ADVANCING_TERMINAL_STATUSES``; defined here so the drift rule
 # ("stale" only applies to advancing runs) stays local and explicit.
-_ADVANCING_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed"})
+_ADVANCING_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed", "router_no_match"})
 
 # ---------------------------------------------------------------------------
 # Journey metric counters — the owning module for this delivery

@@ -115,6 +115,7 @@ export const RUN_STATUSES = [
   "eval_failed",
   "stalled",
   "budget_exceeded",
+  "router_no_match",
 ] as const;
 
 export const TIMESPANS: AnalyticsTimespanOption[] = [

@@ -13,12 +13,15 @@ from langgraph.errors import GraphInterrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.pipeline_engine.graph_cache import (
-    _is_truthy,
     _make_conditional_router,
     _make_gate_kickback_router,
     build_graph_from_json,
 )
-from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn
+from modulo.core.pipeline_engine.node_runner import (
+    _evaluate_eval_condition,
+    _is_truthy,
+    make_hitl_gate_fn,
+)
 
 # ---------------------------------------------------------------------------
 # _is_truthy — JMESPath truthiness semantics

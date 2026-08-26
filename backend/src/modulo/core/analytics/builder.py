@@ -125,6 +125,8 @@ class AnalyticsStatus(StrEnum):
     CANCELLED = "cancelled"
     EVAL_FAILED = "eval_failed"
     STALLED = "stalled"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    ROUTER_NO_MATCH = "router_no_match"
 
 
 @dataclass(frozen=True)

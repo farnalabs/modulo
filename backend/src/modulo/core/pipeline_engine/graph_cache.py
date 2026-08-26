@@ -19,7 +19,7 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, cast
 
 import jmespath
@@ -27,12 +27,13 @@ from langgraph.graph import StateGraph
 
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE
+from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
 from modulo.core.pipeline_engine.node_runner import (
-    _is_truthy,
     make_connector_fn,
     make_hitl_gate_fn,
     make_manual_node_fn,
     make_node_fn,
+    make_router_node_fn,
     make_sandbox_agent_fn,
 )
 from modulo.core.pipeline_engine.port_resolver import (
@@ -120,6 +121,41 @@ def _make_gate_id(source: str, target: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _make_router_pass_fn(node_id: str) -> Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]:
+    """A pass-through node function for Router nodes.
+
+    A Router node makes no tool/agent call — it exists solely to host the
+    outgoing conditional-edges router (built in ``build_graph_from_json``). It
+    returns an empty update so the merged state is unchanged.
+    """
+
+    async def _pass(state: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    _pass.__name__ = f"router_pass_{node_id}"
+    return _pass
+
+
+class RouterConfigError(ValueError):
+    """Typed compile-time error for an invalid Router node configuration."""
+
+
+def _validate_router_config(router_config: dict[str, Any], node_id: str) -> None:
+    """Enforce Router-node compile-time invariants (FAR-402 P1 / F2-A).
+
+    A Router node MUST declare a ``default`` rule so every run has a defined
+    terminal hop. This is enforced ONLY for new Router nodes (backward-compat:
+    legacy ``conditional`` edges without a default remain valid — they fall
+    back to the first normal target via ``_make_conditional_router``).
+    """
+    rules = router_config.get("rules") or []
+    has_default = any(rule.get("default") for rule in rules)
+    if not has_default and router_config.get("mode") != "classifier":
+        raise RouterConfigError(
+            f"Router node {node_id!r} has no 'default' rule; every Router node must declare an explicit default target."
+        )
+
+
 def _make_gate_kickback_router(
     normal_target: str,
     reject_target_str: str,
@@ -160,16 +196,15 @@ def _make_conditional_router(
     If there are no normal targets, *default_target* (or the last conditional
     edge's target) is used as the fallback.
     """
-    compiled: list[tuple[Any, str]] = []
+    compiled: list[tuple[str, str]] = []
     for edge in conditional_edges:
         expr: str = edge.get("condition_expression", "")
         target = _get_edge_val(edge, "target", "target_node_id")
-        compiled.append((jmespath.compile(expr), target))
+        compiled.append((expr, target))
 
     def _router(state: dict[str, Any]) -> str:
-        for compiled_expr, target in compiled:
-            result = compiled_expr.search(state)
-            if _is_truthy(result):
+        for expr, target in compiled:
+            if evaluate_jmespath_condition(state, expr):
                 return target
         if normal_targets:
             return normal_targets[0]
@@ -280,8 +315,7 @@ def _make_loop_counter_router(
         if _hit_max_iterations(state, loop_key, max_iterations):
             return default_target
         if compiled_expr is not None:
-            result = compiled_expr.search(state)
-            if bool(result):
+            if evaluate_jmespath_condition(state, condition_expression):
                 return target
             return default_target
         return target
@@ -376,7 +410,7 @@ def _make_node_fn(
     max_input_length: int | None = node_def.get("max_input_length")
     token_budget: int | None = node_def.get("token_budget")
 
-    if node_type not in ("agent", "manual", "connector", "sandbox_agent"):
+    if node_type not in ("agent", "manual", "connector", "sandbox_agent", "router", "hitl"):
         raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
 
     connector_binding = node_def.get("connector_binding")
@@ -391,6 +425,27 @@ def _make_node_fn(
     if connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
         return make_connector_fn(node_def, timeout=timeout)
     if node_type == "manual":
+        return make_manual_node_fn(node_def, timeout=timeout)
+    if node_type == "router":
+        # Router node: a pure decision node. It produces no artifact of its
+        # own — it simply passes state through so the conditional-edges router
+        # (built in build_graph_from_json) can pick the next hop.
+        return _make_router_pass_fn(node_id)
+    if node_type == "hitl":
+        # HITL node: produces output like a normal node (agent / connector /
+        # manual) and its OUTGOING edges are gated by the node's hitl_config
+        # (injected at compile time in build_graph_from_json). The gate path is
+        # identical to the legacy edge-level HITL gate.
+        if node_def.get("agent_id"):
+            return make_node_fn(
+                node_def,
+                role=role,
+                timeout=timeout,
+                max_input_length=max_input_length,
+                token_budget=token_budget,
+            )
+        if connector_binding:
+            return make_connector_fn(node_def, timeout=timeout)
         return make_manual_node_fn(node_def, timeout=timeout)
     # agent nodes (with or without a frozen agent_id) and connector nodes
     # without a binding default to the general agent node factory.
@@ -872,15 +927,58 @@ def build_graph_from_json(
     # Build a node-id-to-def lookup for quick access.
     nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
 
+    # Router nodes route via `router_config` (not outgoing edges), so their rule
+    # targets are never seen by the edge-driven `target_ids` population below.
+    # Register every router rule/default target here so the entry-point selection
+    # cannot pick a router's rule target as the pipeline entry node (FAR-415: a
+    # router whose rule target sorts first in `nodes` would otherwise become the
+    # entry, leaving the real entry + router dead).
+    for _n in nodes:
+        if (_n.get("node_type") or "agent") == "router":
+            _rc = _n.get("router_config") or {}
+            for _rule in _rc.get("rules", []) or []:
+                _tgt = _rule.get("target") or _rule.get("target_port")
+                if _tgt is not None:
+                    target_ids.add(str(_tgt))
+
     for source, src_edges in source_edges.items():
         source_node_def = nodes_by_id.get(source, {})
         routing_mode: str | None = source_node_def.get("routing_mode")
+        source_node_type: str = source_node_def.get("node_type", "agent")
 
         conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
         loop_edges = [e for e in src_edges if _get_edge_type(e) == "loop"]
         normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
 
-        if loop_edges:
+        if source_node_type == "router":
+            # Router node (FAR-402 P1 / F2-A): lowers to the existing
+            # conditional-edge compile path via the shared JMESPath evaluator.
+            # Compile-time default-rule enforcement guards mis-configured graphs.
+            router_config = dict(source_node_def.get("router_config") or {})
+            _validate_router_config(router_config, source)
+            graph.add_conditional_edges(source, make_router_node_fn(router_config, node_id=source))
+        elif source_node_type == "hitl":
+            # HITL node (FAR-402 P1 / F2-D): compile-equivalent to the legacy
+            # edge-level HITL gate. Inject the node's hitl_config onto every
+            # outgoing (normal) edge so the existing synthetic-gate path picks
+            # it up unchanged.
+            hitl_config = dict(source_node_def.get("hitl_config") or {})
+            for edge in normal:
+                gate_id = _make_gate_id(source, _get_edge_val(edge, "target", "target_node_id"))
+                edge["hitl_gate_config"] = {**hitl_config, "gate_id": gate_id}
+            _add_normal_edges(
+                graph,
+                source,
+                normal,
+                target_ids=target_ids,
+                gate_node_ids=gate_node_ids,
+                reject_targets_by_source=reject_targets_by_source,
+                eval_definitions_by_node=eval_definitions_by_node,
+                session_factory=session_factory,
+                org_id=org_id,
+                node_type_map=node_type_map,
+            )
+        elif loop_edges:
             _add_loop_edges(graph, source, loop_edges, normal, target_ids)
         elif routing_mode == "llm":
             _add_llm_routing(graph, source, source_node_def, conditional, normal, target_ids)

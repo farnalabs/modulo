@@ -599,7 +599,7 @@ class CapabilityScope(BaseModel):
 
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "join"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -709,6 +709,19 @@ class PipelineGraphNode(BaseModel):
         default_factory=list,
         description="Filesystem detector: globs of sandbox paths whose change counts as activity.",
     )
+    # FAR-402 P1 (F2-A Router / F2-D HITL): per-node configuration carried on
+    # the node and compiled by the pipeline engine.
+    router_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Router node config: {mode, rules:[{guard (JMESPath), target|target_port}|{default, target}]}. "
+        "Required for node_type='router'.",
+    )
+    hitl_config: dict[str, Any] | None = Field(
+        default=None,
+        description="HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, "
+        "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
+        "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
+    )
     # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
     # sandbox_agent / composite node (NOT a new node_type). When set, the node
     # splits its `split` source port into N parallel branches. The compile step
@@ -746,6 +759,8 @@ class PipelineGraphNode(BaseModel):
             "composite": self._validate_composite_node,
             "sandbox_agent": self._validate_sandbox_agent_node,
             "agent": self._validate_agent_node,
+            "router": self._validate_router_node,
+            "hitl": self._validate_hitl_node,
             "join": self._validate_join_node,
         }
         node_validators[self.node_type]()
@@ -790,6 +805,26 @@ class PipelineGraphNode(BaseModel):
             raise ValueError("Manual nodes require an output schema")
         if self.label is None:
             raise ValueError("Manual nodes require a label")
+
+    def _validate_router_node(self) -> None:
+        # The heavy validation (default-rule enforcement) happens at compile
+        # time in the pipeline engine; here we just require a router_config.
+        if self.router_config is None:
+            raise ValueError("Router nodes require a router_config")
+        rules = (self.router_config or {}).get("rules") or []
+        if not rules:
+            raise ValueError("Router nodes require at least one rule")
+        for rule in rules:
+            if rule.get("default"):
+                continue
+            if not (rule.get("target") or rule.get("target_port")):
+                raise ValueError("Each non-default Router rule requires a target/target_port")
+
+    def _validate_hitl_node(self) -> None:
+        # HITL nodes produce output like a normal (manual/agent) node and gate
+        # their outgoing edges. Require a hitl_config describing the gate.
+        if self.hitl_config is None:
+            raise ValueError("HITL nodes require a hitl_config")
 
     def _validate_composite_node(self) -> None:
         if self.composite_ref is None:
@@ -933,7 +968,7 @@ class PipelineGraphEdge(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     source_node_id: uuid.UUID
     target_node_id: uuid.UUID
-    edge_type: str = Field(pattern="^(normal|reject|conditional)$")
+    edge_type: str = Field(pattern="^(normal|reject|conditional|loop)$")
     hitl_gate_config: HitlGateConfig | None = None
     condition_expression: str | None = Field(
         default=None,

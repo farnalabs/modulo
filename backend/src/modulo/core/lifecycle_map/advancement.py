@@ -90,7 +90,7 @@ _log = logging.getLogger(__name__)
 
 # Terminal statuses that ADVANCE a journey (evidence + run_count). Cancelled
 # and stalled are deliberately excluded — they mean "the work did not happen".
-_ADVANCING_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed"})
+_ADVANCING_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed", "router_no_match"})
 
 _AWAITING_HUMAN = "awaiting_human"
 

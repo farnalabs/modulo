@@ -619,16 +619,18 @@ def test_single_migration_head() -> None:
     # 0148 -> 0149_suite_run_trigger_kind (FAR-377).
     chaining_off_0146 = [p for p in revisions if parents[p] == "0146_extend_runs_status_cost_ceiling"]
     assert [_basename(p) for p in chaining_off_0146] == ["0147_json_to_jsonb_standardize.py"]
-    # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147;
-    # 0149_suite_run_trigger_kind (FAR-377) chains off 0148 and is the head.
+    # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147.
     chaining_off_0147 = [p for p in revisions if parents[p] == "0147_json_to_jsonb_standardize"]
     assert [_basename(p) for p in chaining_off_0147] == ["0148_pipeline_snapshot_versioning_far420.py"]
-    # What chains off 0148 (pipeline_snapshot_versioning_far420) -> 0149_suite_run_trigger_kind (FAR-377).
+    # 0149_suite_run_trigger_kind (FAR-377, main) chains off 0148.
     chaining_off_0148 = [p for p in revisions if parents[p] == "0148_pipeline_snapshot_versioning_far420"]
     assert [_basename(p) for p in chaining_off_0148] == ["0149_suite_run_trigger_kind.py"]
-    # Nothing chains off 0149 -> it is the single head.
+    # 0150_add_router_no_match_status (this PR) chains off 0149 and is the single head.
     chaining_off_0149 = [p for p in revisions if parents[p] == "0149_suite_run_trigger_kind"]
-    assert chaining_off_0149 == []
+    assert [_basename(p) for p in chaining_off_0149] == ["0150_add_router_no_match_status.py"]
+    # Nothing chains off 0150 -> it is the single head.
+    chaining_off_0150 = [p for p in revisions if parents[p] == "0150_add_router_no_match_status"]
+    assert chaining_off_0150 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

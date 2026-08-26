@@ -62,7 +62,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
 
 import jinja2
-import jmespath
 from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
@@ -86,8 +85,13 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
+from modulo.core.pipeline_engine.jmespath_eval import (
+    compile_jmespath,
+    evaluate_jmespath_condition,
+)
 from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -257,6 +261,8 @@ class OutputSchemaValidationError(ValueError):
     """
 
 
+# Single source of truth for JMESPath guard truthiness — `bool(result)`.
+# Test-pinned in tests/unit/pipeline_engine/test_conditional_transitions.py.
 _is_truthy = bool
 
 # Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
@@ -1680,6 +1686,65 @@ def make_node_fn(
     return _node
 
 
+def make_router_node_fn(
+    router_config: dict[str, Any],
+    *,
+    node_id: str | None = None,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a LangGraph *routing* function for a Router node (FAR-402 P1 / F2-A).
+
+    Evaluates ordered ``rules`` ``{guard (JMESPath), target}`` against state,
+    first-match-wins. An explicit ``default`` rule maps to its target. LLM
+    routing mode (``mode == "classifier"``) matches the ``_llm_next_node`` state
+    value against each rule's ``label`` (falling back to the default rule).
+
+    The function reuses the shared JMESPath evaluator
+    (:func:`evaluate_jmespath_condition`) — the same engine the existing
+    conditional-edge compile path uses — so Router lowers onto that machinery.
+    Every other branching primitive shares one truthiness rule.
+
+    When no rule matches and there is no ``default`` rule, raises
+    :class:`RouterNoMatchError` so the executor terminalizes the run with the
+    ``router_no_match`` status (a terminal, non-failure outcome). Compile-time
+    default-rule enforcement (see :func:`_validate_router_config`) is the
+    primary guard; this runtime raise is the backstop for a mis-configured
+    graph that slipped past validation.
+    """
+    rules: list[dict[str, Any]] = list(router_config.get("rules", []))
+    classifier_mode: bool = router_config.get("mode") == "classifier"
+
+    # Store (guard_expr, target) tuples. The guards are evaluated through the
+    # shared JMESPath evaluator so Router and the conditional-edge compile path
+    # share ONE truthiness rule.
+    rule_targets: list[tuple[str | None, str | None]] = []
+    default_target: str | None = None
+    for rule in rules:
+        target = rule.get("target") or rule.get("target_port")
+        if rule.get("default"):
+            default_target = target
+            continue
+        rule_targets.append((rule.get("guard"), target))
+
+    def _router(state: dict[str, Any]) -> str:
+        for guard, target in rule_targets:
+            if target is not None and evaluate_jmespath_condition(state, guard):
+                return target
+        if classifier_mode:
+            label = state.get("_llm_next_node")
+            if label is not None:
+                for rule in rules:
+                    if rule.get("label") == label:
+                        matched: str | None = rule.get("target") or rule.get("target_port")
+                        if matched is not None:
+                            return matched
+        if default_target:
+            return default_target
+        raise RouterNoMatchError(node_id=node_id)
+
+    _router.__name__ = f"router_{node_id}" if node_id else "router"
+    return _router
+
+
 async def _invoke_backend(
     hub: Any,
     backend_id: uuid.UUID,
@@ -1975,13 +2040,14 @@ def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: d
     """Evaluate the conditional-gate JMESPath expression; skip artifact when falsy."""
     if condition_expr:
         try:
-            compiled = jmespath.compile(condition_expr)
-        except jmespath.exceptions.JMESPathError:
+            compiled = compile_jmespath(condition_expr)
+        except ValueError:
             _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
             raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
         result = compiled.search(state)
-        if not _is_truthy(result):
-            # Condition falsy — skip the gate entirely.
+        if not bool(result):
+            # Condition falsy — skip the gate entirely. Preserve the raw result
+            # in the artifact (mirrors the pre-refactor behaviour).
             return _build_hitl_gate_artifact(
                 gate_id, "condition_skipped", condition=condition_expr, condition_result=result
             )
