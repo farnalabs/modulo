@@ -379,7 +379,8 @@ export default {
       "agent_governance_for_your_agentic_sdlc": "Agent governance for your agentic SDLC",
       "login_failed": "Login failed:",
       "enter_your_password": "Enter your password",
-      "modulo": "Modulo"
+      "modulo": "Modulo",
+      "or_continue_with": "or continue with"
     },
     "NotificationsPage": {
       "title": "Notifications",
