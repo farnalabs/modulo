@@ -198,6 +198,19 @@ async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list
     ]
 
 
+def _collect_bound_connector_ids(snapshots: Sequence[Any]) -> set[uuid.UUID]:
+    """Collect every connector instance id bound by any pipeline snapshot."""
+    bound_ids: set[uuid.UUID] = set()
+    for snap in snapshots:
+        bindings = snap.connector_bindings_json or []
+        for b in bindings:
+            cid = b.get("connector_instance_id") or b.get("connector_id")
+            if cid:
+                with contextlib.suppress(ValueError, TypeError):
+                    bound_ids.add(uuid.UUID(cid) if isinstance(cid, str) else cid)
+    return bound_ids
+
+
 async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     connectors = (
         (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
@@ -213,14 +226,7 @@ async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> 
         .all()
     )
 
-    bound_ids: set[uuid.UUID] = set()
-    for snap in snapshots:
-        bindings = snap.connector_bindings_json or []
-        for b in bindings:
-            cid = b.get("connector_instance_id") or b.get("connector_id")
-            if cid:
-                with contextlib.suppress(ValueError, TypeError):
-                    bound_ids.add(uuid.UUID(cid) if isinstance(cid, str) else cid)
+    bound_ids = _collect_bound_connector_ids(snapshots)
 
     return [
         Candidate(

@@ -953,6 +953,37 @@ async def _record_streak_notify_failed(
         _log.warning("streak.notify_failed_audit_write_failed org=%s", org_id)
 
 
+async def _pend_streak_notify_retry(
+    org_id: uuid.UUID,
+    *,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str,
+    pipeline_name: str,
+    redis_client: AsyncRedis | None,
+    retry_count: int = 0,
+) -> bool:
+    """Record a first-attempt audit failure and pend a Redis retry.
+
+    Shared tail of every deactivation-notify failure path: first-attempt
+    failures (``retry_count == 0``) get a CRITICAL audit row via
+    :func:`_record_streak_notify_failed`; every failure gets a per-org pending
+    marker via :func:`_write_streak_notify_pending` so the next scheduler tick
+    retries. Returns ``False`` so callers can ``return False`` directly.
+    """
+    if retry_count == 0:
+        await _record_streak_notify_failed(org_id, data=data, threshold=threshold, reason=reason)
+    await _write_streak_notify_pending(
+        redis_client,
+        org_id,
+        data=data,
+        threshold=threshold,
+        pipeline_name=pipeline_name,
+        retry_count=retry_count,
+    )
+    return False
+
+
 async def _notify_streak_deactivation(
     org_id: uuid.UUID,
     *,
@@ -1019,16 +1050,15 @@ async def _notify_streak_deactivation(
         )
         if retry_count == 0:
             _log.critical("streak.deactivation_notify_failed org=%s trigger=%s (timeout)", org_id, data["id"])
-            await _record_streak_notify_failed(org_id, data=data, threshold=threshold, reason=safe_reason)
-        await _write_streak_notify_pending(
-            redis_client,
+        return await _pend_streak_notify_retry(
             org_id,
             data=data,
             threshold=threshold,
+            reason=safe_reason,
             pipeline_name=pipeline_name,
+            redis_client=redis_client,
             retry_count=retry_count,
         )
-        return False
     except Exception:
         _log.critical(
             "streak.deactivation_notify_failed org=%s trigger=%s",
@@ -1036,17 +1066,15 @@ async def _notify_streak_deactivation(
             data["id"],
             exc_info=True,
         )
-        if retry_count == 0:
-            await _record_streak_notify_failed(org_id, data=data, threshold=threshold, reason=safe_reason)
-        await _write_streak_notify_pending(
-            redis_client,
+        return await _pend_streak_notify_retry(
             org_id,
             data=data,
             threshold=threshold,
+            reason=safe_reason,
             pipeline_name=pipeline_name,
+            redis_client=redis_client,
             retry_count=retry_count,
         )
-        return False
     # dispatch_event does NOT raise on per-endpoint delivery failure (it
     # dead-letters internally after 4 attempts) — inspect the results.
     if results and any(getattr(r, "status", "") == "dead_lettered" for r in results):
@@ -1055,17 +1083,15 @@ async def _notify_streak_deactivation(
             org_id,
             data["id"],
         )
-        if retry_count == 0:
-            await _record_streak_notify_failed(org_id, data=data, threshold=threshold, reason=safe_reason)
-        await _write_streak_notify_pending(
-            redis_client,
+        return await _pend_streak_notify_retry(
             org_id,
             data=data,
             threshold=threshold,
+            reason=safe_reason,
             pipeline_name=pipeline_name,
+            redis_client=redis_client,
             retry_count=retry_count,
         )
-        return False
     return True
 
 

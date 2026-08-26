@@ -1328,6 +1328,113 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
         return "failed"
 
 
+async def _sweep_org_stale_runs(
+    conn: Any,
+    *,
+    org_id: uuid.UUID,
+    nd_window: int,
+    wl_window: int,
+    stranded_rows: list[Any],
+    terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> tuple[int, int, int]:
+    """Run one org's stale-run UPDATE set; return (never, capacity_timeout, lost) counts.
+
+    Runs inside the caller's RLS-scoped transaction and mutates ``stranded_rows``
+    and ``terminalised_run_ids`` in place so the caller can post-process them once
+    the transaction commits. Extracted from :func:`stale_run_recovery_sweep` to keep
+    that function's control flow shallow.
+    """
+    await conn.execute(
+        text(_SQL_SET_ORG_ID),
+        {"val": str(org_id)},
+    )
+    never_result = await conn.execute(
+        text(
+            "UPDATE runs "
+            "SET status = 'failed', error_code = 'never_dispatched', "
+            "error_detail = :detail, completed_at = now() "
+            "WHERE status = 'pending' "
+            "AND organisation_id = :oid "
+            "AND created_at < now() - (:nd_window * interval '1 second') "
+            "AND dispatched_at IS NULL "
+            "AND cancellation_requested = false "
+            "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+            "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "nd_window": nd_window,
+            "detail": "Run was not dispatched within the stale threshold.",
+        },
+    )
+    never_count = never_result.rowcount or 0
+    terminalised_run_ids.extend((row[0], org_id) for row in never_result.all())
+
+    stranded_result = await conn.execute(
+        text(
+            "UPDATE runs "
+            "SET heartbeat_at = now() "
+            "WHERE status = 'pending' "
+            "AND organisation_id = :oid "
+            "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+            "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
+            "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
+            "AND cancellation_requested = false "
+            "RETURNING id, organisation_id"
+        ),
+        {
+            "oid": str(org_id),
+            "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
+            "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+        },
+    )
+    stranded_rows.extend(stranded_result.all())
+
+    capacity_timeout_result = await conn.execute(
+        text(
+            "UPDATE runs "
+            "SET status = 'failed', error_code = 'capacity_timeout', "
+            "error_detail = :detail, completed_at = now() "
+            "WHERE status = 'pending' "
+            "AND organisation_id = :oid "
+            "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+            "AND created_at < now() - (:ttl * interval '1 minute') "
+            "AND cancellation_requested = false "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+            "detail": "Waited in capacity queue past the TTL.",
+        },
+    )
+    capacity_timeout_count = capacity_timeout_result.rowcount or 0
+    terminalised_run_ids.extend((row[0], org_id) for row in capacity_timeout_result.all())
+
+    lost_result = await conn.execute(
+        text(
+            "UPDATE runs "
+            "SET status = 'failed', error_code = 'worker_lost', "
+            "error_detail = :detail, completed_at = now() "
+            "WHERE status = 'running' "
+            "AND organisation_id = :oid "
+            "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
+            "AND claim_count >= 5 "
+            "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "wl_window": wl_window,
+            "detail": "Worker lost heartbeat for this run.",
+        },
+    )
+    lost_count = lost_result.rowcount or 0
+    terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
+    return never_count, capacity_timeout_count, lost_count
+
+
 async def stale_run_recovery_sweep(
     async_engine: AsyncEngine,
     *,
@@ -1399,102 +1506,23 @@ async def stale_run_recovery_sweep(
         never_count = 0
         lost_count = 0
         capacity_timeout_count = 0
-        stranded_count = 0
         # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
         # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
         terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
-                await conn.execute(
-                    text(_SQL_SET_ORG_ID),
-                    {"val": str(org_id)},
+                never_delta, capacity_delta, lost_delta = await _sweep_org_stale_runs(
+                    conn,
+                    org_id=org_id,
+                    nd_window=nd_window,
+                    wl_window=wl_window,
+                    stranded_rows=stranded_rows,
+                    terminalised_run_ids=terminalised_run_ids,
                 )
-                never_result = await conn.execute(
-                    text(
-                        "UPDATE runs "
-                        "SET status = 'failed', error_code = 'never_dispatched', "
-                        "error_detail = :detail, completed_at = now() "
-                        "WHERE status = 'pending' "
-                        "AND organisation_id = :oid "
-                        "AND created_at < now() - (:nd_window * interval '1 second') "
-                        "AND dispatched_at IS NULL "
-                        "AND cancellation_requested = false "
-                        "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
-                        "AND (dispatcher IS NULL OR dispatcher != 'saq') "
-                        "RETURNING id"
-                    ),
-                    {
-                        "oid": str(org_id),
-                        "nd_window": nd_window,
-                        "detail": "Run was not dispatched within the stale threshold.",
-                    },
-                )
-                never_count += never_result.rowcount or 0
-                terminalised_run_ids.extend((row[0], org_id) for row in never_result.all())
-
-                stranded_result = await conn.execute(
-                    text(
-                        "UPDATE runs "
-                        "SET heartbeat_at = now() "
-                        "WHERE status = 'pending' "
-                        "AND organisation_id = :oid "
-                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                        "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
-                        "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
-                        "AND cancellation_requested = false "
-                        "RETURNING id, organisation_id"
-                    ),
-                    {
-                        "oid": str(org_id),
-                        "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
-                        "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
-                    },
-                )
-                org_stranded_rows = list(stranded_result.all())
-                stranded_count += len(org_stranded_rows)
-                stranded_rows.extend(org_stranded_rows)
-
-                capacity_timeout_result = await conn.execute(
-                    text(
-                        "UPDATE runs "
-                        "SET status = 'failed', error_code = 'capacity_timeout', "
-                        "error_detail = :detail, completed_at = now() "
-                        "WHERE status = 'pending' "
-                        "AND organisation_id = :oid "
-                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                        "AND created_at < now() - (:ttl * interval '1 minute') "
-                        "AND cancellation_requested = false "
-                        "RETURNING id"
-                    ),
-                    {
-                        "oid": str(org_id),
-                        "ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
-                        "detail": "Waited in capacity queue past the TTL.",
-                    },
-                )
-                capacity_timeout_count += capacity_timeout_result.rowcount or 0
-                terminalised_run_ids.extend((row[0], org_id) for row in capacity_timeout_result.all())
-
-                lost_result = await conn.execute(
-                    text(
-                        "UPDATE runs "
-                        "SET status = 'failed', error_code = 'worker_lost', "
-                        "error_detail = :detail, completed_at = now() "
-                        "WHERE status = 'running' "
-                        "AND organisation_id = :oid "
-                        "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
-                        "AND claim_count >= 5 "
-                        "AND (dispatcher IS NULL OR dispatcher != 'saq') "
-                        "RETURNING id"
-                    ),
-                    {
-                        "oid": str(org_id),
-                        "wl_window": wl_window,
-                        "detail": "Worker lost heartbeat for this run.",
-                    },
-                )
-                lost_count += lost_result.rowcount or 0
-                terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
+                never_count += never_delta
+                capacity_timeout_count += capacity_delta
+                lost_count += lost_delta
+        stranded_count = len(stranded_rows)
 
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
         # own sessions (and the row lock the UPDATE held) never overlap a live
