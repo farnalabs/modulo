@@ -99,6 +99,7 @@ async def move_schema_to_folder(
     session: AsyncSession,
     schema_id: uuid.UUID,
     folder_id: uuid.UUID | None,
+    organisation_id: uuid.UUID | None = None,
 ) -> Schema | None:
     result = await session.execute(select(Schema).where(Schema.id == schema_id))
     schema = result.scalar_one_or_none()
@@ -107,6 +108,12 @@ async def move_schema_to_folder(
     if folder_id is not None:
         folder = await get_folder(session, folder_id)
         if folder is None:
+            raise ValueError(f"Folder not found: {folder_id}")
+        # On non-Postgres backends RLS does not filter the folder read, so a
+        # caller could otherwise attach an owned schema into another org's
+        # folder. Assert ownership explicitly (the Postgres path already
+        # collapses a cross-org folder to None via RLS → same 422 below).
+        if organisation_id is not None and folder.organisation_id != organisation_id:
             raise ValueError(f"Folder not found: {folder_id}")
     schema.folder_id = folder_id
     await session.flush()

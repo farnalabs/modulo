@@ -15,7 +15,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.product_analytics.hmac_verify import verify_hmac
 from modulo.core.product_analytics.instance_identity import (
@@ -128,6 +128,7 @@ async def get_identity(
 
 @router.post(
     "/rotate",
+    dependencies=[Depends(deny_break_glass_mint)],
     responses={
         400: {"description": "Bad Request"},
         401: {"description": "Unauthorized"},

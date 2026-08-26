@@ -67,6 +67,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/schemas", tags=["schemas"])
 
 
+async def _assert_owns_schema(session: AsyncSession, schema_id: uuid.UUID, principal: TenantPrincipal) -> "Schema":
+    """Load a schema by id and assert the caller's org owns it.
+
+    The application session is RLS-enforced (the app role is not BYPASSRLS), but
+    we assert ownership explicitly to give consistent 404s on non-Postgres
+    backends that rely on the ORM tenant filter. Raises 404 (not 403) to avoid
+    leaking existence.
+    """
+    schema = await get_schema(session, schema_id)
+    if schema is None or schema.organisation_id != principal.organisation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
+    return schema
+
+
 # ---------------------------------------------------------------------------
 # Schema models
 # ---------------------------------------------------------------------------
@@ -356,6 +370,7 @@ async def update_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _assert_owns_schema(session, schema_id, principal)
             schema = await update_schema(session, schema_id, updates)
     except IntegrityError:
         logger.exception("schemas.update_integrity")
@@ -401,6 +416,7 @@ async def deprecate_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _assert_owns_schema(session, schema_id, principal)
             schema = await deprecate_schema(session, schema_id)
     except IntegrityError:
         logger.exception("schemas.deprecate_schema_endpoint")
@@ -455,7 +471,8 @@ async def move_schema_to_folder_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            schema = await move_schema_to_folder(session, schema_id, req.folder_id)
+            await _assert_owns_schema(session, schema_id, principal)
+            schema = await move_schema_to_folder(session, schema_id, req.folder_id, principal.organisation_id)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -484,6 +501,7 @@ async def delete_schema_endpoint(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
+                await _assert_owns_schema(session, schema_id, principal)
                 deleted = await delete_schema(session, schema_id, force=force)
         except SchemaDeletionProtectedError as exc:
             raise HTTPException(
@@ -595,9 +613,7 @@ async def create_schema_version_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            schema = await get_schema(session, schema_id)
-            if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
+            await _assert_owns_schema(session, schema_id, principal)
             sv = await create_schema_version(
                 session,
                 org_id=principal.organisation_id,
@@ -1158,19 +1174,22 @@ async def _load_migration_versions(
     principal: TenantPrincipal,
     req: SchemaMigrationRequest,
 ) -> tuple[Any, Any]:
-    """Load the latest source and target schema versions within a transaction."""
+    """Load the latest source and target schema versions within a transaction.
+
+    The application session is RLS-enforced (the app role is not BYPASSRLS), so we
+    must set the org context before querying. We additionally assert explicitly
+    that the caller's org owns both the source and target schema before touching
+    any versions (avoiding a cross-org read, and giving consistent 404s on
+    non-Postgres backends that rely on the ORM tenant filter).
+    """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        from_schema = await get_schema(session, req.from_schema_id)
-        if from_schema is None:
-            raise HTTPException(status_code=404, detail="Source schema not found")
+        await _assert_owns_schema(session, req.from_schema_id, principal)
         from_sv = await _get_latest_version(session, req.from_schema_id)
         if from_sv is None:
             raise HTTPException(status_code=404, detail="Source schema has no versions")
 
-        to_schema = await get_schema(session, req.to_schema_id)
-        if to_schema is None:
-            raise HTTPException(status_code=404, detail="Target schema not found")
+        await _assert_owns_schema(session, req.to_schema_id, principal)
         to_sv = await _get_latest_version(session, req.to_schema_id)
         if to_sv is None:
             raise HTTPException(status_code=404, detail="Target schema has no versions")

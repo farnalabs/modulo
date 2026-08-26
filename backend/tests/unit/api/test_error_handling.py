@@ -7,6 +7,7 @@ Each case tests that a route returns the correct status when a DB error
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,19 @@ _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000020")
 _AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000030")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000040")
 _SCHEMA_ID = uuid.UUID("00000000-0000-0000-0000-000000000070")
+
+
+def _make_owned_schema() -> MagicMock:
+    """A schema whose organisation_id matches the default test principal org.
+
+    Used to stub the ``_assert_owns_schema`` guard so guarded write endpoints
+    pass the ownership check and reach their (patched) CRUD function.
+    """
+    s = MagicMock()
+    s.organisation_id = _ORG_ID
+    return s
+
+
 _NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000080")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
 _EVAL_DEF_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b0")
@@ -701,7 +715,17 @@ class TestPatchLevelErrors:
         exc = _make_exc(error_type)
         mock_fn = AsyncMock(side_effect=exc)
 
-        with patch(mock_target, mock_fn), patch("modulo.api.routes.schemas.set_rls_org"):
+        # Guarded write endpoints call ``_assert_owns_schema`` (which loads the
+        # schema via ``get_schema``) before the patched CRUD function. Stub that
+        # load so the ownership check passes and the test reaches its expected
+        # error. The GET-single cases patch ``get_schema`` itself to raise, so
+        # they must be left alone.
+        with ExitStack() as stack:
+            stack.enter_context(patch(mock_target, mock_fn))
+            stack.enter_context(patch("modulo.api.routes.schemas.set_rls_org"))
+            if mock_target != "modulo.api.routes.schemas.get_schema":
+                stack.enter_context(patch("modulo.api.routes.schemas.get_schema", return_value=_make_owned_schema()))
+
             if method == "GET":
                 resp = client.get(url)
             elif method == "POST":
@@ -742,6 +766,7 @@ def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> Non
 
     with (
         patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
         patch("modulo.api.routes.schemas.update_schema", new_callable=AsyncMock, return_value=schema) as mock_update,
     ):
         resp = client.patch(

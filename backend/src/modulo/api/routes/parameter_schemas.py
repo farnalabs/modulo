@@ -32,6 +32,8 @@ from modulo.db.crud.parameter_set import (
     soft_delete_set,
     update_set,
 )
+from modulo.db.models.parameter_schema import ParameterSchema
+from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"
@@ -58,6 +60,38 @@ _CODE_PARAMETER_SETS_REFERENCES = "parameter_sets.references"
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["parameter-schemas"])
+
+
+async def _assert_owns_parameter_schema(
+    session: AsyncSession, schema_id: uuid.UUID, principal: TenantPrincipal
+) -> "ParameterSchema":
+    """Load a parameter schema by id and assert the caller's org owns it.
+
+    The application session is RLS-enforced (the app role is not BYPASSRLS), but
+    we assert ownership explicitly to give consistent 404s on non-Postgres
+    backends that rely on the ORM tenant filter. Raises 404 (not 403) to avoid
+    leaking existence.
+    """
+    schema = await get_schema(session, schema_id)
+    if schema is None or schema.organisation_id != principal.organisation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
+    return schema
+
+
+async def _assert_owns_parameter_set(
+    session: AsyncSession, set_id: uuid.UUID, principal: TenantPrincipal
+) -> "ParameterSet":
+    """Load a parameter set by id and assert the caller's org owns it.
+
+    The application session is RLS-enforced (the app role is not BYPASSRLS), but
+    we assert ownership explicitly to give consistent 404s on non-Postgres
+    backends that rely on the ORM tenant filter. Raises 404 (not 403) to avoid
+    leaking existence.
+    """
+    ps = await get_set(session, set_id)
+    if ps is None or ps.organisation_id != principal.organisation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SET_NOT_FOUND)
+    return ps
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +366,7 @@ async def update_parameter_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
             schema = await update_schema(
                 session,
                 schema_id,
@@ -385,6 +420,7 @@ async def delete_parameter_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
             schema = await soft_delete_schema(session, schema_id)
     except IntegrityError:
         logger.exception("parameter_schemas.delete_parameter_schema_endpoint")
@@ -428,6 +464,7 @@ async def restore_parameter_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
             schema = await restore_schema(session, schema_id)
     except ProgrammingError:
         logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE)
@@ -701,9 +738,7 @@ async def create_parameter_set_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema = await get_schema(session, schema_id)
-            if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
+            schema = await _assert_owns_parameter_schema(session, schema_id, principal)
             ps = await create_set(
                 session,
                 parameter_schema_id=schema_id,
@@ -800,9 +835,8 @@ async def update_parameter_set_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema = await get_schema(session, schema_id)
-            if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
+            await _assert_owns_parameter_set(session, set_id, principal)
             ps = await update_set(
                 session,
                 set_id,
@@ -859,9 +893,8 @@ async def delete_parameter_set_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema = await get_schema(session, schema_id)
-            if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
+            await _assert_owns_parameter_set(session, set_id, principal)
             ps = await soft_delete_set(session, set_id)
     except IntegrityError:
         logger.exception("parameter_schemas.delete_parameter_set_endpoint")
@@ -908,9 +941,8 @@ async def restore_parameter_set_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema = await get_schema(session, schema_id)
-            if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
+            await _assert_owns_parameter_schema(session, schema_id, principal)
+            await _assert_owns_parameter_set(session, set_id, principal)
             ps = await restore_set(session, set_id)
     except ProgrammingError:
         logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)

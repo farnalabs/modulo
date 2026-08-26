@@ -155,7 +155,7 @@ def _schema_crud_cases() -> list[dict[str, object]]:
             "method": "PATCH",
             "url": f"/api/v1/schemas/{_SCHEMA_ID}",
             "body": {"name": "Updated"},
-            "patches": [("update_schema", updated)],
+            "patches": [("get_schema", _make_schema()), ("update_schema", updated)],
             "expected_status": 200,
         },
         {
@@ -163,7 +163,7 @@ def _schema_crud_cases() -> list[dict[str, object]]:
             "method": "DELETE",
             "url": f"/api/v1/schemas/{_SCHEMA_ID}",
             "body": None,
-            "patches": [("delete_schema", True)],
+            "patches": [("get_schema", _make_schema()), ("delete_schema", True)],
             "expected_status": 204,
         },
         {
@@ -171,7 +171,7 @@ def _schema_crud_cases() -> list[dict[str, object]]:
             "method": "DELETE",
             "url": f"/api/v1/schemas/{uuid.uuid4()}",
             "body": None,
-            "patches": [("delete_schema", False)],
+            "patches": [("get_schema", _make_schema()), ("delete_schema", False)],
             "expected_status": 404,
         },
     ]
@@ -206,6 +206,7 @@ def test_schema_crud(client: TestClient, case: dict[str, object]) -> None:
 
 def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch(
             "modulo.api.routes.schemas.delete_schema",
             side_effect=SchemaDeletionProtectedError(_SCHEMA_ID),
@@ -219,6 +220,7 @@ def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> Non
 def test_delete_schema_force_returns_204(client: TestClient) -> None:
     """force=True should delete even when references exist."""
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch("modulo.api.routes.schemas.delete_schema", return_value=True),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):
@@ -231,6 +233,7 @@ def test_delete_schema_force_skips_protection(client: TestClient) -> None:
     schema_id = uuid.uuid4()
     # Without force — should raise SchemaDeletionProtectedError
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch(
             "modulo.api.routes.schemas.delete_schema",
             side_effect=SchemaDeletionProtectedError(schema_id),
@@ -242,6 +245,7 @@ def test_delete_schema_force_skips_protection(client: TestClient) -> None:
 
     # With force=true — should succeed
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch("modulo.api.routes.schemas.delete_schema", return_value=True),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):
@@ -386,6 +390,53 @@ def test_migrate_data_source_schema_not_found_returns_404(client: TestClient) ->
             json={
                 "from_schema_id": str(uuid.uuid4()),
                 "to_schema_id": str(uuid.uuid4()),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 404
+
+
+def test_migrate_data_source_cross_org_schema_returns_404(client: TestClient) -> None:
+    # A schema belonging to a DIFFERENT organisation must be rejected with 404
+    # (not 403) and must never reach the version-loading CRUD path.
+    from_schema = _make_schema()
+    from_schema.organisation_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    to_schema = _make_schema()
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.list_schema_versions", new_callable=AsyncMock) as mock_list,
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 404
+    mock_list.assert_not_awaited()
+
+
+def test_migrate_data_target_cross_org_schema_returns_404(client: TestClient) -> None:
+    # The source is owned but the target belongs to another org: reject before
+    # any migration plan is computed.
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    to_schema.organisation_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    from_sv = _make_schema_version(from_schema.id)
+    from_page = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[from_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
                 "data": {"name": "Alice"},
             },
         )
@@ -684,6 +735,7 @@ def test_deprecate_schema_returns_200(client: TestClient) -> None:
     schema.deprecated = True
     schema.deprecated_at = _NOW
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
         patch("modulo.api.routes.schemas.deprecate_schema", return_value=schema),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):
@@ -694,6 +746,7 @@ def test_deprecate_schema_returns_200(client: TestClient) -> None:
 
 def test_deprecate_schema_not_found_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch("modulo.api.routes.schemas.deprecate_schema", return_value=None),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):

@@ -96,6 +96,14 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "admin_get_org_guardrails_kill_switch",
         "admin_set_org_guardrails_kill_switch",
     },
+    # Fernet key rotation — mints a new Fernet key for the whole instance.
+    "admin_rotation.py": {
+        "rotate_key",
+    },
+    # product-analytics identity rotation — mints a new HMAC secret.
+    "product_analytics_identity.py": {
+        "rotate_identity_secret",
+    },
 }
 
 
