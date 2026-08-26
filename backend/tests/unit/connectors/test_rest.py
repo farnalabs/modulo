@@ -149,6 +149,32 @@ def test_query_templates_url_and_params_from_filters() -> None:
     assert captured["params"] == {"page": "2"}
 
 
+def test_query_templates_headers_from_filters() -> None:
+    """Header values render from runtime variables via the sandboxed Jinja env —
+    the headers leg of the templated-fields behaviour (path/params/body/headers)."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.headers))
+        return httpx.Response(200, json={"ok": True})
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/items",
+            "headers": {
+                "X-Branch": "{{ branch }}",
+                "X-Runner": "{{ resource }}",
+            },
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.query(ConnectorQuery(resource="default", filters={"branch": "feature/foo"})))
+    assert captured.get("x-branch") == "feature/foo"
+    assert captured.get("x-runner") == "default"
+
+
 # ── Auth modes ──────────────────────────────────
 
 
@@ -182,6 +208,33 @@ def test_auth_api_key_header() -> None:
     c._transport = httpx.MockTransport(handler)
     asyncio_run(c.query(ConnectorQuery(resource="default")))
     assert captured["x-api-key"] == "k123"
+
+
+def test_auth_api_key_custom_header_name() -> None:
+    """api_key header mode honours a custom header_name (not only the default
+    X-API-Key), and that custom name becomes a protected header."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.headers))
+        return httpx.Response(200, json={})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "api_key", "api_key": "k567", "in": "header", "header_name": "X-Tenant-Key"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert captured.get("x-tenant-key") == "k567"
+    assert "x-api-key" not in captured
+
+    # The custom header name is protected: a rendered header may not override it.
+    c2 = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "headers": {"X-Tenant-Key": "evil"}},
+        {"auth_mode": "api_key", "api_key": "k567", "in": "header", "header_name": "X-Tenant-Key"},
+    )
+    with pytest.raises(ValueError, match="protected header"):
+        asyncio_run(c2.query(ConnectorQuery(resource="default")))
 
 
 def test_auth_api_key_query() -> None:
@@ -561,6 +614,56 @@ def test_three_xx_is_a_distinct_error() -> None:
         asyncio_run(c.query(ConnectorQuery(resource="default")))
 
 
+def test_three_xx_carries_status_location_and_retry_after_metadata() -> None:
+    """A 3xx must surface a typed RESTStatusError carrying status_code, location
+    and Retry-After metadata (not just a redacted message) so an operator can
+    reconcile exactly which redirect led to the failure (FAR-408 product map)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            307,
+            text="redirecting",
+            headers={"location": "https://api.example.com/v2/items", "Retry-After": "5"},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    with pytest.raises(RESTStatusError) as exc_info:
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+    exc = exc_info.value
+    assert exc.status_code == 307
+    assert exc.location == "https://api.example.com/v2/items"
+    assert exc.retry_after == 5.0
+
+
+def test_config_rejects_unsupported_http_method() -> None:
+    """An operation method outside the GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS
+    allowlist must be rejected with an actionable ValueError at config time."""
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "operations": {"default": {"method": "TRACE", "path": "/items"}},
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    with pytest.raises(ValueError, match=r"TRACE.*not allowed"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
+def test_config_rejects_verbatim_unsupported_top_level_method() -> None:
+    """The top-level method path (non-operations config) is swept by the same
+    allowlist — a CONNECT verb is rejected, never emitted."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "method": "CONNECT"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    with pytest.raises(ValueError, match=r"CONNECT.*not allowed"):
+        asyncio_run(c.query(ConnectorQuery(resource="default")))
+
+
 def test_query_honours_limit() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": {"items": [{"id": i} for i in range(5)]}})
@@ -585,6 +688,46 @@ def test_query_rejects_non_none_cursor() -> None:
         asyncio_run(c.query(ConnectorQuery(resource="default", cursor="abc")))
 
 
+def test_query_surfaces_next_cursor_from_response() -> None:
+    """A next_cursor_path JMESPath expression surfaces the response's next_cursor
+    on the result so the caller can page forward response-driven (FAR-408)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": {"items": [{"id": 1}], "paging": {"next_cursor": "page-2"}}},
+        )
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/items",
+            "records_path": "data.items",
+            "next_cursor_path": "data.paging.next_cursor",
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert len(result.records) == 1
+    assert result.next_cursor == "page-2"
+
+
+def test_query_next_cursor_none_without_path() -> None:
+    """No next_cursor_path configured → next_cursor stays None, not a spurious value."""
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/items",
+            "records_path": "data.items",
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"data": {"items": [{"id": 1}]}}))
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert result.next_cursor is None
+
+
 def test_query_passthrough_forces_wrap_for_json() -> None:
     """passthrough=True forces a single-record wrap even for a JSON body."""
     c = _make_connector(
@@ -595,6 +738,48 @@ def test_query_passthrough_forces_wrap_for_json() -> None:
     result = asyncio_run(c.query(ConnectorQuery(resource="default")))
     assert len(result.records) == 1
     assert '"data"' in result.records[0]["body"]
+
+
+def test_query_xml_passthrough_yields_uniform_record() -> None:
+    """An XML (non-JSON) body with no records_path yields the uniform
+    {body, content_type, status_code, headers} passthrough record — the
+    UNTESTED-for-XML leg of the raw/passthrough content-type behaviour."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<root><item>1</item></root>",
+            headers={"content-type": "application/xml", "x-request-id": "req-1"},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert_result_shape(result)
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert record["body"] == "<root><item>1</item></root>"
+    assert record["content_type"] == "application/xml"
+    assert record["status_code"] == 200
+    assert record["headers"]["x-request-id"] == "req-1"
+
+
+def test_query_whole_object_single_record_fallback() -> None:
+    """A top-level JSON object (no records_path) falls back to a whole-object
+    single-record wrap so the result always stays a list-of-dicts (FAR-408)."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/status"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    c._transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True, "revision": 3}))
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert_result_shape(result)
+    assert len(result.records) == 1
+    assert result.records[0] == {"ok": True, "revision": 3}
+    assert result.total == 1
 
 
 def test_retry_get_retries_on_429_then_succeeds() -> None:

@@ -57,6 +57,9 @@
             {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
           </Button>
           <span v-if="saveGraphError" class="ml-2 text-xs text-destructive" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
+          <Button v-if="planStore.featureEnabled('pipeline_diff_rollback')" size="small" class="text-xs" @click="showVersionTimeline = !showVersionTimeline" data-testid="pipeline-editor-version-timeline">
+            {{ $t('views.PipelineEditorView.versions') }}
+          </Button>
           <Button size="small" class="text-xs border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" @click="openRunDialog" data-testid="pipeline-editor-run">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="mr-1"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
@@ -1095,6 +1098,8 @@
         {{ deleteError }}
       </div>
     </FormDialog>
+
+    <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />
   </div>
 </template>
 <script setup lang="ts">
@@ -1111,6 +1116,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
+import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
@@ -1149,6 +1155,7 @@ const snapshots = ref<any[]>([])
 const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
 const showSaveAsComposite = ref(false)
+const showVersionTimeline = ref(false)
 const pickerAgentId = ref<string>('__all__')
 const pickerConnectorId = ref<string>('__all__')
 const revertSnapshotId = ref<string>('__all__')
@@ -1821,6 +1828,10 @@ async function saveEdgeConfig() {
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
+          fan_out: n.fan_out ?? null,
+          collect: n.collect ?? null,
+          aggregate: n.aggregate ?? null,
+          join_partial_policy: n.join_partial_policy || 'collect_and_proceed',
           capability_scope: n.capability_scope || null,
         })),
         edges: updatedEdges,
@@ -2105,6 +2116,10 @@ async function saveGraph() {
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
+          fan_out: n.fan_out ?? null,
+          collect: n.collect ?? null,
+          aggregate: n.aggregate ?? null,
+          join_partial_policy: n.join_partial_policy || 'collect_and_proceed',
           capability_scope: n.capability_scope || null,
         })),
         edges: rawEdges.value.map((e: any) => ({

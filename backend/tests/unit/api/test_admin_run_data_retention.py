@@ -112,6 +112,8 @@ class TestCandidates:
             ],
             "total_count": 1,
             "total_estimated_bytes": 1234,
+            "terminal_total": 1,
+            "terminal_estimated_bytes": 1234,
         }
         with (
             patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
@@ -126,6 +128,8 @@ class TestCandidates:
         body = resp.json()
         assert body["total_count"] == 1
         assert body["total_estimated_bytes"] == 1234
+        assert body["terminal_total"] == 1
+        assert body["terminal_estimated_bytes"] == 1234
         assert body["runs"][0]["status"] == "complete"
         expected_keys = {"id", "created_at", "status", "pipeline_id", "thread_id", "estimated_bytes"}
         assert set(body["runs"][0].keys()) == expected_keys

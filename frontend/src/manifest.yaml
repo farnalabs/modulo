@@ -609,7 +609,7 @@ routes:
         product_map: [feat-runtime]
         sidebar_group: system
         sidebar_order: 5
-        type: form_page
+        type: page
         deprecated: false
 
         <<: *team
@@ -1465,23 +1465,41 @@ elements:
         type: input
         dynamic_testid: false
     /admin/run-retention:
-      - testid: admin-run-retention-save
+      - testid: admin-run-retention-refresh
         type: button
         dynamic_testid: false
-      - testid: admin-run-retention-purge-now
+      - testid: admin-run-retention-export
         type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-purge
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-apply
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-run-retention-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-run-retention-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: admin-run-retention-status
+        type: select
         dynamic_testid: false
       - testid: admin-run-retention-total-runs
         type: element
         dynamic_testid: false
-      - testid: admin-run-retention-estimated-saved
+      - testid: admin-run-retention-total-bytes
         type: element
         dynamic_testid: false
-      - testid: admin-run-retention-days
-        type: input
+      - testid: admin-run-retention-terminal-runs
+        type: element
         dynamic_testid: false
-      - testid: admin-run-retention-purge-age
-        type: input
+      - testid: admin-run-retention-purge-confirm
+        type: button
         dynamic_testid: false
     /admin/sandbox-concurrency:
       - testid: admin-sandbox-concurrency-save
@@ -2995,54 +3013,54 @@ features:
         description: Audit trail and audit log
     feat-connectors:
         description: External tool connectors
-        status: partial
+        status: covered
         behaviours:
             # Generic REST integration connector (FAR-408 / FAR-411 / FAR-412).
 
             # Happy Path
-            - "[ ] A REST connector instance is creatable with a declarative endpoint (base_url + path + method) and an auth credential profile (bearer / api_key / basic)"
-            - "[ ] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) is intended to be declared on the write surface — the connector does not infer semantics, the author declares the method, and the query/write surface fixes the ACL gate"
-            - "[ ] A JSON response with a configured records_path JMESPath expression yields a list of dicts that feeds the downstream JMESPath consumer; a top-level JSON array and a whole-object single-record fallback also stay list-of-dicts"
-            - "[ ] When no records_path is configured, raw / passthrough content-types yield a single uniform {body, content_type, status_code, headers} record, so the result always stays a list-of-dicts (UNTESTED for XML)"
-            - "[ ] Templated fields (headers, params, body, path) render from runtime variables via the sandboxed Jinja environment"
-            - "[ ] Pagination is response-driven: the response's next_cursor (via next_cursor_path JMESPath) is surfaced on the result, while a caller-supplied start cursor is rejected with an actionable error (UNTESTED for the end-to-end paging loop)"
+            - "[x] A REST connector instance is creatable with a declarative endpoint (base_url + path + method) and an auth credential profile (bearer / api_key / basic)"
+            - "[x] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) is intended to be declared on the write surface — the connector does not infer semantics, the author declares the method, and the query/write surface fixes the ACL gate"
+            - "[x] A JSON response with a configured records_path JMESPath expression yields a list of dicts that feeds the downstream JMESPath consumer; a top-level JSON array and a whole-object single-record fallback also stay list-of-dicts"
+            - "[x] When no records_path is configured, raw / passthrough content-types yield a single uniform {body, content_type, status_code, headers} record, so the result always stays a list-of-dicts (XML covered by test_query_xml_passthrough_yields_uniform_record)"
+            - "[x] Templated fields (headers, params, body, path) render from runtime variables via the sandboxed Jinja environment"
+            - "[x] Pagination is response-driven: the response's next_cursor (via next_cursor_path JMESPath) is surfaced on the result, while a caller-supplied start cursor is rejected with an actionable error (cursor surfacing covered by test_query_surfaces_next_cursor_from_response)"
 
             # Config Validation
-            - "[ ] Config validation rejects an unsupported HTTP method against the allowlist (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) with an actionable ValueError"
-            - "[ ] JMESPath paths using legacy dot-index syntax (data.items.0) are rejected with an actionable ValueError directing to bracket notation (data.items[0]); a numeric key like data.2024 is never silently rewritten"
-            - "[ ] verify_tls is configurable (default true) and controls the httpx TLS certificate verify on the connector client"
+            - "[x] Config validation rejects an unsupported HTTP method against the allowlist (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) with an actionable ValueError"
+            - "[x] JMESPath paths using legacy dot-index syntax (data.items.0) are rejected with an actionable ValueError directing to bracket notation (data.items[0]); a numeric key like data.2024 is never silently rewritten"
+            - "[x] verify_tls is configurable (default true) and controls the httpx TLS certificate verify on the connector client"
 
             # Auth & Credentials
-            - "[ ] Credentials are stored encrypted as a multi-field JSON dict (auth_mode bearer / api_key / basic) and round-trip through the secrets backend; the credential never reaches LangGraph state, logs, or error detail, and error detail redacts secret values"
-            - "[ ] api_key auth runs in BOTH header mode (default X-API-Key, or a custom header_name) and query mode (default api_key, or a custom query_param_name)"
-            - "[ ] api_key-in-query credentials are applied right before the wire, after the injection guard, so the secret is never screened; a rendered/context query param that collides with the credential param name is a hard error, never a silent override"
-            - "[ ] health_check issues the configured request with the credentials applied and reports the endpoint OK only for a sub-400 status"
+            - "[x] Credentials are stored encrypted as a multi-field JSON dict (auth_mode bearer / api_key / basic) and round-trip through the secrets backend; the credential never reaches LangGraph state, logs, or error detail, and error detail redacts secret values"
+            - "[x] api_key auth runs in BOTH header mode (default X-API-Key, or a custom header_name) and query mode (default api_key, or a custom query_param_name)"
+            - "[x] api_key-in-query credentials are applied right before the wire, after the injection guard, so the secret is never screened; a rendered/context query param that collides with the credential param name is a hard error, never a silent override"
+            - "[x] health_check issues the configured request with the credentials applied and reports the endpoint OK only for a sub-400 status"
 
             # Security — SSRF / egress / injection
-            - "[ ] An allowed_hosts allowlist plus core SSRF validation (validate_outbound_url_async wired at the composition root) prevent private / loopback / metadata / off-allowlist targets; a non-http/https scheme is rejected"
-            - "[ ] Injection guard: rendered header names/values are rejected on CR/LF or C0 control chars, rendered headers may not override the protected set (authorization, proxy-authorization, host, content-length, plus the api_key header name), and query params are URL-encoded by httpx"
-            - "[ ] On the WRITE surface the rendered URL, header values, params and body are screened by the core output-injection filter (filter_output_for_injection); the READ surface deliberately does NOT run the text classifier to avoid false positives on legitimate search terms"
-            - "[ ] The api_key credential value is never fed through the injection filter (applied post-screening)"
+            - "[x] An allowed_hosts allowlist plus core SSRF validation (validate_outbound_url_async wired at the composition root) prevent private / loopback / metadata / off-allowlist targets; a non-http/https scheme is rejected"
+            - "[x] Injection guard: rendered header names/values are rejected on CR/LF or C0 control chars, rendered headers may not override the protected set (authorization, proxy-authorization, host, content-length, plus the api_key header name), and query params are URL-encoded by httpx"
+            - "[x] On the WRITE surface the rendered URL, header values, params and body are screened by the core output-injection filter (filter_output_for_injection); the READ surface deliberately does NOT run the text classifier to avoid false positives on legitimate search terms"
+            - "[x] The api_key credential value is never fed through the injection filter (applied post-screening)"
 
             # Error Handling
-            - "[ ] Non-2xx/3xx responses surface a typed RESTStatusError carrying status_code, location and Retry-After metadata instead of silently passing through — redirects are never followed (UNTESTED for 3xx redirect metadata)"
-            - "[ ] The response body is capped at max_response_size (default 10 MiB): a Content-Length or streaming body exceeding the cap raises RESTResponseTooLargeError so an unbounded body never stalls a run"
-            - "[ ] Transport failures (connect / timeout / read) surface as a typed RESTConnectError"
-            - "[ ] A fan-out source whose cardinality exceeds max_cardinality fails CLOSED before any request is emitted — a Sized source is len()-checked, a lazy generator is buffered to cap+1 then fails — raising RESTCardinalityExceededError with source_cardinality and the cardinality_over_cap flag"
-            - "[ ] An empty or unresolved fan-out items path succeeds vacuously (0 items, no outbound calls — not a failure)"
-            - "[ ] A mid-fan-out per-item failure fails the node, raising RESTFanOutFailureError carrying the per-item outcomes and success/failure counts so an operator can reconcile exactly which items were written"
-            - "[ ] A mid-fan-out cancellation surfaces as RESTFanOutCancelledError carrying partial outcome state"
-            - "[ ] A saturated per-destination token bucket never spins past the per-item budget — the rate-limit wait is bounded and raises RESTRateLimitTimeoutError"
+            - "[x] Non-2xx/3xx responses surface a typed RESTStatusError carrying status_code, location and Retry-After metadata instead of silently passing through — redirects are never followed (metadata fields asserted in test_three_xx_carries_status_location_and_retry_after_metadata)"
+            - "[x] The response body is capped at max_response_size (default 10 MiB): a Content-Length or streaming body exceeding the cap raises RESTResponseTooLargeError so an unbounded body never stalls a run"
+            - "[x] Transport failures (connect / timeout / read) surface as a typed RESTConnectError"
+            - "[x] A fan-out source whose cardinality exceeds max_cardinality fails CLOSED before any request is emitted — a Sized source is len()-checked, a lazy generator is buffered to cap+1 then fails — raising RESTCardinalityExceededError with source_cardinality and the cardinality_over_cap flag"
+            - "[x] An empty or unresolved fan-out items path succeeds vacuously (0 items, no outbound calls — not a failure)"
+            - "[x] A mid-fan-out per-item failure fails the node, raising RESTFanOutFailureError carrying the per-item outcomes and success/failure counts so an operator can reconcile exactly which items were written"
+            - "[x] A mid-fan-out cancellation surfaces as RESTFanOutCancelledError carrying partial outcome state"
+            - "[x] A saturated per-destination token bucket never spins past the per-item budget — the rate-limit wait is bounded and raises RESTRateLimitTimeoutError"
 
             # Retry / Idempotency / Concurrency
-            - "[ ] Idempotent verbs (GET/HEAD) retry on 429/5xx and transient transport failures with exponential backoff + jitter, honouring a Retry-After capped at 30s; mutating verbs retry only when the operation declares an idempotency_header, and never retry otherwise (UNTESTED for idempotency key replay)"
-            - "[ ] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination TokenBucket — one bucket per connector instance, keyed by the connector's base_url"
-            - "[ ] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close(), and is not Redis-backed"
-            - "[ ] The fan-out budget (max_cardinality x per_item_timeout x (max_retries + 1)) is reconciled against the node's timeout_seconds budget by the graph validator at save/run time (UNTESTED — validator-only, not a runtime assertion)"
-            - "[ ] A per-request timeout (default 30s, override via timeout_seconds) applies to both the read and write surfaces; the fan-out path uses its own per_item_timeout (default = connector timeout) (UNTESTED for the write-timeout surfacing a RESTConnectError)"
+            - "[x] Idempotent verbs (GET/HEAD) retry on 429/5xx and transient transport failures with exponential backoff + jitter, honouring a Retry-After capped at 30s; mutating verbs retry only when the operation declares an idempotency_header, and never retry otherwise (idempotency key reuse across retries asserted in test_mutating_verb_with_idempotency_header_retries)"
+            - "[x] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination TokenBucket — one bucket per connector instance, keyed by the connector's base_url"
+            - "[x] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close(), and is not Redis-backed"
+            - "[x] The fan-out budget (max_cardinality x per_item_timeout x (max_retries + 1)) is reconciled against the node's timeout_seconds budget by the graph validator at save/run time (validator tests assert the multiplier in test_node_send_budget_*)"
+            - "[x] A per-request timeout (default 30s, override via timeout_seconds) applies to both the read and write surfaces; the fan-out path uses its own per_item_timeout (default = connector timeout) (write-timeout surfacing a RESTConnectError asserted in test_write_timeout_is_typed_rest_connect_error_not_crash)"
 
             # Redaction
-            - "[ ] Fan-out outcome records persist only a bounded, redacted item_summary / result_summary — never the raw item payload — so a credential-bearing item is not echoed into logs or the persisted run result"
+            - "[x] Fan-out outcome records persist only a bounded, redacted item_summary / result_summary — never the raw item payload — so a credential-bearing item is not echoed into logs or the persisted run result"
         deferrals:
             - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork — fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
             - Redis-backed per-destination rate limiting — the token bucket is per-process (each uvicorn / SAQ worker owns its buckets), NOT shared across workers (future work)

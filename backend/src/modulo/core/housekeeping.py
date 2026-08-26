@@ -325,29 +325,26 @@ async def _scan_unused_model_backends(session: AsyncSession, org_id: uuid.UUID) 
 
 
 async def _scan_inactive_triggers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    triggers = (
-        (
-            await session.execute(
-                select(Trigger).where(
-                    Trigger.organisation_id == org_id,
-                    Trigger.deleted_at.is_(None),
-                    Trigger.active.is_(False),
-                    Trigger.last_fired_at.is_(None),
-                )
+    stmt = select(Trigger).where(
+        Trigger.organisation_id == org_id,
+        Trigger.deleted_at.is_(None),
+        Trigger.active.is_(False),
+        Trigger.last_fired_at.is_(None),
+    )
+    result = await session.execute(stmt)
+    triggers = result.scalars().all()
+
+    candidates: list[Candidate] = []
+    for t in triggers:
+        candidates.append(
+            Candidate(
+                id=str(t.id),
+                name=f"Trigger {t.trigger_type} for pipeline {t.pipeline_id}",
+                detail="Trigger is inactive and has never fired",
+                created_at=t.created_at.isoformat() if t.created_at else None,
             )
         )
-        .scalars()
-        .all()
-    )
-    return [
-        Candidate(
-            id=str(t.id),
-            name=f"Trigger {t.trigger_type} for pipeline {t.pipeline_id}",
-            detail="Trigger is inactive and has never fired",
-            created_at=t.created_at.isoformat() if t.created_at else None,
-        )
-        for t in triggers
-    ]
+    return candidates
 
 
 async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:

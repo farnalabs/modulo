@@ -180,7 +180,20 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 1. **Trigger** – A trigger fires (manual POST, webhook HMAC-verified, cron schedule, or agent_signal). TriggerEngine validates input against the entry agent's `input_schema`. A Run record is created in `pending` status. TriggerEvent is logged.
 
-2. **Snapshot** – The pipeline's current definition is frozen as a PipelineSnapshot (all agent versions, schema pins, connector bindings, model backend pins, environment profile). The run now executes against this immutable snapshot.
+2. **Snapshot** – The pipeline's current definition is frozen as a PipelineSnapshot (all agent versions, schema pins, connector bindings, model backend pins, environment profile). The run now executes against this immutable snapshot; the snapshot is tagged `version_kind='run'`.
+
+   **Live-edit history + release channels (ADR 025 / FAR-402 P6):** the snapshot
+   machinery is reused for versioning beyond run-start freezes. The editor's
+   save action creates a new snapshot tagged `version_kind='edit'` (the live-edit
+   chain), leaving prior rows immutable so rollback is a pointer swap to a prior
+   snapshot. A snapshot also carries a `release_channel` (`none` | `stable` |
+   `canary`); a trigger bound to a `stable`/`canary` channel resolves to the
+   latest snapshot of that channel (`TriggerEngine.resolve_snapshot_id_for_trigger`),
+   while an unbound trigger pins the live graph (current behaviour).
+   `diff_snapshots` surfaces port-signature deltas + a deterministic downstream
+   impact oracle (`compute_port_change_impact`), and a save-time check
+   (`check_port_change_breaking`) flags port changes that would drop/alter data
+   read by a downstream edge.
 
 3. **Compile** – PipelineExecutor loads the snapshot, compiles the `StateGraph`, and caches it by `(pipeline_id, snapshot_id)`.
 

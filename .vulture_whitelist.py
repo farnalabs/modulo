@@ -242,6 +242,11 @@ __all__ = [
     # --- Product analytics enforcement (FAR-361) ---
     "is_enforcement_active",
     "should_degrade_to_community",
+    # --- FAR-402 P6 release-channel contract (referenced by tests; production
+    #     callers land in later phases — the metrics pipeline / trigger-route
+    #     wiring — so vulture cannot see a prod call site yet) ---
+    "should_rollback",  # release-channel rollback oracle (pure decision function)
+    "resolve_snapshot_id_for_trigger",  # TriggerEngine channel-resolution hook
     # --- FAR-409 SSRF pinned-IP transport (core.ssrf pinned-IP capability) ---
     # pinned_async_client is a public API exercised by tests/unit/core/test_ssrf.py;
     # production callers (RestConnector, FAR-408) land in a follow-up, so vulture

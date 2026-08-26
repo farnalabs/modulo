@@ -303,13 +303,7 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
     carried as sandbox metadata awaiting a FUTURE template-side enforcement
     point — it is NOT honored at runtime yet (FAR-296 Phase 3b-3).
     """
-    if egress_policy == "selected":
-        if not isinstance(egress_allowlist, list) or not egress_allowlist:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_policy='selected' requires a "
-                "non-empty 'egress_allowlist' of {{'host', 'port'}} entries"
-            )
-    else:
+    if egress_policy != "selected":
         if egress_allowlist is not None:
             raise ValueError(
                 f"sandbox_agent node '{node_id}' egress_allowlist is only valid with "
@@ -317,31 +311,53 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
                 "enforcement point and would silently no-op"
             )
         return
+    _require_non_empty_egress_allowlist(egress_allowlist, node_id)
     for index, entry in enumerate(egress_allowlist):
-        if not isinstance(entry, dict):
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_allowlist[{index}] must be an "
-                f"object with 'host' and 'port', got {entry!r}"
-            )
-        unknown = set(entry) - _SANDBOX_EGRESS_ALLOWLIST_KEYS
-        if unknown:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_allowlist[{index}] contains "
-                f"unknown keys {sorted(unknown)} — allowed keys are "
-                f"{sorted(_SANDBOX_EGRESS_ALLOWLIST_KEYS)}"
-            )
-        host = entry.get("host")
-        if not isinstance(host, str) or not host.strip():
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must "
-                f"be a non-empty string, got {host!r}"
-            )
-        port = entry.get("port")
-        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'port' must "
-                f"be an int in [1, 65535], got {port!r}"
-            )
+        _validate_egress_allowlist_entry(entry, index, node_id)
+
+
+def _require_non_empty_egress_allowlist(egress_allowlist: Any, node_id: str) -> None:
+    """Fail-closed: ``selected`` requires a non-empty list of allowlist entries."""
+    if not isinstance(egress_allowlist, list) or not egress_allowlist:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_policy='selected' requires a "
+            "non-empty 'egress_allowlist' of {{'host', 'port'}} entries"
+        )
+
+
+def _validate_egress_allowlist_entry(entry: Any, index: int, node_id: str) -> None:
+    """Validate a single egress allowlist entry (host/port dict, known keys)."""
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] must be an "
+            f"object with 'host' and 'port', got {entry!r}"
+        )
+    unknown = set(entry) - _SANDBOX_EGRESS_ALLOWLIST_KEYS
+    if unknown:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] contains "
+            f"unknown keys {sorted(unknown)} — allowed keys are "
+            f"{sorted(_SANDBOX_EGRESS_ALLOWLIST_KEYS)}"
+        )
+    _validate_allowlist_host(entry.get("host"), index, node_id)
+    _validate_allowlist_port(entry.get("port"), index, node_id)
+
+
+def _validate_allowlist_host(host: Any, index: int, node_id: str) -> None:
+    """Validate the ``host`` field of an egress allowlist entry."""
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a non-empty string, got {host!r}"
+        )
+
+
+def _validate_allowlist_port(port: Any, index: int, node_id: str) -> None:
+    """Validate the ``port`` field of an egress allowlist entry."""
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'port' must "
+            f"be an int in [1, 65535], got {port!r}"
+        )
 
 
 def _validate_sandbox_read_only_config(node_def: dict[str, Any]) -> None:

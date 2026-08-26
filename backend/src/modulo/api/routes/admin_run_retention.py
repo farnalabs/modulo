@@ -61,6 +61,8 @@ class CandidatesResponse(BaseModel):
     runs: list[RetentionCandidate]
     total_count: int
     total_estimated_bytes: int
+    terminal_total: int = 0
+    terminal_estimated_bytes: int = 0
 
 
 class RetentionFilter(BaseModel):
@@ -124,8 +126,13 @@ async def candidates(
     """List runs matching the filter set, with an estimated per-run byte size.
 
     Returns every matching run (including non-terminal ones — the UI shows
-    terminal-only as purge-able), the total match count, and an estimated total
-    reclaimable byte count across ALL matches.
+    terminal-only as purge-able), the total match count, an estimated total
+    reclaimable byte count across ALL matches, and — most importantly for the
+    purge confirm dialog — a terminal-only ``terminal_total`` and
+    ``terminal_estimated_bytes``. The purge deletes *every* matching terminal run
+    (unbounded), so the client must derive its confirm count and reclaimable
+    figure from these server-side terminal totals, never from the page-capped
+    candidate list it happens to hold.
     """
 
     org_id = _resolve_org_id(principal, organisation_id)

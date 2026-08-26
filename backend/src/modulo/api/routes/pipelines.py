@@ -41,6 +41,12 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
 )
 from modulo.core.graph_validator import GraphValidator
+from modulo.core.pipeline_engine.scatter_join import (
+    FanOutConfig,
+    JoinAggregateSpec,
+    JoinCollectSpec,
+)
+from modulo.core.release_channels import VALID_RELEASE_CHANNELS
 from modulo.core.reports.quality_report import (
     deliver_quality_report,
     generate_quality_report,
@@ -78,6 +84,7 @@ from modulo.db.crud.pipeline import (
     update_pipeline,
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
+from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
@@ -592,7 +599,7 @@ class CapabilityScope(BaseModel):
 
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "join"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -702,6 +709,20 @@ class PipelineGraphNode(BaseModel):
         default_factory=list,
         description="Filesystem detector: globs of sandbox paths whose change counts as activity.",
     )
+    # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
+    # sandbox_agent / composite node (NOT a new node_type). When set, the node
+    # splits its `split` source port into N parallel branches. The compile step
+    # expands this into N distinct child node identities with unique ids.
+    fan_out: FanOutConfig | None = None
+    # FAR-402 P3 / FAR-417: join (fan-in). Only valid on a `join` node_type.
+    # `collect` lists the upstream branches to gather; `aggregate` declares how
+    # to fold them.
+    collect: list[JoinCollectSpec] | None = None
+    aggregate: JoinAggregateSpec | None = None
+    # Policy when some collected branches failed (non-empty, non-timeout).
+    # "collect_and_proceed" (default) marks failed branches in the output;
+    # "fail" raises. Deadline (seconds) for waiting on slow/partial branches.
+    join_partial_policy: Literal["collect_and_proceed", "fail"] = "collect_and_proceed"
     # FAR-416 (FAR-402 F1): ports are ADDITIVE metadata over the flat
     # run_context/artifact dict. A port name maps 1:1 to the flat-state key the
     # node already uses (identity mapping). When absent, the lazy backfill
@@ -725,8 +746,17 @@ class PipelineGraphNode(BaseModel):
             "composite": self._validate_composite_node,
             "sandbox_agent": self._validate_sandbox_agent_node,
             "agent": self._validate_agent_node,
+            "join": self._validate_join_node,
         }
         node_validators[self.node_type]()
+        # FAR-402 P3 / FAR-417: fan_out / collect / aggregate cross-checks.
+        if self.fan_out is not None and self.node_type == "join":
+            raise ValueError("A join node cannot also declare fan_out")
+        if self.fan_out is not None and self.node_type not in (
+            "agent",
+            "sandbox_agent",
+        ):
+            raise ValueError("fan_out is only allowed on agent / sandbox_agent nodes")
         # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
         # A non-sandbox node that sets them is rejected ÔÇö the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
@@ -813,6 +843,22 @@ class PipelineGraphNode(BaseModel):
     def _validate_agent_node(self) -> None:
         if self.agent_id is None:
             raise ValueError("Agent nodes require an agent")
+
+    def _validate_join_node(self) -> None:
+        # A join node is a pure convergence node — it has no agent, no connector
+        # binding, and no manual output schema of its own.
+        if self.agent_id is not None:
+            raise ValueError("Join nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Join nodes cannot have connector bindings")
+        if not self.collect:
+            raise ValueError("Join nodes require a non-empty 'collect' list")
+        if self.aggregate is None:
+            raise ValueError("Join nodes require an 'aggregate'")
+        if self.aggregate.kind == "merge_by_key" and not self.aggregate.key:
+            raise ValueError("Join aggregate merge_by_key requires an explicit 'key'")
+        if self.aggregate.kind == "map" and not self.aggregate.map_expression:
+            raise ValueError("Join aggregate map requires a 'map_expression'")
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:
@@ -2116,6 +2162,13 @@ class SnapshotResponse(BaseModel):
     notes: str | None
     created_at: datetime | None
     created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
+    # FAR-402 P6: live-edit history + release-channel discriminator. Additive
+    # fields default to the legacy run-kind/none-channel snapshot so older
+    # clients that ignore them keep working.
+    version_kind: str = "run"
+    created_kind: str = "run"
+    draft: bool = False
+    channel: str = "none"
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -2140,6 +2193,18 @@ class SnapshotListResponse(BaseModel):
     total: int
 
 
+class SnapshotCreateEdit(BaseModel):
+    """Body for a live-edit save (FAR-402 P6).
+
+    ``draft`` marks an in-progress editor auto-save (``False`` = a committed
+    edit). ``channel`` optionally tags the edit's release channel (default
+    ``none`` — the live-edit chain is not channel-routed unless set).
+    """
+
+    draft: bool = False
+    channel: str | None = None
+
+
 class SnapshotDiffQuery(BaseModel):
     snapshot_a_id: uuid.UUID
     snapshot_b_id: uuid.UUID
@@ -2154,6 +2219,9 @@ class SnapshotDiffResponse(BaseModel):
     edges_added: list[dict[str, Any]]
     edges_removed: list[dict[str, Any]]
     edges_modified: list[dict[str, Any]]
+    # FAR-402 P6: semantic-diff + impact layer (port-signature deltas,
+    # downstream-impact oracle, save-time breaking-change warnings).
+    semantic: dict[str, Any] = Field(default_factory=dict)
 
 
 def _snapshot_to_response(s: Any) -> SnapshotResponse:
@@ -2165,6 +2233,10 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
         notes=s.notes,
         created_at=s.created_at,
         created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
     )
 
 
@@ -2177,6 +2249,10 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         notes=s.notes,
         created_at=s.created_at,
         created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
         graph_json=s.graph_json,
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,
@@ -2211,6 +2287,54 @@ async def list_snapshot_endpoint(
         items=[_snapshot_to_response(s) for s in snapshots],
         total=total,
     )
+
+
+@router.post(
+    "/{pipeline_id}/snapshots",
+    dependencies=[require_feature("pipeline_diff_rollback")],
+)
+@handle_db_errors("pipelines.save_edit_snapshot")
+async def save_edit_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    req: SnapshotCreateEdit,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotResponse:
+    """Save a LIVE-EDIT snapshot of the current graph (FAR-402 P6).
+
+    Creates a new snapshot row tagged ``version_kind='edit'`` so the editor's
+    save history is distinct from run-frozen snapshots; the prior snapshot row
+    stays immutable, so rollback remains a pointer swap to a prior version. A
+    ``draft`` save marks an in-progress editor auto-save; ``channel`` optionally
+    tags the edit's release channel.
+    """
+    channel = str(req.channel or "none").strip().lower()
+    if channel not in VALID_RELEASE_CHANNELS:
+        valid = ", ".join(sorted(VALID_RELEASE_CHANNELS))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid release channel: {req.channel!r}. Must be one of {valid}.",
+        )
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+            snapshot = await create_snapshot_edit(
+                session,
+                pipeline_id=pipeline_id,
+                account_id=principal.account_id,
+                draft=req.draft,
+                channel=channel,
+            )
+    except ProgrammingError:
+        _raise_db_migration_error()
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
+    return _snapshot_to_response(snapshot)
 
 
 @router.get("/{pipeline_id}/snapshots/{snapshot_id}")

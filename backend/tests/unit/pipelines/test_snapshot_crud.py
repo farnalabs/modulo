@@ -124,7 +124,9 @@ class TestRollbackToSnapshot:
             assert result is not None
             assert result.tag == "rollback-v1"
             assert result.notes == "Rollback to snapshot version 1"
-            mock_create.assert_awaited_once_with(session, pipeline_id=pid, account_id=None)
+            mock_create.assert_awaited_once_with(
+                session, pipeline_id=pid, account_id=None, version_kind="edit", created_kind="rollback"
+            )
 
     async def test_rollback_to_snapshot_different_pipeline_returns_none(self):
         session = AsyncMock()
@@ -584,7 +586,9 @@ class TestRollbackToSnapshot:
         assert new_edge.edge_type == "normal"
         assert new_edge.hitl_gate_config == new_edge_cfg
 
-        mock_create.assert_awaited_once_with(session, pipeline_id=pid, account_id=None)
+        mock_create.assert_awaited_once_with(
+            session, pipeline_id=pid, account_id=None, version_kind="edit", created_kind="rollback"
+        )
 
     async def test_rollback_to_snapshot_returns_none_when_new_snapshot_none(self):
         """A rollback whose follow-up snapshot creation fails must return None."""

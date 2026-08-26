@@ -1921,3 +1921,49 @@ async def test_agent_command_tojson_on_undefined_skips():
     assert result["status"] == "skipped"
     assert "agent_command" in result["summary"]
     sandbox.commands.run.assert_not_called()
+
+
+async def test_context_scope_gates_sandbox_agent_render_view():
+    """FAR-418 MAJOR-3 fix for the sandbox_agent path: ``capability_scope.context_scope``
+    must bind the sandbox agent's render view, not just the plain ``agent`` node path.
+
+    A ``sandbox_agent`` node whose template reads a gated ``run_context`` key (via
+    ``{{ run_context.<key> }}`` or ``{{ state.run_context.<key> }}``) must NOT have
+    that key appear in the rendered prompt written to ``/home/user/prompt.md`` — the
+    same bypass class the make_node_fn fix closed, still open on this node type.
+    """
+    node_def = _base_node_def(
+        agent_prompt=(
+            "tier={{ run_context.model_tier }}|"
+            "leak-rc={{ run_context.secret }}|"
+            "leak-state={{ state.run_context.secret }}"
+        ),
+        capability_scope={"context_scope": ["model_tier"]},
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(
+            {
+                "run_context": {"model_tier": "tier-2", "secret": "X", "input": {}},
+                "_run_id": "run-1",
+                "_pipeline_id": "pipe-1",
+                "_org_id": _ORG_ID,
+            }
+        )
+
+    assert result["output"]["status"] == "completed"
+
+    # Pull the rendered prompt back out of the /home/user/prompt.md write.
+    prompt_writes = [
+        c.args[1] for c in sandbox.files.write.call_args_list if c.args and c.args[0] == "/home/user/prompt.md"
+    ]
+    assert prompt_writes, "rendered prompt was not written to /home/user/prompt.md"
+    rendered = prompt_writes[0]
+
+    # The scoped key is visible; the gated key must NOT leak into the prompt
+    # (neither via the run_context var nor the state.run_context view).
+    assert "tier=tier-2" in rendered
+    assert "leak-rc=X" not in rendered
+    assert "leak-state=X" not in rendered

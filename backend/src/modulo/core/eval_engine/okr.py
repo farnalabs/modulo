@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -51,6 +51,33 @@ def _rate(total: int, passed: int) -> float:
 
 def _trend_point(period: str, total: int, passed: int) -> OkrTrendPoint:
     return OkrTrendPoint(period=period, pass_rate=_rate(total, passed), total_evals=total, passed_evals=passed)
+
+
+# (period, total-field, passed-field) orderings that mirror the aggregate query
+# aliases in ``track_okr_progress``. Keeps the trend assembly and the row read
+# in a single, ordered source of truth.
+_TREND_PERIODS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("7d", "total_7d", "passed_7d"),
+    ("14d", "total_14d", "passed_14d"),
+    ("30d", "total_30d", "passed_30d"),
+    ("overall", "total_all", "passed_all"),
+)
+
+
+def _extract_trend_counts(trend_row: object) -> dict[str, int]:
+    """Read the aggregate row into zero-defaulted per-window counts.
+
+    The trend query's ``SUM`` aliases are ``NULL`` (and ``SQLAlchemy Row`` may
+    expose them as ``None``) whenever a window has no rows, so every count is
+    normalised to ``0`` before building the trend points.
+    """
+    if trend_row is None:
+        return {field: 0 for _, total_field, passed_field in _TREND_PERIODS for field in (total_field, passed_field)}
+    return {
+        field: int(getattr(trend_row, field) or 0)
+        for _, total_field, passed_field in _TREND_PERIODS
+        for field in (total_field, passed_field)
+    }
 
 
 def _compute_trend_direction(trend: list[OkrTrendPoint], threshold: float = 0.05) -> TrendDirection:
@@ -199,20 +226,10 @@ async def track_okr_progress(
         )
         raise
 
-    total_7d = trend_row.total_7d or 0 if trend_row else 0
-    passed_7d = trend_row.passed_7d or 0 if trend_row else 0
-    total_14d = trend_row.total_14d or 0 if trend_row else 0
-    passed_14d = trend_row.passed_14d or 0 if trend_row else 0
-    total_30d = trend_row.total_30d or 0 if trend_row else 0
-    passed_30d = trend_row.passed_30d or 0 if trend_row else 0
-    total_all = trend_row.total_all or 0 if trend_row else 0
-    passed_all = trend_row.passed_all or 0 if trend_row else 0
-
+    counts = _extract_trend_counts(trend_row)
     trend = [
-        _trend_point("7d", total_7d, passed_7d),
-        _trend_point("14d", total_14d, passed_14d),
-        _trend_point("30d", total_30d, passed_30d),
-        _trend_point("overall", total_all, passed_all),
+        _trend_point(period, counts[total_field], counts[passed_field])
+        for period, total_field, passed_field in _TREND_PERIODS
     ]
 
     # Use the most recent non-empty discrete window; fall back to overall

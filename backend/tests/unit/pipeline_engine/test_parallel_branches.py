@@ -81,57 +81,69 @@ class TestFanOutExecution:
         assert "branch-b" in node_ids
 
     async def test_fanout_wallclock_is_max_not_sum(self) -> None:
-        """Two 0.5s parallel branches complete in well under the serial sum.
+        """Two parallel branches execute with OVERLAPPING wall-clock intervals.
 
         This is the behavioural proof of fan-out concurrency at the LangGraph
-        layer using the production reducer. A serial chain of the same nodes
-        takes >= 1.0s. Rather than assert an absolute wall-clock threshold
-        (which is flaky on contended CI runners), we compare the parallel
-        graph's elapsed time against a serial control graph with identical node
-        delays — the ratio is invariant to runner load.
-        """
+        layer using the production reducer. The original assertion compared the
+        parallel graph's wall-clock against a serial control graph
+        (``parallel < serial``), but that ratio is NOT invariant to runner
+        load: on a heavily contended CI runner a 0.5s ``asyncio.sleep`` can be
+        stretched and langgraph's fan-out can incur scheduling overhead, so the
+        parallel run occasionally exceeds the serial control (observed in CI:
+        ``parallel=2.74s``, ``serial=1.06s``) even though the branches genuinely
+        run concurrently.
 
-        async def _run_graph(graph: StateGraph) -> float:
-            compiled = graph.compile()
-            start = time.monotonic()
-            await compiled.ainvoke(
+        The definitive proof of concurrency is INTERVAL OVERLAP, not wall-clock
+        magnitude: both branches must be in-flight at the same instant. We
+        instrument each branch to record its monotonic start/end and assert the
+        intervals overlap. We retry a few times so a single contended run does
+        not red-fail a working fan-out.
+        """
+        intervals: dict[str, list[float]] = {}
+
+        def _make_instrumented(node_id: str) -> Any:
+            async def _fn(state: dict[str, Any]) -> dict[str, Any]:
+                intervals[node_id] = [time.monotonic(), 0.0]
+                await asyncio.sleep(0.1)
+                intervals[node_id][1] = time.monotonic()
+                return {"artifacts": [{"node_id": node_id, "status": "completed"}]}
+
+            _fn.__name__ = node_id
+            return _fn
+
+        def _build() -> StateGraph:
+            graph = StateGraph(_STATE_SCHEMA)
+            graph.add_node("entry", _make_instrumented("entry"))
+            graph.add_node("branch-a", _make_instrumented("branch-a"))
+            graph.add_node("branch-b", _make_instrumented("branch-b"))
+            graph.set_entry_point("entry")
+            graph.add_edge("entry", "branch-a")
+            graph.add_edge("entry", "branch-b")
+            return graph.compile()
+
+        last_err = ""
+        for _attempt in range(3):
+            intervals.clear()
+            compiled = _build()
+            result = await compiled.ainvoke(
                 {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
                 {"configurable": {"thread_id": str(uuid.uuid4())}},
             )
-            return time.monotonic() - start
+            node_ids = [a["node_id"] for a in result["artifacts"]]
+            assert "branch-a" in node_ids
+            assert "branch-b" in node_ids
 
-        parallel = StateGraph(_STATE_SCHEMA)
-        parallel.add_node("entry", _make_sleepy_node("entry", 0.05))
-        parallel.add_node("branch-a", _make_sleepy_node("branch-a", 0.5))
-        parallel.add_node("branch-b", _make_sleepy_node("branch-b", 0.5))
-        parallel.set_entry_point("entry")
-        parallel.add_edge("entry", "branch-a")
-        parallel.add_edge("entry", "branch-b")
-
-        serial = StateGraph(_STATE_SCHEMA)
-        serial.add_node("entry", _make_sleepy_node("entry", 0.05))
-        serial.add_node("branch-a", _make_sleepy_node("branch-a", 0.5))
-        serial.add_node("branch-b", _make_sleepy_node("branch-b", 0.5))
-        serial.set_entry_point("entry")
-        serial.add_edge("entry", "branch-a")
-        serial.add_edge("branch-a", "branch-b")
-
-        compiled = parallel.compile()
-        start = time.monotonic()
-        result = await compiled.ainvoke(
-            {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
-            {"configurable": {"thread_id": str(uuid.uuid4())}},
-        )
-        parallel_elapsed = time.monotonic() - start
-        serial_elapsed = await _run_graph(serial)
-
-        node_ids = [a["node_id"] for a in result["artifacts"]]
-        assert "branch-a" in node_ids
-        assert "branch-b" in node_ids
-        assert parallel_elapsed < serial_elapsed, (
-            f"branches did not run in parallel: parallel={parallel_elapsed:.3f}s "
-            f"(expected < serial={serial_elapsed:.3f}s)"
-        )
+            a_start, a_end = intervals["branch-a"]
+            b_start, b_end = intervals["branch-b"]
+            # Overlap is the true concurrency signal: branch-a must still be
+            # running when branch-b starts (and vice versa).
+            if a_start < b_end and b_start < a_end:
+                return  # proven concurrent on this attempt
+            last_err = (
+                f"branches did not run in parallel: branch-a=[{a_start:.3f},{a_end:.3f}] "
+                f"branch-b=[{b_start:.3f},{b_end:.3f}]"
+            )
+        raise AssertionError(last_err)
 
 
 # ---------------------------------------------------------------------------
