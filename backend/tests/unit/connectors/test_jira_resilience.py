@@ -1,7 +1,5 @@
 """Resilience tests for JiraConnector — HTTP/JSON error handling and edge cases."""
 
-import random
-
 import httpx
 import pytest
 import respx
@@ -30,7 +28,6 @@ def test_compute_delay_includes_jitter():
     """Verify _compute_delay adds random jitter to the backoff."""
     from modulo.connectors.jira import _compute_delay
 
-    random.seed(42)
     delays = {_compute_delay(0) for _ in range(100)}
     # With jitter (0-1), each call produces a different value
     assert len(delays) > 1, "Expected jitter to vary delay values"

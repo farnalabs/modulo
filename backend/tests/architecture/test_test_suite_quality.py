@@ -395,7 +395,52 @@ regression that silently weakens the suite:
   rename a helper that only happens to start with ``test_``. ``@pytest.mark``-
   decorated functions are covered too (same non-collection), while nested
   ``def``/``class``/``@pytest.fixture`` helpers are left alone — those are the
-  legitimate local-helper spellings
+   legitimate local-helper spellings
+
+- a freshly-constructed Mock nested *inside* a container literal in an
+  ``assert`` — ``assert result == {'status': MagicMock()}``,
+  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
+  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
+  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
+  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
+  truthy) ALWAYS PASS — every one decided at source time, never by the code
+  under test. This is the nested-or-direct-container twin of the Mock-
+  constructor lens, which owns only the *direct* positions (the assert's test
+  expression, a ``not``-wrap, or a single comparison operand): a fresh
+  constructor buried in a list/dict/tuple/set literal is a different AST shape
+  that the direct lens provably misses. The configure-then-assert fix is the
+  same — configure the double (``return_value``/``side_effect``) and verify
+  through ``assert_called*``/attribute checks instead of comparing to a
+  constructor call
+- a direct mutation of the process environment made without the ``monkeypatch``
+  fixture in scope — subscript set/delete on the ``os.environ`` mapping
+  (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
+  ``from os import environ`` twin), the mutating ``environ`` methods
+  (``pop``/``update``/``setdefault``/``clear`` and their ``__*__`` / pydantic
+  twins), and ``os.putenv()``/``os.unsetenv()``. A test that mutates
+  ``os.environ`` and never restores it leaks state into every test that runs
+  afterwards, so the suite becomes order-dependent: a test can pass alone and
+  silently corrupt a sibling (or be corrupted by one) in the full run.
+  ``monkeypatch.setenv()``/``monkeypatch.delenv()`` restore the value at
+  teardown automatically and are the pytest-blessed form — a function that
+  requests ``monkeypatch`` is left alone even when it mutates ``os.environ``
+  directly. Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
+  module-level ``os.environ.setdefault(...)`` bootstrap (the   ``conftest.py``
+  pattern that pins ``DATABASE_URL`` once at import time, which is idempotent
+  configuration rather than between-test leakage) are deliberately left alone
+- a reseed of the process-global random generator made without the
+  ``monkeypatch`` fixture in scope — ``random.seed(...)`` (the ``import random``
+  attribute form and its ``from random import seed`` twin). Seeding resets the
+  module-global ``random.Random`` singleton every test shares, changing the
+  sequence that every later test calling ``random.*`` observes, so the suite
+  becomes order-dependent: a test that guards on a drawn random value can pass
+  alone and silently change (or be changed by) a sibling in the full run.
+  ``random.seed`` is also almost always pointless — the blessed deterministic
+  form is to inject a dedicated ``random.Random(N)`` instance so nothing global
+  is touched, and a function that requests ``monkeypatch`` is trusted (it can
+  restore the prior generator at teardown). A module-level ``random.seed(...)``
+  bootstrap is left alone, and ``numpy.random.seed`` is deliberately out of
+   scope (it seeds a separate generator with its own namespace)
 
 - a direct mutation of the process *working directory* made without the
   ``monkeypatch`` fixture in scope — ``os.chdir(...)`` (either spelling),
@@ -5704,6 +5749,62 @@ def test_environ_mutation_lens_flags_unguarded_mutations():
         assert not _environ_mutation_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+def _random_seed_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every reseed of the process-global
+    random generator made without the ``monkeypatch`` fixture in scope.
+
+    Seeding resets the module-global ``random.Random`` singleton that every
+    test shares, changing the sequence that every later test calling ``random.*``
+    observes, so the suite becomes order-dependent: a test that guards on a
+    drawn random value can pass alone and silently change (or be changed by) a
+    sibling in the full run. ``random.seed`` is also almost always pointless —
+    the determinism it provides is rarely the point of an assertion — and the
+    blessed deterministic form is to inject a dedicated ``random.Random(N)``
+    instance so nothing global is touched; a function that requests
+    ``monkeypatch`` is trusted because it can restore the prior generator at
+    teardown. The recognised spellings are ``random.seed(...)`` (the
+    ``import random`` attribute form) and the bare ``seed(...)`` name (the
+    ``from random import seed`` twin). Only reseeds *inside a function body*
+    are flagged: a module-level ``random.seed(N)`` bootstrap that pins the
+    generator once at import time is idempotent setup, not between-test
+    leakage. ``numpy.random.seed`` (a separate generator namespace) and reads
+    like ``random.randrange``/``random.uniform`` are deliberately out of scope.
+    """
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    found: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def _record(node: ast.AST, fn: ast.AST, kind: str) -> None:
+        key = (node.lineno, ast.unparse(node))
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} in {fn.name} reseeds the global random generator without monkeypatch ({kind})",
+            )
+        )
+
+    for fn in functions:
+        guarded = any(arg.arg == "monkeypatch" for arg in fn.args.args)
+        pending = list(fn.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not guarded and isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == "seed":
+                    receiver = func.value
+                    if isinstance(receiver, ast.Name) and receiver.id == "random":
+                        _record(node, fn, "random.seed()")
+                elif isinstance(func, ast.Name) and func.id == "seed":
+                    _record(node, fn, "bare seed()")
+            pending.extend(ast.iter_child_nodes(node))
+    return found
+
+
 def _unreachable_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``assert`` that is dead
     because an earlier statement at the same body level unconditionally
@@ -5854,6 +5955,73 @@ def _cwd_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
                         _record(node, fn, "Path.chdir()")
             pending.extend(ast.iter_child_nodes(node))
     return found
+
+
+def test_no_global_random_reseed_without_monkeypatch():
+    """Reseeding the process-global random generator resets the module-level
+    ``random.Random`` singleton that every test shares, so the suite becomes
+    order-dependent: a test that guards on a drawn random value can pass alone
+    and silently change the results a sibling observes (or be changed by it) in
+    the full run. ``random.seed`` is also almost always pointless — the
+    determinism it confers rarely bears on the assertion it precedes. This
+    guards both the ``random.seed(...)`` attribute spelling and the bare
+    ``seed(...)`` name. A function that requests ``monkeypatch`` is trusted
+    (it can restore the prior generator at teardown), the module-level
+    ``random.seed(N)`` bootstrap is left alone, and ``numpy.random.seed`` (a
+    separate generator namespace) is out of scope."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _random_seed_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} global random-generator reseed(s) made without monkeypatch.\n"
+        "A direct random.seed never restores the prior generator, so it leaks state into every\n"
+        "later test in the run — the suite becomes order-dependent and fails at the wrong\n"
+        "test. Inject a dedicated random.Random(N) instance instead of touching the global, or\n"
+        "request monkeypatch so the prior generator is restored at teardown.\n" + "\n".join(violations)
+    )
+
+
+def test_random_reseed_lens_flags_unguarded_reseeds():
+    """Synthetic positive/negative control for the global-random-reseed lens: it
+    must flag every reseed spelling (``random.seed`` and the bare ``seed()``
+    name) when the enclosing function does not request ``monkeypatch``, and
+    ignore reads of the generator, reseeds inside a ``monkeypatch``-guarded
+    function, nested helpers that *are* guarded, module-level bootstraps, and
+    unrelated calls."""
+    positive_sources = [
+        "def test_foo():\n    random.seed(42)\n",
+        "def test_foo():\n    import random\n    random.seed(42)\n",
+        "def test_foo():\n    seed(42)\n",
+        "def test_foo():\n    from random import seed\n    seed(42)\n",
+        "def test_foo():\n    def inner():\n        random.seed(42)\n",
+        "def test_foo():\n    random.seed()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _random_seed_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo(monkeypatch):\n    random.seed(42)\n",
+        "def test_foo():\n    rng = random.Random(42)\n    rng.seed(7)\n",
+        "def test_foo():\n    numpy.random.seed(42)\n",
+        "def test_foo():\n    np.random.seed(42)\n",
+        "def test_foo():\n    x = random.uniform(0, 1)\n",
+        "def test_foo():\n    x = random.randrange(10)\n",
+        "def test_foo():\n    x = random.random()\n",
+        "def test_foo():\n    cfg.seed(42)\n",
+        "def test_foo():\n    obj.seed = 42\n",
+        "def test_foo(monkeypatch):\n    def inner(monkeypatch):\n        random.seed(42)\n",
+        "import random\nrandom.seed(42)\n",
+        "def test_foo():\n    random.Random(42)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _random_seed_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_cwd_mutation_without_monkeypatch():
