@@ -487,7 +487,24 @@ regression that silently weakens the suite:
    ``skip-without-reason`` and ``constant-condition-skip`` lenses; this lens
    owns the statement form that carries a reason and slips past both. A skip
    nested under an explicit ``if``/loop (a real runtime gate) is left alone
-- an ``assert`` whose *entire* test expression is a container literal or a
+ - an *unconditional* ``@pytest.mark.skip`` **marker** (or the bare imported
+   ``@skip`` decorator), and its module-level ``pytestmark = pytest.mark.skip``
+   twin that deselects every test in the module. A ``skip`` marker has no
+   condition argument to gate on, so the decorated test is permanently removed
+   from every run while still reporting green — the decorator twin of the
+   unconditional body-skip statement lens above, which explicitly disclaims the
+   marker form ("The marker and reason-less twins are owned by the
+   ``skip-without-reason`` and ``constant-condition-skip`` lenses") but neither
+   of those reaches it either: ``skip-without-reason`` only flags markers that
+   *lack* a ``reason=``, and ``constant-condition-skip`` only handles
+   ``@skipif``/``@xfail`` whose *condition* is foldable. A ``skip`` marker
+   carrying a ``reason=`` therefore slips past every sibling unpacked. These are
+   almost always a leftover from disabling a test while debugging — the repo's
+   sanctioned alternate is ``@pytest.mark.skipif(<real condition>, ...)`` or the
+   flaky-test quarantine registry. ``@skipif``/``@xfail`` are deliberately left
+   alone: ``skipif`` is inherently conditional and ``xfail`` is the visible,
+   reviewable "known-failing" pin (the test still runs to report XPASS)
+ - an ``assert`` whose *entire* test expression is a container literal or a
    zero-argument empty-container builtin call — ``assert []``, ``assert [1, 2]``,
    ``assert {'k': 'v'}``, ``assert ()``, ``assert list()``, ``assert set()``.
    The truthiness of a container literal is decided by its arity alone (an empty
@@ -505,7 +522,7 @@ regression that silently weakens the suite:
    literals are left alone — those can legitimately be empty *or* non-empty.
    Container literals appearing as an *operand* of a comparison or ``in`` (the
    ``x == []`` / ``x in [...]`` shapes) are owned by their own lenses
-- ``time.sleep(...)`` inside an ``async def`` — an ``async`` test or fixture
+ - ``time.sleep(...)`` inside an ``async def`` — an ``async`` test or fixture
    that calls the *blocking* time.sleep (the ``import time`` attribute spelling)
    freezes the entire event loop for the duration, so no other coroutine on that
    loop — teardowns, concurrent tasks, the run loop itself — can make progress,
@@ -6719,3 +6736,162 @@ def test_unconditional_body_skip_lens_flags_permanent_deselection():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unconditional_body_skip_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unconditional_skip_marker_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every unconditional ``@skip`` marker.
+
+    ``@pytest.mark.skip(...)`` (or the bare imported ``@skip`` decorator) on a
+    test function/method, a class-level ``@pytest.mark.skip`` decorator (which
+    permanently deselects every test defined in the class) — and the
+    module-level ``pytestmark = pytest.mark.skip`` form that deselects every
+    test in the module — permanently removes the item
+    from every run: unlike ``skipif`` there is no condition argument to gate on,
+    so the deselection is unconditional and the test reports green while its
+    body never runs. The body-statement sibling goggles this class separately;
+    this lens owns the *decorator* spelling, which neither
+    ``test_no_skip_without_reason`` (only flags markers *without* ``reason=``)
+    nor ``test_no_constant_condition_skips`` (only ``skipif``/``xfail`` with a
+    foldable condition) can reach. ``@skipif`` (inherently conditional) and
+    ``@xfail`` (a visible, reviewable known-failing pin whose XPASS shows up in
+    the report) are deliberately left alone.
+    """
+    found = []
+
+    def _marker_prefix(marker: ast.AST) -> str:
+        """Return the dotted path *before* the terminal marker name, e.g.
+        ``pytest.mark.`` for ``pytest.mark.skip`` and ``''`` for a bare imported
+        ``skip`` (so the reported context reads ``@skip`` rather than the
+        misleading ``@pytest.mark.skip``)."""
+        node = marker.func if isinstance(marker, ast.Call) else marker
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        parts.reverse()
+        # Drop the terminal name (the marker itself, e.g. ``skip``).
+        if len(parts) >= 2:
+            return ".".join(parts[:-1]) + "."
+        return ""
+
+    def _report(marker: ast.AST, prefix: str, lineno: int) -> None:
+        # Reuse the module-level ``_decorator_name`` rather than re-deriving it.
+        if _decorator_name(marker) != "skip":
+            return
+        reason = ""
+        if isinstance(marker, ast.Call):
+            if marker.args:
+                reason = f" ('{ast.unparse(marker.args[0])}')"
+            else:
+                for kw in marker.keywords:
+                    if kw.arg == "reason":
+                        reason = f" ('{ast.unparse(kw.value)}')"
+                        break
+        found.append(
+            (
+                lineno,
+                f"{prefix}skip marker with no condition{reason} — "
+                "the test ALWAYS skips, so it never runs (replace with "
+                "@pytest.mark.skipif(<real condition>, ...) or delete the marker)",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
+                continue
+            is_test = node.name.startswith("test_") or any(_is_mark_decorator(d) for d in node.decorator_list)
+            if not is_test:
+                continue
+            for dec in node.decorator_list:
+                _report(dec, f"@{_marker_prefix(dec)}", node.lineno)
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+            value = node.value
+            # Unwrap list/tuple spellings (``pytestmark = [pytest.mark.skip(...)]``)
+            # — otherwise a whole-module deselect slips past the lens.
+            elements = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+            for el in elements:
+                _report(el, f"pytestmark = {_marker_prefix(el)}", node.lineno)
+    return found
+
+
+def test_no_unconditional_skip_markers():
+    """An ``@pytest.mark.skip`` marker (or the bare imported ``@skip``
+    decorator, or module-level ``pytestmark = pytest.mark.skip``) has no
+    condition to gate on, so the decorated test is permanently removed from
+    every run while still reporting green. It is the decorator twin of the
+    unconditional body-skip statement — the ``skip-without-reason`` lens only
+    flags markers that lack a ``reason=``, and ``constant-condition-skip`` only
+    handles ``skipif``/``xfail`` with a foldable condition, so a ``skip`` marker
+    carrying a reason slips past every sibling. The sanctioned spellings are
+    ``@pytest.mark.skipif(<real condition>, ...)`` and the flaky-test
+    quarantine registry; ``@xfail`` is deliberately left alone (it is the
+    visible, reviewable known-failing pin)."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unconditional_skip_marker_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unconditional @skip marker(s).\n"
+        "A plain @pytest.mark.skip has no condition to gate on, so the test is permanently\n"
+        "deselected while still reporting green. Use @pytest.mark.skipif(<real condition>, ...)\n"
+        "or delete the marker (the quarantine registry is the flaky-test alternative).\n" + "\n".join(violations)
+    )
+
+
+def test_unconditional_skip_marker_lens_flags_permanent_deselection():
+    """Synthetic positive/negative control for the unconditional-skip-marker
+    lens: it must flag the ``@pytest.mark.skip`` decorator (called and bare,
+    with and without a reason, on sync and async tests, on methods, at the
+    class level, and at module level via ``pytestmark =``) and ignore
+    ``@skipif``, ``@xfail``, non-test helpers, fixtures, and unrelated marks."""
+    positive_sources = [
+        "@pytest.mark.skip\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skip()\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skip(reason='not implemented')\ndef test_foo():\n    assert x\n",
+        "import pytest\n@skip\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skip(reason='flaky in CI')\nasync def test_foo():\n    await x\n",
+        (
+            "import pytest\n"
+            "\n"
+            "class TestFoo:\n"
+            "    @pytest.mark.skip(reason='legacy')\n"
+            "    def test_bar(self):\n"
+            "        assert x\n"
+        ),
+        (
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skip(reason='legacy')\n"
+            "class TestFoo:\n"
+            "    def test_bar(self):\n"
+            "        assert x\n"
+        ),
+        "pytestmark = pytest.mark.skip\ndef test_foo():\n    assert x\n",
+        "pytestmark = pytest.mark.skip(reason='whole module dormant')\ndef test_foo():\n    assert x\n",
+        "pytestmark = [pytest.mark.skip(reason='whole module dormant')]\ndef test_foo():\n    assert x\n",
+        "pytestmark = (pytest.mark.skip(reason='whole module dormant'),)\ndef test_foo():\n    assert x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unconditional_skip_marker_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.mark.skipif(os.name == 'nt', reason='windows')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(True, reason='temp')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(condition=True, reason='known bug')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.asyncio\nasync def test_foo():\n    await x\n",
+        "@pytest.fixture\n@skip\ndef fixture_foo():\n    return x\n",
+        "def test_foo():\n    if not pkg:\n        pytest.skip('missing')\n",
+        "skip_service = Service()\ndef test_foo():\n    assert skip_service.run()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
