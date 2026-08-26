@@ -10,6 +10,8 @@ from tests.bdd.conftest import ORG_ID
 
 scenarios("../features/agents/crud.feature")
 
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 _AGENT_ID: uuid.UUID | None = None
 _AGENT_BODY: dict = {
     "name": "code-review",

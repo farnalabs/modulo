@@ -725,7 +725,7 @@ async def export_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

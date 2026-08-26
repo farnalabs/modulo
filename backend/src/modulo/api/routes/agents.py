@@ -418,7 +418,7 @@ async def get_agent_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
-    if agent is None:
+    if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
     return AgentResponse.model_validate(agent)
 
@@ -542,7 +542,7 @@ async def optimize_prompt(
             detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
 
-    if agent is None:
+    if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     source_template = _resolve_prompt_template(agent, version)
@@ -745,7 +745,7 @@ async def list_prompt_versions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
-    if agent is None:
+    if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     history = list(agent.prompt_version_history or [])
@@ -772,6 +772,9 @@ async def get_prompt_version_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+            if agent is None or agent.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
             entry = await get_prompt_version(session, agent_id, version)
     except ProgrammingError:
         _log.exception("agents.get_prompt_version_endpoint")
@@ -889,7 +892,7 @@ async def diff_prompt_versions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
-    if agent is None:
+    if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     template_a = _resolve_prompt_template(agent, req.version_a)
