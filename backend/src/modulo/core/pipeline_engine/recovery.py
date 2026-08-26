@@ -106,6 +106,8 @@ class GuardrailOverrideRequiredError(RuntimeError):
 
 _RECOVERABLE_STATUSES = frozenset({"failed", "awaiting_human"})
 
+_RECOVERY_LOCK_STATUS = "running"
+
 
 async def recover_node(
     session: AsyncSession,
@@ -138,8 +140,25 @@ async def recover_node(
         ConcurrentRecoveryError — another recovery won the race.
 
     """
-    # Serialise on the pipeline row to prevent concurrent recovery attempts
-    # for runs on the same pipeline.
+    run = await _fetch_locked_run(session, run_id)
+    _require_recoverable_status(run, run_id)
+    node_type = await _resolve_node_type(session, run, run_id, node_id)
+    _require_node_not_completed(run, run_id, node_id)
+    await _acquire_recovery_lock(session, run, run_id)
+
+    _apply_recovery_markers(run, node_id, input_data)
+    await session.flush()
+    await _record_recovery_audit(session, org_id, run_id, node_id, node_type, input_data, actor_id)
+
+    return run
+
+
+async def _fetch_locked_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
+    """Load the run, take the pipeline row lock, and re-fetch the latest run.
+
+    Serialises recovery attempts for runs on the same pipeline. Raises
+    :class:`RecoveryNotAllowedError` if the run disappears under the lock.
+    """
     run = await get_run(session, run_id)
     if run is None:
         raise RecoveryNotAllowedError(run_id, "not_found")
@@ -151,15 +170,33 @@ async def recover_node(
     if run is None:
         raise RecoveryNotAllowedError(run_id, "not_found")
 
-    if run.status not in _RECOVERABLE_STATUSES:
-        if run.status == "eval_failed" and run.error_code == "eval_blocked":
-            # A guardrail-blocked run must never be resurrected through the
-            # generic recovery path (no guardrail re-pass, no is_replay=True —
-            # the blocked payload would flow into the pipeline anyway). Point
-            # the caller at the re-block-safe override endpoint.
-            raise GuardrailOverrideRequiredError(run_id)
-        raise RecoveryNotAllowedError(run_id, run.status)
+    return run
 
+
+def _require_recoverable_status(run: Run, run_id: uuid.UUID) -> None:
+    """Raise unless the run is in a generic-recoverable status.
+
+    A guardrail-blocked run (terminal ``eval_failed`` with ``error_code``
+    ``eval_blocked``) must never be resurrected through the generic recovery
+    path — it does not re-run the guardrail pass and would resume execution on
+    the blocked payload. Point the caller at the re-block-safe override
+    endpoint instead.
+    """
+    if run.status in _RECOVERABLE_STATUSES:
+        return
+
+    if run.status == "eval_failed" and run.error_code == "eval_blocked":
+        raise GuardrailOverrideRequiredError(run_id)
+
+    raise RecoveryNotAllowedError(run_id, run.status)
+
+
+async def _resolve_node_type(session: AsyncSession, run: Run, run_id: uuid.UUID, node_id: str) -> Any:
+    """Resolve the node definition from the run's snapshot graph.
+
+    Raises :class:`NodeNotFoundInGraphError` if the node is absent from the
+    graph. Returns the node's ``node_type`` (defaulting to ``"agent"``).
+    """
     snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
     snapshot = snapshot_result.scalar_one_or_none()
     if snapshot is None:
@@ -171,26 +208,36 @@ async def recover_node(
     if node_def is None:
         raise NodeNotFoundInGraphError(run_id, node_id)
 
-    node_type = node_def.get("node_type", "agent")
+    return node_def.get("node_type", "agent")
 
-    # Check for already-completed node in either output column. A skipped
-    # recovery marker lives ONLY in node_telemetry_json (its outputs key is
-    # omitted), so the guard must check both columns (Agent Return Contract,
-    # FAR-125 P1c).
+
+def _require_node_not_completed(run: Run, run_id: uuid.UUID, node_id: str) -> None:
+    """Raise if the node already has a completed marker in either output column.
+
+    A skipped recovery marker lives ONLY in ``node_telemetry_json`` (its
+    outputs key is omitted), so both columns must be checked (Agent Return
+    Contract, FAR-125 P1c).
+    """
     outputs = dict(run.outputs_json) if run.outputs_json else {}
     telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
     if node_id in outputs or node_id in telemetry:
         raise NodeAlreadyCompletedError(run_id, node_id)
 
-    # Serialise status update with optimistic locking via the WHERE clause.
-    new_status = "running"
+
+async def _acquire_recovery_lock(session: AsyncSession, run: Run, run_id: uuid.UUID) -> None:
+    """Flip the run to the lock status via an optimistic WHERE clause.
+
+    Serialises the status update with optimistic locking; a concurrent recovery
+    attempt loses the WHERE match and raises :class:`ConcurrentRecoveryError`.
+    Updates ``run.status`` in place on success.
+    """
     stmt = (
         update(Run)
         .where(
             Run.id == run_id,
             Run.status.in_(_RECOVERABLE_STATUSES),
         )
-        .values(status=new_status)
+        .values(status=_RECOVERY_LOCK_STATUS)
         .returning(Run.id)
     )
     locked_result = await session.execute(stmt)
@@ -198,14 +245,22 @@ async def recover_node(
     if locked_id is None:
         raise ConcurrentRecoveryError(run_id)
 
-    run.status = new_status
+    run.status = _RECOVERY_LOCK_STATUS
 
-    # Store recovery markers in the split output columns (Agent Return
-    # Contract, FAR-125). The PURE return lands in outputs_json and the marker
-    # in node_telemetry_json; a skipped node OMITS its outputs key entirely
-    # (the telemetry entry is the sole record). Both columns are written on the
-    # same ORM object and flushed once so the pair lands atomically — the same
-    # pattern as update_run_outputs / update_run_status.
+
+def _apply_recovery_markers(run: Run, node_id: str, input_data: dict[str, Any] | None) -> None:
+    """Write the recovery markers into the run's split output columns.
+
+    The PURE return lands in ``outputs_json`` and the marker in
+    ``node_telemetry_json``; a skipped node OMITS its outputs key entirely (the
+    telemetry entry is the sole record). Both columns are written on the same
+    ORM object (Agent Return Contract, FAR-125) — the caller flushes once so
+    the pair lands atomically, mirroring ``update_run_outputs`` /
+    ``update_run_status``.
+    """
+    outputs = dict(run.outputs_json) if run.outputs_json else {}
+    telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
+
     if input_data is not None:
         outputs[node_id] = input_data
         telemetry[node_id] = {"recovered": True, "recovery_input": input_data}
@@ -214,8 +269,23 @@ async def recover_node(
 
     run.outputs_json = outputs
     run.node_telemetry_json = telemetry
-    await session.flush()
 
+
+async def _record_recovery_audit(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    node_id: str,
+    node_type: str,
+    input_data: dict[str, Any] | None,
+    actor_id: uuid.UUID | None,
+) -> None:
+    """Emit the ``node.recovery`` audit event and the applied-log line.
+
+    Audit recording failures are non-fatal — they are logged and swallowed so a
+    recovery is never blocked by a transient audit write error.
+    """
+    action = "skip" if input_data is None else "replay"
     try:
         await append_audit_event(
             session,
@@ -227,7 +297,7 @@ async def recover_node(
             payload_json={
                 "node_id": node_id,
                 "node_type": node_type,
-                "recovery_action": "skip" if input_data is None else "replay",
+                "recovery_action": action,
             },
         )
     except Exception:
@@ -238,11 +308,9 @@ async def recover_node(
         extra={
             "run_id": str(run_id),
             "node_id": node_id,
-            "action": "skip" if input_data is None else "replay",
+            "action": action,
         },
     )
-
-    return run
 
 
 async def guardrail_override(
