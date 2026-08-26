@@ -13,7 +13,9 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_crud.py
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/db/test_pipeline_snapshot.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/pipelines/crud.feature
+  - backend/tests/bdd/steps/test_pipelines.py
 depends-on:
   - feat-pipelines
 status: covered
@@ -42,12 +44,19 @@ CRUD (tag, annotate, delete, rollback, diff) is the data layer under
 
 ## Known Gaps
 
-- **No BDD feature file** — snapshot versioning is covered by unit tests only
-  (`test_snapshot_versioning.py` etc.); scenarios live behind the higher-level
-  `feat-pipelines-pipeline-diff-rollback` entry.
+- **No dedicated standalone snapshot BDD feature file** — snapshot-versioning
+  scenarios (list/pagination, get, tag, delete + latest refusal, diff) run inside
+  the higher-level ``tests/bdd/features/pipelines/crud.feature``; unit suites
+  pin the versioned-CRUD and backward-compat semantics.
 
 ## QA History
 
+- 2026-08-26: **improve-architecture (product-map walk)** — fixed a stale
+  coverage claim: ``bdd:`` was empty while
+  ``tests/bdd/features/pipelines/crud.feature`` (via
+  ``tests/bdd/steps/test_pipelines.py``) already covered list/pagination, get,
+  tag, delete + latest-snapshot refusal, and diff. Recorded the real BDD
+  references and retired the outdated "no BDD" gap.
 - 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
   dangling `depends-on: feat-pipelines-pipeline-versioning` edge in
   `pipelines/pipeline-diff-rollback.md`. Behaviours re-verified against

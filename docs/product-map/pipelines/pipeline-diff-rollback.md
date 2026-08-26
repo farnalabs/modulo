@@ -13,10 +13,12 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/api/test_error_handling.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/pipelines/crud.feature
+  - backend/tests/bdd/steps/test_pipelines.py
 depends-on:
   - feat-pipelines-pipeline-versioning
-status: partial
+status: covered
 ---
 
 # Pipeline Snapshot Diff & Rollback
@@ -45,12 +47,23 @@ product-map entry touched during centralized authorization cleanup.
 
 ## Known Gaps
 
-- **No BDD feature files** — snapshot/rollback is covered by unit tests
-  (`backend/tests/unit/db/test_pipeline_snapshot.py`,
-  `backend/tests/unit/pipelines/test_snapshot_versioning.py`); no pytest-bdd scenarios.
+- **No dedicated standalone snapshot BDD feature file** — snapshot/rollback/diff
+  scenarios live inside ``tests/bdd/features/pipelines/crud.feature`` (snapshot
+  creation at run start, list + pagination, get, tag, rollback + HITL-gate
+  weakening denial, delete + latest refusal, diff, missing-pipeline 404); the
+  500/422 error-path semantics are unit-tested
+  (``backend/tests/unit/db/test_pipeline_snapshot.py``,
+  ``backend/tests/unit/pipelines/test_snapshot_versioning.py``).
 
 ## QA History
 
+- 2026-08-26: **improve-architecture (product-map walk)** — fixed a stale
+  coverage claim: the entry was parked at ``status: partial`` with ``bdd: []``
+  while ``tests/bdd/features/pipelines/crud.feature`` already exercised
+  create-at-run-start, list/pagination, get, tag, rollback (incl. HITL-gate
+  weakening denial), delete (+latest refusal), diff, and missing-pipeline 404
+  via ``tests/bdd/steps/test_pipelines.py``. Recorded the real BDD references and
+  moved the entry to ``status: covered``.
 - 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 017/018
   (centralized-authorization cleanup). Re-verified endpoints and CRUD modules against the
