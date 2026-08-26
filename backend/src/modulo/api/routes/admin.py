@@ -1779,6 +1779,7 @@ async def admin_dashboard_summary(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
+    _require_admin(current_user, "view dashboard summary")
     from modulo.api.routes.dashboard import dashboard_summary as _dashboard_summary
 
     return await _dashboard_summary(session=session, principal=current_user)

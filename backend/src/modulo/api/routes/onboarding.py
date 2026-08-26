@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.agent import create_agent
@@ -331,7 +331,9 @@ async def dismiss_onboarding(
 @handle_db_errors("onboarding.seed_examples")
 async def seed_examples(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+    _agent_perm: TenantPrincipal = require_permission("agent.create"),
+    _schema_perm: TenantPrincipal = require_permission("schema.create"),
 ) -> SeedExamplesResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -470,7 +472,8 @@ async def seed_examples(
 @handle_db_errors("onboarding.create_starter_pipeline")
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+    _schema_perm: TenantPrincipal = require_permission("schema.create"),
 ) -> StarterPipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)

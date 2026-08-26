@@ -329,6 +329,7 @@ class TestAdminSetTeamSpendLimit:
     def test_admin_sets_team_limit(self, client: TestClient) -> None:
         team = MagicMock()
         team.id = _TEAM_ID
+        team.organisation_id = _ORG_ID
         team.daily_spend_limit = None
 
         with (

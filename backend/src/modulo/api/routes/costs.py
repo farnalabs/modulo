@@ -429,6 +429,8 @@ async def set_team_spend_limit(
             team = await get_team(session, team_id)
             if team is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+            if team.organisation_id != current_user.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
             team.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:

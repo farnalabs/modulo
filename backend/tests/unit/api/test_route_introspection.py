@@ -48,8 +48,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/onboarding/actions/{action_id}/complete"): "onboarding user action",
     ("POST", "/api/v1/onboarding/actions/{action_id}/skip"): "onboarding user action",
     ("POST", "/api/v1/onboarding/dismiss"): "onboarding user action",
-    ("POST", "/api/v1/onboarding/seed-examples"): "onboarding creation-only",
-    ("POST", "/api/v1/onboarding/starter-pipeline"): "onboarding creation-only",
     # Remy: dev-mode-only assistant with its own session auth model.
     ("POST", "/api/v1/remy/sessions"): "Remy own session auth",
     ("PATCH", "/api/v1/remy/sessions/{session_id}"): "Remy own session auth",
@@ -73,7 +71,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     # Libraries: creation-only + user content + community (ADR creation-only rule).
     ("POST", "/api/v1/libraries/{primitive_id}/ratings"): "user content",
     ("POST", "/api/v1/libraries/{primitive_id}/ratings/abuse"): "user content",
-    ("POST", "/api/v1/libraries/community/contribute"): "community creation",
     (
         "POST",
         "/api/v1/libraries/admin/library/community/publish/{primitive_id}",

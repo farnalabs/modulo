@@ -544,6 +544,7 @@ def admin_put_org_limit(limit: str, request: Any, ctx: dict[str, Any], client: A
 def admin_put_team_limit(team_id: str, limit: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     team = MagicMock()
     team.id = uuid.UUID(team_id)
+    team.organisation_id = _ORG_ID
     team.daily_spend_limit = None
 
     with (

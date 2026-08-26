@@ -1610,7 +1610,7 @@ class CommunityContributionListResponse(BaseModel):
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:

@@ -240,6 +240,7 @@ class TestSpendLimitsGatingFeatureEnabled:
     def test_set_team_spend_limit_succeeds(self, licensed_client: TestClient) -> None:
         team = MagicMock()
         team.id = _TEAM_ID
+        team.organisation_id = _ORG_ID
         team.daily_spend_limit = None
 
         with (
@@ -256,6 +257,29 @@ class TestSpendLimitsGatingFeatureEnabled:
 
         assert resp.status_code == 200
         assert resp.json()["daily_spend_limit"] == 75.0
+
+    def test_set_team_spend_limit_cross_org_returns_404(self, licensed_client: TestClient) -> None:
+        # Principal org is _ORG_ID; get_team returns a team in a DIFFERENT org.
+        other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
+        team = MagicMock()
+        team.id = _TEAM_ID
+        team.organisation_id = other_org
+        team.daily_spend_limit = Decimal("50.00")
+
+        with (
+            patch(
+                "modulo.api.routes.costs.get_team",
+                return_value=team,
+            ),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = licensed_client.put(
+                f"/api/v1/admin/costs/limits/teams/{_TEAM_ID}",
+                json={"daily_spend_limit": 75.0},
+            )
+
+        assert resp.status_code == 404
+        assert team.daily_spend_limit == Decimal("50.00")
 
 
 # ── Non-gated endpoints should be unaffected ──────────────────────────────────
