@@ -513,9 +513,9 @@ async def _clone_edges(
             source_node_id=edge["source_node_id"],
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
-            source_port=edge.get("source_port", "out"),
-            target_port=edge.get("target_port", "in"),
             hitl_gate_config=copy.deepcopy(edge["hitl_gate_config"]),
+            source_port=edge.get("source_port") or "out",
+            target_port=edge.get("target_port") or "in",
         )
         session.add(cloned_edge)
         if edge["hitl_gate_config"] is not None:
@@ -594,8 +594,8 @@ def _edge_to_plain_dict(e: PipelineEdge) -> dict[str, Any]:
         "source_node_id": e.source_node_id,
         "target_node_id": e.target_node_id,
         "edge_type": e.edge_type,
-        "source_port": e.source_port,
-        "target_port": e.target_port,
+        "source_port": e.source_port or "out",
+        "target_port": e.target_port or "in",
         "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
     }
 
@@ -852,8 +852,8 @@ async def replace_pipeline_graph(
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
             "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
-            "source_port": getattr(e, "source_port", "out"),
-            "target_port": getattr(e, "target_port", "in"),
+            "source_port": getattr(e, "source_port", None) or "out",
+            "target_port": getattr(e, "target_port", None) or "in",
         }
         for e in old_rows
     ]
@@ -919,8 +919,8 @@ async def replace_pipeline_graph(
             target_node_id=uuid.UUID(str(edge["target_node_id"])),
             edge_type=edge["edge_type"],
             hitl_gate_config=_preserve_omitted_gate_config(edge, old_by_key),
-            source_port=edge.get("source_port", "out"),
-            target_port=edge.get("target_port", "in"),
+            source_port=edge.get("source_port") or "out",
+            target_port=edge.get("target_port") or "in",
         )
         for edge in edges
     ]
