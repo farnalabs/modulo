@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY frontend/ ./
 RUN pnpm run build
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 ENV UV_LINK_MODE=copy \
     HOME=/tmp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
