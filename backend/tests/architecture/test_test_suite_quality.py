@@ -487,6 +487,39 @@ regression that silently weakens the suite:
    ``skip-without-reason`` and ``constant-condition-skip`` lenses; this lens
    owns the statement form that carries a reason and slips past both. A skip
    nested under an explicit ``if``/loop (a real runtime gate) is left alone
+- an ``assert`` whose *entire* test expression is a container literal or a
+   zero-argument empty-container builtin call — ``assert []``, ``assert [1, 2]``,
+   ``assert {'k': 'v'}``, ``assert ()``, ``assert list()``, ``assert set()``.
+   The truthiness of a container literal is decided by its arity alone (an empty
+   container is falsy, a non-empty one is truthy) and a zero-argument builtin
+   call always yields an empty container, so ``assert <container>`` ALWAYS FAILS
+   for empty containers, ALWAYS PASSES for non-empty ones, and ``assert not
+   <container>`` is the mirror — the outcome is fixed at source time, never by
+   the code under test. This is the direct-test-position twin of the empty-
+   container *equality* lens: ``assert x == []`` is already flagged, but a bold
+   container standing alone as the assertion (``assert []`` shadowing the value
+   that should have been checked, ``assert [1]`` after a debug edit) has a
+   different AST shape that the literal-constant lens provably misses (a
+   list/dict/set/tuple literal is ``ast.List``/``ast.Dict``/..., not
+   ``ast.Constant``). Comprehensions and ``*args``/``**kwargs``-unpacked
+   literals are left alone — those can legitimately be empty *or* non-empty.
+   Container literals appearing as an *operand* of a comparison or ``in`` (the
+   ``x == []`` / ``x in [...]`` shapes) are owned by their own lenses
+- ``time.sleep(...)`` inside an ``async def`` — an ``async`` test or fixture
+   that calls the *blocking* time.sleep (the ``import time`` attribute spelling)
+   freezes the entire event loop for the duration, so no other coroutine on that
+   loop — teardowns, concurrent tasks, the run loop itself — can make progress,
+   and a N-second literal sleep is N real seconds of CI on a single core, not a
+   cooperative yield. The duration does not matter to the lens: even
+   ``time.sleep(0)`` is the wrong idiom (it should be ``await asyncio.sleep(0)``,
+   which yields control instead of hogging it). This is the async-twin of the
+   computed-wall-clock-sleep lens: that one flags sleeps with a *computed*
+   duration regardless of blocking or async spelling, this one flags the
+   *blocking* spelling regardless of duration. Calls in a plain ``def`` (where a
+   blocking sleep is the only way to wait) are left alone, and the ``from time
+   import sleep`` bare-name spelling is deliberately not matched because a local
+   ``sleep`` helper (e.g. an asyncio-driven retry) cannot be distinguished
+   statically
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -537,11 +570,11 @@ def _is_mark_decorator(dec: ast.AST) -> bool:
     return "mark" in parts
 
 
-@functools.lru_cache(maxsize=1)
 def _iter_test_modules():
-    return tuple(
-        path for path in sorted(TESTS.rglob("*.py")) if not any(part in EXCLUDED_PACKAGES for part in path.parts)
-    )
+    for path in sorted(TESTS.rglob("*.py")):
+        if any(part in EXCLUDED_PACKAGES for part in path.parts):
+            continue
+        yield path
 
 
 @functools.cache
@@ -6092,6 +6125,268 @@ def test_cwd_mutation_lens_flags_unguarded_mutations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _cwd_mutation_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _container_literal_truthiness(expr: ast.AST) -> str | None:
+    """Return ``"always falsy"``/``"always truthy"`` for a container expression
+    whose truthiness is fixed at source time, or ``None`` when it depends on
+    runtime values.
+
+    A list/dict/set/tuple *literal* is truthy exactly when it is non-empty, so
+    empty literals (``[]``/``{}``/``()``) are always falsy and non-empty
+    literals are always truthy no matter what their elements evaluate to. A
+    zero-argument builtin container call (``list()``/``dict()``/``set()``/
+    ``tuple()``/``bytes()``/``bytearray()``/``frozenset()`` — ``_EMPTY_BUILTIN_CALLS``)
+    always returns an empty, falsy container. ``*``-unpacked sequences
+    (``[*a]``/``(*a,)``/``{*a}``) and ``**``-spread dicts (``{**mapping}``)
+    return ``None`` because their arity — and therefore their truthiness — is
+    runtime-dependent; a dict with at least one literal key is always truthy
+    even when a ``**`` spread joins it. Comprehensions (``ast.ListComp`` etc.)
+    are never passed in here because they are their own node types and depend on
+    the iterable at runtime."""
+    if isinstance(expr, ast.Dict):
+        if not expr.keys:
+            return "always falsy"
+        if any(key is not None for key in expr.keys):
+            return "always truthy"
+        return None
+    if isinstance(expr, (ast.List, ast.Set, ast.Tuple)):
+        if any(isinstance(elt, ast.Starred) for elt in expr.elts):
+            return None
+        return "always falsy" if not expr.elts else "always truthy"
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id in _EMPTY_BUILTIN_CALLS
+        and not expr.args
+        and not expr.keywords
+    ):
+        return "always falsy"
+    return None
+
+
+def _dead_container_literal_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose *entire*
+    test expression is a container literal or zero-argument empty-container
+    builtin call with statically-fixed truthiness.
+
+    ``assert []`` / ``assert not []``, ``assert [1]`` / ``assert not [1]``,
+    ``assert list()`` / ``assert not set()``, ... — the outcome is decided by
+    the literal's arity alone, so the assert either always passes (a silent
+    false green that a mutation-testing run believes verifies behaviour) or
+    always fails (unconditionally red) no matter what the code under test does.
+    This is the direct-test-position twin of the empty-container *equality*
+    lens: ``assert x == []`` is already flagged, but the container standing
+    alone as the assertion (``assert []`` after a value was replaced by a
+    literal while debugging, ``assert [1]`` left over from a hard-coded
+    fixture) has an ``ast.List``-shaped test that the literal-constant lens
+    provably misses. Only the whole test expression (optionally ``not``-wrapped)
+    is flagged: a container that is an *operand* of a comparison or ``in`` is
+    the responsibility of the equality/membership lenses, and a compound
+    boolean test (``assert [] and x``) that short-circuits on the literal is
+    deliberately left to the compound-assertion lens to reason about."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+        candidate = test.operand if negated else test
+        verdict = _container_literal_truthiness(candidate)
+        if verdict is None:
+            continue
+        falsy = verdict == "always falsy"
+        outcome = "always FAILS" if falsy != negated else "always PASSES"
+        if isinstance(candidate, ast.Call):
+            kind = "a zero-argument builtin call that always returns an empty container"
+        else:
+            kind = "an empty container literal" if falsy else "a non-empty container literal"
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(candidate)} — {outcome}: {kind} has fixed truthiness, so the "
+                "outcome is decided at source time, never by the code under test",
+            )
+        )
+    return found
+
+
+def test_no_dead_container_literal_asserts():
+    """An ``assert`` whose entire test expression is a container literal (or a
+    zero-argument empty-container builtin call) is dead code: an empty
+    container is always falsy and a non-empty one is always truthy, so the
+    assert always passes (reporting green no matter how broken the code under
+    test is) or always fails (breaking the suite unconditionally) — the outcome
+    never depends on the behaviour under test. These are almost always leftover
+    debugging where a value under test was replaced by a hard-coded fixture
+    literal. Comprehensions, ``*args``/``**kwargs``-unpacked literals, and
+    containers used as comparison/membership operands are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _dead_container_literal_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a container with statically-fixed truthiness.\n"
+        "An empty container literal/builtin call is always falsy and a non-empty one is always\n"
+        "truthy, so the assert either always passes (dead green) or always fails (unconditionally\n"
+        "red), never depending on the code under test. Assert against the value the expression\n"
+        "contains, or bind it to a name that reflects what is actually being verified.\n" + "\n".join(violations)
+    )
+
+
+def test_dead_container_literal_lens_flags_fixed_truthiness():
+    """Synthetic positive/negative control for the dead-container-literal lens:
+    it must flag every container literal and zero-argument empty-container
+    builtin call standing alone as the assertion (direct or ``not``-wrapped,
+    empty or non-empty) and ignore comparisons, comprehensions, ``*``/``**``-
+    unpacked literals, and anything whose truthiness depends on runtime
+    values."""
+    positive_sources = [
+        "def test_foo():\n    assert []\n",
+        "def test_foo():\n    assert {}\n",
+        "def test_foo():\n    assert ()\n",
+        "def test_foo():\n    assert not []\n",
+        "def test_foo():\n    assert not {}\n",
+        "def test_foo():\n    assert [1, 2]\n",
+        "def test_foo():\n    assert {'k': 'v'}\n",
+        "def test_foo():\n    assert ('x',)\n",
+        "def test_foo():\n    assert {1, 2}\n",
+        "def test_foo():\n    assert not [1]\n",
+        "def test_foo():\n    assert list()\n",
+        "def test_foo():\n    assert dict()\n",
+        "def test_foo():\n    assert set()\n",
+        "def test_foo():\n    assert tuple()\n",
+        "def test_foo():\n    assert bytes()\n",
+        "def test_foo():\n    assert bytearray()\n",
+        "def test_foo():\n    assert frozenset()\n",
+        "def test_foo():\n    assert not set()\n",
+        "def test_foo():\n    assert {'x': 1, **mapping}\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _dead_container_literal_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert items\n",
+        "def test_foo():\n    assert not items\n",
+        "def test_foo():\n    assert result == []\n",
+        "def test_foo():\n    assert x != {}\n",
+        "def test_foo():\n    assert x == list()\n",
+        "def test_foo():\n    assert x in [1, 2]\n",
+        "def test_foo():\n    assert x not in set()\n",
+        "def test_foo():\n    assert [a for a in items]\n",
+        "def test_foo():\n    assert {k: v for k, v in pairs}\n",
+        "def test_foo():\n    assert {x for x in items}\n",
+        "def test_foo():\n    assert {*values}\n",
+        "def test_foo():\n    assert [*items]\n",
+        "def test_foo():\n    assert (*items,)\n",
+        "def test_foo():\n    assert {**mapping}\n",
+        "def test_foo():\n    assert not [*items]\n",
+        "def test_foo():\n    assert list(items)\n",
+        "def test_foo():\n    assert not set(items)\n",
+        "def test_foo():\n    assert len(items)\n",
+        "def test_foo():\n    assert () == x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _dead_container_literal_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _blocking_sleep_in_async_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``time.sleep(...)`` call
+    inside an ``async def`` body.
+
+    An ``async`` test or fixture that calls the *blocking* ``time.sleep``
+    freezes the entire event loop for the duration: no other coroutine on that
+    loop — concurrent tasks, teardowns, the loop itself — can make progress
+    while the thread sleeps, so the call is a real wall-clock stall rather than
+    the cooperative yield ``await asyncio.sleep(...)`` provides. The default
+    pytest-asyncio loop is a fresh event loop per test, so a blocking sleep even
+    starves nothing visible — the hazard appears when the sleep carries a
+    real duration (each second is a second of CI) or when the async body shares
+    a loop with concurrent work. Only the ``import time`` attribute spelling
+    (``time.sleep(...)``) is matched: the ``from time import sleep`` bare-name
+    twin cannot be distinguished statically from a local ``sleep`` helper. A
+    ``time.sleep`` inside a *nested* plain ``def`` within the async body is
+    still flagged: the nested helper is awaited on the same loop, so its
+    blocking sleep freezes that loop just like an inline call."""
+    found: list[tuple[int, str]] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "sleep"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "time"
+            ):
+                found.append(
+                    (
+                        node.lineno,
+                        f"{ast.unparse(node)} in async def {fn.name} — time.sleep() blocks the event "
+                        "loop; use 'await asyncio.sleep(...)' so the loop can interleave other work",
+                    )
+                )
+    return found
+
+
+def test_no_blocking_sleep_in_async_body():
+    """``time.sleep(...)`` inside an ``async def`` blocks the whole event loop
+    for the full duration instead of yielding control the way
+    ``await asyncio.sleep(...)`` does. Every second of a literal sleep is a
+    real second of wall-clock CI, and a concurrent coroutine on the same loop
+    (a teardown, a background task) is starved for the whole wait even when the
+    duration is tiny. This is the blocking-spelling twin of the
+    computed-wall-clock-sleep lens. The ``from time import sleep`` bare-name
+    spelling and calls inside plain ``def`` functions are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _blocking_sleep_in_async_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} blocking time.sleep() call(s) inside async test bodies.\n"
+        "time.sleep() blocks the entire event loop, starving every other coroutine on it\n"
+        "for the full duration; use 'await asyncio.sleep(...)' which yields control back\n"
+        "to the loop instead of hogging it.\n" + "\n".join(violations)
+    )
+
+
+def test_blocking_sleep_lens_flags_loop_blockers():
+    """Synthetic positive/negative control for the blocking-sleep lens: it must
+    flag every ``time.sleep(...)`` call anywhere inside an ``async def`` and
+    ignore the same call inside plain ``def`` functions, ``asyncio.sleep``
+    (the prescribed fix), and unrelated ``.sleep`` attribute receivers."""
+    positive_sources = [
+        "async def test_foo():\n    time.sleep(0.1)\n",
+        "async def test_foo():\n    await load()\n    time.sleep(1)\n",
+        "async def test_foo():\n    def inner():\n        time.sleep(0.05)\n    await inner()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _blocking_sleep_in_async_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    time.sleep(0.1)\n",
+        "async def test_foo():\n    await asyncio.sleep(0.1)\n",
+        "async def test_foo():\n    await asyncio.sleep(delay)\n",
+        "async def test_foo():\n    await some_sleep()\n",
+        "async def test_foo():\n    Mock.sleep(1)\n",
+        "async def test_foo():\n    fake.sleep(0)\n",
+        "def test_foo():\n    async def inner():\n        await asyncio.sleep(1)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _blocking_sleep_in_async_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _FRESH_VALUE_NAMES = frozenset({"uuid4", "uuid1", "uuid3", "uuid5", "token_hex", "token_bytes", "token_urlsafe"})
