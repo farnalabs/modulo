@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 # MOCKED: scenarios() path relative to this file
 scenarios("../../features/agents/prompt_versioning.feature")
 
@@ -37,7 +39,7 @@ def ctx() -> dict[str, Any]:
 def _make_agent(name: str = "reviewer", prompt: str = "Version 1") -> MagicMock:
     a = MagicMock()
     a.id = uuid.uuid4()
-    a.organisation_id = uuid.uuid4()
+    a.organisation_id = ORG_ID
     a.name = name
     a.description = "Review agent"
     a.is_executable = True

@@ -665,7 +665,7 @@ async def get_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching model backend.",
         ) from None
-    if mb is None:
+    if mb is None or mb.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
     return _to_response(mb)
 
@@ -684,7 +684,7 @@ async def list_pipeline_references_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
-            if mb is None:
+            if mb is None or mb.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
             result = await list_pipeline_references_for_backend(
                 session,

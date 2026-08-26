@@ -170,6 +170,7 @@ class TestGetPromptVersion:
     def test_get_version_found(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
             patch("modulo.api.routes.agents.get_prompt_version", return_value=agent.prompt_version_history[0]),
             patch("modulo.api.routes.agents.set_rls_org"),
         ):
@@ -180,7 +181,9 @@ class TestGetPromptVersion:
         assert data["template"] == "original prompt v1"
 
     def test_get_version_not_found(self, client: TestClient) -> None:
+        agent = _make_agent()
         with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
             patch("modulo.api.routes.agents.get_prompt_version", return_value=None),
             patch("modulo.api.routes.agents.set_rls_org"),
         ):
@@ -198,6 +201,7 @@ class TestGetPromptVersion:
             "eval_result_ids": [],
         }
         with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
             patch("modulo.api.routes.agents.get_prompt_version", return_value=current_entry),
             patch("modulo.api.routes.agents.set_rls_org"),
         ):
