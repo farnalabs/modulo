@@ -14,12 +14,21 @@ COPY frontend/ ./
 RUN pnpm run build
 
 FROM nginx:alpine AS runtime
-RUN apk add --no-cache ca-certificates libcap tzdata
+RUN apk add --no-cache ca-certificates libcap tzdata gettext
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
-RUN chown -R nginx:nginx /var/cache/nginx && \
+# Shared edge CSP snippet (FAR-447): template + default render + render script.
+# render_csp.sh re-renders the snippet at boot so connect-src honours
+# MODULO_MONITOR_DOMAINS (FAR-447 review Major-1).
+COPY deploy/nginx/security_headers.conf.in /etc/nginx/security_headers.conf.in
+COPY deploy/nginx/security_headers.conf /usr/share/nginx/html/security_headers.conf
+COPY deploy/nginx/render_csp.sh /usr/local/bin/render_csp.sh
+COPY deploy/nginx/frontend-entrypoint.sh /usr/local/bin/frontend-entrypoint.sh
+RUN chmod +x /usr/local/bin/render_csp.sh /usr/local/bin/frontend-entrypoint.sh && \
+    chown -R nginx:nginx /usr/share/nginx/html && \
+    chown nginx:nginx /usr/local/bin/render_csp.sh /usr/local/bin/frontend-entrypoint.sh && \
     touch /var/run/nginx.pid && chown nginx:nginx /var/run/nginx.pid && \
     setcap 'cap_net_bind_service=+ep' "$(command -v nginx)"
 USER nginx
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/usr/local/bin/frontend-entrypoint.sh"]

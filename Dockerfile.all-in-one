@@ -19,7 +19,7 @@ ENV UV_LINK_MODE=copy \
     HOME=/tmp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends libcap2-bin nginx postgresql-client supervisor
+    apt-get update && apt-get install -y --no-install-recommends gettext-base libcap2-bin nginx postgresql-client supervisor
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -31,6 +31,10 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --no-dev --frozen
 COPY backend/alembic.ini ./alembic.ini
 COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/all-in-one.conf /etc/nginx/conf.d/default.conf
+COPY deploy/nginx/security_headers.conf.in /etc/nginx/security_headers.conf.in
+COPY deploy/nginx/security_headers.conf /usr/share/nginx/html/security_headers.conf
+COPY deploy/nginx/render_csp.sh /usr/local/bin/render_csp.sh
+RUN chmod +x /usr/local/bin/render_csp.sh
 COPY deploy/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/supervisor/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

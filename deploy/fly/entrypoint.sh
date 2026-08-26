@@ -380,6 +380,9 @@ Path("/usr/share/nginx/html/runtime-config.js").write_text(
 )
 PY
 
+    echo "=== Rendering edge CSP snippet (honours MODULO_MONITOR_DOMAINS) ==="
+    /usr/local/bin/render_csp.sh
+
     echo "=== Starting nginx ==="
     nginx -g "daemon off;" &
 

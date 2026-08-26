@@ -1,0 +1,16 @@
+# Shared edge security-header block, included by every nginx server config
+# (deploy/nginx/*.conf, deploy/fly/nginx.conf). A single source of truth so the
+# CSP/headers don't drift across files (FAR-447 review Major-2).
+#
+# connect-src is rendered at boot by deploy/nginx/render_csp.sh via envsubst:
+# it mirrors the backend SecurityHeadersMiddleware and honours MODULO_MONITOR_DOMAINS
+# (and VITE_GRAFANA_FARO_URL) so configured telemetry backends aren't silently
+# blocked by the SPA's edge CSP (FAR-447 review Major-1).
+#
+# CONNECT_SRC holds everything AFTER the leading 'self' in connect-src.
+add_header Content-Security-Policy "default-src 'self'; connect-src 'self' ${CONNECT_SRC}; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-src 'self'; frame-ancestors 'none'" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+add_header X-Frame-Options "DENY" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;

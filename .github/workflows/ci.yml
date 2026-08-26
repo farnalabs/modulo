@@ -266,6 +266,15 @@ jobs:
       - run: pnpm run build
       - run: pnpm audit --audit-level=critical
 
+  nginx-config:
+    name: Check nginx configs
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate nginx server configs (nginx -t)
+        run: bash scripts/nginx_config_check.sh
+        shell: bash
+
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
     # FAILS if the committed schema differs from what the generator produces.
