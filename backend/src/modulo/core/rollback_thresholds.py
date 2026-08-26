@@ -52,6 +52,39 @@ def _graph_has_script_mode_node(graph_json: dict[str, Any] | None) -> bool:
     )
 
 
+def _flag_anomaly(
+    *,
+    org_id: uuid.UUID,
+    total: int,
+    window_hours: int,
+    anomaly_type: str,
+    anomaly_count: int,
+    flagged_orgs: list[str],
+) -> bool:
+    """Log a detected anomaly and register the org as flagged.
+
+    Returns True when an anomaly was detected (so the caller can increment its
+    anomaly counter), False otherwise. Appends ``str(org_id)`` to ``flagged_orgs``
+    at most once.
+    """
+    if anomaly_count <= 0:
+        return False
+    if str(org_id) not in flagged_orgs:
+        flagged_orgs.append(str(org_id))
+    _log.warning(
+        _LOG_ANOMALY_DETECTED,
+        extra={
+            "org_id": str(org_id),
+            "total_runs": total,
+            "anomaly_type": anomaly_type,
+            "anomaly_count": anomaly_count,
+            "threshold_rate": f"{anomaly_count}/{total}",
+            "window_hours": window_hours,
+        },
+    )
+    return True
+
+
 def _node_config_has_budget(node_def: dict[str, Any] | None) -> bool:
     """Check if a node definition has timeout_seconds or wallclock_budget_seconds."""
     if not isinstance(node_def, dict):
@@ -151,6 +184,78 @@ async def _count_unexpected_side_effect_unknown(
     return count
 
 
+async def _resolve_org_ids(
+    session_factory: Callable[..., Any],
+    org_ids: list[uuid.UUID] | None,
+) -> list[uuid.UUID]:
+    """Return the explicit org id list, or all org ids when None is given."""
+    if org_ids is not None:
+        return org_ids
+    async with session_factory() as session, session.begin():
+        result = await session.execute(select(Organisation.id))
+        return list(result.scalars())
+
+
+async def _evaluate_org(
+    session_factory: Callable[..., Any],
+    org_id: uuid.UUID,
+    window_start: Any,
+    window_hours: int,
+    min_runs: int,
+) -> tuple[int, int, list[str]]:
+    """Evaluate a single org against the rollback thresholds.
+
+    Returns ``(orgs_checked, anomalies_found, flagged_orgs)``. ``orgs_checked``
+    is 1 only when the org had at least ``min_runs`` script-mode runs (otherwise
+    0); ``flagged_orgs`` contains ``str(org_id)`` at most once.
+    """
+    async with session_factory() as session, session.begin():
+        from modulo.db.rls import set_rls_org
+
+        await set_rls_org(session, org_id)
+
+        total = await _count_script_runs_by_graph(session, org_id, window_start)
+        if total < min_runs:
+            return 0, 0, []
+
+        flagged_orgs: list[str] = []
+        anomalies_found = 0
+
+        claim_without_marker = await _count_claim_without_marker(session, org_id, window_start)
+        contract_violation = await _count_contract_violation_delivered(session, org_id, window_start)
+        unexpected_side_effect = await _count_unexpected_side_effect_unknown(session, org_id, window_start)
+
+        if _flag_anomaly(
+            org_id=org_id,
+            total=total,
+            window_hours=window_hours,
+            anomaly_type="claim_without_marker",
+            anomaly_count=claim_without_marker,
+            flagged_orgs=flagged_orgs,
+        ):
+            anomalies_found += 1
+        if _flag_anomaly(
+            org_id=org_id,
+            total=total,
+            window_hours=window_hours,
+            anomaly_type="contract_violation_delivered",
+            anomaly_count=contract_violation,
+            flagged_orgs=flagged_orgs,
+        ):
+            anomalies_found += 1
+        if _flag_anomaly(
+            org_id=org_id,
+            total=total,
+            window_hours=window_hours,
+            anomaly_type="unexpected_side_effect_unknown",
+            anomaly_count=unexpected_side_effect,
+            flagged_orgs=flagged_orgs,
+        ):
+            anomalies_found += 1
+
+    return 1, anomalies_found, flagged_orgs
+
+
 async def evaluate_rollback_thresholds(
     session_factory: Callable[..., Any],
     *,
@@ -175,77 +280,20 @@ async def evaluate_rollback_thresholds(
     flagged_orgs: list[str] = []
 
     try:
-        if org_ids is None:
-            async with session_factory() as session, session.begin():
-                result = await session.execute(select(Organisation.id))
-                org_ids = list(result.scalars())
+        org_ids = await _resolve_org_ids(session_factory, org_ids)
 
         for org_id in org_ids:
             if time.monotonic() > deadline:
                 break
             try:
-                async with session_factory() as session, session.begin():
-                    from modulo.db.rls import set_rls_org
-
-                    await set_rls_org(session, org_id)
-
-                    total = await _count_script_runs_by_graph(session, org_id, window_start)
-                    if total < min_runs:
-                        continue
-
-                    orgs_checked += 1
-
-                    # Check anomaly types.
-                    claim_without_marker = await _count_claim_without_marker(session, org_id, window_start)
-                    contract_violation = await _count_contract_violation_delivered(session, org_id, window_start)
-                    unexpected_side_effect = await _count_unexpected_side_effect_unknown(session, org_id, window_start)
-
-                    if claim_without_marker > 0:
-                        anomalies_found += 1
-                        flagged_orgs.append(str(org_id))
-                        _log.warning(
-                            _LOG_ANOMALY_DETECTED,
-                            extra={
-                                "org_id": str(org_id),
-                                "total_runs": total,
-                                "anomaly_type": "claim_without_marker",
-                                "anomaly_count": claim_without_marker,
-                                "threshold_rate": f"{claim_without_marker}/{total}",
-                                "window_hours": window_hours,
-                            },
-                        )
-
-                    if contract_violation > 0:
-                        anomalies_found += 1
-                        if str(org_id) not in flagged_orgs:
-                            flagged_orgs.append(str(org_id))
-                        _log.warning(
-                            _LOG_ANOMALY_DETECTED,
-                            extra={
-                                "org_id": str(org_id),
-                                "total_runs": total,
-                                "anomaly_type": "contract_violation_delivered",
-                                "anomaly_count": contract_violation,
-                                "threshold_rate": f"{contract_violation}/{total}",
-                                "window_hours": window_hours,
-                            },
-                        )
-
-                    if unexpected_side_effect > 0:
-                        anomalies_found += 1
-                        if str(org_id) not in flagged_orgs:
-                            flagged_orgs.append(str(org_id))
-                        _log.warning(
-                            _LOG_ANOMALY_DETECTED,
-                            extra={
-                                "org_id": str(org_id),
-                                "total_runs": total,
-                                "anomaly_type": "unexpected_side_effect_unknown",
-                                "anomaly_count": unexpected_side_effect,
-                                "threshold_rate": f"{unexpected_side_effect}/{total}",
-                                "window_hours": window_hours,
-                            },
-                        )
+                checked, found, flagged = await _evaluate_org(
+                    session_factory, org_id, window_start, window_hours, min_runs
+                )
+                orgs_checked += checked
+                anomalies_found += found
+                for org in flagged:
+                    if org not in flagged_orgs:
+                        flagged_orgs.append(org)
             except asyncio.CancelledError:
                 raise
             except Exception:
