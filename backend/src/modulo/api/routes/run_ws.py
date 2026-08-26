@@ -128,7 +128,7 @@ async def run_websocket(
     try:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
     except ProgrammingError:
         _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
