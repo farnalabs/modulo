@@ -110,6 +110,12 @@ ignore_imports =
     # exceptions above: db.crud.run exposes the terminal write, classify.py is
     # the pure decision function.
     modulo.db.crud.run -> modulo.core.pipeline_engine.classify
+    # FAR-402 P6 — the snapshot diff exposes a deterministic impact/scoring
+    # oracle (``compute_port_change_impact`` / ``check_port_change_breaking``);
+    # pipeline_impact is the PURE decision function, db.crud.pipeline_snapshot_versioning
+    # only invokes it (same cross-boundary wiring category as the classify.py /
+    # audit_logger exceptions above).
+    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core

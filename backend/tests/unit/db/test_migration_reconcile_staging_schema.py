@@ -29,7 +29,7 @@ _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0120 is still the
 # org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0147_json_to_jsonb_standardize"
+_CHAIN_HEAD_MIGRATION = "0148_pipeline_snapshot_versioning_far420"
 
 
 def _source(name: str) -> str:

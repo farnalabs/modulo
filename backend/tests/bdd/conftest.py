@@ -177,6 +177,10 @@ def make_mock_snapshot(**kwargs: Any) -> MagicMock:
     s.schema_pins_json = kwargs.get("schema_pins", [])
     s.prompt_pins_json = kwargs.get("prompt_pins", [])
     s.model_backend_pins_json = kwargs.get("backend_pins", [])
+    s.version_kind = kwargs.get("version_kind", "run")
+    s.created_kind = kwargs.get("created_kind", "run")
+    s.draft = kwargs.get("draft", False)
+    s.channel = kwargs.get("channel", "none")
     return s
 
 

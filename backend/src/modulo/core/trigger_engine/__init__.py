@@ -58,7 +58,14 @@ from modulo.auth.secret_storage import decode_stored_secret
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
+from modulo.core.release_channels import (
+    is_routable_channel,
+    resolve_channel_binding,
+)
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.db.crud.pipeline_snapshot_versioning import (
+    resolve_snapshot_for_channel,
+)
 from modulo.db.crud.run import create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -1152,6 +1159,35 @@ class TriggerEngine:
             )
             raise PipelineRateLimitError(delivery.trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
         return _RateLimitState(key=rate_limit_key, max_triggers=max_triggers, window_seconds=window_seconds)
+
+    async def resolve_snapshot_id_for_trigger(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+    ) -> uuid.UUID | None:
+        """Resolve a trigger's channel binding to a concrete snapshot id.
+
+        FAR-402 P6 release-channel hook: a trigger whose ``config_json`` binds a
+        ``release_channel`` (``stable``/``canary``) resolves to the LATEST
+        snapshot created under that channel so it executes the newest channel
+        version rather than the live graph. An unbound trigger (``none``) or a
+        channel with no snapshot returns ``None`` — the caller then pins the live
+        graph, preserving current behaviour. The hook is deliberately minimal
+        (a resolver, not a promotion/rollback controller).
+        """
+        if trigger is None:
+            return None
+        channel = resolve_channel_binding(trigger.config_json)
+        if not is_routable_channel(channel):
+            return None
+        snapshot = await resolve_snapshot_for_channel(
+            session,
+            pipeline_id=trigger.pipeline_id,
+            channel=channel,
+            organisation_id=trigger.organisation_id,
+        )
+        return snapshot.id if snapshot is not None else None
 
     async def _create_webhook_run(
         self,

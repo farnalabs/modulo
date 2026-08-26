@@ -347,6 +347,10 @@ async def create_snapshot_from_live_graph(
     *,
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID | None = None,
+    version_kind: str = "run",
+    created_kind: str = "run",
+    draft: bool = False,
+    channel: str = "none",
 ) -> PipelineSnapshot | None:
     """Lock and copy the authoritative live graph into an immutable snapshot.
 
@@ -354,6 +358,11 @@ async def create_snapshot_from_live_graph(
     context set. Uses a Postgres advisory lock (session-scoped) to serialise
     snapshot creation for a given pipeline, avoiding transaction-scoped FOR
     UPDATE so the caller's transaction is not blocked during graph loading.
+
+    FAR-402 P6: the run-start callers (webhook/replay/trigger/manual/slack)
+    keep the defaults and produce a ``version_kind='run'`` snapshot; live-edit
+    saves go through ``create_snapshot_edit`` which passes ``version_kind='edit'``
+    so the live-edit chain stays distinguishable from run-frozen snapshots.
     """
     # Acquire session-scoped advisory lock to serialise snapshot creation.
     key1, key2 = _pipeline_lock_keys(pipeline_id)
@@ -428,6 +437,10 @@ async def create_snapshot_from_live_graph(
             guardrail_pins_json=guardrail_pins,
             guardrail_pins_fingerprint=guardrail_pins_fingerprint,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
+            version_kind=version_kind,
+            created_kind=created_kind,
+            draft=draft,
+            channel=channel,
         )
         session.add(snapshot)
         await session.flush()
@@ -440,3 +453,30 @@ async def create_snapshot_from_live_graph(
             text("SELECT pg_advisory_unlock(:key1, :key2)"),
             {"key1": key1, "key2": key2},
         )
+
+
+async def create_snapshot_edit(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    draft: bool = False,
+    channel: str = "none",
+) -> PipelineSnapshot | None:
+    """Snapshot the live graph as a LIVE-EDIT version (FAR-402 P6).
+
+    A live-edit save reuses the snapshot machinery but tags the row as
+    ``version_kind='edit'`` / ``created_kind='edit'``, so the editor's save
+    history (the live-edit chain) is distinguishable from run-frozen snapshots.
+    Each save leaves the prior snapshot row immutable, so rollback remains a
+    pointer swap to a prior snapshot (``rollback_to_snapshot``).
+    """
+    return await create_snapshot_from_live_graph(
+        session,
+        pipeline_id=pipeline_id,
+        account_id=account_id,
+        version_kind="edit",
+        created_kind="edit",
+        draft=draft,
+        channel=channel,
+    )

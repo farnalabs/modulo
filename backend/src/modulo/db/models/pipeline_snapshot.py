@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -55,6 +55,18 @@ class PipelineSnapshot(OrgScoped):
     guardrail_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # FAR-402 P6: live-edit history + release channels. ``version_kind``
+    # discriminates a live-edit version ('edit') from a run-frozen snapshot
+    # ('run'); ``draft`` marks an in-progress editor auto-save; ``created_kind``
+    # is the finer provenance discriminator the GUI timeline uses
+    # ('initial' | 'edit' | 'rollback' | 'run'); ``channel`` tags the release
+    # channel the snapshot was created under ('none' | 'stable' | 'canary').
+    # Additive columns — legacy snapshots default to a run-kind, no-channel
+    # snapshot so existing consumers are unaffected.
+    version_kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="run", default="run")
+    created_kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="run", default="run")
+    draft: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    channel: Mapped[str] = mapped_column(String(10), nullable=False, server_default="none", default="none")
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

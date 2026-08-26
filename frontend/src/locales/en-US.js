@@ -795,6 +795,7 @@ export default {
       "linked_in_lifecycle_maps": "In {count} lifecycle maps",
       "save": "Save",
       "saving_graph": "Saving...",
+      "versions": "Versions",
       "run_pipeline": "Run Pipeline",
       "running": "Running...",
       "run_dialog_title": "Run Pipeline",
@@ -3107,6 +3108,21 @@ export default {
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification",
       "notifications": "Notifications"
+    },
+    "PipelineSnapshotTimeline": {
+      "version_timeline": "Version timeline",
+      "no_snapshots_yet": "No snapshots yet.",
+      "compare_to": "Compare to:",
+      "impacted_nodes": "Impacted nodes:",
+      "breaking_changes": "Breaking changes",
+      "no_breaking_port_changes": "No breaking port changes.",
+      "close": "Close version timeline",
+      "select_base_snapshot": "Select base snapshot",
+      "diff": "Diff",
+      "rollback_to_selected": "Rollback to selected",
+      "edit": "edit",
+      "run": "run",
+      "none": "none"
     },
     "SidebarLink": {
       "preview": "Preview",

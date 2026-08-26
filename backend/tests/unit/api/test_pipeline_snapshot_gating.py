@@ -94,6 +94,10 @@ def _rollback_url(pipeline_id: uuid.UUID = _PIPELINE_ID, snapshot_id: uuid.UUID 
     return f"/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback"
 
 
+def _save_edit_url(pipeline_id: uuid.UUID = _PIPELINE_ID) -> str:
+    return f"/api/v1/pipelines/{pipeline_id}/snapshots"
+
+
 def _assert_feature_402(resp: Any) -> None:
     assert resp.status_code == 402, f"Expected 402, got {resp.status_code}: {resp.text[:200]}"
     assert "pipeline_diff_rollback" in resp.text
@@ -149,6 +153,10 @@ def test_rollback_succeeds_when_enabled(team_client: TestClient) -> None:
     new_snapshot.notes = None
     new_snapshot.created_at = None
     new_snapshot.account_id = _USER_ID
+    new_snapshot.version_kind = "run"
+    new_snapshot.created_kind = "run"
+    new_snapshot.draft = False
+    new_snapshot.channel = "none"
     with (
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
@@ -164,6 +172,73 @@ def test_rollback_succeeds_when_enabled(team_client: TestClient) -> None:
 # ── Community tier keeps the non-gated snapshot surface ──
 
 
+def test_save_edit_endpoint_round_trips_edit_body(team_client: TestClient) -> None:
+    """Endpoint-level contract: a real ``SnapshotCreateEdit`` body hits the handler
+    and returns a ``SnapshotResponse`` with ``version_kind='edit'`` and the
+    draft/channel mapping locked in (FAR-420 P6)."""
+    snapshot = MagicMock()
+    snapshot.id = _SNAPSHOT_A
+    snapshot.pipeline_id = _PIPELINE_ID
+    snapshot.snapshot_version = 3
+    snapshot.tag = None
+    snapshot.notes = None
+    snapshot.created_at = None
+    snapshot.account_id = _USER_ID
+    snapshot.version_kind = "edit"
+    snapshot.created_kind = "edit"
+    snapshot.draft = False
+    snapshot.channel = "canary"
+
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
+        patch(
+            "modulo.api.routes.pipelines.create_snapshot_edit",
+            return_value=snapshot,
+        ),
+    ):
+        resp = team_client.post(
+            _save_edit_url(),
+            json={"draft": False, "channel": "canary"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["version_kind"] == "edit"
+    assert body["created_kind"] == "edit"
+    assert body["draft"] is False
+    assert body["channel"] == "canary"
+
+
+def test_save_edit_endpoint_rejects_invalid_channel(team_client: TestClient) -> None:
+    """An arbitrary (<=10-char) channel value must be rejected with 422 rather
+    than persisted; only VALID_RELEASE_CHANNELS are accepted (FAR-420 P6)."""
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = team_client.post(
+            _save_edit_url(),
+            json={"draft": False, "channel": "foo"},
+        )
+    assert resp.status_code == 422, resp.text
+    assert "Invalid release channel" in resp.text
+
+
+def test_save_edit_endpoint_rejects_overlong_channel(team_client: TestClient) -> None:
+    """A >10-char channel value must be rejected with 422 rather than surfacing
+    a DB-level error (FAR-420 P6)."""
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = team_client.post(
+            _save_edit_url(),
+            json={"draft": False, "channel": "x" * 12},
+        )
+    assert resp.status_code == 422, resp.text
+
+
 def test_snapshot_list_is_community_tier(community_client: TestClient) -> None:
     """Snapshot listing stays community tier — only diff/rollback are gated."""
     snapshot = MagicMock()
@@ -174,6 +249,10 @@ def test_snapshot_list_is_community_tier(community_client: TestClient) -> None:
     snapshot.notes = None
     snapshot.created_at = None
     snapshot.account_id = _USER_ID
+    snapshot.version_kind = "run"
+    snapshot.created_kind = "run"
+    snapshot.draft = False
+    snapshot.channel = "none"
 
     with (
         patch("modulo.api.routes.pipelines.set_rls_org"),
