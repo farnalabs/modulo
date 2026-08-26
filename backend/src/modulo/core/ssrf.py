@@ -462,7 +462,7 @@ async def _resolve_all_async(host: str) -> list[str]:
         )
     except TimeoutError:
         raise ValueError(f"DNS resolution timed out for {host}. Cannot verify the target is not internal.") from None
-    except (OSError, socket.gaierror):
+    except OSError:
         raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.") from None
     return _extract_ip_strings(addrinfos)
 
