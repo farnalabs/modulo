@@ -194,16 +194,21 @@ async def backfill_facts(session: Any, day: date) -> int:
         else_=None,
     )
     # Graph-derived fields from the snapshot's ``graph_json`` (the serialised
-    # pipeline graph: a dict with a ``nodes`` list). ``graph_json`` is the
-    # native Postgres ``json`` type, so the ``json_*`` functions apply; all
-    # three degrade to defaults when the graph is malformed/absent — backfilled
-    # rows must NEVER carry NULL here (NULL facts on backfilled rows are a bug).
+    # pipeline graph: a dict with a ``nodes`` list). ``graph_json`` is ``jsonb``
+    # on Postgres (promoted from ``json`` by migration 0147) and the generic
+    # ``json`` type on SQLite/MariaDB, so the matching ``jsonb_*`` / ``json_*``
+    # functions must be selected per dialect; all three degrade to defaults when
+    # the graph is malformed/absent — backfilled rows must NEVER carry NULL here
+    # (NULL facts on backfilled rows are a bug).
     graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
+    _is_pg = (await _dialect_name(session)) == "postgresql"
+    _json_array_length = sa.func.jsonb_array_length if _is_pg else sa.func.json_array_length
+    _json_array_elements = sa.func.jsonb_array_elements if _is_pg else sa.func.json_array_elements
     node_count_expr = sa.case(
-        (graph_nodes_json.is_not(None), sa.func.coalesce(sa.func.json_array_length(graph_nodes_json), 0)),
+        (graph_nodes_json.is_not(None), sa.func.coalesce(_json_array_length(graph_nodes_json), 0)),
         else_=0,
     )
-    _node_arr = sa.func.json_array_elements(graph_nodes_json).table_valued("value")
+    _node_arr = _json_array_elements(graph_nodes_json).table_valued("value")
     _node_value = _node_arr.c.value
     sandbox_count_subq = (
         sa.select(sa.func.count())
