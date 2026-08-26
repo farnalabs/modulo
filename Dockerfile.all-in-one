@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.26
 # Multi-stage build: frontend + backend → single image with nginx + uvicorn
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app
