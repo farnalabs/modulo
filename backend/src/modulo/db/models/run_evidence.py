@@ -6,11 +6,12 @@ of the ``EvidenceResult`` values: ``has_work`` | ``verified_empty`` |
 ``unverifiable``. ``unverifiable`` never fires a flag — downstream renders a
 muted "work could not be verified" notice instead.
 
-The table is deliberately NOT org-scoped: it carries no ``organisation_id``
-column. Rows are written/read only by the harness probe machinery with an
-explicit run_id; the UNIQUE(run_id, node_id) primary key is the tenant anchor.
-A surrogate ``id`` is omitted — the composite PK IS the natural key, matching
-the §15.12 schema diff exactly.
+The table is tenant-isolated via ``organisation_id`` (mirrors the
+``rls_org_isolation`` policy added by migration ``0133_run_evidence_rls``). The
+composite ``(run_id, node_id)`` primary key remains the natural row anchor;
+``organisation_id`` is added here so the ORM stays in sync with the migrated
+schema and a future ``alembic revision --autogenerate`` will not propose
+dropping the RLS-confined column.
 """
 
 from __future__ import annotations
@@ -32,6 +33,12 @@ class RunEvidence(Base):
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("organisations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     evidence_written_at: Mapped[datetime] = mapped_column(
