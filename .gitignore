@@ -107,3 +107,4 @@ qa-findings-lens*.json
 /package-lock.json
 
 # The evidence FILE (alpha-exit-evidence.json) IS committed — it is the template.
+.githooks/

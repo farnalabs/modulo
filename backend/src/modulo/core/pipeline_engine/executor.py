@@ -99,6 +99,7 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
@@ -116,6 +117,7 @@ from modulo.db.crud.run import (
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
@@ -1486,6 +1488,79 @@ class PipelineExecutor:
                 raise RunNotFoundError(run_id)
             return pending_run
 
+    async def _check_spend_ceiling_gate(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        claim_token: str | None,
+    ) -> Run | None:
+        """Halt a run BEFORE any billable step when the org budget is exhausted.
+
+        Reads the org's FAR-391 lifetime spend ceiling and its consumed total. If
+        the org is already at/over its ceiling (no remaining budget for ANY new
+        run), the run is terminalized as ``cost_ceiling_exceeded`` and returned so
+        ``execute()`` never spawns an LLM / E2B call. Returns ``None`` when the
+        run may proceed (no ceiling, budget remaining, or any read error).
+
+        FAIL-OPEN by design (mirrors ``_check_capacity``): a settings/DB read
+        failure must NEVER block the run — the terminal ledger block in
+        ``finalize.py`` is the authoritative hard ceiling that refuses billing
+        beyond the limit regardless of this pre-gate.
+
+        Only the org ceiling is checked here (the per-run ceiling is enforced
+        after the run has incurred cost, at the terminal ledger block, because a
+        run's cost is only known once nodes have executed).
+        """
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
+                org = (
+                    await session.execute(select(Organisation).where(Organisation.id == org_id))
+                ).scalar_one_or_none()
+                if org is None:
+                    return None
+                # Pass a minimal 1-cent charge as the "next run" so the gate
+                # honours the documented at-ceiling / kill-switch semantics: with
+                # zero remaining budget (cumulative >= ceiling, or ceiling == 0)
+                # the run must be terminalized BEFORE any billable work, not left
+                # to the finalize ledger block. A ceiling of 0 therefore blocks
+                # every new run, and an org exactly at its ceiling (1 cent would
+                # exceed it) is halted. A genuinely non-empty remaining budget
+                # (>= 1 cent) still passes so the run can execute.
+                decision = evaluate_org_spend_ceiling(
+                    org_cumulative_spend_cents=org.org_cumulative_spend_cents or 0,
+                    additional_cents=1,
+                    spend_ceiling_cents=org.spend_ceiling_cents,
+                )
+                if decision.allowed:
+                    return None
+                await update_run_status(
+                    session,
+                    run_id,
+                    "cost_ceiling_exceeded",
+                    error_code=ORG_CEILING_EXCEEDED,
+                    error_detail=decision.message,
+                    claim_token=claim_token,
+                )
+                halted_run = await get_run(session, run_id)
+                if halted_run is None:
+                    raise RunNotFoundError(run_id)
+                _log.info(
+                    "pipeline.spend_ceiling_gate_halt",
+                    extra={"run_id": str(run_id), "org_id": str(org_id)},
+                )
+                return halted_run
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "pipeline.spend_ceiling_gate_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id)},
+            )
+            return None
+
     async def _claim_run_and_audit(
         self,
         *,
@@ -2664,6 +2739,17 @@ class PipelineExecutor:
             # liveness backstop. A terminal run (cancelled/completed while the
             # capacity check ran) is never resurrected.
             return capacity_run
+
+        # FAR-391 — hard spend-ceiling gate. Runs BEFORE any billable step is
+        # spawned (no LLM / E2B call happens until ``_prepare_and_stream`` below).
+        # If the org's lifetime budget is already exhausted, the run is halted
+        # immediately as ``cost_ceiling_exceeded`` so no billable work starts.
+        # FAIL-OPEN: any error reading the ceilings must never block the run —
+        # the terminal ledger block (finalize.py) is the authoritative hard
+        # ceiling that refuses billing beyond the limit regardless.
+        ceiling_run = await self._check_spend_ceiling_gate(run_id=run_id, org_id=org_id, claim_token=claim_token)
+        if ceiling_run is not None:
+            return ceiling_run
 
         final_status: str = "failed"
         error_code: str | None = None

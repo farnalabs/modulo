@@ -34,6 +34,71 @@
           </template>
         </Card>
 
+        <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
+          <Card>
+            <template #title>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings') }}</template>
+            <template #subtitle>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle') }}</template>
+
+            <template #content>
+              <LoadingSpinner v-if="ceilingLoading" />
+              <ErrorAlert v-else-if="ceilingLoadError" :message="ceilingLoadError" :on-retry="loadCeiling" />
+
+              <template v-else>
+                <div class="space-y-4">
+                  <div class="flex items-end gap-3">
+                    <div class="flex-1">
+                      <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.per_run_ceiling_usd') }}</span>
+                      <InputText
+                        :aria-label="$t('views.AdminSpendLimitsView.per_run_ceiling_aria')"
+                        :model-value="ceilingMaxRun == null ? '' : String(ceilingMaxRun)"
+                        @update:model-value="(v: any) => ceilingMaxRun = v === '' ? null : Number(v)"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        :placeholder="$t('views.AdminSpendLimitsView.no_limit')"
+                        data-testid="admin-spend-limits-max-run-cost"
+                      />
+                      <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminSpendLimitsView.per_run_ceiling_help') }}</p>
+                    </div>
+                  </div>
+
+                  <div class="flex items-end gap-3">
+                    <div class="flex-1">
+                      <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.org_lifetime_ceiling_usd') }}</span>
+                      <InputText
+                        :aria-label="$t('views.AdminSpendLimitsView.org_lifetime_ceiling_aria')"
+                        :model-value="ceilingSpend == null ? '' : String(ceilingSpend)"
+                        @update:model-value="(v: any) => ceilingSpend = v === '' ? null : Number(v)"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        :placeholder="$t('views.AdminSpendLimitsView.no_limit')"
+                        data-testid="admin-spend-limits-spend-ceiling"
+                      />
+                      <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminSpendLimitsView.org_lifetime_ceiling_help') }}</p>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
+                    <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.remaining_budget') }}</span>
+                    <span class="text-lg font-semibold" :class="ceilingRemaining === null ? '' : (ceilingRemaining === 0 ? 'text-destructive' : 'text-success')">
+                      {{ ceilingRemaining === null ? '—' : formatMoney(ceilingRemaining, currencyCode) }}
+                    </span>
+                  </div>
+
+                  <div class="flex items-center gap-3">
+                    <Button :disabled="savingCeiling" data-testid="admin-spend-limits-ceiling-save" @click="saveCeiling">
+                      {{ savingCeiling ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
+                    </Button>
+                    <p v-if="ceilingSaveError" class="text-xs text-destructive">{{ ceilingSaveError }}</p>
+                    <p v-if="ceilingSaveSuccess" class="text-xs text-success">{{ $t('views.AdminSpendLimitsView.ceiling_updated') }}</p>
+                  </div>
+                </div>
+              </template>
+            </template>
+          </Card>
+        </FeatureGate>
+
         <Card>
           <template #title>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</template>
 <template #subtitle>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</template>
@@ -128,6 +193,7 @@ import Button from 'primevue/button'
 import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import type { components } from '../lib/api/schema'
 
 const planStore = usePlanStore()
 const { currencyCode, loadCurrency } = useOrgCurrency()
@@ -222,6 +288,56 @@ const savingOrg = ref(false)
 const orgSaveError = ref<string | null>(null)
 const orgSaveSuccess = ref(false)
 
+const ceilingMaxRun = ref<number | null>(null)
+const ceilingSpend = ref<number | null>(null)
+const ceilingRemaining = ref<number | null>(null)
+const ceilingLoading = ref(false)
+const ceilingLoadError = ref<string | null>(null)
+const savingCeiling = ref(false)
+const ceilingSaveError = ref<string | null>(null)
+const ceilingSaveSuccess = ref(false)
+
+async function loadCeiling() {
+  ceilingLoading.value = true
+  ceilingLoadError.value = null
+  try {
+    const { data, error: err } = await api.GET('/api/v1/admin/costs/ceiling')
+    if (err) {
+      ceilingLoadError.value = `Failed to load: ${formatApiError(err)}`
+    } else if (data) {
+      const resp: components['schemas']['SpendCeilingResponse'] = data
+      ceilingMaxRun.value = resp.max_run_cost ?? null
+      ceilingSpend.value = resp.spend_ceiling ?? null
+      ceilingRemaining.value = resp.remaining_budget_usd ?? null
+    }
+  } catch (e: unknown) {
+    ceilingLoadError.value = `Failed to load: ${formatApiError(e)}`
+  } finally {
+    ceilingLoading.value = false
+  }
+}
+
+async function saveCeiling() {
+  savingCeiling.value = true
+  ceilingSaveError.value = null
+  ceilingSaveSuccess.value = false
+  try {
+    const { error: err } = await api.PUT('/api/v1/admin/costs/ceiling', {
+      body: { max_run_cost: ceilingMaxRun.value, spend_ceiling: ceilingSpend.value },
+    })
+    if (err) {
+      ceilingSaveError.value = `Failed to save: ${formatApiError(err)}`
+    } else {
+      ceilingSaveSuccess.value = true
+      await loadCeiling()
+    }
+  } catch (e: unknown) {
+    ceilingSaveError.value = `Failed to save: ${formatApiError(e)}`
+  } finally {
+    savingCeiling.value = false
+  }
+}
+
 function overageClass(cost: number, limit: number | null): string {
   if (limit === null || limit <= 0) return ''
   return cost > limit ? 'text-destructive' : 'text-success'
@@ -268,4 +384,5 @@ async function saveTeamLimit(team: TeamRow) {
 
 planStore.fetchPlan()
 loadCurrency()
+loadCeiling()
 </script>

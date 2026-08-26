@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Numeric, String, Uuid, func, text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Integer, Numeric, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -56,6 +56,16 @@ class Organisation(Base):
     guardrails_kill_switch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     guardrails_kill_switch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    # Hard spend ceilings (FAR-391, spec §5.1 cost controls). Stored in integer
+    # CENTS so the gate comparison is exact and allocation-free (no float drift).
+    #   max_run_cost_cents      — per-run hard ceiling; None = unlimited.
+    #   spend_ceiling_cents      — org lifetime budget; None = unlimited.
+    #   org_cumulative_spend_cents — running consumed total (incremented at each
+    #                               run's terminal ledger write).
+    # A ceiling of 0 is a deliberate kill-switch (blocks every billable run).
+    max_run_cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spend_ceiling_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    org_cumulative_spend_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)

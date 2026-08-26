@@ -86,10 +86,15 @@ from modulo.core.node_output_split import (
     node_telemetry,
     split_node_output,
 )
+from modulo.core.spend_ceiling import (
+    cents_from_usd,
+    evaluate_spend_ceilings,
+)
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
@@ -758,7 +763,7 @@ async def _fallback_write(
     error_detail: str | None,
     is_terminal: bool = False,
     claim_token: str | None = None,
-) -> None:
+) -> Decimal:
     """The LEGACY FALLBACK write (never-fail envelope, §1.5).
 
     Persists the UN-ENRICHED merged set (so the cumulative write-back invariant
@@ -797,6 +802,7 @@ async def _fallback_write(
     )
     if is_terminal:
         await _record_fallback_terminal_facts(session, run_id, status, merged.outputs)
+    return total
 
 
 def _fallback_wall_hours(merged_outputs: dict[str, Any], merged_telemetry: Any) -> float:
@@ -995,6 +1001,58 @@ async def _ledger_block(
         record_duplicate_terminal()
         await _record_duplicate_terminal_event(session, run_id)
         return
+
+    # --- FAR-391: hard spend-ceiling gate (per-run + per-org) ---
+    # Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
+    # (the run is never billed beyond its ceiling) AND terminalizes the run as
+    # ``cost_ceiling_exceeded`` — a run that exceeds its per-run ceiling is
+    # halted (never resumed to spawn further billable steps), and an org at its
+    # lifetime budget stops spawning new runs. On the success path the org's
+    # consumed total is incremented by this run's cost.
+    org_row = (
+        await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    ).scalar_one_or_none()
+    if org_row is not None:
+        # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
+        # gate value and the persisted org cumulative never diverge on sub-cent
+        # run costs (the accrual below also uses ``cents_from_usd``).
+        total_cents = cents_from_usd(total) or 0
+        decision = evaluate_spend_ceilings(
+            run_cost_so_far_cents=total_cents,
+            estimated_next_step_cents=0,
+            max_run_cost_cents=org_row.max_run_cost_cents,
+            org_cumulative_spend_cents=org_row.org_cumulative_spend_cents or 0,
+            spend_ceiling_cents=org_row.spend_ceiling_cents,
+        )
+        if not decision.allowed:
+            # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
+            # the ceiling refuse does NOT overwrite it and feed the wrong status
+            # to journey advancement. The ledger is still refused (the run is not
+            # billed beyond its ceiling) — only the status is left untouched.
+            if locked.status == "cancelled":
+                locked.ledger_refused_at = datetime.now(UTC)
+                record_limit_refused("spend_ceiling")
+                await session.flush()
+                return
+            locked.ledger_refused_at = datetime.now(UTC)
+            locked.status = "cost_ceiling_exceeded"
+            locked.error_code = decision.reason
+            locked.error_detail = decision.message
+            _log.info(
+                "cost_ledger.ceiling_exceeded",
+                extra={
+                    "run_id": str(run_id),
+                    "org_id": str(org_id),
+                    "reason": decision.reason,
+                    "total_cents": total_cents,
+                },
+            )
+            record_limit_refused("spend_ceiling")
+            await session.flush()
+            return
+        # Success: accrue this run's cost into the org's lifetime consumed total.
+        org_row.org_cumulative_spend_cents = (org_row.org_cumulative_spend_cents or 0) + total_cents
+        await session.flush()
 
     try:
         ok, reason = await _record_ledger_with_retry(
@@ -1489,7 +1547,7 @@ async def finalize_cost(
         status, error_code, error_detail = await _apply_agent_budget_override(
             session, run, merged_usage, is_terminal, status, error_code, error_detail
         )
-        await _fallback_write(
+        fallback_total = await _fallback_write(
             session,
             run_id,
             status,
@@ -1499,6 +1557,38 @@ async def finalize_cost(
             is_terminal=is_terminal,
             claim_token=claim_token,
         )
+        # FAR-391 — the never-fail fallback MUST still run the terminal ledger
+        # block so the spend-ceiling gate refuses the ledger and the org's
+        # consumed total is accrued. Otherwise a breached ceiling is silently
+        # skipped on the legacy path. Keep it inside the never-fail envelope:
+        # a ledger failure here must never resurrect the original exception.
+        if is_terminal:
+            run_date = _ledger_run_date(is_terminal, fallback_total, run)
+            if run_date is not None:
+                try:
+                    await _ledger_block(
+                        session,
+                        run_id=run_id,
+                        org_id=org_id,
+                        status=status,
+                        total=fallback_total,
+                        owner_team_id=run.owner_team_id,
+                        run_date=run_date,
+                        finalize_fields={
+                            "error_code": error_code,
+                            "error_detail": error_detail,
+                            "total_cost_usd": fallback_total,
+                        },
+                        session_factory=session_factory,
+                        claim_token=claim_token,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "cost_ledger.fallback_block_failed",
+                        extra={"run_id": str(run_id)},
+                    )
         return
 
     # --- Ledger block — terminal only, guarded, converged (§4.2/§4.6) ---

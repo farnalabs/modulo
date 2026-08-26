@@ -1398,7 +1398,20 @@ export default {
       "current_spend": "Current Spend",
       "org_total": "Org Total",
       "no_team_cost_data_available": "No team cost data available.",
-      "todays_accrued_costs_across_all_teams": "Today's accrued costs across all teams"
+      "todays_accrued_costs_across_all_teams": "Today's accrued costs across all teams",
+      "hard_spend_ceilings": "Hard Spend Ceilings",
+      "hard_spend_ceilings_subtitle": "Hard limits on spend. The org lifetime ceiling halts brand-new runs before any billable cost (LLM / sandbox) once the budget is exhausted; per-run and org ceilings are also enforced post-hoc at the run's terminal ledger — a run that overshoots is billed up to completion, then stopped from accruing further. A per-run ceiling caps a single run; an org ceiling caps lifetime spend.",
+      "per_run_ceiling_usd": "Per-run ceiling (USD)",
+      "per_run_ceiling_help": "Maximum billable cost for a single run. Enforced after the run completes: if the run's recorded cost exceeds this, its ledger write is refused and the run stops. 0 blocks all runs. Empty = no limit.",
+      "org_lifetime_ceiling_usd": "Org lifetime ceiling (USD)",
+      "org_lifetime_ceiling_help": "Maximum lifetime spend for the organisation. 0 blocks all runs. Empty = no limit.",
+      "remaining_budget": "Remaining budget",
+      "per_run_ceiling_aria": "Per-run ceiling",
+      "org_lifetime_ceiling_aria": "Org lifetime ceiling",
+      "no_limit": "No limit",
+      "saving": "Saving...",
+      "save": "Save",
+      "ceiling_updated": "Ceilings updated."
     },
     "CostComponentsView": {
       "cost_components": "Cost Components",

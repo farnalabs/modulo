@@ -33,7 +33,7 @@ from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0144_broaden_notification_status_in_app"
+_HEAD_MIGRATION = "0146_extend_runs_status_cost_ceiling"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 

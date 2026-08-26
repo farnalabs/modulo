@@ -74,7 +74,15 @@ FLOOD_MIN_DISTINCT_RUNS = 5
 FLOOD_COOLDOWN_SECONDS = 15 * 60
 
 # The canonical terminal-status set (spec §4.2) — the probe sample predicate.
-PROBE_TERMINAL_STATUSES = ("complete", "failed", "cancelled", "eval_failed", "stalled", "budget_exceeded")
+PROBE_TERMINAL_STATUSES = (
+    "complete",
+    "failed",
+    "cancelled",
+    "eval_failed",
+    "stalled",
+    "budget_exceeded",
+    "cost_ceiling_exceeded",
+)
 
 # Per-org statement/query timeout (one stalled org cannot block the cadence).
 _ORG_STATEMENT_TIMEOUT_MS = 5000
@@ -86,7 +94,8 @@ _SAMPLE_QUERY_EXPLAIN_TEMPLATE = (
     "SELECT id, total_cost_usd, cost_breakdown, started_at, ledger_written, ledger_refused_at "
     "FROM runs "
     "WHERE organisation_id = :org_id "
-    "AND status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') "
+    "AND status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
+    "'budget_exceeded', 'cost_ceiling_exceeded') "
     "AND cost_breakdown IS NOT NULL "
     "ORDER BY started_at DESC "
     "LIMIT 50"

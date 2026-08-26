@@ -360,6 +360,9 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
+        # This test exercises the fallback cost calc, not the ledger block
+        # (covered by test_finalize_cost_fallback_runs_ledger_block).
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -380,6 +383,46 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     assert kwargs["node_telemetry_json"] == stored_telemetry
     # The fallback's breakdown is flat-clamped with the shared marker when over the cap.
     assert kwargs["cost_breakdown"]
+
+
+async def test_finalize_cost_fallback_runs_ledger_block() -> None:
+    """FAR-391 regression — the never-fail legacy fallback MUST still run the
+    terminal ledger block (spend-ceiling gate + org accrual), not skip it.
+
+    A cost-path exception degrades to the legacy fallback; the ledger block is
+    asserted to be invoked with the fallback-derived total so a breached ceiling
+    is still refused on the legacy path.
+    """
+    stored_outputs = {"node-a": {"summary": "did the thing"}}
+    stored_telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000}}
+    run = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
+    run.owner_team_id = uuid.uuid4()
+    run.cancellation_requested = False
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.load_live_components",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_cost(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            status="complete",
+            segment_node_token_usage=None,
+            segment_completed_node_outputs=run.outputs_json,
+            node_type_map={},
+            is_terminal=True,
+        )
+    mock_block.assert_awaited_once()
+    assert mock_block.await_args.kwargs["total"] == Decimal("0.1332")
+    # The fallback path passes through the run's terminal status.
+    assert mock_block.await_args.kwargs["status"] == "complete"
 
 
 # ---------------------------------------------------------------------------
