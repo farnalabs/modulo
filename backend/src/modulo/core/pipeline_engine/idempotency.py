@@ -11,18 +11,23 @@ cardinality/fanout index). It is never a fresh random per run, and an in-run
 retry reuses the identical key.
 
 NOTE (persistence): the derived key is meant to be stored on the run record so
-an operator re-run can READ it back. The runs-column migration is DEFERRED —
-the migration chain was repaired (``0136_rename_remy_*`` now re-parents onto
-``0131_eval_dataset_corpus`` rather than the absent ``0135_status_check_constraints``,
-and migrations 0132-0134 were removed), so the deferred column migration can
-now land without compounding breakage. The derivation primitive is the
-delivered contract; the column lands once that migration is added.
+an operator re-run can READ it back. The run-record column
+(``runs.idempotency_key``, migration 0150, FAR-438) now lands it: the run stores
+its stable logical identity ``<pipeline_id>:<run_number>`` (built + validated in
+``modulo.db.crud.run`` — the DB layer owns the run-record storage contract, per
+the import-linter layering that forbids ``modulo.db`` importing ``modulo.core``),
+and a re-run that restores the SAME run reads it back and recomputes the
+identical per-node keys via :func:`node_idempotency_key`. The derivation
+primitive (:func:`stable_idempotency_key`) is the delivered contract;
+:func:`read_before_write_suppression` is the read-before-write dedupe that
+consumes it.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+from typing import Any
 
 _IDEMPOTENCY_NAMESPACE = "modulo"
 
@@ -32,6 +37,8 @@ _IDEMPOTENCY_NAMESPACE = "modulo"
 # UUID fork of the pipeline and would mint a NEW key on every re-run — silently
 # defeating the idempotency contract. Validate the ``<id>:<number>`` shape here
 # so a naive ``run_id`` fails loudly instead of silently breaking dedupe.
+# NOTE: this regex is mirrored by ``_RUN_REF_RE`` in ``modulo.db.crud.run`` (the
+# DB layer cannot import this module, so the two copy the shape deliberately).
 _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
 
 
@@ -75,3 +82,61 @@ def stable_idempotency_key(
         payload_bytes: bytes = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
         raw = f"{raw}:{hashlib.sha256(payload_bytes).hexdigest()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# FAR-438: the run-record persistence boundary. ``stable_idempotency_key`` is the
+# derivation primitive; the run-storage helpers (run-ref building + validation)
+# live in the DB layer (``modulo.db.crud.run``) because import-linter forbids
+# ``modulo.db`` importing ``modulo.core`` and the run record is a DB concern. The
+# helpers here (``node_idempotency_key`` + ``read_before_write_suppression``) are
+# the CORE side: they derive a per-node key FROM the persisted run value and
+# decide whether a re-run reusing the same key must suppress a duplicate write.
+
+
+def node_idempotency_key(
+    run_ref: str,
+    node_ref: str,
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+) -> str:
+    """Derive the per-node idempotency key from a run's PERSISTED key.
+
+    Thin wrapper over :func:`stable_idempotency_key` with an explicit
+    ``run_ref`` named as the run-record value a re-run reads back. A re-run that
+    restores the same run passes the SAME persisted ``run_ref``, node and
+    cardinality index, so it recomputes the IDENTICAL per-node key -- which is
+    what lets the read-before-write check detect a duplicate write.
+    """
+    return stable_idempotency_key(run_ref=run_ref, node_ref=node_ref, index=index, payload=payload)
+
+
+def read_before_write_suppression(
+    markers: Any,
+    *,
+    run_ref: str,
+    node_ref: str,
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+) -> bool:
+    """READ-BEFORE-WRITE dedupe (FAR-438): should this write be suppressed?
+
+    True when a re-run reused the run's PERSISTED idempotency key and the
+    recorded markers already stamped the SAME derived per-node key as applied
+    (``marker["idempotency_key"] == node_idempotency_key(run_ref, node_ref, ...)``).
+    This is what makes "re-run with the same key" actually suppress a duplicate
+    write (no double-submit) rather than re-applying it as a fresh operation.
+
+    Fail-open: a missing/None ``run_ref``, a malformed ``run_ref``, or a
+    non-dict ``markers`` never suppresses (the write proceeds), so a
+    misconfigured run record can never silently drop a real write.
+    """
+    if not run_ref or not node_ref:
+        return False
+    if not isinstance(markers, dict):
+        return False
+    try:
+        derived = node_idempotency_key(run_ref, node_ref, index=index, payload=payload)
+    except ValueError:
+        # A malformed persisted run key must fail open (never silently suppress).
+        return False
+    return any(isinstance(marker, dict) and marker.get("idempotency_key") == derived for marker in markers.values())

@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -50,6 +51,44 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
+
+# FAR-438 run-record idempotency-key persistence. The run record stores its STABLE
+# logical idempotency identity ``<pipeline_id>:<run_number>`` (NOT a per-replay
+# ``run_id`` — a fresh UUID fork would mint a new key on every re-run and
+# silently defeat dedupe). These helpers live HERE (the DB layer owns the run
+# record) because import-linter forbids ``modulo.db`` importing ``modulo.core``;
+# the derivation + dedupe that CONSUME the persisted value live in
+# ``modulo.core.pipeline_engine.idempotency``. The ``<id>:<number>`` shape regex
+# mirrors ``_RUN_REF_RE`` there; the two copies are a deliberate layering
+# trade-off (DB cannot import core, so they cannot share one definition).
+_RUN_IDEMPOTENCY_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
+
+
+def run_idempotency_ref(pipeline_id: uuid.UUID, run_number: int) -> str:
+    """Build the stable logical run identity ``<pipeline_id>:<run_number>`` (FAR-438).
+
+    This is the run-scoped value persisted on the run record. A re-run that
+    restores the SAME run reuses the same ``run_number`` (allocated once per
+    org), so the reference — and every per-node key derived from it — is stable
+    across the re-run. It is deliberately NOT the per-replay ``run_id``.
+    """
+    return f"{pipeline_id}:{run_number}"
+
+
+def run_idempotency_key(run_ref: str) -> str:
+    """Validate *run_ref* and return the value to persist on the run record (FAR-438).
+
+    Enforces the ``<id>:<number>`` contract at the persist boundary so a naive
+    per-replay ``run_id`` fails loudly instead of silently persisting a value
+    that mints a fresh key every re-run.
+    """
+    if not isinstance(run_ref, str) or not _RUN_IDEMPOTENCY_REF_RE.match(run_ref):
+        raise ValueError(
+            "run_ref must be the stable logical run identity '<pipeline_id>:<run_number>' "
+            f"(recomputed on a re-run), NOT the per-replay run_id; got {run_ref!r}"
+        )
+    return run_ref
+
 
 # Legacy underscore alias for the neutral helper (see modulo.db.unique_violation).
 _is_unique_violation = is_unique_violation
@@ -1092,6 +1131,18 @@ async def create_run(
     # which races under concurrent trigger dispatches.
     run_number = await _allocate_run_number(session, org_id)
 
+    # FAR-438 idempotency-key persistence: the run's STABLE logical identity
+    # (<pipeline_id>:<run_number>) is written once at create so a re-run that
+    # restores THIS run can READ it back and reuse the identical derived per-node
+    # keys (UNKNOWN-recovery dedupe). It is NEVER a per-replay run_id (a fresh
+    # UUID fork would mint a new key every re-run). run_idempotency_key validates
+    # the <id>:<number> shape so a buggy identity fails loudly at the persist
+    # boundary rather than silently storing a value that mints fresh keys. These
+    # helpers are local (DB layer) — the derivation that CONSUMES the stored value
+    # lives in modulo.core.pipeline_engine.idempotency (a module the DB layer
+    # must not import, per import-linter).
+    idempotency_key = run_idempotency_key(run_idempotency_ref(pipeline_id, run_number))
+
     # Create-time journey stamping (FAR-142): resolve the chain anchor
     # (explicit > adopted-from-parent > deterministic floor), canonicalise the
     # work-item refs, and carry is_replay / variant_group_id verbatim. None of
@@ -1130,6 +1181,7 @@ async def create_run(
         parent_run_id=parent_run_id,
         run_number=run_number,
         rate_limit_key=rate_limit_key,
+        idempotency_key=idempotency_key,
         work_item_id=resolved_work_item_id,
         work_item_refs=canonical_refs,
         is_replay=is_replay,

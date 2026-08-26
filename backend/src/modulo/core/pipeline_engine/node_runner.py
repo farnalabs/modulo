@@ -87,6 +87,7 @@ from modulo.core.node_output_split import (
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.idempotency import node_idempotency_key
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
@@ -1109,6 +1110,15 @@ async def _write_raw_output_marker(
                 return
             markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
+            # FAR-438 read-before-write: stamp the derived per-node idempotency key
+            # (from the run's PERSISTED run-level key) so a re-run that reuses the
+            # same key can suppress a duplicate write. Fail-open — a missing or
+            # malformed persisted key simply stamps nothing. Monotone: setdefault
+            # never downgrades an already-applied marker's key.
+            run_ref = run.idempotency_key if hasattr(run, "idempotency_key") else None
+            if run_ref:
+                with suppress(TypeError, ValueError):
+                    marker.setdefault("idempotency_key", node_idempotency_key(run_ref, node_id))
             persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
             markers[key] = persisted_marker
             run.raw_output_markers = markers
@@ -1146,8 +1156,8 @@ def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any) -> 
         preserved["pr_url"] = existing["pr_url"]
     if existing.get("delivery_done") or marker.get("delivery_done"):
         preserved["delivery_done"] = True
-    if not preserved:
-        return marker
+    if existing.get("idempotency_key"):
+        preserved["idempotency_key"] = existing["idempotency_key"]
     merged = dict(marker)
     merged.update(preserved)
     return merged

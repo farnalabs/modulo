@@ -193,6 +193,15 @@ class Run(OrgScoped):
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error_detail: Mapped[str | None] = mapped_column(String(5000))
     error_code: Mapped[str | None] = mapped_column(String(255))
+    # FAR-438 idempotency-key persistence (migration 0150). The run's STABLE
+    # logical idempotency identity (``<pipeline_id>:<run_number>``) persisted at
+    # create so a re-run that restores THIS run can READ it back and reuse the
+    # same derived per-node keys (the UNKNOWN-recovery path FAR-410 designed but
+    # could not land without the column). It is NEVER a per-replay ``run_id``
+    # (a fresh UUID fork would mint a new key every re-run and silently defeat
+    # dedupe). NULL for pre-migration runs — those simply carry no idempotency
+    # identity and are never deduped by this path.
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True)

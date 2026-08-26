@@ -91,6 +91,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
+from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     OutputSchemaValidationError,
@@ -3115,9 +3116,13 @@ class PipelineExecutor:
         from modulo.settings import get_settings
 
         retries = int(get_settings().saq_run_retries)
-        node_attempt_count, current_token, run_markers, cancellation_requested = await self._load_transient_state(
-            run_id=run_id, org_id=org_id
-        )
+        (
+            node_attempt_count,
+            current_token,
+            run_markers,
+            cancellation_requested,
+            idempotency_key,
+        ) = await self._load_transient_state(run_id=run_id, org_id=org_id)
 
         superseded = self._claim_token is not None and current_token is not None and current_token != self._claim_token
         stalled = bool(stall_requested is not None and stall_requested.is_set())
@@ -3136,6 +3141,7 @@ class PipelineExecutor:
             exc=exc,
             run_markers=run_markers,
             run_id=run_id,
+            idempotency_key=idempotency_key,
             superseded=superseded,
             stalled=stalled,
             cancellation_requested=cancellation_requested,
@@ -3565,15 +3571,20 @@ class PipelineExecutor:
 
     async def _load_transient_state(
         self, *, run_id: uuid.UUID, org_id: uuid.UUID
-    ) -> tuple[int, str | None, dict[str, Any] | None, bool]:
+    ) -> tuple[int, str | None, dict[str, Any] | None, bool, str | None]:
         """Reload the run's attempt markers + claim + cancellation state.
 
-        Returns ``(node_attempt_count, current_token, run_markers, cancellation_requested)``.
+        Returns ``(node_attempt_count, current_token, run_markers,
+        cancellation_requested, idempotency_key)``. ``idempotency_key`` is the
+        run's persisted FAR-438 idempotency identity (``<pipeline_id>:<run_number>``)
+        written at create — a re-run reads it back to recompute the SAME per-node
+        keys for the read-before-write dedupe.
         """
         node_attempt_count = 0
         current_token: str | None = None
         run_markers: dict[str, Any] | None = None
         cancellation_requested = False
+        idempotency_key: str | None = None
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -3583,7 +3594,8 @@ class PipelineExecutor:
                 current_token = current_run.claim_token
                 run_markers = current_run.raw_output_markers
                 cancellation_requested = bool(current_run.cancellation_requested)
-        return node_attempt_count, current_token, run_markers, cancellation_requested
+                idempotency_key = current_run.idempotency_key
+        return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
 
     def _idempotency_gate_ok(
         self,
@@ -3591,18 +3603,34 @@ class PipelineExecutor:
         exc: NodeCancelledError | SandboxNodeFailedError,
         run_markers: dict[str, Any] | None,
         run_id: uuid.UUID,
+        idempotency_key: str | None,
         superseded: bool,
         stalled: bool,
         cancellation_requested: bool,
         single_sandbox_node: bool,
     ) -> bool:
-        """FAR-228 guard B — should a transient retry be suppressed by the idempotency gate?"""
+        """FAR-228 guard B + FAR-438 read-before-write — should a transient retry be suppressed?
+
+        Suppresses when EITHER the run's delivery marker already records
+        ``delivery_done`` for the failing node (FAR-228, same-run retry) OR a
+        re-run that reused the run's persisted FAR-438 idempotency key records an
+        already-applied per-node key (``read_before_write_suppression``). The
+        second branch is the UNKNOWN-recovery path: an operator re-run with the
+        SAME persisted key must NOT double-submit the write.
+        """
         from modulo.settings import get_settings
 
         gate_ok = False
         try:
+            node_id = getattr(exc, "node_id", None)
+            delivered = _should_skip_retry(node_id, run_markers, str(run_id))
+            replay_suppressed = read_before_write_suppression(
+                run_markers,
+                run_ref=idempotency_key,
+                node_ref=node_id,
+            )
             gate_ok = (
-                _should_skip_retry(getattr(exc, "node_id", None), run_markers, str(run_id))
+                (delivered or replay_suppressed)
                 and not superseded
                 and not stalled
                 and not cancellation_requested
