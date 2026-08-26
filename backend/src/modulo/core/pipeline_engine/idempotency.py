@@ -22,18 +22,31 @@ primitive (:func:`stable_idempotency_key`) is the delivered contract;
 :func:`read_before_write_suppression` is the read-before-write dedupe that
 consumes it.
 
-SCOPE LIMITATION (connector-write dedupe, FAR-438): the read-before-write
-dedupe (:func:`read_before_write_suppression`) is currently wired ONLY to the
-sandbox single-node transient-recovery path (the executor's
-``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
-suppression for a ``single_sandbox_node`` graph on the sandbox transient
-retry). It is NOT yet wired to the connector-write UNKNOWN-recovery surface
-(the actual FAR-410 scenario this module was framed around): a connector node
-whose write reached upstream but whose outcome was reported UNKNOWN is not
-currently deduped. The derivation primitive + the suppression decision function
-are the portable contract — wiring the connector-write surface to consume them
-is deferred (see the TODO below) and should land with the connector
-UNKNOWN-recovery path + its tests.
+SCOPE (connector-write dedupe, FAR-458): the read-before-write dedupe
+(:func:`read_before_write_suppression`) is wired at TWO distinct decision
+points:
+
+1. **Sandbox single-node transient recovery** (FAR-438) — the executor's
+   ``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
+   suppression for a ``single_sandbox_node`` graph on the sandbox transient
+   retry.
+2. **Connector-write UNKNOWN recovery** (FAR-458) — the connector node's write
+   boundary (``make_connector_fn`` → ``_connector_node``) is now the
+   connector-specific decision point: it consults
+   :func:`read_before_write_suppression` BEFORE re-sending a write that was
+   previously delivered (the persisted ``delivery_done`` marker on the same
+   derived key), and stamps a ``delivery_done`` marker when a connector write
+   genuinely succeeds. This is the actual FAR-410 scenario this module was
+   framed around.
+
+REMAINING GAP (honest, FAR-458): the connector node gate runs at the node level,
+one logical write per node invocation, so it threads ``index=None`` and the
+write-content ``payload``. A multi-item REST fan-out runs INSIDE the connector
+(``write()`` iterates items internally); the node cannot see per-item
+cardinality without the connector surfacing it, so per-item fan-out
+idempotency-key derivation is NOT wired through the node boundary — it remains
+a capability of the primitive (:func:`node_idempotency_key` accepts ``index``).
+A future change can thread per-item keys out of the fan-out outcome set.
 """
 
 from __future__ import annotations
@@ -56,11 +69,14 @@ _IDEMPOTENCY_NAMESPACE = "modulo"
 # the same samples so the mirror cannot drift from this definition.
 _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
 
-# TODO(FAR-438): wire :func:`read_before_write_suppression` into the
-# connector-write UNKNOWN-recovery path. Today the dedupe runs only on the
-# sandbox single-node transient-recovery surface (see the SCOPE LIMITATION note
-# in the module docstring); the connector write that actually reaches upstream
-# but reports UNKNOWN is NOT deduped. Add tests alongside the wiring.
+# TODO(FAR-438 RESOLVED by FAR-458): :func:`read_before_write_suppression` is
+# now wired into the connector-write UNKNOWN-recovery path at the connector
+# node's write boundary (see the SCOPE note in the module docstring). The
+# sandbox single-node transient-recovery surface remains wired via the
+# executor's ``_idempotency_gate_ok``. Remaining per-item fan-out key threading
+# is documented in the SCOPE note as an honest gap. New wiring must keep the
+# ``delivery_done is True`` + same-``idempotency_key`` contract — never suppress
+# a first-time write or a changed-payload re-run.
 
 
 def stable_idempotency_key(
