@@ -1,7 +1,7 @@
 """Add the run-record idempotency-key persistence column (FAR-438).
 
-Revision ID: 0150_run_idempotency_key
-Revises: 0149_suite_run_trigger_kind
+Revision ID: 0151_run_idempotency_key
+Revises: 0150_add_router_no_match_status
 Create Date: 2026-08-26
 
 FAR-410's ``stable_idempotency_key`` derivation landed WITHOUT a run-record
@@ -36,8 +36,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0150_run_idempotency_key"
-down_revision: str | None = "0149_suite_run_trigger_kind"
+revision: str = "0151_run_idempotency_key"
+down_revision: str | None = "0150_add_router_no_match_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
