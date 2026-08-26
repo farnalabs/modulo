@@ -321,8 +321,70 @@ regression that silently weakens the suite:
   (``mock.assert_called_with(ANY)``), never compare a value to it with
   ``==``/``!=`` yourself. The membership twin is covered too: a list/tuple
   literal that *contains* ``ANY`` (``[a, ANY]``) makes ``in`` always PASS and
-  ``not in`` always FAIL, because the element match short-circuits on
-  ``x == ANY``
+   ``not in`` always FAIL, because the element match short-circuits on
+   ``x == ANY``
+ - a freshly-constructed Mock nested *inside* a container literal in an
+   ``assert`` — ``assert result == {'status': MagicMock()}``,
+   ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
+   Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
+   a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
+   ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
+   truthy) ALWAYS PASS — every one decided at source time, never by the code
+   under test. This is the nested-or-direct-container twin of the Mock-
+   constructor lens, which owns only the *direct* positions (the assert's test
+   expression, a ``not``-wrap, or a single comparison operand): a fresh
+   constructor buried in a list/dict/tuple/set literal is a different AST shape
+   that the direct lens provably misses. The configure-then-assert fix is the
+   same — configure the double (``return_value``/``side_effect``) and verify
+   through ``assert_called*``/attribute checks instead of comparing to a
+   constructor call
+ - ``assert`` on a *container literal* whose truthiness is fixed at source time
+  — ``assert [x]``, ``assert {}``, ``assert not [y, z]``, and their
+  ``list``/``dict``/``set``/``tuple`` literal twins. A literal container is
+  truthy exactly when non-empty and falsy when empty, so ``assert
+  <non-empty literal>`` ALWAYS PASSES and ``assert not <non-empty literal>``
+  ALWAYS FAILS no matter what the elements evaluate to — ``assert (a, b)``
+  (or ``assert [a, b]``) is the classic forgot-``and`` bug where a
+  tuple/list-wrapped condition silently becomes an always-true assertion,
+  while ``assert <empty literal>`` ALWAYS FAILS and
+  ``assert not <empty literal>`` ALWAYS PASSES. This is the *truthiness* twin
+  of the container *equality* lenses: those catch ``== []``/``== {}`` against
+  an empty literal, this one catches the container standing alone (or under
+  ``not``) as the assert operand. Comprehension forms
+  (``[x for x in y]``/``{k: v for ...}``) and unpacked dicts (``{**cfg}``)
+  are left alone — their emptiness depends on the iterable the code under
+  test provides
+- direct ``os.environ`` mutation without the ``monkeypatch`` fixture in scope
+  — ``os.environ[key] = ...`` / ``del os.environ[key]`` /
+  ``os.environ.pop()``/``update()``/``setdefault()``/``clear()`` /
+  ``os.putenv()`` / ``os.unsetenv()`` (including the `from os import environ`
+  spellings). A test that mutates the process environment and never restores
+  it leaks state into every test that runs afterwards, so the suite becomes
+  order-dependent: the test can pass alone and silently corrupt a sibling
+  (or be corrupted by one) in the full run, and a mutation-testing run
+  believes each test is isolated when it is not.
+  ``monkeypatch.setenv()``/``delenv()`` restore the value at teardown
+  automatically and are the pytest-blessed form; a function that requests
+  ``monkeypatch`` is left alone even when it mutates ``os.environ`` directly
+- an ``assert`` that is *unreachable* because an earlier top-level statement
+  in the same function body unconditionally ``return``s or ``raise``s before
+  it — the verification can never execute, so the test reports green no
+  matter how broken the guarded behaviour is. The no-op lens is blind to it
+  because the body *contains* an assert; pytest is blind to it because the
+  assert parses fine. Reachability only through a preceding branch
+  (``if cond: return``/``try: return ... except: pass``) is the legitimate
+  early-exit idiom and is left alone
+- a ``test_*`` function whose *entire* body is a single unconditional
+  ``pytest.skip(...)`` call — the test permanently deselects itself from
+  every run but still *reads* as a live test (pytest reports it as skipped,
+  not failed, so the suite stays green). This is the same coverage loss as
+  ``@pytest.mark.skip``, hidden behind an in-body spelling that the
+  skip-without-reason lens (only bare ``skip()`` calls) and the
+  constant-condition-skip lens (only ``skipif``/``xfail`` marker conditions)
+  do not reach. Turn it into ``@pytest.mark.skip(reason=...)`` /
+  ``@pytest.mark.xfail(reason=...)`` with the reason spelled out, or delete
+  it
+
 - ``test_*`` functions *nested inside another function* — pytest only
   collects module/class-level ``test_*`` functions, so a ``def test_*``
   defined inside a test (or helper) body is never collected and silently
@@ -334,37 +396,7 @@ regression that silently weakens the suite:
   decorated functions are covered too (same non-collection), while nested
   ``def``/``class``/``@pytest.fixture`` helpers are left alone — those are the
   legitimate local-helper spellings
-- a freshly-constructed Mock nested *inside* a container literal in an
-  ``assert`` — ``assert result == {'status': MagicMock()}``,
-  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
-  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
-  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
-  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
-  truthy) ALWAYS PASS — every one decided at source time, never by the code
-  under test. This is the nested-or-direct-container twin of the Mock-
-  constructor lens, which owns only the *direct* positions (the assert's test
-  expression, a ``not``-wrap, or a single comparison operand): a fresh
-  constructor buried in a list/dict/tuple/set literal is a different AST shape
-  that the direct lens provably misses. The configure-then-assert fix is the
-  same — configure the double (``return_value``/``side_effect``) and verify
-  through ``assert_called*``/attribute checks instead of comparing to a
-  constructor call
-- a direct mutation of the process environment made without the ``monkeypatch``
-  fixture in scope — subscript set/delete on the ``os.environ`` mapping
-  (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
-  ``from os import environ`` twin), the mutating ``environ`` methods
-  (``pop``/``update``/``setdefault``/``clear`` and their ``__*__`` / pydantic
-  twins), and ``os.putenv()``/``os.unsetenv()``. A test that mutates
-  ``os.environ`` and never restores it leaks state into every test that runs
-  afterwards, so the suite becomes order-dependent: a test can pass alone and
-  silently corrupt a sibling (or be corrupted by one) in the full run.
-  ``monkeypatch.setenv()``/``monkeypatch.delenv()`` restore the value at
-  teardown automatically and are the pytest-blessed form — a function that
-  requests ``monkeypatch`` is left alone even when it mutates ``os.environ``
-  directly. Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
-  module-level ``os.environ.setdefault(...)`` bootstrap (the   ``conftest.py``
-  pattern that pins ``DATABASE_URL`` once at import time, which is idempotent
-  configuration rather than between-test leakage) are deliberately left alone
+
 - a direct mutation of the process *working directory* made without the
   ``monkeypatch`` fixture in scope — ``os.chdir(...)`` (either spelling),
   ``os.fchdir(...)``, and ``Path.chdir()``. A test that changes the current
@@ -5295,6 +5327,132 @@ def test_any_equality_lens_flags_fixed_outcomes():
         assert not _any_equality_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
+_CONTAINER_LITERALS = (ast.List, ast.Dict, ast.Set, ast.Tuple)
+
+
+def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression is a *container literal* standing alone (positionally or under
+    a ``not``).
+
+    A list/dict/set/tuple *literal* is truthy exactly when non-empty and falsy
+    exactly when empty — the container's own structure decides the outcome at
+    source time, never the values inside (an empty container is falsy even when
+    every element would be truthy, and a non-empty container is truthy even
+    when every element is falsy). So ``assert [x]`` ALWAYS PASSES and
+    ``assert not [x]`` ALWAYS FAILS regardless of ``x``, while ``assert []``
+    ALWAYS FAILS and ``assert not []`` ALWAYS PASSES. The ``assert (a, b)`` /
+    ``assert [a, b]`` shape is the classic forgot-``and`` bug: the condition is
+    wrapped so the assertion measures the container, not the conditions.
+
+    ``ast.List``/``ast.Tuple``/``ast.Set``/``ast.Dict`` nodes are exactly the
+    literal forms; comprehensions (``ast.ListComp``/``ast.SetComp``/
+    ``ast.DictComp``) and unpacked dicts (``ast.Dict`` with a ``None`` key from
+    ``{**cfg}``) are left alone because their emptiness depends on a runtime
+    iterable.
+    """
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = False
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            negated = True
+            test = test.operand
+        if not isinstance(test, _CONTAINER_LITERALS):
+            continue
+        if isinstance(test, ast.Dict):
+            if any(key is None for key in test.keys):
+                continue
+            empty = not test.keys
+        else:
+            empty = not test.elts
+        if empty:
+            verdict = "ALWAYS FAILS" if not negated else "ALWAYS PASSES"
+            shape = "empty"
+        else:
+            verdict = "ALWAYS PASSES" if not negated else "ALWAYS FAILS"
+            shape = "non-empty"
+        found.append(
+            (
+                node.lineno,
+                f"assert {ast.unparse(test)} — a {shape} container literal is "
+                f"always {'' if (empty is not negated) else 'not '}truthy, so this {verdict} "
+                f"regardless of its elements; assert against the behaviour under test instead",
+            )
+        )
+    return found
+
+
+def test_no_container_literal_truthiness_assertions():
+    """A container *literal* standing alone as an ``assert`` operand is a
+    fixed-outcome assertion: the container's own emptiness decides the
+    truthiness at source time, never the code under test. ``assert [x]`` /
+    ``assert {}`` ALWAYS PASS and ``assert not [x]`` ALWAYS FAILS no matter
+    what the elements evaluate to — the ``assert (a, b)`` shape is the classic
+    forgot-``and`` bug that silently becomes an always-true assertion — and an
+    *empty* literal (``assert []`` / ``assert not ()``) is decided by the
+    literal too. The sibling always-pass/fail lens only folds ``ast.Constant``
+    operands and ducked ``[]``/``{}`` *equality* comparisons have their own
+    lenses; this is the gap where the container stands alone."""
+
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _container_literal_truthiness_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a container literal.\n"
+        "A literal container is truthy iff non-empty, so the outcome is fixed at write time.\n"
+        "Assert against the behaviour under test (e.g. assert a and b, not assert (a, b)).\n" + "\n".join(violations)
+    )
+
+
+def test_container_literal_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the container-literal lens,
+    mirroring the constant-literal lens pattern: it must flag every ``assert``
+    whose operand is a list/dict/set/tuple literal (empty or not, bare or
+    ``not``-wrapped, nested) and ignore comparisons, comprehension forms,
+    unpacked dicts, attribute/name operands, and runtime containers."""
+    positive_sources = [
+        "def test_foo():\n    assert [x]\n",
+        "def test_foo():\n    assert not {y: z}\n",
+        "def test_foo():\n    assert []\n",
+        "def test_foo():\n    assert not ()\n",
+        "def test_foo():\n    assert (a, b)\n",
+        "def test_foo():\n    assert [a, b, c]\n",
+        "def test_foo():\n    assert {1}\n",
+        "def test_foo():\n    assert not [[[]]]\n",
+        "def test_foo():\n    result = f()\n    assert {}\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _container_literal_truthiness_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert x == []\n",
+        "def test_foo():\n    assert x != {}\n",
+        "def test_foo():\n    assert x in []\n",
+        "def test_foo():\n    assert [] == []\n",
+        "def test_foo():\n    assert [x for x in y]\n",
+        "def test_foo():\n    assert {k: v for k, v in items()}\n",
+        "def test_foo():\n    assert {**cfg}\n",
+        "def test_foo():\n    assert result.error == []\n",
+        "def test_foo():\n    assert list()\n",
+        "def test_foo():\n    assert ns.items\n",
+        "def test_foo():\n    assert (x == 1)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _container_literal_truthiness_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 def _nested_test_functions(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``test_*`` (or
     ``@pytest.mark``-decorated) function defined inside another function.
@@ -5349,6 +5507,7 @@ def test_no_nested_test_functions():
     rename a helper that merely happens to start with ``test_``. Nested
     ``@pytest.fixture`` helpers and non-test local defs/classes are
     deliberately left alone."""
+
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -5399,16 +5558,12 @@ def test_nested_test_lens_flags_uncollected_tests():
 
 
 _MUTATING_ENVIRON_METHODS = frozenset({"pop", "update", "setdefault", "clear", "__setitem__", "__delitem__"})
-# Method names on ``os.environ`` that mutate the mapping in place. The
-# ``__setitem__``/``__delitem__`` twins cover the pydantic-spelled
-# ``os.environ["K"] = ...`` / ``del os.environ["K"]`` subscripts written as
-# method calls.
 
 
 def _is_environ_reference(node: ast.AST) -> bool:
-    """Return True for either spelling of the process-environment mapping:
-    the attribute path ``os.environ`` (``import os``) and the bare ``environ``
-    name (``from os import environ``)."""
+    """Return True for the two spellings of the process-environment mapping:
+    the attribute path ``os.environ`` and the bare ``environ`` name (the
+    ``from os import environ`` form)."""
     if isinstance(node, ast.Attribute):
         return node.attr == "environ"
     return isinstance(node, ast.Name) and node.id == "environ"
@@ -5425,10 +5580,11 @@ def _environ_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
     ``monkeypatch.delenv()`` restore the value at teardown automatically and
     are the pytest-blessed form — a function that requests ``monkeypatch`` is
     left alone even when it mutates ``os.environ`` directly. The recognised
-    mutation spellings are the subscript store/delete on either environ
-    spelling (``os.environ[key] = ...`` / ``del os.environ[key]``), the
-    mutating ``environ`` methods (``pop``/``update``/``setdefault``/``clear``
-    and their ``__*__`` twins), and the ``os.putenv()`` / ``os.unsetenv()``
+    mutation spellings are ``os.environ[key] = ...`` /
+    ``del os.environ[key]`` (subscript store/delete on either environ
+    spelling), the ``os.environ`` mutating methods (``pop``/``update``/
+    ``setdefault``/``clear`` — the ``__*__`` twins exist in pydantic-spelled
+    code and are covered too), and the ``os.putenv()`` / ``os.unsetenv()``
     builtins. Reads (``os.getenv``, ``os.environ.get``, subscript loads) are
     left alone, and each function scope decides its own guard — a nested
     helper without ``monkeypatch`` stays flagged even inside a guarded test.
@@ -5485,18 +5641,13 @@ def _environ_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
 
 
 def test_no_environ_mutation_without_monkeypatch():
-    """A test that mutates ``os.environ`` and never restores it leaks process
-    state into every later test in the same run, so the suite becomes
-    order-dependent: a test can pass on its own (or in the first hop of a
-    --randomly shuffle) and silently corrupt the sibling that runs after it,
-    and the failure surfaces at the wrong test far from the offending
-    mutation. ``monkeypatch.setenv()``/``monkeypatch.delenv()`` restore the
-    original value at teardown automatically and are the pytest-blessed form,
-    so a function that requests ``monkeypatch`` is trusted even when it writes
-    ``os.environ`` directly. This guards the subscript set/delete spellings,
-    the mutating ``environ`` methods, and ``os.putenv``/``os.unsetenv``.
-    Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
-    module-level ``conftest.py`` bootstrap are deliberately left alone."""
+    """Direct ``os.environ`` mutation (subscript set/delete, the mutating
+    methods, ``os.putenv``/``os.unsetenv``) on either environ spelling leaks
+    state into every test that runs afterwards unless the function also
+    requests the ``monkeypatch`` fixture, whose teardown restores the value
+    automatically. A mutation without that guard makes the suite
+    order-dependent: the test can pass alone and silently corrupt a sibling
+    (or be corrupted by one) in the full run."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -5506,56 +5657,136 @@ def test_no_environ_mutation_without_monkeypatch():
         for lineno, detail in _environ_mutation_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} process-environment mutation(s) made without monkeypatch.\n"
-        "A direct os.environ mutation never restores the prior value, so it leaks state into\n"
-        "every later test in the run — the suite becomes order-dependent and fails at the wrong\n"
-        "test. Use monkeypatch.setenv()/monkeypatch.delenv(), which restore at teardown.\n" + "\n".join(violations)
+        f"Found {len(violations)} direct os.environ mutation(s) without monkeypatch.\n"
+        "Unrestored environment changes leak into every later test and make the suite\n"
+        "order-dependent. Use monkeypatch.setenv()/delenv() to get automatic teardown.\n" + "\n".join(violations)
     )
 
 
 def test_environ_mutation_lens_flags_unguarded_mutations():
     """Synthetic positive/negative control for the environ-mutation lens: it
-    must flag every direct mutation spelling (subscript store/delete on either
-    ``os.environ`` spelling, the ``environ`` mutating methods, and
-    ``os.putenv``/``os.unsetenv``) when the enclosing function does not request
-    ``monkeypatch``, and ignore reads, module-level bootstraps, mutations
-    inside a ``monkeypatch``-guarded function, nested helpers that *are*
-    guarded, and unrelated mutations."""
+    must flag every mutation spelling in a function that does not request
+    ``monkeypatch`` and ignore the same spellings inside a ``monkeypatch``
+    function, reads from the mapping, other ``os`` calls, module-level
+    definitions, and unrelated statements."""
     positive_sources = [
         "def test_foo():\n    os.environ['K'] = 'v'\n",
         "def test_foo():\n    del os.environ['K']\n",
-        "def test_foo():\n    environ['K'] = 'v'\n",
         "def test_foo():\n    os.environ.pop('K')\n",
         "def test_foo():\n    os.environ.update({'K': 'v'})\n",
-        "def test_foo():\n    os.environ.setdefault('K', 'v')\n",
+        "def test_foo():\n    environ.setdefault('K', 'v')\n",
         "def test_foo():\n    os.environ.clear()\n",
         "def test_foo():\n    os.putenv('K', 'v')\n",
         "def test_foo():\n    os.unsetenv('K')\n",
-        "def test_foo():\n    def inner():\n        os.environ['K'] = 'v'\n",
-        "def test_foo():\n    os.environ['K'] = os.environ.get('OLD', '')\n",
+        "def test_foo():\n    environ['K'] = 'v'\n",
+        "def test_foo():\n    os.environ['K'] = value\n",
     ]
     for source in positive_sources:
         tree = ast.parse(source)
         assert _environ_mutation_violations(tree), f"lens should flag:\n{source}"
 
     negative_sources = [
-        "def test_foo():\n    m = monkeypatch\n    m.setenv('K', 'v')\n",
         "def test_foo(monkeypatch):\n    os.environ['K'] = 'v'\n",
-        "def test_foo(monkeypatch):\n    os.environ.pop('K', None)\n",
+        "def test_foo(monkeypatch):\n    del os.environ['K']\n",
+        "def test_foo(monkeypatch):\n    os.environ.pop('K')\n",
         "def test_foo(monkeypatch):\n    os.putenv('K', 'v')\n",
-        "def test_foo():\n    v = os.environ.get('K')\n",
-        "def test_foo():\n    v = os.getenv('K')\n",
-        "def test_foo():\n    v = os.environ['K']\n",
-        "def test_foo():\n    x = config['K'] = 'v'\n",
-        "def test_foo():\n    d = {}\n    d['K'] = 'v'\n",
+        "def test_foo():\n    assert os.environ['K'] == 'v'\n",
+        "def test_foo():\n    assert os.getenv('K')\n",
         "def test_foo():\n    os.makedirs('/tmp/x')\n",
-        "os.environ.setdefault('DATABASE_URL', 'sqlite://')\n",
-        "import os\nos.environ.setdefault('FERNET_KEY', 'x')\n",
-        "def test_foo(monkeypatch):\n    def inner(monkeypatch):\n        os.environ['K'] = 'v'\n",
+        "def test_foo():\n    shutil.rmtree(d)\n",
+        "def test_foo():\n    os.environ\n",
+        "def test_foo():\n    return os.path.join('a', 'b')\n",
+        "import os\nX = os.environ.copy()\n",
+        "def test_foo():\n    os.environ = {}\n",
     ]
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _environ_mutation_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unreachable_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that is dead
+    because an earlier statement at the same body level unconditionally
+    ``return``s or ``raise``s before it.
+
+    The no-op lens cannot see these: the body *contains* an assert, so it
+    counts as verifying, yet the assert can never execute. Only direct
+    statement-sequence reachability is checked — an ``assert`` whose
+    reachability depends on a preceding branch (``if cond: return`` /
+    ``try: return ... except: pass``) stays live and is left alone.
+    """
+    found: list[tuple[int, str]] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        ancestor = False
+        for stmt in fn.body:
+            if ancestor:
+                if isinstance(stmt, ast.Assert):
+                    found.append(
+                        (
+                            stmt.lineno,
+                            f"assert {ast.unparse(stmt.test)} in {fn.name} is unreachable — "
+                            "preceded by an unconditional return/raise in the same body",
+                        )
+                    )
+            elif isinstance(stmt, (ast.Return, ast.Raise)):
+                ancestor = True
+    return found
+
+
+def test_no_unreachable_assert_after_unconditional_exit():
+    """An ``assert`` that sits after an unconditional ``return``/``raise`` at
+    the same body level is permanent dead code: it can never execute, so the
+    test reports green no matter how broken the guarded behaviour is. The no-op
+    lens is blind here because the body *contains* an assert; pytest collects
+    it fine; a reader believes the behaviour is verified. Reachability only
+    through a preceding branch is the legitimate early-exit idiom and is left
+    alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unreachable_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unreachable assertion(s) after an unconditional return/raise.\n"
+        "The assert can never run, so it verifies nothing. Move it before the exit, or delete it.\n"
+        + "\n".join(violations)
+    )
+
+
+def test_unreachable_assert_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the unreachable-assert lens: it
+    must flag an ``assert`` that follows an unconditional top-level
+    ``return``/``raise`` in the same body and ignore early-exit-via-branch
+    idioms, asserts reached through a ``try``/``if``, module-level code, and
+    asserts in a different function from the exit."""
+    positive_sources = [
+        "def test_foo():\n    return value\n    assert x == 1\n",
+        "def test_foo():\n    raise RuntimeError('boom')\n    assert x\n",
+        "def test_foo():\n    assert a\n    return\n    assert b\n",
+        "async def test_foo():\n    return None\n    assert isinstance(x, int)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unreachable_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    if cond:\n        return\n    assert x == 1\n",
+        "def test_foo():\n    try:\n        return a\n    except Exception:\n        pass\n    assert x == 1\n",
+        "def test_foo():\n    return value\n",
+        "def test_foo():\n    assert x\n    return\n",
+        "def test_foo():\n    for x in xs:\n        return x\n    assert not xs\n",
+        "def test_foo():\n    return x\n\ndef test_bar():\n    assert z\n",
+        "assert x\n\nclass C:\n    def test_c(self):\n        return\n\nassert y\n",
+        "def test_foo():\n    if cond:\n        return\n    else:\n        assert x == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unreachable_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _chdir_reference(node: ast.AST) -> bool:
