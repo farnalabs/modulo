@@ -668,10 +668,48 @@ jobs:
           Write-Host "::error::One or more staging suites failed."
           exit 1
 
+  dast-gate:
+    name: DAST gate (OWASP ZAP baseline vs staging)
+    needs: [staging-e2e]
+    if: github.event.inputs.skip_staging_e2e != 'true'
+    timeout-minutes: 30
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Run OWASP ZAP baseline against staging
+        shell: bash
+        env:
+          TARGET: https://staging.modulo.run
+        run: |
+          mkdir -p zap-gate
+          EXIT=0
+          docker run --rm -v "$PWD/zap-gate:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "${TARGET}" -r zap-gate/zap-gate-report.html -J zap-gate/zap-gate-report.json -a || EXIT=$?
+          echo "zap_exit=$EXIT"
+          # ZAP baseline exit codes: 0=no FAIL, 1=FAIL (High/Critical), 2=WARN (Medium), 3=INFO.
+          # Block the deploy ONLY on High/Critical (exit 1). Medium/Low findings are advisory and
+          # must not stall production promotions (the current header cluster is WARN/Medium).
+          if [ "$EXIT" -eq 1 ]; then
+            echo "::error::DAST gate BLOCKED: high/critical finding(s) detected on staging. Review zap-gate/zap-gate-report.html."
+            exit 1
+          fi
+          echo "::notice::DAST gate passed (zap exit ${EXIT} - no high/critical findings)."
+
+      - name: Upload DAST gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-gate-report-${{ github.run_id }}
+          path: zap-gate/
+          if-no-files-found: ignore
+
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [pre-deploy-tests, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
+    needs: [pre-deploy-tests, staging-e2e, dast-gate]
+    if: always() && ( (needs.staging-e2e.result == 'success' && needs.dast-gate.result == 'success') || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
