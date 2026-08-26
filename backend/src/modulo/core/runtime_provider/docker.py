@@ -135,30 +135,9 @@ class DockerRuntimeProvider(RuntimeProvider):
         container = await client.containers.get(container_id)
         exec_instance = await container.exec(cmd=command)
 
-        async def _run_exec() -> tuple[bytes, bytes, int]:
-            stream: Any = await exec_instance.start(detach=False)  # type: ignore[misc]
-            stdout_chunks: list[bytes] = []
-            stderr_chunks: list[bytes] = []
-            while True:
-                frame = await stream.read_out()
-                if frame is None:
-                    break
-                out, err = frame
-                if out:
-                    stdout_chunks.append(out)
-                if err:
-                    stderr_chunks.append(err)
-            info = await exec_instance.inspect()
-            exit_code = info.get("ExitCode", -1)
-            return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
-
         start = time.monotonic()
         try:
-            if cmd_timeout is not None:
-                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(_run_exec(), timeout=cmd_timeout)
-            else:
-                stdout_bytes, stderr_bytes, exit_code = await _run_exec()
-            duration = int((time.monotonic() - start) * 1000)
+            stdout_bytes, stderr_bytes, exit_code = await self._run_exec_with_timeout(exec_instance, cmd_timeout)
         except TimeoutError:
             duration = int((time.monotonic() - start) * 1000)
             _log.warning("exec_command timed out for container %s", container_id)
@@ -174,12 +153,41 @@ class DockerRuntimeProvider(RuntimeProvider):
             _log.exception("exec_command failed for container %s", container_id)
             raise
 
+        duration = int((time.monotonic() - start) * 1000)
         return ExecResult(
             exit_code=exit_code,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
             duration_ms=duration,
         )
+
+    async def _run_exec_with_timeout(
+        self,
+        exec_instance: Any,
+        cmd_timeout: int | None,
+    ) -> tuple[bytes, bytes, int]:
+        """Collect exec output, applying an optional asyncio timeout."""
+        if cmd_timeout is not None:
+            return await asyncio.wait_for(self._collect_exec_output(exec_instance), timeout=cmd_timeout)
+        return await self._collect_exec_output(exec_instance)
+
+    async def _collect_exec_output(self, exec_instance: Any) -> tuple[bytes, bytes, int]:
+        """Stream stdout/stderr from an exec instance and return decoded output."""
+        stream: Any = await exec_instance.start(detach=False)
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        while True:
+            frame = await stream.read_out()
+            if frame is None:
+                break
+            out, err = frame
+            if out:
+                stdout_chunks.append(out)
+            if err:
+                stderr_chunks.append(err)
+        info = await exec_instance.inspect()
+        exit_code = info.get("ExitCode", -1)
+        return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
 
     async def destroy_workspace(self, provider_ref: str) -> None:
         """Stop and remove the workspace container.

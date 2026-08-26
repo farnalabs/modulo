@@ -126,6 +126,24 @@ class TestIsSensitiveKey:
             "passwd",
             "db_passwd",
         ],
+        ids=[
+            "token",
+            "api_key",
+            "secret",
+            "password",
+            "key",
+            "credential",
+            "API_KEY",
+            "ApiKey",
+            "api-key",
+            "client_secret",
+            "webhook_secret",
+            "access_token",
+            "api_key_openai",
+            "auth_token",
+            "passwd",
+            "db_passwd",
+        ],
     )
     def test_returns_true_for_sensitive_keys(self, key: str) -> None:
         assert is_sensitive_key(key) is True
@@ -144,6 +162,7 @@ class TestIsSensitiveKey:
             "endpoint",
             "visibility",
         ],
+        ids=["name", "description", "url", "host", "port", "timeout", "model", "provider", "endpoint", "visibility"],
     )
     def test_returns_false_for_non_sensitive_keys(self, key: str) -> None:
         assert is_sensitive_key(key) is False

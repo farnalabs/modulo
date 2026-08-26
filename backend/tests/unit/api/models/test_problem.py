@@ -71,6 +71,24 @@ def _body(resp: Any) -> Any:
         (ProblemType.GATEWAY_TIMEOUT, 504, "Gateway Timeout"),
         (ProblemType.INTERNAL_ERROR, 500, "Internal Error"),
     ],
+    ids=(
+        "bad_request",
+        "validation_error",
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "gone",
+        "method_not_allowed",
+        "rate_limited",
+        "feature_required",
+        "pipeline_error",
+        "migration_required",
+        "bad_gateway",
+        "service_unavailable",
+        "gateway_timeout",
+        "internal_error",
+    ),
 )
 def test_problem_type_metadata(problem_type: ProblemType, expected_status: int, expected_title: str) -> None:
     problem = ProblemDetail.from_type(problem_type, detail="d")

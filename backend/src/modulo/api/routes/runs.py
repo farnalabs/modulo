@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,7 +29,10 @@ from modulo.api.dependencies import (
     require_permission,
     require_permission_any_credential,
 )
-from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
+from modulo.api.middleware.sensitive_mask import (
+    is_sensitive_key,
+    mask_sensitive_value,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
@@ -51,7 +55,9 @@ from modulo.core.pipeline_engine.recovery import (
     recover_node,
 )
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
@@ -986,6 +992,8 @@ async def trigger_run(
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
 
+    except StorageExhaustedError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -1630,12 +1638,21 @@ async def get_run_workspace_events(
 def _mask_output_value(value: Any, *, _depth: int = 0) -> Any:
     """Recursively mask sensitive string fields in *value*.
 
-    Traverses dicts, lists, and simple values.  String values whose keys
-    match :func:`is_sensitive_key` are replaced with the standard mask.
+    Two complementary strategies are applied:
+
+    1. **Key-name masking** (existing): string values whose key matches
+       :func:`is_sensitive_key` are replaced wholesale with the standard mask.
+    2. **Value-pattern masking** (FAR-392): every string value is also scanned
+       for gitleaks-style secret VALUES (API keys, tokens, private keys,
+       connection strings, JWTs, ...) regardless of the key it sits under, so
+       secrets in free text or under arbitrary keys are masked too.
+
     Nones and non-string atomic values pass through unchanged.
     """
     if _depth > 20:
         return value
+    if isinstance(value, str):
+        return mask_secret_values_in_text(value)
     if isinstance(value, dict):
         return {
             k: (
@@ -2211,7 +2228,6 @@ def _mask_prompt_text(text: str) -> str:
     password, key, credential) with bullet characters. Also redacts
     Authorization/Bearer headers and JWT-like tokens regardless of key name.
     """
-    import re
 
     masked = text
     for pattern, replacement in _SENSITIVE_MASK_PATTERNS:

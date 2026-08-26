@@ -640,3 +640,77 @@ def test_idempotent_non_bool_error_carries_node_id():
     issue = next(i for i in result.issues if i.code == "NODE_IDEMPOTENT_INVALID")
     assert issue.node_id == "node-x"
     assert "idempotent" in issue.message
+
+
+# ---------------------------------------------------------------------------
+# _check_node_send_budget — FAR-410 node budget reconcile warning
+# ---------------------------------------------------------------------------
+
+
+def test_send_budget_absent_is_clean():
+    """Nodes without fanout keys (every existing graph) get no warning."""
+    for node in ({"id": "node-a"}, {"id": "node-b", "timeout_seconds": 60}):
+        graph = {"nodes": [node], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_node_send_budget(graph, result)
+        assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" not in _codes(result)
+        assert result.is_valid
+
+
+def test_send_budget_warns_when_fanout_exceeds_wait_for():
+    """fanout_cardinality x per_item_budget > node_wait_for → advisory warning."""
+    node = {
+        "id": "fanout-node",
+        "fanout_cardinality": 20,
+        "per_item_budget": 5.0,
+        "node_wait_for": 30.0,
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_node_send_budget(graph, result)
+    assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" in _codes(result)
+    # advisory only — the graph stays valid
+    assert result.is_valid
+
+
+def test_send_budget_uses_timeout_seconds_as_wait_for_fallback():
+    """node_wait_for falls back to timeout_seconds when the former is absent."""
+    node = {
+        "id": "fanout-node",
+        "fanout_cardinality": 20,
+        "per_item_budget": 5.0,
+        "timeout_seconds": 30.0,
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_node_send_budget(graph, result)
+    assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" in _codes(result)
+
+
+def test_send_budget_clean_when_within_budget():
+    """fanout x per_item <= wait_for is fine (no warning)."""
+    node = {
+        "id": "fanout-node",
+        "fanout_cardinality": 3,
+        "per_item_budget": 5.0,
+        "node_wait_for": 60.0,
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_node_send_budget(graph, result)
+    assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" not in _codes(result)
+
+
+def test_send_budget_malformed_values_skipped():
+    """Non-numeric fanout/budget values are skipped, not warned about."""
+    node = {
+        "id": "fanout-node",
+        "fanout_cardinality": "many",
+        "per_item_budget": -1,
+        "node_wait_for": 30.0,
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_node_send_budget(graph, result)
+    assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" not in _codes(result)
+    assert result.is_valid

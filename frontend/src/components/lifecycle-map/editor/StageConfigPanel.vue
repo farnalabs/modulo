@@ -18,7 +18,7 @@
     <div>
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.type') }}</span>
       <div class="grid grid-cols-2 gap-2">
-        <button
+        <button type="button"
           v-for="opt in stageTypeOptions"
           :key="opt.value"
           :class="[

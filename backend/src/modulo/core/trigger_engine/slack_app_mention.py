@@ -224,6 +224,179 @@ def _slack_dedup_hash(event_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _trigger_failure_hash(trigger_id: uuid.UUID) -> str:
+    """Dedup hash used for pre-dedup audit events (namespaced by trigger)."""
+    return _slack_dedup_hash(str(trigger_id))
+
+
+async def _resolve_signing_secret(trigger_id: uuid.UUID, cfg: dict[str, Any]) -> str:
+    """Decode the trigger's Slack signing secret, falling back to the raw
+    value if decryption fails."""
+    signing_secret_raw = cfg.get("signing_secret")
+    if not signing_secret_raw:
+        raise SlackSignatureError("Slack signing secret is not configured for this trigger")
+    try:
+        from modulo.settings import get_settings as _get_settings
+
+        return decode_stored_secret(signing_secret_raw, _get_settings().fernet_key)
+    except Exception:
+        _log.exception("slack_app_mention.signing_secret_decrypt_failed trigger=%s", trigger_id)
+        return str(signing_secret_raw)
+
+
+async def _parse_mention(
+    session: AsyncSession,
+    *,
+    engine: TriggerEngine,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    raw_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Parse the app_mention envelope, logging and re-raising typed errors.
+
+    Non-app_mention events and malformed payloads are audited (with a
+    TriggerEvent) and re-raised so the caller can map them to the right status.
+    A ``SlackChallengeNotFoundError`` (a routing error) is re-raised untouched.
+    """
+    try:
+        return parse_app_mention_payload(raw_payload)
+    except SlackChallengeNotFoundError:
+        # A url_verification payload reaching the engine is a routing error —
+        # the route layer handles challenges before calling the engine.
+        raise
+    except SlackEventTypeError as exc:
+        _log.info("Slack event not an app_mention for trigger %s: %s", trigger_id, exc)
+        await engine._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=_trigger_failure_hash(trigger_id),
+            result="event_type_not_accepted",
+            error_detail=str(exc)[:200],
+        )
+        raise
+    except SlackAppMentionParseError as exc:
+        _log.warning("Slack app_mention payload parse failed for trigger %s: %s", trigger_id, exc)
+        await engine._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=_trigger_failure_hash(trigger_id),
+            result="parse_failed",
+            error_detail=str(exc)[:200],
+        )
+        raise
+
+
+async def _load_pipeline_rate_limit(session: AsyncSession, pipeline_id: uuid.UUID) -> dict[str, Any] | None:
+    """Look up the pipeline's rate-limit config when none is set on the trigger.
+
+    Uses the RLS execution hatch so a team-private pipeline's config is
+    readable in the org-only (no user principal) Slack automation context.
+    """
+    from modulo.db.models.pipeline import Pipeline
+
+    await set_rls_execution_context(session)
+    pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+    pipeline = pipe_result.scalar_one_or_none()
+    return pipeline.rate_limit_config if pipeline is not None else None
+
+
+async def _check_rate_limit(
+    session: AsyncSession,
+    *,
+    engine: TriggerEngine,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    input_payload: dict[str, Any],
+    cfg: dict[str, Any],
+    dedup_hash: str,
+) -> tuple[str | None, int | None, int | None]:
+    """Resolve and enforce the rate limit.
+
+    Returns ``(rate_limit_key, max_triggers, window_seconds)``. When no rate
+    limit applies, returns ``(None, None, None)``. Raises
+    ``PipelineRateLimitError`` when the rate limit is exceeded.
+    """
+    pipeline_rate_limit = cfg.get("rate_limit")
+    if pipeline_rate_limit is None:
+        pipeline_rate_limit = await _load_pipeline_rate_limit(session, pipeline_id)
+    if not pipeline_rate_limit or not pipeline_rate_limit.get("max_triggers"):
+        return None, None, None
+
+    max_triggers = int(pipeline_rate_limit["max_triggers"])
+    window_seconds = int(pipeline_rate_limit.get("window_seconds", _MAX_RATE_LIMIT_WINDOW_FALLBACK))
+    rate_limit_key = engine._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+    recent_count = await engine._count_recent_rate_limited(session, pipeline_id, rate_limit_key, window_seconds)
+    if recent_count >= max_triggers:
+        _log.warning(
+            "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+            pipeline_id,
+            recent_count,
+            max_triggers,
+            rate_limit_key,
+        )
+        await engine._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=dedup_hash,
+            result="rate_limited",
+        )
+        raise PipelineRateLimitError(pipeline_id, rate_limit_key, max_triggers, window_seconds)
+    return rate_limit_key, max_triggers, window_seconds
+
+
+async def _create_run(
+    session: AsyncSession,
+    *,
+    engine: TriggerEngine,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    input_payload: dict[str, Any],
+    cfg: dict[str, Any],
+    rate_limit_key: str | None,
+    dedup_hash: str,
+    max_triggers: int | None,
+    window_seconds: int | None,
+) -> Run:
+    """Create the Run, mapping the rate-limit conflict to ``PipelineRateLimitError``."""
+    refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
+    try:
+        return await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type="slack_app_mention",
+            input_payload=input_payload,
+            trigger_id=trigger_id,
+            rate_limit_key=rate_limit_key,
+            work_item_refs=refs,
+        )
+    except RateLimitConflictError as exc:
+        _log.warning("Rate limit conflict for pipeline %s: %s", pipeline_id, exc.rate_limit_key)
+        await engine._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=dedup_hash,
+            result="rate_limited",
+        )
+        raise PipelineRateLimitError(
+            pipeline_id,
+            exc.rate_limit_key,
+            max_triggers if max_triggers is not None else 0,
+            window_seconds if window_seconds is not None else 0,
+        ) from exc
+
+
 async def handle_app_mention(
     session: AsyncSession,
     *,
@@ -260,16 +433,7 @@ async def handle_app_mention(
         trigger = await engine._load_trigger(session, trigger_id, org_id)
         cfg = trigger.config_json or {}
 
-        signing_secret_raw: str | None = cfg.get("signing_secret")
-        if not signing_secret_raw:
-            raise SlackSignatureError("Slack signing secret is not configured for this trigger")
-        try:
-            from modulo.settings import get_settings as _get_settings
-
-            signing_secret = decode_stored_secret(signing_secret_raw, _get_settings().fernet_key)
-        except Exception:
-            _log.exception("slack_app_mention.signing_secret_decrypt_failed trigger=%s", trigger_id)
-            signing_secret = signing_secret_raw
+        signing_secret = await _resolve_signing_secret(trigger_id, cfg)
 
         # X-Slack-Request-Timestamp replay window check
         verify_slack_timestamp(slack_timestamp)
@@ -281,7 +445,7 @@ async def handle_app_mention(
                 session,
                 trigger=trigger,
                 org_id=org_id,
-                payload_hash=_slack_dedup_hash(str(trigger_id)),
+                payload_hash=_trigger_failure_hash(trigger_id),
                 result="hmac_failed",
             )
             raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
@@ -290,40 +454,14 @@ async def handle_app_mention(
         # delivery does not consume a dedup slot. Read failures propagate.
         await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="slack_app_mention")
 
-        # Parse the app_mention envelope. Non-app_mention events are logged and
-        # skipped (Slack may deliver other event types to the same URL).
-        try:
-            mention = parse_app_mention_payload(raw_payload)
-        except SlackChallengeNotFoundError:
-            # A url_verification payload reaching the engine is a routing error —
-            # the route layer handles challenges before calling the engine.
-            raise
-        except SlackEventTypeError as exc:
-            _log.info(
-                "Slack event not an app_mention for trigger %s: %s",
-                trigger_id,
-                exc,
-            )
-            await engine._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=_slack_dedup_hash(str(trigger_id)),
-                result="event_type_not_accepted",
-                error_detail=str(exc)[:200],
-            )
-            raise
-        except SlackAppMentionParseError as exc:
-            _log.warning("Slack app_mention payload parse failed for trigger %s: %s", trigger_id, exc)
-            await engine._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=_slack_dedup_hash(str(trigger_id)),
-                result="parse_failed",
-                error_detail=str(exc)[:200],
-            )
-            raise
+        mention = await _parse_mention(
+            session,
+            engine=engine,
+            trigger=trigger,
+            org_id=org_id,
+            trigger_id=trigger_id,
+            raw_payload=raw_payload,
+        )
 
         # Deduplication by Slack event_id
         dedup_hash = _slack_dedup_hash(mention["event_id"])
@@ -364,79 +502,33 @@ async def handle_app_mention(
         mapping: dict[str, str] = cfg.get("payload_mapping", {})
         input_payload = _apply_payload_mapping(mention, mapping)
 
-        # Rate limit check
-        pipeline_rate_limit = cfg.get("rate_limit")
-        if pipeline_rate_limit is None:
-            from modulo.db.models.pipeline import Pipeline
+        rate_limit_key, max_triggers, window_seconds = await _check_rate_limit(
+            session,
+            engine=engine,
+            trigger=trigger,
+            org_id=org_id,
+            trigger_id=trigger_id,
+            pipeline_id=trigger.pipeline_id,
+            input_payload=input_payload,
+            cfg=cfg,
+            dedup_hash=dedup_hash,
+        )
 
-            # Org-only context (Slack automation has no user principal) — the
-            # execution hatch lets the rate-limit fallback read a team-private
-            # pipeline's config.
-            await set_rls_execution_context(session)
-            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-            pipeline = pipe_result.scalar_one_or_none()
-            if pipeline is not None:
-                pipeline_rate_limit = pipeline.rate_limit_config
-
-        if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
-            max_triggers = int(pipeline_rate_limit["max_triggers"])
-            window_seconds = int(pipeline_rate_limit.get("window_seconds", _MAX_RATE_LIMIT_WINDOW_FALLBACK))
-            rate_limit_key = engine._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-            recent_count = await engine._count_recent_rate_limited(
-                session, trigger.pipeline_id, rate_limit_key, window_seconds
-            )
-            if recent_count >= max_triggers:
-                _log.warning(
-                    "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
-                    trigger.pipeline_id,
-                    recent_count,
-                    max_triggers,
-                    rate_limit_key,
-                )
-                await engine._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=dedup_hash,
-                    result="rate_limited",
-                )
-                raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
-        else:
-            rate_limit_key = None
-
-        # Create run
-        refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-        try:
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="slack_app_mention",
-                input_payload=input_payload,
-                trigger_id=trigger_id,
-                rate_limit_key=rate_limit_key,
-                work_item_refs=refs,
-            )
-        except RateLimitConflictError as exc:
-            _log.warning(
-                "Rate limit conflict for pipeline %s: %s",
-                trigger.pipeline_id,
-                exc.rate_limit_key,
-            )
-            await engine._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=dedup_hash,
-                result="rate_limited",
-            )
-            raise PipelineRateLimitError(
-                trigger.pipeline_id,
-                exc.rate_limit_key,
-                max_triggers,
-                window_seconds,
-            ) from exc
+        run = await _create_run(
+            session,
+            engine=engine,
+            trigger=trigger,
+            org_id=org_id,
+            trigger_id=trigger_id,
+            pipeline_id=trigger.pipeline_id,
+            snapshot_id=snapshot_id,
+            input_payload=input_payload,
+            cfg=cfg,
+            rate_limit_key=rate_limit_key,
+            dedup_hash=dedup_hash,
+            max_triggers=max_triggers,
+            window_seconds=window_seconds,
+        )
 
         # Audit log
         trigger_event = await engine._log_event(

@@ -113,7 +113,7 @@ describe('useUiCommandExecutor select → combobox / scoped option lookup', () =
 
     const trigger = document.createElement('button')
     trigger.setAttribute('role', 'combobox')
-    trigger.setAttribute('data-testid', 'cb-trigger')
+    trigger.dataset.testid = 'cb-trigger'
     trigger.textContent = 'Pick one'
     document.body.appendChild(trigger)
 
@@ -122,7 +122,7 @@ describe('useUiCommandExecutor select → combobox / scoped option lookup', () =
     // opens. Without the click-to-open fix the option is never in the DOM, so
     // this fails (the pre-fix code queried el.querySelector on the trigger).
     const option = document.createElement('span')
-    option.setAttribute('data-value', 'alpha')
+    option.dataset.value = 'alpha'
     option.textContent = 'Alpha'
     option.addEventListener('click', () => {
       option.dataset.clicked = 'true'
@@ -150,7 +150,7 @@ describe('useUiCommandExecutor select → combobox / scoped option lookup', () =
     // NOT inside any listbox/menu overlay. A document-scoped query would match
     // this element first (it appears earlier in the document).
     const stray = document.createElement('span')
-    stray.setAttribute('data-value', 'alpha')
+    stray.dataset.value = 'alpha'
     stray.textContent = 'stray'
     stray.addEventListener('click', () => {
       stray.dataset.clicked = 'true'
@@ -159,14 +159,14 @@ describe('useUiCommandExecutor select → combobox / scoped option lookup', () =
 
     const trigger = document.createElement('button')
     trigger.setAttribute('role', 'combobox')
-    trigger.setAttribute('data-testid', 'cb-trigger')
+    trigger.dataset.testid = 'cb-trigger'
     trigger.textContent = 'Pick one'
     document.body.appendChild(trigger)
 
     // The real option only exists once the popover opens (teleported overlay
     // rendered as role="listbox" at body level, appended after the stray).
     const option = document.createElement('span')
-    option.setAttribute('data-value', 'alpha')
+    option.dataset.value = 'alpha'
     option.textContent = 'Alpha'
     option.addEventListener('click', () => {
       option.dataset.clicked = 'true'

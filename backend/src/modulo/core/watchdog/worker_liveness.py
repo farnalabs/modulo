@@ -45,6 +45,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -348,6 +349,23 @@ async def _send_email_alert(
         _log.warning("watchdog.email_unknown_failure: %s", exc)
 
 
+async def _dispatch_channel(coro_factory: Callable[[], Awaitable[None]], log_key: str) -> None:
+    """Run one alert channel, isolating its failure from the others.
+
+    Each channel is wrapped in its own try/except so one channel's failure
+    never prevents the others from delivering (mirrors the error-forwarder
+    isolation lesson). ``asyncio.CancelledError`` is re-raised (the watchdog
+    task is being torn down) while any other exception is logged with the
+    channel-specific *log_key* and swallowed so the caller never raises.
+    """
+    try:
+        await coro_factory()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("watchdog.%s: %s", log_key, exc)
+
+
 async def _send_alerts(
     settings: Settings,
     conditions: list[str],
@@ -362,26 +380,14 @@ async def _send_alerts(
     """
     text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
     if settings.alert_webhook_url:
-        try:
-            await _post_generic_webhook(settings, text)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("watchdog.channel_generic_failed: %s", exc)
+        await _dispatch_channel(lambda: _post_generic_webhook(settings, text), "channel_generic_failed")
     if settings.alert_teams_webhook_url:
-        try:
-            await _post_teams_webhook(settings, text)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("watchdog.channel_teams_failed: %s", exc)
+        await _dispatch_channel(lambda: _post_teams_webhook(settings, text), "channel_teams_failed")
     if settings.alert_email_to and settings.smtp_host:
-        try:
-            await _send_email_alert(settings, conditions, recovery_state=recovery_state)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("watchdog.channel_email_failed: %s", exc)
+        await _dispatch_channel(
+            lambda: _send_email_alert(settings, conditions, recovery_state=recovery_state),
+            "channel_email_failed",
+        )
 
 
 async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: list[str]) -> None:

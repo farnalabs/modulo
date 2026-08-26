@@ -491,6 +491,16 @@ def test_node_return_missing_node_returns_none() -> None:
         None,
         42,
     ],
+    ids=[
+        "wallclock",
+        "output-plus-extra",
+        "plain-string-output",
+        "artifacts-and-manual",
+        "empty-artifacts",
+        "plain-string",
+        "none",
+        "int",
+    ],
 )
 def test_node_telemetry_legacy_equals_finalize_node_output_dict(node_value: Any) -> None:
     outputs = {"n1": node_value}

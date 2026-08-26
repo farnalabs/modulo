@@ -50,6 +50,24 @@ class TestEvaluateCondition:
             ("[0].count > `0`", [{"count": 42}], True),
             ("[0].x", [{"x": Decimal("1.5")}], True),
         ],
+        ids=[
+            "none-true",
+            "none-false",
+            "empty-true",
+            "empty-false",
+            "jmsp-open",
+            "jmsp-closed",
+            "length-gt0",
+            "length-eq999",
+            "missing-field",
+            "index-status-open",
+            "index-status-empty",
+            "index-nested",
+            "index-nested-empty",
+            "flag-true",
+            "count-gt0",
+            "decimal-x",
+        ],
     )
     def test_evaluate_condition(self, expr: str | None, records: list[dict], expected: bool) -> None:
         result = ConnectorResult(records=records, total=len(records))
@@ -92,6 +110,18 @@ class TestBuildPollingConnector:
             ),
             ("filesystem", {}, {}, None, "requires 'base_path'"),
             ("unknown", {}, {}, None, "Unsupported connector type"),
+        ],
+        ids=[
+            "filesystem",
+            "github",
+            "gitlab",
+            "gitlab-base-url",
+            "slack",
+            "jira-instance",
+            "jira-missing-instance",
+            "jira-base-url",
+            "filesystem-missing-base",
+            "unknown",
         ],
     )
     def test_build_polling_connector(

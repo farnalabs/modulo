@@ -22,6 +22,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    storage_exhausted_exception_handler,
     unhandled_exception_handler,
     validation_exception_handler,
 )
@@ -36,6 +37,7 @@ from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
+from modulo.api.routes.admin_capacity import router as admin_capacity_router
 from modulo.api.routes.admin_dev_mode import router as admin_dev_mode_router
 from modulo.api.routes.admin_email import router as admin_email_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
@@ -125,6 +127,7 @@ from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
 from modulo.core.seed_data.catalog import FLAGS, TIERS
+from modulo.db.capacity import StorageExhaustedError
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
@@ -1148,6 +1151,7 @@ app.include_router(admin_system_config_router)
 app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(admin_housekeeping_router)
+app.include_router(admin_capacity_router)
 app.include_router(auth_router)
 app.include_router(sso_router)
 app.include_router(analytics_router)
@@ -1232,4 +1236,5 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)

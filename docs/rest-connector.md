@@ -1,10 +1,9 @@
-# Generic REST Connector
+# REST Connector
 
-The generic REST connector (`ConnectorType.REST`, displayed as **rest** in the
-connector list) lets you point Modulo at an arbitrary HTTP endpoint without
-writing a vendor-specific client. You declare one endpoint (or a map of named
-resources) and pipeline nodes call it with runtime variables rendered into the
-request.
+The generic REST connector (`ConnectorType.REST`) lets a Modulo pipeline make
+an arbitrary HTTP request to an external system configured by the operator —
+no per-vendor client. It is the FAR-401 "point Modulo at any external system"
+implementation: a declarative, templated HTTP call.
 
 Because it is **verb-agnostic**, the connector does not infer meaning from the
 HTTP verb. You declare the method; the node surface fixes the access-control
@@ -19,109 +18,87 @@ A `PUT` / `PATCH` / `DELETE` mutates the remote system, so it belongs on the
 **write** surface even though it is not a "create". The capability set is
 `{read, write}`.
 
-## Config shape (`config_json`)
+## Configuration (`config_json`)
 
-All template fields render through a sandboxed Jinja environment against the
-runtime variables supplied per call (`ConnectorQuery.filters` for `query()`,
-`ConnectorPayload.data` for `write()`).
+A single connector instance describes one endpoint (or a map of named
+resources, each with its own endpoint). All template fields are rendered with
+Jinja2 against the runtime variables supplied per call
+(`ConnectorQuery.filters` for `query()`, `ConnectorPayload.data` for
+`write()`).
 
-| Key | Type | Required | Meaning |
+| Field | Type | Default | Description |
 |---|---|---|---|
-| `base_url` | string | yes | Scheme + host, e.g. `https://api.example.com` |
-| `method` | string | no | Default verb (`GET` on read, `POST` on write) |
-| `path` | string | yes (or per resource) | URL path/pattern, e.g. `/v1/users/{{ user_id }}` |
-| `headers` | map | no | Header templates |
-| `params` | map | no | Query params (URL-encoded by httpx) |
-| `body` | map | no | JSON body template (write path) |
-| `records_path` | string | no | JMESPath expression into the JSON response for records |
-| `next_cursor_path` | string | no | JMESPath cursor for response-driven pagination (see below) |
-| `passthrough` | bool | no | Force a single raw-body record wrap |
-| `max_response_size` | int | no | Response body cap (default 10 MiB) |
-| `idempotency_header` | string | no | Header name that makes a non-GET/HEAD request safe to retry |
-| `allowed_hosts` | list | no | Scheme/host allowlist |
+| `base_url` | `str` | — (required) | Scheme + host of the endpoint. `http://`/`https://` only. |
+| `method` | `str` | `GET` (query) / `POST` (write) | HTTP verb. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`. |
+| `path` | `str` | — (required) | Path template appended to `base_url` (e.g. `/v1/users/{{ user_id }}`). |
+| `headers` | `dict` | `{}` | Header templates. May not override auth/transport headers (`authorization`, `host`, `content-length`, …). |
+| `params` | `dict` | `{}` | Query parameter templates (URL-encoded by httpx). |
+| `body` | `dict` | `{}` | JSON body template (write path). |
+| `operations` | `dict` | `{}` | Per-resource override map: `{ "<resource>": { "method", "path", "headers", "params", "body", "records_path", "next_cursor_path", "passthrough", "idempotency_header" } }`. |
+| `records_path` | `str` | `null` | JMESPath expression into the JSON response for records (e.g. `data.items`). |
+| `next_cursor_path` | `str` | `null` | Optional pagination cursor (JMESPath). |
+| `allowed_hosts` | `list[str]` | `[]` | Optional scheme/host allowlist. |
+| `passthrough` | `bool` | `false` | Force a single-record `{"body", "content_type", "status_code", "headers"}` wrap of the raw body. |
+| `max_response_size` | `int` | `10485760` | Max response body bytes before the read aborts (10 MiB default). |
+| `timeout_seconds` | `float` | `30.0` | Per-request timeout (connect + read/write) for the pooled client. |
+| `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert — the SSRF guard still blocks loopback/metadata targets regardless. |
+| `idempotency_header` | `str` | `null` | Header that makes a non-`GET`/`HEAD` request safe to retry; a fresh UUID is injected per attempt. |
 
 You can also declare **operations** — a map of named resources, each with its
 own method/path/headers/params/body/records_path. When present, a node must
 reference a declared resource; requesting an undeclared resource fails fast.
 
-## Auth config (`credentials`)
+## Authentication (`credentials_ciphertext` / `creds`)
 
-Credentials are stored as an encrypted JSON dict, so multi-field auth round-trips.
-`auth_mode` is one of `bearer`, `api_key`, or `basic`.
+Credentials are stored as an encrypted JSON dict so multi-field creds
+round-trip. Read `auth_mode` + named fields from that dict:
 
-| mode | fields |
+| `auth_mode` | Required fields |
 |---|---|
 | `bearer` | `token` |
-| `api_key` | `api_key` + `in` (`header` default / `query`) + `header_name` (default `X-API-Key`) or `query_param_name` (default `api_key`) |
+| `api_key` | `api_key`, and `in` (`header` [default] or `query`), `header_name` (default `X-API-Key`) for header mode, `query_param_name` (default `api_key`) for query mode |
 | `basic` | `username`, `password` |
 
 Credentials are never written to LangGraph state, checkpoint, OTel span, or log;
-error detail redacts secret values. A query-mode `api_key` is injected after the
-injection guard, so a secret containing characters a filter would reject still
-round-trips.
+error detail redacts secret values.
 
-## Egress allowlist (admin guide)
+## Behaviour
 
-To keep the connector from issuing requests to arbitrary internet targets,
-set `allowed_hosts` in `config_json`:
+### Verb-agnostic read/write mapping
 
-```json
-{ "allowed_hosts": ["api.example.com", "internal.example.com"] }
-```
+The capability contract (`read` / `write`) maps onto the two public surfaces,
+not onto any single verb:
 
-The host must equal an entry or be a subdomain of an entry (`us.api.example.com`
-matches `api.example.com`). The scheme is restricted to `http`/`https` and an
-SSRF guard blocks private/loopback/metadata targets. If `allowed_hosts` is
-unset, the connector still enforces the scheme restriction and SSRF guard — it
-just accepts any public host.
+- `query()` is the **read** surface (ACL `read`). It performs the operation's
+  verb (default `GET`).
+- `write()` is the **write** surface (ACL `write`). It performs the operation's
+  verb (default `POST`). A `PUT`/`DELETE`/`PATCH` mutates the remote, so it
+  belongs on the **write** surface. The connector never infers semantics from
+  the verb.
 
-## Result shape and UNKNOWN semantics
+### Transport
 
-`query()` always returns a `ConnectorResult` whose `records` is a **list of
-JSON-serializable dicts**, so a pipeline node can evaluate a JMESPath expression
-against it:
+A single lazily-created, connection-pooled `httpx.AsyncClient` is reused across
+calls and closed via `close()`. The client never follows redirects, so HTTP 3xx
+responses surface as errors (with `location`/`Retry-After` metadata) rather
+than silently passing through.
 
-- A JSON response with a configured `records_path` yields the list found there.
-- A top-level JSON array is treated as the record list.
-- A JSON object with no `records_path` is wrapped as a single record.
-- **Raw / passthrough** content-types (CSV, XML, plain text) yield a single
-  uniform record — `{body, content_type, status_code, headers}` — when **no
-  `records_path` is configured** (or when `passthrough` is set). The connector
-  does **not** parse XML/CSV itself — the record body is the raw string, which a
-  downstream node (or Remy) can interpret. When a `records_path` IS configured
-  against a non-JSON body, extraction cannot run, so the connector returns an
-  empty records list rather than fabricating a record. This keeps the shape
-  contract stable: the result is **never** a bare string that would break the
-  JMESPath consumer.
+### Retry
 
-A non-2xx/3xx response raises a typed error rather than silently passing a
-redirect through — so a downstream node sees a failure, not an empty or
-misleading result. That is the **UNKNOWN** you surface on failure: the connector
-reports `HTTP <status>` plus `location`/`Retry-After` metadata, and the record
-list is not fabricated.
+Idempotent verbs (`GET`/`HEAD`) are retried up to 3x with exponential backoff
++ jitter, honouring `Retry-After` and the retryable status set
+(`429`/`5xx`). Mutating verbs are retried only when the operation declares an
+`idempotency_header`. Transport failures are retried for idempotent verbs and
+surface as a typed `RESTConnectError`. The retry sleep uses the injected clock
+seam, so timing is deterministic under test.
 
-## Determinism and ordering caveats
+### Security guards
 
-- **Pagination is response-driven and out of v1.** The connector reads a
-  `next_cursor_path` in an **already-fetched** response body and returns it as
-  `next_cursor`. It does **not** follow cursors or loop pages on its own — the
-  pipeline node drives the loop by feeding the cursor back. A direct start
-  cursor (`ConnectorQuery.cursor`) is rejected with an actionable error because
-  REST pagination is not offset/token based up-front. This is deferred beyond
-  v1.
-- **HTTP response order is not guaranteed.** For an endpoint that returns a
-  JSON array or an unordered map, the record order is whatever the server
-  returns; the connector does not sort. If your pipeline depends on ordering
-  (e.g. "latest first"), require it from the endpoint (a sort param) rather than
-  relying on insertion order.
-- **Retries can reorder side effects.** Idempotent verbs (`GET`/`HEAD`) retry on
-  `429`/`5xx` with backoff. Mutating verbs retry **only** when `idempotency_header`
-  is declared, and then the connector sends a fresh idempotency key per attempt.
-  A retried `POST` without an idempotency header is a single attempt — treat
-  indeterminate write outcomes as unknown and avoid assuming success from a
-  single 200.
-- **No redirect following.** HTTP 3xx is surfaced as an error (with
-  `location`/`Retry-After` metadata), never silently followed, so a moved
-  endpoint cannot silently read a different resource.
-- **Response bodies are capped** at `max_response_size`. A body larger than the
-  cap aborts the call rather than buffering unbounded data.
+- **SSRF**: every target URL passes a guard (bound at the composition root)
+  that blocks private/loopback/link-local/cloud-metadata/CGNAT ranges via DNS
+  resolution, and enforces the `allowed_hosts` allowlist. Disabling `verify_tls`
+  never re-enables loopback/metadata targets.
+- **Header injection**: rendered header names/values may not contain CR/LF or
+  control characters, and may not override auth/transport headers.
+- **Redaction**: credential values are stripped from error detail so a secret
+  never echoes into logs or spans.

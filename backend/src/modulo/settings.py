@@ -114,6 +114,25 @@ class Settings(BaseSettings):
     modulo_max_local_concurrency: int = Field(2)
 
     # ------------------------------------------------------------------
+    # DB capacity monitor + 98% hard-stop (FAR-425/426)
+    # ------------------------------------------------------------------
+    # "fixed" (self-hosted, ENFORCED), "elastic" (Aurora / horizontally-scaled,
+    # advisory only — no hard-stop), or "disabled". Env var: DB_CAPACITY_MODE.
+    db_capacity_mode: str = Field("fixed")
+    # Total capacity bytes used to compute capacity_percent for mode="fixed".
+    # If left None, no percent is reported (capacity_percent=None, alert "ok"),
+    # the monitor is disabled and the 98% hard-stop never fires — an operator
+    # MUST set DB_CAPACITY_BYTES to enable it. Env var: DB_CAPACITY_BYTES.
+    db_capacity_bytes: int | None = Field(default=None)
+    # Operator bypass for the 98% hard-stop (e.g. a deliberate migration that
+    # must write at/over the limit). Does NOT disable the monitor. Env var:
+    # DB_CAPACITY_BYPASS=1.
+    db_capacity_bypass: bool = Field(False)
+    # The percent of configured capacity at/above which a NEW run is refused
+    # (mode="fixed" only). Env var: DB_CAPACITY_HARD_STOP_PCT.
+    db_capacity_hard_stop_pct: float = Field(98.0, ge=1.0, le=100.0)
+
+    # ------------------------------------------------------------------
     # SAQ (Celery removed in PR C) — plan F4 Settings section
     # ------------------------------------------------------------------
     # SAQ is the ONLY dispatch path — dispatch_run always enqueues to SAQ and

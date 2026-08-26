@@ -31,7 +31,11 @@ def test_safe_datetime_passes_through_parseable_iso_strings(value: str) -> None:
     assert safe_datetime(value) is not None
 
 
-@pytest.mark.parametrize("value", [None, True, False, 0, 42, 1.5, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "value",
+    [None, True, False, 0, 42, 1.5, float("nan"), float("inf")],
+    ids=["none", "true", "false", "zero", "positive", "float", "nan", "inf"],
+)
 def test_safe_datetime_rejects_non_string_scalars(value: object) -> None:
     """bool/number timestamps would crash ``fromisoformat`` with a TypeError."""
     assert safe_datetime(value) is None

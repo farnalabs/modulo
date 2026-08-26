@@ -125,13 +125,18 @@ from modulo.core.library_service import (
     get_primitive_by_slug,
     list_primitives,
 )
-from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.mcp.scope_validator import (
+    MCPAuthorizationError,
+    check_tool_scope,
+    set_request_allowed_tools,
+)
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
 )
+from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -316,6 +321,12 @@ _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
+# FAR-436: node-level allowed_tools for a run-scoped sandbox key. Set by
+# ``_authenticate_api_key`` when the caller is a run-scoped key; None (default)
+# means no node-level narrowing (legacy behaviour). Empty list = deny-all.
+_ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "mcp_node_allowed_tools", default=None
+)
 
 
 class McpAuthContextError(LookupError):
@@ -357,6 +368,32 @@ def _ctx_team_id_val() -> uuid.UUID | None:
     to ``None`` — they are org-role-only, matching the REST layer.
     """
     return _ctx_team_id.get(None)
+
+
+def _ctx_node_allowed_tools_val() -> list[str] | None:
+    """Get the node-level allowed_tools for the current request (None = no narrowing).
+
+    Set by ``_authenticate_api_key`` when the caller is a run-scoped sandbox
+    key whose node declares ``capability_scope.allowed_tools``. ``None`` (the
+    default) preserves pre-scope behaviour; an empty list is deny-by-default.
+    """
+    return _ctx_node_allowed_tools.get(None)
+
+
+def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
+    """Reuse the ``check_tool_scope`` chokepoint with node-level allowed_tools (FAR-436).
+
+    Every live MCP agent tool-call is gated at this single chokepoint: the role
+    must still permit the tool, AND (when the node declares
+    ``capability_scope.allowed_tools``) the tool must be on the node's
+    allow-list. Absent scope = legacy behaviour (role check only).
+    """
+    check_tool_scope(
+        _ctx_role_val(),
+        tool_name,
+        action=action,
+        allowed_tools=_ctx_node_allowed_tools_val(),
+    )
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
@@ -743,6 +780,77 @@ def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None
     return token, None
 
 
+def _extract_node_id_from_key_name(key_name: str | None) -> str | None:
+    """Parse a per-node sandbox key ``name`` for its ``node_id`` (FAR-436).
+
+    ``mint_run_api_key`` names run-scoped keys ``run:<run_id>:node:<node_id>``.
+    Returns ``None`` when the name is not a run-scoped sandbox key (a normal
+    user/org API key), so those callers are never narrowed.
+    """
+    if not key_name:
+        return None
+    marker = ":node:"
+    idx = key_name.rfind(marker)
+    if idx < 0:
+        return None
+    node_id = key_name[idx + len(marker) :].strip()
+    return node_id or None
+
+
+async def _node_allowed_tools_for_key(
+    *, org_id: uuid.UUID, run_id: uuid.UUID | None, key_name: str
+) -> list[str] | None:
+    """Resolve a run-scoped key's node-level ``capability_scope.allowed_tools`` (FAR-436).
+
+    A run-scoped sandbox key (``run_id`` set) is minted per sandbox_agent NODE,
+    so the node's snapshot ``capability_scope`` narrows the MCP tools that
+    node's agent may call. Returns ``None`` for a non-run key or a node with no
+    ``capability_scope`` (unrestricted — the pre-scope default); an explicit
+    empty allow-list is returned untouched (deny-by-default). Any resolution
+    failure returns ``None`` (unrestricted) with a log — a scope misread must
+    never break the agent's MCP stream, and it cannot widen beyond the Agent's
+    grants either (the role check still runs).
+    """
+    if run_id is None:
+        return None
+    node_id = _extract_node_id_from_key_name(key_name)
+    if node_id is None:
+        return None
+    from sqlalchemy import select
+
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+
+    try:
+        async with _session(org_id) as s:
+            snapshot_id = (
+                await s.execute(
+                    select(Run.snapshot_id).where(
+                        Run.id == run_id,
+                        Run.organisation_id == org_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if snapshot_id is None:
+                return None
+            snapshot = await s.get(PipelineSnapshot, snapshot_id)
+            if snapshot is None:
+                return None
+            for node in snapshot.graph_json.get("nodes", []):
+                if str(node.get("id")) == node_id:
+                    scope = node.get("capability_scope") or {}
+                    allowed = scope.get("allowed_tools")
+                    if isinstance(allowed, list):
+                        return [str(t) for t in allowed]
+                    return None
+            return None
+    except (SQLAlchemyError, TimeoutError):
+        _log.exception(
+            "mcp.scope.node_allowed_tools_resolve_failed",
+            extra={"run_id": str(run_id), "node_id": node_id},
+        )
+        return None
+
+
 async def _authenticate_api_key(
     request: Request,
     token: str,
@@ -836,6 +944,17 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
+        # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
+        # loop to the node's capability_scope.allowed_tools (deny-by-default
+        # within the scope). Non-run keys / scoped-less nodes resolve to None
+        # (unrestricted — legacy behaviour). Empty allow-list = deny-all.
+        _ctx_node_allowed_tools.set(
+            await _node_allowed_tools_for_key(
+                org_id=org_id,
+                run_id=key.run_id,
+                key_name=key.name,
+            )
+        )
         request.scope["auth_principal"] = {
             "type": "api_key",
             "org_id": str(org_id),
@@ -1094,6 +1213,16 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         if unauth is not None:
             return unauth
 
+        # FAR-418: lift the node-level allowed_tools allow-list (if the calling
+        # agent forwarded it) into the request-scoped ContextVar consumed by
+        # check_tool_scope. Absent/empty header = UNRESTRICTED, preserving the
+        # pre-scope behaviour for all non-node tool calls.
+        raw_allowed = request.headers.get("X-Modulo-Allowed-Tools")
+        if raw_allowed:
+            set_request_allowed_tools([t.strip() for t in raw_allowed.split(",") if t.strip()])
+        else:
+            set_request_allowed_tools(None)
+
         token, auth_err = _extract_bearer_token(request)
         if auth_err is not None:
             return auth_err
@@ -1313,7 +1442,7 @@ async def create_pipeline(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_pipeline")
+        _check_agent_tool_scope("create_pipeline")
         from modulo.db.crud.pipeline import create_pipeline
 
         org_id = _ctx_org_id_val()
@@ -1406,7 +1535,7 @@ async def _list_runs_impl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "list_runs")
+    _check_agent_tool_scope("list_runs")
     from modulo.db.crud.run import get_child_run_rollup
     from modulo.db.crud.run import list_runs as db_list_runs
 
@@ -1663,7 +1792,7 @@ class _AnalyticsQueryInput:
 async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "query_analytics")
+    _check_agent_tool_scope("query_analytics")
 
     org_id = _ctx_org_id_val()
     settings = get_settings()
@@ -1768,7 +1897,7 @@ async def query_analytics(
 async def _query_analytics_concurrency_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
+    _check_agent_tool_scope("query_analytics_concurrency")
 
     org_id = _ctx_org_id_val()
     settings = get_settings()
@@ -1964,7 +2093,7 @@ async def _update_pipeline_graph_impl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
+    _check_agent_tool_scope("update_pipeline_graph")
     from modulo.core.team_visibility import (
         CONNECTOR_TEAM_MISMATCH,
         connector_team_mismatch_detail,
@@ -2167,7 +2296,7 @@ async def bind_connector_to_node(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "bind_connector_to_node")
+        _check_agent_tool_scope("bind_connector_to_node")
 
         from modulo.db.crud.connector_instance import get_connector_instance
 
@@ -2290,7 +2419,7 @@ async def _trigger_pipeline_impl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "trigger_pipeline")
+    _check_agent_tool_scope("trigger_pipeline")
     if not await _trigger_pipeline_rate_allowed():
         _log.warning(
             "ratelimit.trigger_pipeline_exceeded",
@@ -2339,6 +2468,9 @@ async def trigger_pipeline(
         if exc.deleted:
             return {"error": "org_deleted", "detail": f"Organisation {exc.org_id} is deleted"}
         return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
+    except StorageExhaustedError as exc:
+        _log.warning("trigger_pipeline refused — storage exhausted (FAR-426)")
+        return {"error": "storage_exhausted", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("trigger_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -2509,7 +2641,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
 async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "get_run_output")
+    _check_agent_tool_scope("get_run_output")
     from modulo.api.routes.runs import _mask_output_value
 
     org_id = _ctx_org_id_val()
@@ -2562,7 +2694,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
 async def _get_run_evals_impl(run_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "get_run_evals")
+    _check_agent_tool_scope("get_run_evals")
     from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
     org_id = _ctx_org_id_val()
@@ -2599,7 +2731,7 @@ async def list_eval_definitions(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_eval_definitions")
+        _check_agent_tool_scope("list_eval_definitions")
         from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
         org_id = _ctx_org_id_val()
@@ -2654,7 +2786,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "cancel_run")
+    _check_agent_tool_scope("cancel_run")
     from modulo.db.crud.run import get_run, request_cancellation
 
     org_id = _ctx_org_id_val()
@@ -2703,7 +2835,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
 async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "list_pending_hitl")
+    _check_agent_tool_scope("list_pending_hitl")
     from sqlalchemy import func
 
     from modulo.db.models.pipeline import Pipeline
@@ -2959,7 +3091,7 @@ async def _review_hitl_impl(
         raise RuntimeError("_review_hitl_impl: parse returned no error and no run id")
 
     try:
-        check_tool_scope(_ctx_role_val(), "review_hitl", action=action)
+        _check_agent_tool_scope("review_hitl", action=action)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
@@ -3034,7 +3166,7 @@ async def copy_library_primitive(
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     try:
-        check_tool_scope(_ctx_role_val(), "copy_library_primitive")
+        _check_agent_tool_scope("copy_library_primitive")
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
@@ -3278,7 +3410,7 @@ async def _list_trigger_events_impl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "list_trigger_events")
+    _check_agent_tool_scope("list_trigger_events")
     from sqlalchemy import func, select
 
     org_id = _ctx_org_id_val()
@@ -3341,7 +3473,7 @@ async def list_triggers(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_triggers")
+        _check_agent_tool_scope("list_triggers")
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
         org_id = _ctx_org_id_val()
@@ -3415,7 +3547,7 @@ async def create_model_backend(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_model_backend")
+        _check_agent_tool_scope("create_model_backend")
 
         from modulo.core.mcp_setup_handoff import create_handoff
 
@@ -3480,7 +3612,7 @@ async def create_connector(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_connector")
+        _check_agent_tool_scope("create_connector")
 
         from cryptography.fernet import Fernet
 
@@ -3619,7 +3751,7 @@ async def _create_trigger_impl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    check_tool_scope(_ctx_role_val(), "create_trigger")
+    _check_agent_tool_scope("create_trigger")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -3729,7 +3861,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "get_trigger")
+        _check_agent_tool_scope("get_trigger")
 
         org_id = _ctx_org_id_val()
         tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
@@ -3974,7 +4106,7 @@ async def update_trigger(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "update_trigger")
+        _check_agent_tool_scope("update_trigger")
 
         org_id = _ctx_org_id_val()
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
@@ -4054,7 +4186,7 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "delete_trigger")
+        _check_agent_tool_scope("delete_trigger")
 
         org_id = _ctx_org_id_val()
         try:
@@ -4109,7 +4241,7 @@ async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "set_org_triggers_paused")
+        _check_agent_tool_scope("set_org_triggers_paused")
 
         org_id = _ctx_org_id_val()
 
@@ -4171,7 +4303,7 @@ async def delete_pipeline(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "delete_pipeline")
+        _check_agent_tool_scope("delete_pipeline")
 
         org_id = _ctx_org_id_val()
         try:
@@ -4209,7 +4341,7 @@ async def delete_connector(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "delete_connector")
+        _check_agent_tool_scope("delete_connector")
 
         org_id = _ctx_org_id_val()
         try:
@@ -4253,7 +4385,7 @@ async def create_secret(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_secret")
+        _check_agent_tool_scope("create_secret")
 
         if not key or not key.strip():
             return {"error": "validation_failed", "field": "key", "detail": "Secret key is required"}
@@ -4299,7 +4431,7 @@ async def list_secrets(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_secrets")
+        _check_agent_tool_scope("list_secrets")
 
         org_id = _ctx_org_id_val()
 
@@ -4351,7 +4483,7 @@ async def delete_secret(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "delete_secret")
+        _check_agent_tool_scope("delete_secret")
 
         if not key or not key.strip():
             return {"error": "validation_failed", "field": "key", "detail": "Secret key is required"}
@@ -4548,7 +4680,7 @@ async def create_api_key(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_api_key")
+        _check_agent_tool_scope("create_api_key")
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
@@ -4616,7 +4748,7 @@ async def list_api_keys() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_api_keys")
+        _check_agent_tool_scope("list_api_keys")
 
         org_id = _ctx_org_id_val()
 
@@ -4646,7 +4778,7 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "revoke_api_key")
+        _check_agent_tool_scope("revoke_api_key")
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
@@ -4700,7 +4832,7 @@ async def create_agent(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_agent")
+        _check_agent_tool_scope("create_agent")
 
         from modulo.db.crud.agent import create_agent as db_create_agent
 
@@ -5023,7 +5155,7 @@ async def create_schema(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_schema")
+        _check_agent_tool_scope("create_schema")
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
@@ -5126,7 +5258,7 @@ async def infer_schema(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "infer_schema")
+        _check_agent_tool_scope("infer_schema")
 
         # Preview feature - requires dev mode
         from modulo.settings import get_settings
@@ -5255,7 +5387,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_housekeeping")
+        _check_agent_tool_scope("list_housekeeping")
         from modulo.core.housekeeping import scan_all as hk_scan_all
 
         org_id = _ctx_org_id_val()
@@ -5369,7 +5501,7 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "perform_housekeeping")
+        _check_agent_tool_scope("perform_housekeeping")
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()

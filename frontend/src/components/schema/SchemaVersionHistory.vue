@@ -17,7 +17,7 @@
           >{{ $t('views.SchemaEditorView.published') }}</span>
           <span class="text-xs text-muted-foreground">{{ formatDate(version.created_at) }}</span>
         </div>
-        <button
+        <button type="button"
           data-testid="schema-editor-restore-version"
           class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
           @click="$emit('restore', version)"

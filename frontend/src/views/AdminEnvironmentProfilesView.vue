@@ -219,7 +219,7 @@
         <div v-if="testResult.profileId" class="card p-4">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-sm font-semibold">Test Connection: {{ testResult.profileName }}</h3>
-            <button
+            <button type="button"
               class="text-xs text-muted-foreground hover:text-foreground"
               @click="closeTestResult"
             >
@@ -255,7 +255,7 @@
           <Button :disabled="deleting" severity="danger" data-testid="admin-envprofiles-delete-confirm" @click="deleteProfile">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
-            <button
+            <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               data-testid="admin-envprofiles-delete-cancel"
               @click="deleteConfirmProfileId = null"

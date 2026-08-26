@@ -349,6 +349,16 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
         ("pr_label", {"repo": "owner/repo", "pull_number": "1"}, "requires 'labels' in data"),
         ("issue_assign", {"repo": "owner/repo", "issue_number": "42"}, "requires 'assignees' in data"),
     ],
+    ids=[
+        "issue_missing_title",
+        "file_missing_content",
+        "pr_missing_base",
+        "pr_missing_head",
+        "pr_comment_missing_body",
+        "pr_merge_missing_pull_number",
+        "pr_label_missing_labels",
+        "issue_assign_missing_assignees",
+    ],
 )
 async def test_write_missing_data(connector, resource, data, match_text):
     payload = ConnectorPayload(resource=resource, data=data)

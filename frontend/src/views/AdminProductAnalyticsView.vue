@@ -94,7 +94,7 @@ onMounted(() => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '—'
+  if (Number.isNaN(d.getTime())) return '—'
   return formatDateShortWithTime(d)
 }
 </script>

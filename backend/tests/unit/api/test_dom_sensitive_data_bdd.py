@@ -196,6 +196,17 @@ class TestSensitiveKeyDetection:
             "webhook_secret",
             "passwd",
         ],
+        ids=[
+            "api_key",
+            "token",
+            "secret",
+            "password",
+            "credential",
+            "API_KEY",
+            "client_secret",
+            "webhook_secret",
+            "passwd",
+        ],
     )
     def test_true_for_sensitive_patterns(self, key: str) -> None:
         assert is_sensitive_key(key) is True
@@ -216,6 +227,7 @@ class TestNonSensitiveKeyDetection:
             "model",
             "provider",
         ],
+        ids=["description", "name", "url", "host", "port", "timeout", "model", "provider"],
     )
     def test_false_for_innocuous_keys(self, key: str) -> None:
         assert is_sensitive_key(key) is False

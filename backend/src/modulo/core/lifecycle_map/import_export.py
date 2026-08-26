@@ -194,6 +194,38 @@ async def import_lifecycle_map_envelope(
     return lifecycle_map
 
 
+def _resolve_version_number(entry: dict[str, Any], index: int) -> int:
+    """Derive the integer version number for one ``versions`` entry.
+
+    Entries without a ``version`` key are numbered by 1-based position; an
+    existing ``version`` is validated to be a positive integer.
+    """
+    raw_number = entry.get("version")
+    if raw_number is None:
+        return index + 1
+    if isinstance(raw_number, bool) or not isinstance(raw_number, int):
+        raise LifecycleMapBundleError(
+            f"Lifecycle map 'versions' entry #{index} 'version' must be an integer, got {raw_number!r}"
+        )
+    if raw_number < 1:
+        raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'version' must be at least 1")
+    return raw_number
+
+
+def _extract_version_graph(entry: dict[str, Any], index: int) -> dict[str, Any]:
+    """Validate and return the ``{stages, edges, notes}`` graph of one entry."""
+    stages = entry.get("stages")
+    edges = entry.get("edges")
+    notes = entry.get("notes", "")
+    if not isinstance(stages, list):
+        raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} is missing 'stages' array")
+    if not isinstance(edges, list):
+        raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} is missing 'edges' array")
+    if notes is not None and not isinstance(notes, str):
+        raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'notes' must be a string")
+    return {"stages": stages, "edges": edges, "notes": notes if isinstance(notes, str) else ""}
+
+
 def _normalise_version_history(versions: list[Any]) -> list[tuple[int, int, dict[str, Any]]]:
     """Validate and deterministically order a ``versions`` array.
 
@@ -206,33 +238,9 @@ def _normalise_version_history(versions: list[Any]) -> list[tuple[int, int, dict
     for index, entry in enumerate(versions):
         if not isinstance(entry, dict):
             raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} must be an object")
-        raw_number = entry.get("version")
-        if raw_number is None:
-            number = index + 1
-        elif isinstance(raw_number, bool) or not isinstance(raw_number, int):
-            raise LifecycleMapBundleError(
-                f"Lifecycle map 'versions' entry #{index} 'version' must be an integer, got {raw_number!r}"
-            )
-        else:
-            number = raw_number
-        if number < 1:
-            raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'version' must be at least 1")
-        stages = entry.get("stages")
-        edges = entry.get("edges")
-        notes = entry.get("notes", "")
-        if not isinstance(stages, list):
-            raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} is missing 'stages' array")
-        if not isinstance(edges, list):
-            raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} is missing 'edges' array")
-        if notes is not None and not isinstance(notes, str):
-            raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'notes' must be a string")
-        ordered.append(
-            (
-                number,
-                index,
-                {"stages": stages, "edges": edges, "notes": notes if isinstance(notes, str) else ""},
-            )
-        )
+        number = _resolve_version_number(entry, index)
+        graph = _extract_version_graph(entry, index)
+        ordered.append((number, index, graph))
     return sorted(ordered, key=lambda item: (item[0], item[1]))
 
 

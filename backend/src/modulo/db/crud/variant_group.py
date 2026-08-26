@@ -406,7 +406,24 @@ async def run_variant_weighted(
         if resolved:
             control_overrides["prompt_templates"] = resolved
 
-    frozen_snapshot: dict[str, Any] = {"_run_overrides": control_overrides}
+    # FAR-381: a weighted single-shot run MUST carry variant identity in its
+    # frozen snapshot, or the coverage-gap read-model (which keys divergence by
+    # ``variant_id`` / ``variant_name``) silently skips it — a weighted group
+    # then reports ``no gap`` despite real divergence. Parity with the batch
+    # path: ``variant_id`` (stable persisted id, may be absent on legacy
+    # variants), ``variant_name``, ``snapshot_id``, ``run_context_overrides``,
+    # and the system-reserved ``_run_overrides``. ``batch_id`` is intentionally
+    # omitted — these are single-shot runs, not a fired batch.
+    overrides = variant.get("run_context_overrides", {})
+    if not isinstance(overrides, dict):
+        overrides = {}
+    frozen_snapshot: dict[str, Any] = {
+        "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
+        "variant_name": variant.get("name"),
+        "snapshot_id": str(snapshot_id),
+        "run_context_overrides": dict(overrides),
+        "_run_overrides": control_overrides,
+    }
 
     run = await create_run(
         session,

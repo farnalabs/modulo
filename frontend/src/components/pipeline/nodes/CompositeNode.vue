@@ -47,7 +47,7 @@ const portIndicator = computed(() => {
     <div class="mt-0.5 flex items-center gap-2">
       <span class="text-[10px] text-indigo-300/70">{{ portIndicator }}</span>
     </div>
-    <button
+    <button type="button"
       class="mt-1 inline-flex items-center gap-1 rounded bg-indigo-500/20 px-2 py-0.5 text-[10px] text-indigo-300 hover:bg-indigo-500/30"
       @click.stop="emit('expand', id)"
     >

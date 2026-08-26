@@ -21,7 +21,7 @@
   </template>
 </Select>
 
-      <button
+      <button type="button"
         v-if="selectedViewId"
         role="switch"
         :aria-checked="isEnabled"

@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -622,6 +623,62 @@ def test_test_trigger_returns_200(client: TestClient) -> None:
     body = resp.json()
     assert body["status"] == "test_event_created"
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_test_trigger_storage_exhausted_returns_503(client: TestClient) -> None:
+    """Real test-trigger path raises StorageExhaustedError -> 503 (FAR-426).
+
+    ``test_trigger`` is wrapped by ``@handle_db_errors``, whose broad
+    ``except Exception`` would otherwise swallow the re-raised
+    StorageExhaustedError before Starlette's handler could map it. The
+    decorator now re-raises it, so the 503 ``storage_exhausted`` contract fires
+    on the real new-run path (not just the runs endpoint).
+    """
+    trigger = _make_mock_trigger(trigger_type="manual")
+    snapshot = MagicMock()
+    snapshot.id = uuid.uuid4()
+
+    capacity_settings = SimpleNamespace(
+        db_capacity_mode="fixed",
+        db_capacity_bypass=False,
+        db_capacity_hard_stop_pct=98.0,
+    )
+    over_hard_stop = {
+        "capacity_percent": 99.0,
+        "mode": "fixed",
+        "alert_level": "full",
+        "used_bytes": 99_000_000,
+        "capacity_bytes": 100_000_000,
+    }
+
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.create_snapshot_from_live_graph",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch("modulo.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
+        patch("modulo.db.capacity.get_settings", return_value=capacity_settings),
+        patch(
+            "modulo.db.capacity.db_capacity_status",
+            new=AsyncMock(return_value=over_hard_stop),
+        ),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/test",
+            json={"payload": {"test": True}},
+        )
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 503
+    assert resp.json().get("type") == "urn:problem:modulo:storage_exhausted"
 
 
 def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:

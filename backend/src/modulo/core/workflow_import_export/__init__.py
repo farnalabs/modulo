@@ -1550,6 +1550,8 @@ async def _materialize_edges(
             target_node_id=target_id,
             edge_type=edge_type,
             hitl_gate_config=ed.get("hitl_gate_config"),
+            source_port=ed.get("source_port", "out"),
+            target_port=ed.get("target_port", "in"),
         )
         ctx.session.add(edge)
         pipeline_edges_added.append(edge)

@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
 
 @dataclass(frozen=True)
 class ErrorCodeSpec:
@@ -46,6 +48,13 @@ _CODE_CONTRACT_SCHEMA = "contract.schema"
 _CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
 _CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
 _CODE_CAPACITY_ORG = "capacity.org"
+# FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
+# the upstream side-effect state is unknowable. This is a DISTINCT terminal
+# outcome — never collapsed into generic failure (it must surface for manual
+# confirm and be re-runnable with the same persisted idempotency key). The
+# dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
+# ("side-effect state unknown; never retried").
+_CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
 
 
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
@@ -197,6 +206,20 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Delivery already sent; transient retry suppressed by the idempotency gate.",
     ),
+    # --- connector (generic REST) codes ----------------------------------
+    # FAR-410: write-timeout / mid-send cancellation is a DISTINCT terminal
+    # state that must NOT masquerade as generic failure. It surfaces to the run
+    # viewer / HITL for manual confirm and is re-runnable with the SAME
+    # persisted idempotency key (never a fresh random per run).
+    _CODE_CONNECTOR_UNKNOWN: ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "Connector write was cancelled mid-send; upstream side-effect state unknown. "
+            "Re-run with the same idempotency key or confirm manually."
+        ),
+    ),
     # --- sandbox codes ---------------------------------------------------
     "sandbox.no_output_json": ErrorCodeSpec(
         error_class="sandbox",
@@ -274,6 +297,15 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=False,
         alert_severity="critical",
         guidance="Connector credentials are invalid.",
+    ),
+    # FAR-418: node-level capability_scope violation — a node used a connector /
+    # tool / run_context key excluded by its scope (deny-by-default). Permanent
+    # (re-dispatching would reproduce the same violation), so never retryable.
+    "scope.violation": ErrorCodeSpec(
+        error_class="scope",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Node used a capability excluded by its capability_scope (connector/tool/context).",
     ),
     "connector.permission": ErrorCodeSpec(
         error_class="connector",
@@ -434,6 +466,15 @@ LEGACY_ALIASES: dict[str, str] = {
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.
     "idempotency_gate": "harness.idempotency_gate",
+    # FAR-410: connector write-timeout / mid-send cancellation → distinct
+    # ``connector.side_effect_unknown`` (never collapsed into generic failure).
+    # ``connector_unknown`` is the raw exception/snake_case spelling;
+    # ``ConnectorUnknownError`` is the exception class name the executor's
+    # generic catch publishes (``type(exc).__name__``); ``connector.unknown`` is
+    # the prior dotted spelling kept for backward-compat.
+    "connector_unknown": _CODE_CONNECTOR_UNKNOWN,
+    "ConnectorUnknownError": _CODE_CONNECTOR_UNKNOWN,
+    "connector.unknown": _CODE_CONNECTOR_UNKNOWN,
     # Provider (model backend) exception class names published by executor's
     # generic catch (``type(exc).__name__``) on LLM-node failures.
     "RateLimitError": "provider.rate_limited",
@@ -450,6 +491,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "pipeline_capacity": "capacity.pipeline",
     "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",
+    # FAR-418: scope violation (legacy snake_case spelling canonicalized to
+    # scope.violation).
+    "scope_violation": "scope.violation",
+    "ScopeViolationError": "scope.violation",
 }
 
 
@@ -542,7 +587,10 @@ _ERROR_DETAIL_HARD_LIMIT = 5000
 # Redaction patterns — char-class-only, NO alternations with nested quantifiers
 # (the codebase's own (a|b)+ ReDoS lesson). Each pattern is a single anchored
 # literal prefix + a flat char class + a flat quantifier, so worst-case work is
-# linear in the (capped) input.
+# linear in the (capped) input. The AWS-key and GitHub fine-grained-PAT formats
+# are sourced from the canonical shared list in
+# :mod:`modulo.core.secret_patterns` so the secret-format knowledge is never
+# duplicated or drifted across redaction sites.
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"),
     re.compile(r"sk-[A-Za-z0-9]{8,}"),
@@ -551,8 +599,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
     re.compile(r"gh[ousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"glpat-[A-Za-z0-9_-]{8,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"ASIA[0-9A-Z]{16}"),
+    AWS_ACCESS_KEY_PATTERN,
     re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
     re.compile(r"xox[bap]-[A-Za-z0-9-]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
@@ -560,6 +607,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"://[^:\s@]+:[^@\s@]+@"),
     re.compile(r"secret_[A-Za-z0-9]{16,}"),
     re.compile(r"npm_[A-Za-z0-9]{20,}"),
+    GITHUB_PAT_PATTERN,
 )
 
 # Hard control characters (NUL, bell, vertical tab, form feed, C0 except

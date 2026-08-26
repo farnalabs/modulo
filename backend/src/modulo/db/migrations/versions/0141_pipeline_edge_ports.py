@@ -32,10 +32,10 @@ def _upgrade_postgres() -> None:
         'ALTER TABLE public."pipeline_edges" '
         "ADD COLUMN IF NOT EXISTS \"target_port\" varchar(64) NOT NULL DEFAULT 'in';"
     )
-    # Drop the now-redundant per-row server default so the NOT NULL constraint
-    # is enforced for future inserts without silently re-applying the legacy default.
-    op.execute('ALTER TABLE public."pipeline_edges" ALTER COLUMN "source_port" DROP DEFAULT;')
-    op.execute('ALTER TABLE public."pipeline_edges" ALTER COLUMN "target_port" DROP DEFAULT;')
+    # Keep the server default. The ORM model declares server_default="out"/"in",
+    # so inserts that omit the columns (clone, template, import, versioning paths)
+    # rely on the database to supply the legacy port. NOT NULL is still enforced;
+    # the default merely prevents a NOT NULL violation for port-less edges.
 
 
 def _upgrade_other() -> None:

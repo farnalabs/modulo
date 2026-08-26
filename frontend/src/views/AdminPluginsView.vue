@@ -215,7 +215,7 @@ function toggleExpand(id: string) {
 }
 
 async function togglePlugin(id: string) {
-  const newState = activeStates[id] !== false ? false : true
+  const newState = activeStates[id] === false
   activeStates[id] = newState
   try {
     const { error: err } = await (api as any).PUT(`/api/v1/plugins/${id}/toggle`, {

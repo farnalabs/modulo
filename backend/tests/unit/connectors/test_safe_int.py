@@ -117,6 +117,7 @@ def test_safe_int_parses_numeric_strings(value: str, expected: int) -> None:
         "nan",
         "12,5",
     ],
+    ids=["empty", "spaces", "not-a-number", "decimal", "scientific", "hex", "inf", "-inf", "nan", "decimal-comma"],
 )
 def test_safe_int_rejects_unparseable_strings(value: str) -> None:
     assert safe_int(value, DEFAULT) == DEFAULT

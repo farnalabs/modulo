@@ -213,6 +213,17 @@ class TestAsyncpgAdminConnect:
                 ("postgres://u:p@h:5433/db", "require"),
             ),
         ],
+        ids=[
+            "asyncpg-full",
+            "postgres-default",
+            "ssl-require",
+            "ssl-verify-ca",
+            "ssl-verify-full",
+            "ssl-disable",
+            "ssl-prefer",
+            "ssl-require-extra-params",
+            "ssl-require-custom-port",
+        ],
     )
     def test_asyncpg_admin_connect(self, url: str, expected: tuple[str, bool | str]) -> None:
         assert _asyncpg_admin_connect(url) == expected

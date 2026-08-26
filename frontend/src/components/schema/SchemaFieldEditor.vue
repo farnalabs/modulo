@@ -6,7 +6,7 @@
     <div class="flex items-start justify-between gap-2">
       <div class="flex-1 space-y-3">
         <div class="flex items-center gap-2">
-          <button
+          <button type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
             :disabled="isFirst"
             :title="$t('views.SchemaEditorView.move_up')"
@@ -15,7 +15,7 @@
           >
             <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg>
           </button>
-          <button
+          <button type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
             :disabled="isLast"
             :title="$t('views.SchemaEditorView.move_down')"
@@ -98,7 +98,7 @@
         </div>
       </div>
 
-      <button
+      <button type="button"
         class="shrink-0 rounded p-1 text-destructive hover:bg-destructive/10"
         data-testid="schema-editor-field-remove"
         :title="$t('views.SchemaEditorView.remove_field')"

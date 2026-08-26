@@ -1577,23 +1577,15 @@ async def enforce_no_delivery_streaks(
             if time.monotonic() > deadline:
                 summary["budget_exceeded"] = True
                 break
-            try:
-                delta, notify_budget = await _sweep_org(
-                    factory,
-                    org_id,
-                    redis_client=redis_client,
-                    max_triggers_per_tick=max_triggers_per_tick,
-                    deadline=deadline,
-                    notify_budget=notify_budget,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                summary["errors"] += 1
-                _log.warning("enforce_no_delivery_streaks org_sweep_failed org=%s", org_id, exc_info=True)
-                continue
-            for key in _SWEEP_SUMMARY_KEYS:
-                summary[key] += delta[key]
+            notify_budget = await _enforce_org_streak(
+                factory,
+                org_id,
+                redis_client=redis_client,
+                max_triggers_per_tick=max_triggers_per_tick,
+                deadline=deadline,
+                notify_budget=notify_budget,
+                summary=summary,
+            )
         return summary
     except asyncio.CancelledError:
         raise
@@ -1601,3 +1593,39 @@ async def enforce_no_delivery_streaks(
         _log.warning("enforce_no_delivery_streaks sweep_failed", exc_info=True)
         summary["errors"] += 1
         return summary
+
+
+async def _enforce_org_streak(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    *,
+    redis_client: AsyncRedis | None,
+    max_triggers_per_tick: int,
+    deadline: float,
+    notify_budget: int,
+    summary: dict[str, Any],
+) -> int:
+    """Sweep one org's active ongoing triggers and fold its delta in.
+
+    Isolated: a per-org sweep failure is swallowed (WARNING + an error count in
+    ``summary``) and can never break the enclosing sweep. Returns the remaining
+    inline-notification budget for the next org.
+    """
+    try:
+        delta, notify_budget = await _sweep_org(
+            factory,
+            org_id,
+            redis_client=redis_client,
+            max_triggers_per_tick=max_triggers_per_tick,
+            deadline=deadline,
+            notify_budget=notify_budget,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["errors"] += 1
+        _log.warning("enforce_no_delivery_streaks org_sweep_failed org=%s", org_id, exc_info=True)
+        return notify_budget
+    for key in _SWEEP_SUMMARY_KEYS:
+        summary[key] += delta[key]
+    return notify_budget

@@ -49,6 +49,32 @@ class TestCheckToolScope:
             ("operator", "review_hitl"),
             ("admin", "review_hitl"),
         ],
+        ids=[
+            "runner-trigger_pipeline",
+            "operator-trigger_pipeline",
+            "admin-trigger_pipeline",
+            "runner-cancel_run",
+            "runner-list_pending_hitl",
+            "runner-copy_library_primitive",
+            "runner-list_housekeeping",
+            "admin-perform_housekeeping",
+            "operator-create_connector",
+            "admin-create_connector",
+            "operator-create_trigger",
+            "admin-create_trigger",
+            "operator-delete_pipeline",
+            "admin-delete_pipeline",
+            "operator-create_agent",
+            "admin-create_agent",
+            "operator-infer_schema",
+            "admin-infer_schema",
+            "viewer-query_analytics",
+            "runner-query_analytics",
+            "operator-query_analytics",
+            "admin-query_analytics",
+            "operator-review_hitl",
+            "admin-review_hitl",
+        ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
         assert check_tool_scope(role, tool) is None
@@ -84,6 +110,26 @@ class TestCheckToolScope:
             ("runner", "create_agent"),
             ("viewer", "infer_schema"),
             ("runner", "infer_schema"),
+        ],
+        ids=[
+            "viewer-trigger_pipeline",
+            "viewer-cancel_run",
+            "viewer-list_pending_hitl",
+            "viewer-copy_library_primitive",
+            "viewer-review_hitl",
+            "viewer-list_housekeeping",
+            "runner-review_hitl",
+            "runner-perform_housekeeping",
+            "viewer-create_connector",
+            "runner-create_connector",
+            "viewer-create_trigger",
+            "runner-create_trigger",
+            "viewer-delete_pipeline",
+            "runner-delete_pipeline",
+            "viewer-create_agent",
+            "runner-create_agent",
+            "viewer-infer_schema",
+            "runner-infer_schema",
         ],
     )
     def test_unauthorized_role_raises(self, role: str, tool: str) -> None:
@@ -222,6 +268,16 @@ class TestNewlyGuardedTools:
             ("viewer", "list_secrets"),
             ("runner", "list_secrets"),
         ],
+        ids=[
+            "viewer-delete_connector",
+            "runner-delete_connector",
+            "viewer-create_secret",
+            "runner-create_secret",
+            "viewer-delete_secret",
+            "runner-delete_secret",
+            "viewer-list_secrets",
+            "runner-list_secrets",
+        ],
     )
     def test_low_role_denied(self, role: str, tool: str) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -242,6 +298,19 @@ class TestNewlyGuardedTools:
             ("operator", "list_trigger_events"),
             ("admin", "list_trigger_events"),
         ],
+        ids=[
+            "operator-delete_connector",
+            "admin-delete_connector",
+            "operator-create_secret",
+            "admin-create_secret",
+            "operator-delete_secret",
+            "admin-delete_secret",
+            "operator-list_secrets",
+            "admin-list_secrets",
+            "runner-list_trigger_events",
+            "operator-list_trigger_events",
+            "admin-list_trigger_events",
+        ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
         assert check_tool_scope(role, tool) is None
@@ -249,6 +318,41 @@ class TestNewlyGuardedTools:
     def test_viewer_denied_list_trigger_events(self) -> None:
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("viewer", "list_trigger_events")
+
+
+class TestAllowedToolsNarrowing:
+    """FAR-436: node-level ``allowed_tools`` narrows (never widens) the chokepoint.
+
+    The role check must STILL pass for the tool (narrowing is an additional
+    filter, never a bypass), and when a node declares ``allowed_tools`` an
+    out-of-scope tool is rejected. Only an ABSENT allow-list (None) is
+    unrestricted; an explicit EMPTY allow-list is deny-by-default.
+    """
+
+    def test_no_allowed_tools_is_unrestricted(self) -> None:
+        # Absent allow-list (None) -> role check only (legacy behaviour).
+        assert check_tool_scope("runner", "trigger_pipeline") is None
+
+    def test_in_scope_tool_passes(self) -> None:
+        assert check_tool_scope("admin", "create_pipeline", allowed_tools=["create_pipeline"]) is None
+
+    def test_out_of_scope_tool_rejected_despite_valid_role(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_tool_scope("admin", "create_pipeline", allowed_tools=["create_agent"])
+
+    def test_empty_allow_list_is_deny_by_default(self) -> None:
+        # A node granted no tools may call none — even with a valid role.
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_tool_scope("admin", "create_pipeline", allowed_tools=[])
+
+    def test_matching_is_case_insensitive(self) -> None:
+        assert check_tool_scope("admin", "CREATE_PIPELINE", allowed_tools=["create_pipeline"]) is None
+
+    def test_scope_does_not_bypass_role_check(self) -> None:
+        # Narrowing is additive, never a grant: an in-scope tool still needs
+        # the role (viewer lacks pipeline.create -> denied by the role check).
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "create_pipeline", allowed_tools=["create_pipeline"])
 
 
 class TestMCPAuthorizationError:

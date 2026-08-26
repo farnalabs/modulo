@@ -71,8 +71,8 @@ function handleSchemaChange(e: Event, evalDefId: string) {
 
 function updateRetries(e: Event) {
   const target = e.target as HTMLInputElement;
-  const val = parseInt(target.value, 10);
-  if (!isNaN(val)) {
+  const val = Number.parseInt(target.value, 10);
+  if (!Number.isNaN(val)) {
     localRetries.value = val;
     emit("update:maxValidationRetries", val);
   }
@@ -108,7 +108,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
         >
           Eval #{{ idx + 1 }}
         </span>
-        <button
+        <button type="button"
           class="text-xs text-destructive hover:underline"
           @click="removeEval(evalDef.id)"
         >

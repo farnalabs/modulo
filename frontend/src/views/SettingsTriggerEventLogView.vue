@@ -44,7 +44,7 @@
           <Button data-testid="settings-trigger-event-log-apply" @click="applyFilters">
             Apply
           </Button>
-          <button
+          <button type="button"
             data-testid="settings-trigger-event-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
@@ -119,7 +119,7 @@
       </div>
 
       <div class="flex items-center justify-between">
-        <button
+        <button type="button"
           :disabled="cursorStack.length === 0"
           data-testid="settings-trigger-event-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
@@ -130,7 +130,7 @@
         <span class="text-sm text-muted-foreground">
           {{ items.length }} of {{ total }} events
         </span>
-        <button
+        <button type="button"
           :disabled="!nextCursor"
           data-testid="settings-trigger-event-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"

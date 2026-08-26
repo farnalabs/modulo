@@ -61,31 +61,44 @@ def parse_self_report_refs(merged_outputs: dict[str, Any]) -> list[dict[str, Any
 
     collected: list[Any] = []
     seen_ids: set[int] = set()
-
-    def _collect(value: Any) -> None:
-        if isinstance(value, list):
-            collected.extend(value)
-        else:
-            collected.append(value)
-
-    def _walk(node: Any) -> None:
-        if isinstance(node, dict):
-            if id(node) in seen_ids:
-                return
-            seen_ids.add(id(node))
-            for key, value in node.items():
-                if key in _REF_KEYS:
-                    _collect(value)
-                _walk(value)
-        elif isinstance(node, list):
-            if id(node) in seen_ids:
-                return
-            seen_ids.add(id(node))
-            for item in node:
-                _walk(item)
-
-    _walk(merged_outputs)
+    _walk_node(merged_outputs, collected, seen_ids)
     return collected
+
+
+def _collect_value(value: Any, collected: list[Any]) -> None:
+    """Append a reported value to ``collected`` (spreading lists)."""
+    if isinstance(value, list):
+        collected.extend(value)
+    else:
+        collected.append(value)
+
+
+def _walk_dict(node: dict[str, Any], collected: list[Any], seen_ids: set[int]) -> None:
+    """Walk a dict node, collecting values under self-report keys."""
+    if id(node) in seen_ids:
+        return
+    seen_ids.add(id(node))
+    for key, value in node.items():
+        if key in _REF_KEYS:
+            _collect_value(value, collected)
+        _walk_node(value, collected, seen_ids)
+
+
+def _walk_list(node: list[Any], collected: list[Any], seen_ids: set[int]) -> None:
+    """Walk a list node, walking each element."""
+    if id(node) in seen_ids:
+        return
+    seen_ids.add(id(node))
+    for item in node:
+        _walk_node(item, collected, seen_ids)
+
+
+def _walk_node(node: Any, collected: list[Any], seen_ids: set[int]) -> None:
+    """Dispatch a node to the dict or list walker (recursive)."""
+    if isinstance(node, dict):
+        _walk_dict(node, collected, seen_ids)
+    elif isinstance(node, list):
+        _walk_list(node, collected, seen_ids)
 
 
 def validate_and_normalise_reported_refs(

@@ -3,22 +3,22 @@
 Modulo evaluates agent/node outputs against **eval definitions**. An eval is a
 deterministic (or model-mediated) check attached to a pipeline node. This
 document explains the eval types, why the eval system is deliberately
-**non-circular**, and how to use **human-authored eval sets** — the trustworthy
+**non-circular**, and how to use **human-authored eval sets** – the trustworthy
 correctness path.
 
 ## Eval types
 
 | Type | Mechanism | Asserts | Trustworthy for correctness? |
 |------|-----------|---------|------------------------------|
-| `regex` | Pattern match on an output field | **Shape** (text matches a pattern) | No — shape only |
-| `json_schema` | JSON Schema validation | **Shape / structure** of an object | No — shape only |
+| `regex` | Pattern match on an output field | **Shape** (text matches a pattern) | No – shape only |
+| `json_schema` | JSON Schema validation | **Shape / structure** of an object | No – shape only |
 | `custom_function` | User-supplied callable | Whatever the function checks | Depends on the function |
-| `llm_judge` | An LLM grades the output | **Soft** quality/similarity signal | No — circular + injection-prone |
+| `llm_judge` | An LLM grades the output | **Soft** quality/similarity signal | No – circular + injection-prone |
 | `human_set` | A registered, versioned, **human-authored** assertion set | **Correctness** (semantic invariants + business rules) | **Yes** |
 
 ## Why evals must be non-circular
 
-The eval system is built to avoid **eval circularity** — the trap where an LLM
+The eval system is built to avoid **eval circularity** – the trap where an LLM
 grades an LLM and a passing score means nothing.
 
 ### Deterministic guardrails only catch shape, not correctness
@@ -38,14 +38,14 @@ checks are necessary but never sufficient.
    can instruct the judge to return a passing score. The engine mitigates
    instruction leakage with structural delimiters and a guard instruction
    (`_GUARD_INSTRUCTION` in `eval_engine/__init__.py`), but that only neutralises
-   *instruction* leakage — it cannot guarantee the judge's *correctness*
+   *instruction* leakage – it cannot guarantee the judge's *correctness*
    assessment is right.
 
 `llm_judge` is useful as a **soft** signal (e.g. flagging candidates for human
 review) but must never be the sole gate for a claim of correctness.
 
 ### Human-authored eval sets are the trustworthy path
-`human_set` runs a **fixed, versioned artifact** — a list of deterministic
+`human_set` runs a **fixed, versioned artifact** – a list of deterministic
 assertion functions written and reviewed by a person. They are not
 model-mediated, so they cannot be talked into a false pass, and they assert
 *correctness properties* (business rules, consistency, semantic invariants) that
@@ -71,11 +71,11 @@ with:
 }
 ```
 
-* `set_name` — the registered set name (see `HUMAN_EVAL_SETS` in
+* `set_name` – the registered set name (see `HUMAN_EVAL_SETS` in
   `core/eval_engine/human_eval_sets.py`). Required.
-* `field` — the (dotted) output field the assertions resolve and parse. Optional;
+* `field` – the (dotted) output field the assertions resolve and parse. Optional;
   defaults to `output`.
-* `version` — advisory. The registry holds a single active version per name;
+* `version` – advisory. The registry holds a single active version per name;
   consumers should pin the set name they validated against.
 
 At run time the engine looks up the set and runs **every** assertion. The eval
@@ -86,13 +86,13 @@ names. A `block` behaviour raises `EvalBlockedError` on failure.
 A representative agent task: a support-message classification agent emits JSON
 `{category, priority, confidence?}`. The human-authored assertions are:
 
-1. `valid_json` — the output field parses as a JSON object.
-2. `required_keys` — `category` and `priority` are present.
-3. `category_enum` — `category` ∈ {billing, technical, general}.
-4. `priority_enum` — `priority` ∈ {low, medium, high}.
-5. `consistency` — **business rule**: a billing issue is never `low` priority; a
+1. `valid_json` – the output field parses as a JSON object.
+2. `required_keys` – `category` and `priority` are present.
+3. `category_enum` – `category` ∈ {billing, technical, general}.
+4. `priority_enum` – `priority` ∈ {low, medium, high}.
+5. `consistency` – **business rule**: a billing issue is never `low` priority; a
    technical outage is always `high`.
-6. `no_extra_keys` — no hallucinated keys leak into the contract.
+6. `no_extra_keys` – no hallucinated keys leak into the contract.
 
 Assertions 1–4 are things `json_schema` *could* express; assertion 5 (the
 consistency rule) and the overall composition are what make the set a
@@ -110,33 +110,33 @@ trusted to enforce.
    version, so an edit never silently changes a contract.
 
 Keep assertions deterministic and side-effect free. A broken assertion fails
-loudly (it never silently passes) — see `run_human_eval_set`.
+loudly (it never silently passes) – see `run_human_eval_set`.
 
 ## Where evals run
 
-* **Post-node evals** — attached to a node via the `eval_definitions` table;
+* **Post-node evals** – attached to a node via the `eval_definitions` table;
   executed by `EvalEngine.evaluate` in the pipeline executor.
-* **HITL gate evals** — evaluated before an interrupt; see
+* **HITL gate evals** – evaluated before an interrupt; see
   `pipeline_engine/node_runner.py`.
-* **Feedback evals** — ad-hoc evals via `EvalEngine.standalone_evaluate`
+* **Feedback evals** – ad-hoc evals via `EvalEngine.standalone_evaluate`
   (§8.20).
 
 `llm_judge` evals require a resolved judge callable (a *different* model backend
-than the one under test, where possible). `human_set` evals require no model —
+than the one under test, where possible). `human_set` evals require no model –
 they are pure Python.
 
-## Managed eval input corpus (`EvalDataset` / `EvalCase`) — FAR-375 Phase 2
+## Managed eval input corpus (`EvalDataset` / `EvalCase`) – FAR-375 Phase 2
 
-The original "task-type breadth" gap was never about comparing models — it was
+The original "task-type breadth" gap was never about comparing models – it was
 about a **repeatable, managed input corpus** an eval suite can re-run. Phase 2
 is the **data layer** for that corpus (FAR-375). It is standalone: it does not
 depend on `EvalSuite` (Phase 1) and adds no endpoints, UI, or run-execution
 logic (those are Phase 3).
 
-* **`EvalDataset`** — a named, versioned, org- (or team-) scoped header for a
+* **`EvalDataset`** – a named, versioned, org- (or team-) scoped header for a
   corpus. One active name per org; soft-delete only (`deleted_at` /
   `deleted_by`).
-* **`EvalCase`** — a single repeatable input. `input_payload` is the canonical
+* **`EvalCase`** – a single repeatable input. `input_payload` is the canonical
   payload store (mirrors `webhook_payloads.raw_payload`); `expected_output` is an
   optional reference answer; `input_hash` is SHA-256 of the payload for dedupe
   and audit. A case references its dataset with `ON DELETE RESTRICT`, so a
@@ -145,7 +145,7 @@ logic (those are Phase 3).
 Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
 
 * **Storage is data-only.** `input_payload` is stored verbatim and returned
-  verbatim — even when it contains prompt-injection strings it is never altered
+  verbatim – even when it contains prompt-injection strings it is never altered
   or executed. Phase 3 owns the boundary enforcement (LLM-judge + SUT paths)
   that prevents the payload from becoming instructions; Phase 2 guarantees only
   *storage-as-data*.
@@ -157,7 +157,7 @@ Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
   a count of active cases so Phase 3 can refuse to run an empty dataset.
 * **Housekeeping.** `purge_soft_deleted_eval_cases` hard-deletes soft-deleted
   cases past a retention cutoff (cases have no dependents). Dataset
-  hard-delete/purge is intentionally withheld here — the "referenced by a
+  hard-delete/purge is intentionally withheld here – the "referenced by a
   SuiteRun" guard lands in Phase 3.
 
 > Note: this document is the source of truth for the eval data layer while
@@ -334,3 +334,91 @@ Every query injects the explicit `organisation_id = :org` predicate —
 run is terminal (`completed`/`partial`), so the read-model is deterministic
 across two calls; legacy pipeline-path rows (no `suite_run_id`) are always
 included. Guardrail rows are excluded (the standard eval consumer contract).
+
+## The coverage-gap signal (FAR-381)
+
+The complements to the pass-rate read-models are **static coverage** (does a
+variant have any eval at all — `coverage-gaps` on a variant group) and the
+dynamic **coverage-gap signal** described here. It answers the PRD §8.19
+problem: *"variants diverged but evals did not differentiate."* That is not a
+dashboard convenience — it is a signal that the **eval SUITE is insufficient**
+and must be routed to eval-quality improvement.
+
+Lineage read (pure read-model, no new table, no migration):
+
+```
+VariantGroup ──> Runs (variant_group_id, batch_id; each has variant_config_snapshot
+                    {variant_id, variant_name} and outputs_json)
+                     │
+                     └──> EvalResult (run_id, eval_id, score, passed)
+```
+
+Endpoint: `GET /api/v1/eval-coverage-gap?variant_group_id=…&batch_id=…&min_runs=3&threshold=0.15`
+
+It returns a per-eval verdict list:
+
+```json
+{
+  "status": "complete",
+  "variant_divergence": 0.4,
+  "evals": [
+    {
+      "eval_id": "…", "eval_name": "…",
+      "variant_divergence": 0.4,
+      "eval_score_spread": 0.01,
+      "has_gap": true,
+      "reason": "Variants diverged but this eval could not differentiate them; route to eval-quality improvement.",
+      "recommended_action": "improve_evals"
+    }
+  ]
+}
+```
+
+### The metrics
+
+* **Variant divergence** — how spread apart the variant *outputs* are. Measured
+  as `1 − mean pairwise normalized edit distance` over the canonical JSON of
+  each terminal variant run's `outputs_json`. Outputs are often unstructured, so
+  a structure-independent string-similarity gradient is the stable default:
+  `0.0` = identical outputs, near `1.0` = maximally different.
+* **Eval differentiation** — the population standard deviation of that eval's
+  per-variant metric within one `eval_id` (`score` when present, else `passed`
+  as `1.0/0.0`). Grouping by `eval_id` keeps a single scale per comparison, so
+  an absolute std is meaningful. A near-zero std means the eval scored every
+  variant ~the same — it did not differentiate them.
+
+### Statistical significance
+
+A signal is emitted only when at least `min_runs` (default `3`) **terminal**
+runs carry eval data. Below that the result is `status: "insufficient_data"`
+with an empty `evals` list and **no signal** — this is what suppresses
+llm-judge high-variance false positives. Runs are terminal-only, so the
+read-model is deterministic across two calls.
+
+### The gap condition (configurable threshold)
+
+```
+has_gap = variant_divergence >= divergence_threshold      (default 0.15)
+          AND eval_differentiation < differentiation_threshold  (default 0.05)
+```
+
+The `divergence_threshold` is configurable per suite via the endpoint `threshold`
+query param (an operator dial, `0.0`–`1.0`). The `differentiation_threshold` is
+an eval-quality calibration kept as a module default (not surfaced on the
+endpoint).
+
+### Recommended-action routing
+
+* `has_gap=true` → `recommended_action: "improve_evals"` — the evals could not
+  tell the variants apart even though the variants genuinely differ. The problem
+  is the eval **suite**, so this routes to eval-quality improvement, not to a
+  flag.
+* `has_gap=false` → `recommended_action: "ok"` — either the variants did not
+  diverge, or the evals differentiated them adequately.
+
+### Isolation
+
+Every query injects the explicit `organisation_id = :org` predicate (BYPASSRLS
+⇒ the predicate is the ONLY isolation control). A cross-org batch or variant
+group resolves to no org-owned runs and returns `status: "insufficient_data"`
+rather than leaking another org's data.

@@ -925,6 +925,64 @@ class TestRunVariantWeighted:
         assert result is not None
         assert result["merged_payload"]["_degraded_evals"] is True
 
+    async def test_freezes_variant_identity_in_snapshot(self) -> None:
+        """Weighted single-shot runs must carry variant identity (FAR-381 Major 2).
+
+        Before the fix ``run_variant_weighted`` froze only
+        ``{"_run_overrides": control_overrides}`` — no ``variant_id`` /
+        ``variant_name``. The coverage-gap read-model keys divergence by those
+        fields, so every weighted run was silently *skipped* (``_variant_key``
+        returned ``None``), leaving ``runs_by_variant`` empty and divergence
+        ``0.0`` — a weighted group never fired a gap despite real divergence.
+        This test pins the fix: the frozen snapshot now carries variant identity
+        (parity with the batch path), so a weighted run is comparable.
+        """
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "id": "variant-a-uuid",
+                "name": "variant-a",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"key": "val"},
+            }
+        ]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            result = await run_variant_weighted(session, org_id=org_id, group=group, input_payload={"existing": "data"})
+
+        assert result is not None
+        frozen = result["frozen_snapshot"]
+        assert frozen["variant_id"] == "variant-a-uuid"
+        assert frozen["variant_name"] == "variant-a"
+        assert frozen["snapshot_id"] == group.variants[0]["snapshot_id"]
+        assert frozen["run_context_overrides"] == {"key": "val"}
+        assert "_run_overrides" in frozen
+
 
 @pytest.mark.asyncio
 class TestGetCoverageGaps:

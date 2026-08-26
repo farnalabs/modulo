@@ -55,6 +55,7 @@ class TestClassify:
     @pytest.mark.parametrize(
         "status",
         [Status.NEW, Status.QUEUED, Status.ACTIVE, Status.ABORTING, Status.ABORTED, None, "queued", "active"],
+        ids=["NEW", "QUEUED", "ACTIVE", "ABORTING", "ABORTED", "none", "queued-str", "active-str"],
     )
     def test_transient_and_swept_statuses_are_noop(self, status: Status | None) -> None:
         out = saq_hooks._classify("modulo.core.saq_worker.execute_run", status, "boom", {"run_id": RUN_ID})

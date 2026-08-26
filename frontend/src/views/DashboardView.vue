@@ -4,7 +4,7 @@
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title">
       <template #right>
         <div class="flex flex-wrap justify-end gap-1">
-          <button
+          <button type="button"
             v-for="w in trendWindows"
             :key="w.value ?? 'all'"
             :data-testid="'trend-toggle-' + (w.value ?? 'all')"

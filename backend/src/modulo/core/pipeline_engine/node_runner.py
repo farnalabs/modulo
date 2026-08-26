@@ -67,9 +67,12 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
+from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
 if TYPE_CHECKING:
     from e2b import AsyncSandbox
 
+from modulo.core.capability_scope import filter_run_context_scope
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
     MAX_REPORTABLE_USD_MIN,
@@ -751,7 +754,16 @@ _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_
 # any ``http(s)://...@host`` URL; ``_TOKEN_VALUE_PATTERN`` defensively masks
 # bare token values that follow known credential labels.
 _TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
-_TOKEN_VALUE_PATTERN = _re.compile(r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+")
+# Label-based masking (covers short tokens including github_pat_ <50 chars)
+# plus the canonical bare-value patterns for fine-grained GitHub PATs and AWS
+# access keys, shared from the sensitive_mask canonical list.
+_TOKEN_VALUE_PATTERN = _re.compile(
+    r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+"
+    + r"|"
+    + GITHUB_PAT_PATTERN.pattern
+    + r"|"
+    + AWS_ACCESS_KEY_PATTERN.pattern
+)
 
 
 def _extract_pr_url(raw_text: str) -> str:
@@ -1485,9 +1497,15 @@ def _render_agent_prompt(
     """
     env = SandboxedEnvironment()
     template = env.from_string(prompt_template)
+    # FAR-418 / FAR-436: context_scope — the agent's run_context VIEW (the keys
+    # fed to the prompt template) is allowlist-gated to the node's need-to-know
+    # set. Internal control keys are always preserved by filter_run_context_scope
+    # (_CONTEXT_ALWAYS_KEPT). Absent scope = legacy (full run_context view).
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
     template_vars: dict[str, Any] = {
         "state": state,
-        "run_context": run_context,
+        "run_context": scoped_run_context,
         "input": raw_input,
     }
     resolved = node_def.get("_resolved_parameters")
@@ -1560,7 +1578,7 @@ def make_node_fn(
     role: str | None = None,
     timeout: float | None = None,
     max_input_length: int | None = None,
-    token_budget: int | None = None,
+    token_budget: int | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); budget enforced at executor level
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
@@ -1632,9 +1650,15 @@ def make_node_fn(
         if not model_backend_id_str:
             return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
 
+        # FAR-418: context_scope — the agent's run_context VIEW (the keys fed to
+        # the prompt template) is allowlist-gated to the node's need-to-know set.
+        # The machinery reads (run_overrides, autonomy) still use the full
+        # run_context so internal control keys are never starved.
+        _node_cap = node_def.get("capability_scope") or {}
+        scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
         rendered_prompt, routing_mode = _render_agent_prompt(
             state=state,
-            run_context=run_context,
+            run_context=scoped_run_context,
             raw_input=raw_input,
             prompt_template=prompt_template,
             node_def=node_def,
@@ -2226,7 +2250,7 @@ def make_hitl_gate_fn(
 def make_manual_node_fn(
     node_def: dict[str, Any],
     *,
-    timeout: float | None = None,
+    timeout: float | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); manual nodes never time out
 ) -> Any:
     """Return a node function for a manual-input node.
 
@@ -2295,13 +2319,25 @@ def make_manual_node_fn(
 def _resolve_binding_connector(
     binding: dict[str, Any],
     node_id: str,
+    *,
+    allowed_connectors: list[str] | None = None,
 ) -> tuple[Any, dict[str, Any] | None]:
     """Resolve a bound connector instance for *node_id*.
 
     Returns ``(connector, None)`` on success, or ``(None, error_artifact)``
-    when the hub is unavailable, the instance id is missing, or the connector
-    cannot be resolved — the error artifact is already enveloped for return.
+    when the hub is unavailable, the instance id is missing, the connector
+    is outside the node's ``capability_scope.allowed_connectors``, or the
+    connector cannot be resolved — the error artifact is already enveloped.
+
+    FAR-418: when *allowed_connectors* is set, a bound connector excluded by
+    the scope fails FAST with a typed, logged, metric-emitting
+    ``ScopeViolationError`` (never silently). Absent = unrestricted.
     """
+    from modulo.core.capability_scope import (
+        ScopeViolationError,
+        is_connector_allowed,
+        record_scope_violation,
+    )
     from modulo.core.pipeline_engine.decorator import get_connector_hub
 
     hub = get_connector_hub()
@@ -2317,8 +2353,23 @@ def _resolve_binding_connector(
 
     import uuid as _uuid
 
+    instance_uuid = _uuid.UUID(str(instance_id_str))
+
+    # FAR-418: deny-by-default within the node's connector scope.
+    connector_type: str = binding.get("type", "")
+    if not is_connector_allowed(
+        connector_instance_id=instance_uuid,
+        connector_type=connector_type,
+        allowed_connectors=allowed_connectors,
+    ):
+        target = connector_type or str(instance_uuid)
+        scope_err = ScopeViolationError(node_id=node_id, target=target, kind="connector")
+        record_scope_violation(node_id=node_id, target=target, kind="connector")
+        _log.error("scope.violation node=%s connector=%s", node_id, target)
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
+
     try:
-        connector = hub.get(_uuid.UUID(str(instance_id_str)))
+        connector = hub.get(instance_uuid)
     except Exception as _conn_exc:
         return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
     return connector, None
@@ -2363,6 +2414,13 @@ def make_connector_fn(
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
     op: str = binding.get("operation", "query")
+    # FAR-418: node-level capability_scope. ``allowed_connectors`` narrows (never
+    # widens) which connectors this node may resolve — deny-by-default within the
+    # scope. Absent/empty (the UNRESTRICTED default) preserves the pre-scope
+    # behaviour: the node may use anything the hub fetched.
+    scope = node_def.get("capability_scope") or {}
+    allowed_connectors: list[str] | None = scope.get("allowed_connectors")
+    connector_type: str = binding.get("type", "")
 
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -2377,8 +2435,39 @@ def make_connector_fn(
         )
 
         from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+        from modulo.core.capability_scope import (
+            ScopeViolationError,
+            assert_no_secret_objects,
+            is_connector_allowed,
+            record_scope_violation,
+        )
 
-        connector, error_artifact = _resolve_binding_connector(binding, node_id)
+        # FAR-418: deny-by-default within the node's connector scope. The gate
+        # fires BEFORE the connector is resolved from the hub, so a node that
+        # targets a connector excluded by its capability_scope never decrypts or
+        # touches the connection (fail-fast with a typed, logged, metric-emitting
+        # ScopeViolationError). The hub is only consulted for in-scope connectors.
+        instance_id_str = binding.get("instance_id")
+        if instance_id_str:
+            import uuid as _uuid
+
+            instance_uuid = _uuid.UUID(str(instance_id_str))
+            if not is_connector_allowed(
+                connector_instance_id=instance_uuid,
+                connector_type=connector_type,
+                allowed_connectors=allowed_connectors,
+            ):
+                target = connector_type or str(instance_uuid)
+                scope_err = ScopeViolationError(node_id=node_id, target=target, kind="connector")
+                record_scope_violation(node_id=node_id, target=target, kind="connector")
+                _log.error("scope.violation node=%s connector=%s", node_id, target)
+                return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
+
+        connector, error_artifact = _resolve_binding_connector(
+            binding,
+            node_id,
+            allowed_connectors=allowed_connectors,
+        )
         if error_artifact is not None:
             return error_artifact
 
@@ -2393,6 +2482,16 @@ def make_connector_fn(
                 result = await connector.query(query)
         except Exception as exc:
             return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+        # FAR-418: secret hygiene — connector/secret OBJECTS are never valid port
+        # payload types; only opaque connector IDs may enter state. Guard the
+        # output before it is written into the run's state/ports.
+        try:
+            assert_no_secret_objects(result, node_id=node_id)
+        except ScopeViolationError as scope_err:
+            record_scope_violation(node_id=node_id, target=scope_err.target, kind="secret")
+            _log.error("scope.violation node=%s secret=%s", node_id, scope_err.target)
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
 
         return {
             "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
@@ -2988,7 +3087,6 @@ class _SandboxWatchdog:
         sandbox_mode: str,
         stdout_percentage_delta: float | None,
         stream_broker: RunEventBroker | None,
-        stream_enabled: bool,
         drained_chunks: list[str],
         wallclock_budget_seconds: int | None,
         start_time: float,
@@ -3005,7 +3103,7 @@ class _SandboxWatchdog:
         self._sandbox_mode = sandbox_mode
         self._stdout_ratio = stdout_percentage_delta
         self._stream_broker = stream_broker
-        self._stream_enabled = stream_enabled
+        self._stream_enabled = isinstance(stream_broker, RunEventBroker)
         self._drained_chunks = drained_chunks
         self._activity: dict[str, Any] = {"last": time.monotonic()}
         self._stdout_prev: str | None = None
@@ -3721,7 +3819,7 @@ def _script_enforcement_requires_remote(
     )
 
 
-async def _sandbox_agent_impl(
+async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
     config: _SandboxNodeConfig,
@@ -3791,9 +3889,15 @@ async def _sandbox_agent_impl(
     else:
         env = SandboxedEnvironment()
         template = env.from_string(agent_prompt_template)
+        # FAR-436: context_scope — the sandbox agent's run_context VIEW (the keys
+        # fed to the prompt + agent_command templates) is allowlist-gated to the
+        # node's need-to-know set. Internal control keys are always preserved by
+        # filter_run_context_scope (_CONTEXT_ALWAYS_KEPT). Absent scope = legacy.
+        _node_cap = node_def.get("capability_scope") or {}
+        scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
         template_vars: dict[str, Any] = {
             "state": state,
-            "run_context": run_context,
+            "run_context": scoped_run_context,
             "input": raw_input,
         }
         resolved = node_def.get("_resolved_parameters")
@@ -4204,6 +4308,18 @@ async def _sandbox_agent_impl(
             ),
         )
 
+        # FAR-418: expose the node's capability_scope.allowed_tools to the sandbox
+        # agent runtime (FAR-402 P4 / FAR-418) so the agent's MCP client can
+        # forward it as the ``X-Modulo-Allowed-Tools`` header. The MCP server's
+        # McpAuthMiddleware lifts that header into the request-scoped allow-list
+        # consumed by check_tool_scope, enforcing node-level tool scoping in the
+        # production run path. Absent/empty (the UNRESTRICTED default) sets nothing,
+        # preserving pre-scope behaviour.
+        _node_scope = node_def.get("capability_scope") or {}
+        _allowed_tools = _node_scope.get("allowed_tools")
+        if _allowed_tools:
+            env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in _allowed_tools)
+
         # FAR-212 PR B: apply the enforced sandbox policy AFTER the Modulo-owned
         # context files / prompt / input are written but BEFORE the agent/script
         # command executes. Any policy field set on the node invokes the policy
@@ -4275,7 +4391,6 @@ async def _sandbox_agent_impl(
                     _stream_broker = get_registry().get(uuid.UUID(run_id))
                 except (TypeError, ValueError):
                     _stream_broker = None
-            _stream_enabled = isinstance(_stream_broker, RunEventBroker)
 
             watchdog = _SandboxWatchdog(
                 sandbox=sandbox,
@@ -4288,7 +4403,6 @@ async def _sandbox_agent_impl(
                 sandbox_mode=sandbox_mode,
                 stdout_percentage_delta=stdout_percentage_delta,
                 stream_broker=_stream_broker,
-                stream_enabled=_stream_enabled,
                 drained_chunks=_drained_chunks,
                 wallclock_budget_seconds=wallclock_budget_seconds,
                 start_time=start_time,

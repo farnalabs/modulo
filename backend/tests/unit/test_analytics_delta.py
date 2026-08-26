@@ -37,6 +37,21 @@ from modulo.core.analytics import compute_delta
         # curr absent → treated as 0
         (100.0, None, -100.0),
     ],
+    ids=[
+        "null-baseline",
+        "zero-baseline",
+        "zero-base-zero",
+        "zero-base-zero-int",
+        "drop-half",
+        "drop-full",
+        "growth-third",
+        "growth-16_5",
+        "rounding-33_3",
+        "rounding-33_7",
+        "growth-double",
+        "unchanged",
+        "curr-absent",
+    ],
 )
 def test_compute_delta_table(prev: float | None, curr: float | None, expected: float | None) -> None:
     assert compute_delta(prev, curr) == expected

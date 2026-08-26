@@ -293,3 +293,114 @@ async def test_sandbox_agent_command_undefined_model_falls_back_verbatim() -> No
 
     assert result["status"] == "skipped"
     assert "agent_command template references missing input fields" in result["summary"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-436: node capability_scope.context_scope allowlists the run_context view
+# fed to the sandbox_agent prompt + agent_command templates.
+# ---------------------------------------------------------------------------
+
+
+async def _run_sandbox_agent(node_def: dict[str, Any], state: dict[str, Any]) -> tuple[dict[str, Any], MagicMock]:
+    """Run a sandbox_agent node with a mocked E2B sandbox.
+
+    Returns ``(result, sandbox)`` — ``sandbox.commands.run.call_args.args[0]``
+    is the wrapped command actually dispatched when the run completes.
+    """
+    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(state)
+    return result, sandbox
+
+
+@pytest.mark.asyncio
+async def test_sandbox_agent_context_scope_allows_in_scope_key() -> None:
+    """FAR-436: an in-scope ``run_context`` key renders in the agent_command.
+
+    ``context_scope=["input"]`` keeps only the ``input`` key (plus internal
+    control keys). The command references an in-scope key so it renders and the
+    node completes with the scoped value.
+    """
+    node_def = {
+        "id": "sbx-a",
+        "agent_prompt": "Do the thing",
+        "agent_command": "echo {{ run_context.input.task }}",
+        "capability_scope": {"context_scope": ["input"]},
+    }
+    state = {
+        "run_context": {"input": {"task": "scoped-task"}, "secret_tokens": "s3cr3t"},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": "org-1",
+    }
+    result, sandbox = await _run_sandbox_agent(node_def, state)
+    assert result["output"]["status"] == "completed"
+    assert "echo scoped-task" in sandbox.commands.run.call_args.args[0]
+    assert "s3cr3t" not in sandbox.commands.run.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_agent_context_scope_filters_out_of_scope_key() -> None:
+    """FAR-436: an out-of-scope ``run_context`` key is removed from the view.
+
+    ``context_scope=["input"]`` strips ``secret_tokens``. A command that
+    CHAIN-navigates the missing key (``{{ run_context.secret_tokens.value }}``)
+    renders it undefined, so the node is safely skipped rather than dispatching
+    with the secret in-scope.
+    """
+    node_def = {
+        "id": "sbx-b",
+        "agent_prompt": "Do the thing",
+        "agent_command": "echo {{ run_context.secret_tokens.value }}",
+        "capability_scope": {"context_scope": ["input"]},
+    }
+    state = {
+        "run_context": {"input": {"task": "scoped-task"}, "secret_tokens": "s3cr3t"},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": "org-1",
+    }
+    result, _ = await _run_sandbox_agent(node_def, state)
+    assert result["status"] == "skipped"
+    assert "agent_command template references missing input fields" in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_agent_absent_context_scope_preserves_legacy() -> None:
+    """FAR-436: absent ``capability_scope`` feeds the FULL ``run_context`` view.
+
+    No context_scope -> no narrowing: an out-of-scope-looking key is still
+    visible exactly as before the scope feature existed.
+    """
+    node_def = {
+        "id": "sbx-c",
+        "agent_prompt": "Do the thing",
+        "agent_command": "echo {{ run_context.secret_tokens }}",
+    }
+    state = {
+        "run_context": {"input": {"task": "scoped-task"}, "secret_tokens": "s3cr3t"},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": "org-1",
+    }
+    result, sandbox = await _run_sandbox_agent(node_def, state)
+    assert result["output"]["status"] == "completed"
+    assert "echo s3cr3t" in sandbox.commands.run.call_args.args[0]

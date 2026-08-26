@@ -35,6 +35,11 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.capability_scope import (
+    ScopeViolationError,
+    agent_granted_connector_types,
+    validate_allowed_connectors_subset,
+)
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.reports.quality_report import (
     deliver_quality_report,
@@ -551,6 +556,40 @@ class SchemaPin(BaseModel):
 _RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
 
 
+class CapabilityScope(BaseModel):
+    """Node-level least-privilege contract (FAR-402 P4 / FAR-418).
+
+    A node may NARROW (never widen) what its referenced Agent is granted:
+
+    * ``allowed_connectors``: connector instance-ids and/or connector types the
+      node may resolve from the ConnectorHub. Each connector-TYPE entry must be
+      within the Agent's ``connector_type_refs`` (compile-time check); the
+      ConnectorHub is fetched with ONLY these connectors (deny-by-default).
+    * ``allowed_tools``: MCP/runtime tools the node's agent may invoke — an
+      additional narrowing filter wired through ``check_tool_scope``.
+    * ``context_scope``: allowlist of ``run_context`` keys the node may read
+      (need-to-know boundary).
+
+    Default is UNRESTRICTED: an absent ``capability_scope`` leaves behaviour
+    unchanged (the node may use all of its Agent's grants).
+    """
+
+    allowed_connectors: list[str] | None = Field(
+        default=None,
+        description="Connector instance-ids and/or connector types the node may "
+        "resolve. Absent/empty = UNRESTRICTED (Agent grants).",
+    )
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        description="MCP/runtime tools the node's agent may invoke. Absent = NOT "
+        "narrowed (additional role check still applies).",
+    )
+    context_scope: list[str] | None = Field(
+        default=None,
+        description="Allowlist of run_context keys the node may read. Absent = UNRESTRICTED (full run_context).",
+    )
+
+
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
@@ -560,6 +599,10 @@ class PipelineGraphNode(BaseModel):
     output_schema_id: uuid.UUID | None = None
     input_schema_pin: SchemaPin | None = None
     output_schema_pin: SchemaPin | None = None
+    # FAR-418: node-level capability_scope (least-privilege). A node narrows (never
+    # widens) its Agent's grants: allowed_connectors / allowed_tools / context_scope.
+    # Absent = UNRESTRICTED (behaviour unchanged). Validated in _resolve_graph_references.
+    capability_scope: CapabilityScope | None = None
     label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
@@ -1106,6 +1149,39 @@ def _build_schema_and_backend_pins(
     return schema_pins, model_backend_pins
 
 
+def _validate_capability_scopes(
+    nodes: list[PipelineGraphNode],
+    agents_by_id: dict[uuid.UUID, Agent],
+) -> None:
+    """Compile-time narrow-not-widen check for node capability_scope (FAR-418).
+
+    A node may NARROW its referenced Agent's connector grants, never WIDEN them.
+    For every node that declares ``capability_scope.allowed_connectors``, each
+    connector-TYPE entry must be within the Agent's ``connector_type_refs``; a
+    widen attempt raises a typed ``ScopeViolationError`` (422 at the route). A
+    node with no scope (UNRESTRICTED default) or no Agent reference is skipped.
+    Connector instance-id entries are opaque here and enforced at run time by the
+    ConnectorHub deny-by-default fetch scope.
+    """
+    for node in nodes:
+        scope = node.capability_scope
+        if scope is None or not scope.allowed_connectors:
+            continue
+        if node.agent_id is None:
+            # A connector node may not reference an Agent; its allowed_connectors
+            # are instance/type constrained only, so nothing is checked here.
+            continue
+        agent = agents_by_id.get(node.agent_id)
+        if agent is None:
+            continue
+        granted = agent_granted_connector_types(agent.connector_type_refs)
+        validate_allowed_connectors_subset(
+            node_id=str(node.id),
+            allowed_connectors=scope.allowed_connectors,
+            granted_types=granted,
+        )
+
+
 async def _resolve_graph_references(
     session: AsyncSession,
     nodes: list[PipelineGraphNode],
@@ -1124,6 +1200,15 @@ async def _resolve_graph_references(
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
     agents_by_id = await _load_agents_by_ids(session, org_id, agent_ids)
+    try:
+        _validate_capability_scopes(nodes, agents_by_id)
+    except ScopeViolationError as exc:
+        # FAR-418: a node that widens (never narrows) its Agent's connector grants
+        # is rejected — the save is refused, not silently accepted.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     await _load_existing_schema_ids(session, org_id, _collect_schema_ids(nodes))
     schema_pins, model_backend_pins = _build_schema_and_backend_pins(nodes, agents_by_id)
     if model_backend_pins:
