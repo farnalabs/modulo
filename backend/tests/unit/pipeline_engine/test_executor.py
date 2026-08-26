@@ -3,8 +3,8 @@
 import uuid
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import Any, TypedDict
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Self, TypedDict
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
@@ -2928,3 +2929,205 @@ class TestTransientFailureDetail:
         assert code == "node_cancelled"
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
         assert "idempotent=false" in detail
+
+
+def _make_connector_init_session(rows: list[Any]) -> AsyncMock:
+    """Session whose execute() yields non-empty ConnectorInstance rows for _init_connector_hub."""
+    result = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = rows
+    result.scalars.return_value = scalars_mock
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.return_value = result
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+class _FakeConnectorHub:
+    """Stand-in ConnectorHub whose initialise fails closed with a shared-budget error."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def initialise(self, _rows: list[Any], allowed_connectors: list[Any] | None = None) -> None:
+        raise self._exc
+
+
+async def test_init_connector_hub_propagates_shared_budget_error():
+    """FAR-439: _init_connector_hub must FAIL CLOSED (re-raise) on SharedBudgetUnavailableError.
+
+    A configured-but-unconstructable shared Redis budget — or a settings-read failure on
+    the executor path — raises SharedBudgetUnavailableError from ``hub.initialise``.
+    Swallowing it and returning None would let the connector node vacuously "succeed"
+    with the ``no connector hub`` fallback, silently no-op'ing the remote integration and
+    finalising the run GREEN. The raise must propagate so the run fails loudly at startup.
+    """
+    org_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(  # type: ignore[assignment]
+        _make_connector_init_session([MagicMock()])
+    )
+    hub = _FakeConnectorHub(
+        SharedBudgetUnavailableError("shared rate-limit Redis client is configured but could not be constructed")
+    )
+
+    with (
+        patch("modulo.core.connector_hub.ConnectorHub", return_value=hub),
+        patch("modulo.core.runtime_provider.create_default_hub", return_value=MagicMock()),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="key")),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(SharedBudgetUnavailableError),
+    ):
+        await executor._init_connector_hub(org_id)
+
+
+async def test_init_connector_hub_raises_when_configured_but_build_fails():
+    """FAR-439 root cause: a run WITH connectors configured must fail loudly.
+
+    A construction/settings failure (here ``get_settings`` raising) on a run that
+    HAS active connector rows must RAISE out of ``_init_connector_hub`` — never
+    return None. Returning None would let the node_runner vacuously "succeed"
+    with the ``no connector hub`` fallback, silently no-op'ing the configured
+    remote integration and finalising the run GREEN.
+    """
+    org_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(  # type: ignore[assignment]
+        _make_connector_init_session([MagicMock()])
+    )
+
+    with (
+        patch("modulo.settings.get_settings", side_effect=RuntimeError("settings unavailable")),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(RuntimeError),
+    ):
+        await executor._init_connector_hub(org_id)
+
+
+async def test_init_connector_hub_returns_none_when_no_connectors_configured():
+    """FAR-439: a run with NO active connector bindings returns None (vacuous success).
+
+    Vacuous success is only correct when no connector work is expected — the
+    ``hub=None`` fallback must never be reached for a configured run (see the
+    sibling fail-loudly tests). With zero rows the hub is never constructed so
+    the None return is the safe, correct result.
+    """
+    org_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(  # type: ignore[assignment]
+        _make_connector_init_session([])
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+    ):
+        result = await executor._init_connector_hub(org_id)
+
+    assert result is None
+
+
+def _make_connector_read_failing_session(exc: Exception) -> AsyncMock:
+    """Session whose execute() raises for a _init_connector_hub connector-row read."""
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = exc
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+async def test_init_connector_hub_fails_closed_on_read_error():
+    """FAR-439: a connector-row READ failure must re-raise (fail closed), not return None.
+
+    A session / set_rls / ``session.execute`` failure while reading the
+    ConnectorInstance rows means we CANNOT determine whether connectors are
+    configured. Failing open (returning None) would let the connector node
+    vacuously "succeed" with the ``no connector hub`` fallback, silently no-op'ing
+    a possibly-configured remote integration and finalising the run GREEN. The
+    read error must propagate so the run fails loudly at startup — it is NOT
+    evidence that no connectors are configured.
+    """
+    org_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(  # type: ignore[assignment]
+        _make_connector_read_failing_session(RuntimeError("db read failed"))
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(RuntimeError, match="db read failed"),
+    ):
+        await executor._init_connector_hub(org_id)
+
+
+class _FakeModelBackendHub:
+    """Stand-in ModelBackendHub whose __aexit__ is awaited by ``_teardown_hub``."""
+
+    def __init__(self) -> None:
+        self.exited = False
+
+    async def __aexit__(self, *_args: object) -> None:
+        self.exited = True
+
+
+async def test_teardown_model_backend_hub_when_connector_hub_init_raises_pre_stream():
+    """FAR-439: a pre-stream connector-hub raise must tear down the model-backend hub.
+
+    ``_init_run_environment`` acquires model_backend_hub (via ``__aenter__`` +
+    ``set_model_backend_hub``) BEFORE ``_init_connector_hub``. On a configured-path
+    raise that propagates out of execute() before the post-stream try/finally runs,
+    the hub would be leaked (ContextVar dangling, async client never awaited). The
+    raise must await the hub's ``__aexit__`` and clear the ContextVars before
+    propagating so no async client is left dangling.
+    """
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+
+    model_hub = _FakeModelBackendHub()
+    with (
+        patch.object(executor, "_init_model_backend_hub", new=AsyncMock(return_value=model_hub)),
+        patch.object(
+            executor,
+            "_init_connector_hub",
+            new=AsyncMock(side_effect=RuntimeError("connector hub init failed")),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_model_backend_hub", new=MagicMock()) as set_mb,
+        patch("modulo.core.pipeline_engine.executor.set_connector_hub", new=MagicMock()) as set_ch,
+        patch("modulo.core.pipeline_engine.executor.set_cancellation_check", new=MagicMock()) as set_cc,
+        patch("modulo.core.pipeline_engine.executor.set_audit_hook", new=MagicMock()) as set_ah,
+        patch("modulo.core.pipeline_engine.executor.get_registry") as get_registry_mock,
+        pytest.raises(RuntimeError, match="connector hub init failed"),
+    ):
+        registry = MagicMock()
+        get_registry_mock.return_value = registry
+        await executor._init_run_environment(
+            org_id=org_id,
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            graph_json={"nodes": []},
+        )
+
+    assert model_hub.exited is True
+    set_mb.assert_called_once_with(None)
+    set_ch.assert_called_once_with(None)
+    assert set_cc.call_args_list[-1] == call(None)
+    assert set_ah.call_args_list[-1] == call(None)
+    registry.close.assert_called_once_with(run_id)

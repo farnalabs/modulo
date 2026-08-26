@@ -658,7 +658,15 @@ async def test_run_environment_wires_fetch_scope_to_hub(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
     monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock(fernet_key=_KEY))
+    # Declare Redis as genuinely NOT configured so the hub stays on its
+    # connector-local bucket (the new FAR-439 fail-closed path raises rather than
+    # constructing a shared client). A bare MagicMock makes ``redis_url`` truthy
+    # and ``modulo_db.lower()`` a MagicMock, which would send the executor path
+    # into ``Redis.from_url(MagicMock)`` and explode.
+    monkeypatch.setattr(
+        "modulo.settings.get_settings",
+        lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
+    )
 
     # --- Fake async session returning our rows ---
     class _NullCtx:
@@ -751,7 +759,15 @@ async def test_run_environment_unrestricted_node_fetches_all(tmp_path, monkeypat
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
     monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock(fernet_key=_KEY))
+    # Declare Redis as genuinely NOT configured so the hub stays on its
+    # connector-local bucket (the new FAR-439 fail-closed path raises rather than
+    # constructing a shared client). A bare MagicMock makes ``redis_url`` truthy
+    # and ``modulo_db.lower()`` a MagicMock, which would send the executor path
+    # into ``Redis.from_url(MagicMock)`` and explode.
+    monkeypatch.setattr(
+        "modulo.settings.get_settings",
+        lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
+    )
 
     class _NullCtx:
         async def __aenter__(self):
