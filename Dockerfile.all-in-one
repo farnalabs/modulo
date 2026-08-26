@@ -32,7 +32,7 @@ COPY backend/alembic.ini ./alembic.ini
 COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/all-in-one.conf /etc/nginx/conf.d/default.conf
 COPY deploy/nginx/security_headers.conf.in /etc/nginx/security_headers.conf.in
-COPY deploy/nginx/security_headers.conf /usr/share/nginx/html/security_headers.conf
+COPY deploy/nginx/security_headers.conf /etc/nginx/security_headers.conf
 COPY deploy/nginx/render_csp.sh /usr/local/bin/render_csp.sh
 RUN chmod +x /usr/local/bin/render_csp.sh
 COPY deploy/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

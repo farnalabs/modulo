@@ -42,6 +42,6 @@ EOF
   docker run --rm \
     -v "/tmp/nginx-test.conf:/etc/nginx/nginx.conf:ro" \
     -v "$tmp_conf:/tmp/$name:ro" \
-    -v "/tmp/security_headers.conf:/usr/share/nginx/html/security_headers.conf:ro" \
+    -v "/tmp/security_headers.conf:/etc/nginx/security_headers.conf:ro" \
     nginx:alpine nginx -t -c /etc/nginx/nginx.conf
 done
