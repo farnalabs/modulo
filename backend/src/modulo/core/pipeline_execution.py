@@ -1122,43 +1122,22 @@ async def run_executor_with_watchdog(
 
     abort_watch_task = asyncio.create_task(_abort_watcher(), name=f"saq-abort-watch-{rid}")
 
-    exec_exc: Exception | None = None
-    exec_result: Any = None
-    try:
-        exec_result = await exec_task
-        # The run reached a terminal/complete outcome via the executor — signal
-        # the node-deadline watchdog to stand down (never fail a finished run).
-        run_done_event.set()
-    except asyncio.CancelledError:
-        # heartbeat-loss from worker shutdown. Await the watchdogs to completion
-        # first so their ``fail_run_terminal`` transactions commit before the
-        # ``finally`` below cancels them — cancelling a watchdog mid-write would
-        # abort its terminal-fail transaction and leave the run ``running``
-        # forever. A genuine worker-shutdown cancellation re-raises.
-        await _resolve_cancel_outcome(
-            watchdog_task=watchdog_task,
-            node_deadline_task=node_deadline_task,
-            stall_requested=stall_requested,
-            health_failed=health_failed,
-            superseded=superseded,
-            aeng=aeng,
-            run_id=run_id,
-            org_id=org_id,
-            claim_token=claim_token,
-            rid=rid,
-        )
-    except NodeCancelledError:
-        # Transient node cancellation — execute() already reset the run to
-        # pending; re-raise so SAQ retries the job.
-        raise
-    except Exception as exc:
-        exec_exc = exc
-        # A generic executor failure will be terminal-failed below — signal the
-        # node-deadline watchdog to stand down so it does not double-fail.
-        run_done_event.set()
-        _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
-    finally:
-        await _cancel_and_await_tasks(abort_watch_task, watchdog_task, node_deadline_task, exec_task, heartbeat_task)
+    exec_exc, exec_result = await _await_executor_task(
+        aeng=aeng,
+        run_id=run_id,
+        org_id=org_id,
+        claim_token=claim_token,
+        rid=rid,
+        exec_task=exec_task,
+        run_done_event=run_done_event,
+        watchdog_task=watchdog_task,
+        node_deadline_task=node_deadline_task,
+        heartbeat_task=heartbeat_task,
+        abort_watch_task=abort_watch_task,
+        stall_requested=stall_requested,
+        health_failed=health_failed,
+        superseded=superseded,
+    )
 
     if exec_exc is not None:
         # Honest outcome: a generic executor failure is terminal-failed
@@ -1182,6 +1161,74 @@ async def run_executor_with_watchdog(
     if result_status == "awaiting_human":
         return {"status": "awaiting_human"}
     return {"status": "failed"}
+
+
+async def _await_executor_task(
+    *,
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    claim_token: str | None,
+    rid: uuid.UUID,
+    exec_task: asyncio.Task[Any],
+    run_done_event: asyncio.Event,
+    watchdog_task: asyncio.Task[Any] | None,
+    node_deadline_task: asyncio.Task[Any],
+    heartbeat_task: asyncio.Task[Any] | None,
+    abort_watch_task: asyncio.Task[Any] | None,
+    stall_requested: asyncio.Event,
+    health_failed: asyncio.Event,
+    superseded: asyncio.Event,
+) -> tuple[Exception | None, Any]:
+    """Await the executor task and classify its outcome.
+
+    Returns ``(exc, result)``: ``(None, result)`` on a clean completion,
+    ``(exc, None)`` on a generic executor failure (terminal-failed by the
+    caller). A watchdog / supersession / heartbeat-loss cancellation is
+    classified via :func:`_resolve_cancel_outcome` (which re-raises for a
+    genuine worker-shutdown cancellation) and returns ``(None, None)`` so the
+    caller falls back to the run row. A transient ``NodeCancelledError`` is
+    re-raised so SAQ retries the job. The ``finally`` cancels and drains every
+    helper task before the outcome is resolved.
+    """
+    try:
+        result = await exec_task
+        # The run reached a terminal/complete outcome via the executor — signal
+        # the node-deadline watchdog to stand down (never fail a finished run).
+        run_done_event.set()
+        return None, result
+    except asyncio.CancelledError:
+        # Heartbeat-loss, watchdog stall, or supersession. Await the watchdogs
+        # to completion first so their ``fail_run_terminal`` transactions commit
+        # before the ``finally`` below cancels them — cancelling a watchdog
+        # mid-write would abort its terminal-fail transaction and leave the run
+        # ``running`` forever.
+        await _resolve_cancel_outcome(
+            watchdog_task=watchdog_task,
+            node_deadline_task=node_deadline_task,
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+            aeng=aeng,
+            run_id=run_id,
+            org_id=org_id,
+            claim_token=claim_token,
+            rid=rid,
+        )
+        return None, None
+    except NodeCancelledError:
+        # Transient node cancellation — execute() already reset the run to
+        # pending; re-raise so SAQ retries the job.
+        raise
+    except Exception as exc:
+        # A generic executor failure will be terminal-failed by the caller —
+        # signal the node-deadline watchdog to stand down so it does not
+        # double-fail.
+        run_done_event.set()
+        _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
+        return exc, None
+    finally:
+        await _cancel_and_await_tasks(abort_watch_task, watchdog_task, node_deadline_task, exec_task, heartbeat_task)
 
 
 async def _resolve_cancel_outcome(
