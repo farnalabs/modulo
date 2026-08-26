@@ -123,7 +123,7 @@ class TestConnectorPayloadHash:
         assert _payload_hash({"a": 1, "b": 2}) == _payload_hash({"b": 2, "a": 1})
 
     def test_non_json_value_coerced_without_raising(self) -> None:
-        assert _payload_hash({"created": type("D", (), {})()}) != ""
+        assert _payload_hash({"created": type("D", (), {})()})
 
     def test_changed_resource_different_hash(self) -> None:
         # MAJOR 2: same data, different write target (resource) -> different key.
@@ -228,7 +228,7 @@ class TestConnectorWriteGate:
         )
         assert result is None
 
-    async def test_fanout_items_derive_distinct_keys(self) -> None:
+    def test_fanout_items_derive_distinct_keys(self) -> None:
         """Two fan-out items (index 0 vs 1) for the SAME connector node derive
         DIFFERENT keys: item B's delivered marker never suppresses item A.
 
