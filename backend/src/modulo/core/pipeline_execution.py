@@ -1113,11 +1113,11 @@ async def run_executor_with_watchdog(
         finally:
             for w in waiters:
                 w.cancel()
-        if exec_task is not None and not exec_task.done():
+        if not exec_task.done():
             exec_task.cancel()
-        if watchdog_task is not None and not watchdog_task.done():
+        if not watchdog_task.done():
             watchdog_task.cancel()
-        if node_deadline_task is not None and not node_deadline_task.done():
+        if not node_deadline_task.done():
             node_deadline_task.cancel()
 
     abort_watch_task = asyncio.create_task(_abort_watcher(), name=f"saq-abort-watch-{rid}")
