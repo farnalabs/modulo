@@ -17,7 +17,7 @@ on:
         type: boolean
 
 concurrency:
-  group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  group: deploy-pipeline-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +40,14 @@ jobs:
             echo "Force deploy requested — bypassing throttle."
             exit 0
           fi
+          # If a deploy run is already in progress, batch this one - do not cancel/compete.
+          IN_PROGRESS="$(gh api \"repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?status=in_progress&branch=${{ github.ref_name }}\" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id] | .[0] // empty' 2>/dev/null || echo '')"
+          if [ -n "$IN_PROGRESS" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy."
+            exit 0
+          fi
+
           # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
           COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
