@@ -202,6 +202,15 @@ async def backfill_facts(session: Any, day: date) -> int:
     # (NULL facts on backfilled rows are a bug).
     graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
     _is_pg = (await _dialect_name(session)) == "postgresql"
+    # ``graph_json`` is declared ``json`` on the ORM (generic JSON for SQLite/
+    # MariaDB) but promoted to ``jsonb`` on Postgres by migration 0147. Coerce
+    # the operand to ``jsonb`` so the ``jsonb_*`` functions resolve whether the
+    # live column is currently ``json`` or ``jsonb`` (the promotion is a
+    # non-blocking, resumable migration — a half-migrated DB must still work).
+    if _is_pg:
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        graph_nodes_json = sa.cast(graph_nodes_json, JSONB)
     _json_array_length = sa.func.jsonb_array_length if _is_pg else sa.func.json_array_length
     _json_array_elements = sa.func.jsonb_array_elements if _is_pg else sa.func.json_array_elements
     node_count_expr = sa.case(
