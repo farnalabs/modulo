@@ -144,6 +144,31 @@ describe('RestConnectorConfigForm', () => {
     expect(credsDirty.value).toBe(false)
   })
 
+  it('does NOT mark credentials dirty on an identity-only edit, and saves without demanding the secret', async () => {
+    // Edit-mode prefill echoes the non-secret auth identity (header_name,
+    // apiKeyIn, auth_mode) while the secret stays write-only/empty. Editing ONLY
+    // that identity must not mark credsDirty (so the credentials payload is
+    // never re-sent empty, clobbering the stored secret) and must not demand a
+    // re-entered secret on validate().
+    const { wrapper, credsDirty, credentials } = mountForm('edit', {
+      auth_mode: 'api_key',
+      api_key: '',
+      apiKeyIn: 'header',
+      header_name: 'X-API-Key',
+      query_param_name: '',
+    })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(credsDirty.value).toBe(false)
+    credentials.value.header_name = 'X-API-Key-V2'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(credsDirty.value).toBe(false)
+    // credsDirty is false → the parent does NOT resend the credentials payload,
+    // and validate() must pass without a re-entered secret.
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
   it('renders the three on_unknown options and their help text', async () => {
     const { wrapper } = mountForm()
     await wrapper.vm.$nextTick()
@@ -192,6 +217,15 @@ describe('RestConnectorConfigForm', () => {
     const { wrapper, config, credentials } = mountForm()
     credentials.value.token = 'abc'
     config.value.base_url = 'not-a-url'
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Base URL must be a valid URL')
+  })
+
+  it('rejects a base_url with a non-http(s) scheme', async () => {
+    const { wrapper, config, credentials } = mountForm()
+    credentials.value.token = 'abc'
+    config.value.base_url = 'mailto:user@example.com'
     await wrapper.vm.$nextTick()
     expect(await validateAndFlush(wrapper)).toBe(false)
     expect(wrapper.text()).toContain('Base URL must be a valid URL')

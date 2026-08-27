@@ -313,8 +313,12 @@ function validate(): boolean {
     errors.base_url = t('connectors.rest.base_url_required')
   } else {
     try {
-      // eslint-disable-next-line no-new
-      new URL(baseUrl)
+      const parsedBaseUrl = new URL(baseUrl)
+      // The connector is HTTP-only — reject any non http/https scheme (e.g.
+      // mailto:, ftp:, file:) that `new URL()` would otherwise accept.
+      if (parsedBaseUrl.protocol !== 'http:' && parsedBaseUrl.protocol !== 'https:') {
+        errors.base_url = t('connectors.rest.base_url_invalid')
+      }
     } catch {
       errors.base_url = t('connectors.rest.base_url_invalid')
     }
@@ -367,17 +371,26 @@ function validate(): boolean {
 }
 
 // CRITICAL (FAR-466): credsDirty must reflect ONLY a genuine user edit of the
-// auth section, never a programmatic prefill/reset. We capture a baseline at
-// mount (after the parent has prefilled/reset the credentials) and recompute
-// dirty by comparing to that baseline — so a config-only save never re-sends
-// empty/default credentials and clobbers the stored secret.
-const credsBaseline = ref(JSON.stringify(credentials.value))
+// SECRET credential fields (token / api_key / username / password) — never a
+// programmatic prefill/reset, and never an identity-only edit (auth_mode,
+// apiKeyIn, header_name, query_param_name). The non-secret auth identity is
+// echoed/persisted via buildRestConfig in the parent (config-level), so an
+// identity-only edit must save without touching the secret payload: the secret
+// is write-only, and the presence of a real secret edit is what decides whether
+// the credentials payload is re-sent at all. We capture a baseline at mount and
+// compare only the secret fields, so the secret-preservation invariant holds by
+// construction rather than by the validation gate.
+const SECRET_FIELDS = ['token', 'api_key', 'username', 'password'] as const
+function secretSnapshot(): string {
+  return JSON.stringify(SECRET_FIELDS.map(f => credentials.value[f]))
+}
+const credsBaseline = ref(secretSnapshot())
 onMounted(() => {
-  credsBaseline.value = JSON.stringify(credentials.value)
+  credsBaseline.value = secretSnapshot()
 })
 watch(
-  () => ({ ...credentials.value }),
-  () => { credsDirty.value = JSON.stringify(credentials.value) !== credsBaseline.value },
+  () => secretSnapshot(),
+  (v) => { credsDirty.value = v !== credsBaseline.value },
 )
 
 defineExpose({ validate })
