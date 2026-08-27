@@ -225,9 +225,12 @@ jobs:
             sleep 2
           done
 
+      # Per-test timeout: without it a single hung test stalls the whole job
+      # silently until the job-level kill (observed 2026-08-27, run
+      # 33063471418: zero output for 41 min after 93%). 300s matches ci.yml.
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
