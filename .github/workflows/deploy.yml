@@ -409,8 +409,8 @@ jobs:
       # machine -> deploy the pre-built image -> destroy the machine. The
       # release command inside `fly deploy` remains the AUTHORITATIVE
       # migrator (it fails the deploy if migrations fail); the pre-migrate
-      # step is a best-effort optimisation that moves the wait BEFORE the
-      # swap so the health gate measures pure app startup.
+      # step moves the wait BEFORE the swap so the health gate measures pure
+      # app startup, and pre-migrate failure is fatal (deploy aborted).
       - name: Build image (no deploy)
         id: build
         shell: bash
@@ -457,30 +457,30 @@ jobs:
       - name: Pre-deploy migrations (one-off machine)
         id: pre-migrate
         shell: bash
-        # BEST-EFFORT optimisation: run release.sh (bootstrap + alembic
+        # Pre-migrate failure is FATAL: run release.sh (bootstrap + alembic
         # upgrade heads) on a one-off machine from the just-built image so
-        # migrations complete BEFORE `fly deploy` swaps the release. The
-        # release command inside `fly deploy` remains the AUTHORITATIVE
-        # migrator - it fails the deploy if migrations fail - so a failure
-        # here must never fail the deploy: we warn and fall back to the old
-        # behaviour (release-command migration during the deploy; the health
-        # gate absorbs the wait). Best-effort keeps the deploy path resilient
-        # to one-off-machine quirks (e.g. app secrets not being injected into
-        # `fly machine run` machines).
+        # migrations complete BEFORE `fly deploy` swaps the release. Any
+        # failure here (launch failure, machine not identifiable, machine
+        # vanished, poll timeout) fails the run and the deploy is aborted -
+        # the root cause must be fixed; there is no silent fallback to
+        # release-command migration.
         #
-        # Assumption needing live validation: Fly app secrets (DATABASE_URL
-        # etc.) are injected into machines created via `fly machine run`
-        # within the app. If that proves false, release.sh fails fast in this
-        # step and the fallback above engages. flyctl does not reliably
-        # expose a stopped machine's exit code, so a fast-failing release.sh
-        # here is indistinguishable from success - harmless, because the
-        # authoritative release command still gates the deploy on migration
-        # success.
+        # The release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - and acts as
+        # defence-in-depth for the case where pre-migrate succeeded but
+        # migrations ran long (re-running `alembic upgrade heads` at head is
+        # an instant no-op). It is NOT a fallback for pre-migrate failure: a
+        # pre-migrate failure aborts the deploy before it starts.
+        #
+        # Known limitation (inherent to flyctl): the exit code of a stopped
+        # one-off machine is not reliably exposed, so a fast-failing
+        # release.sh looks like a clean stop here. That is exactly why the
+        # authoritative release command in `fly deploy` still gates the
+        # deploy on migration success.
         #
         # The machine does NOT auto-destroy when its command exits
         # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
         # machine" step below removes it in every outcome.
-        continue-on-error: true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
@@ -510,10 +510,10 @@ jobs:
           echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
           fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
             --entrypoint /bin/bash --command "/release.sh" \
-            --vm-size shared-cpu-1x-1gb
+            --vm-size shared-cpu-1x --memory 1024
           if [ $? -ne 0 ]; then
-            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-            exit 0
+            echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
+            exit 1
           fi
 
           MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
@@ -538,16 +538,16 @@ jobs:
                   break
           ')"
           if [ -z "$MID" ]; then
-            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-            exit 0
+            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            exit 1
           fi
           echo "$MID" > /tmp/premigrate-machine-id.txt
           export MID
           echo "Pre-migrate machine: ${MID}"
 
           # Bounded poll until the one-off machine stops (release.sh has
-          # exited). On timeout we warn and let the deploy's release command
-          # take over.
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # swapping onto an unverified database.
           TIMEOUT_MIN=40
           INTERVAL_SEC=20
           ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
@@ -573,14 +573,14 @@ jobs:
               exit 0
             fi
             if [ "$STATE" = "destroyed" ]; then
-              echo "Pre-migrate machine ${MID} vanished (state: destroyed) - falling back."
-              break
+              echo "::error::Pre-migrate machine ${MID} vanished before migrations completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
             fi
             echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
             sleep "$INTERVAL_SEC"
           done
-          echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-          exit 0
+          echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          exit 1
 
       - name: Deploy to staging-modulo
         shell: bash
@@ -610,12 +610,13 @@ jobs:
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
-              else
-                echo "Deploy failed after $MAX_RETRIES attempts"
-                exit $EXIT_CODE
               fi
             fi
           done
+          # Exhaustion is fatal: a masked deploy failure must never count as a
+          # fresh successful deploy for the throttle (2026-08-27 incident).
+          echo "::error::Deploy failed after $MAX_RETRIES attempts - failing the run so the throttle does not count it as a fresh deploy (2026-08-27: masked failure poisoned the throttle for 3h)."
+          exit 1
 
       - name: Destroy pre-migrate machine
         if: always()
@@ -1021,10 +1022,9 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
-        continue-on-error: true # nosemgrep: continue-on-error-in-ci
-        # Deliberate: failures are surfaced by the "Fail on test failure"
-        # aggregate step below instead of hard-failing here, so artifacts
-        # always upload even when a suite fails.
+        # No failure masking: a broken deploy must not ship green, so test
+        # failures hard-fail the run. Artifacts still upload (step below is
+        # `if: always()`).
 
       - name: Upload test artifacts
         if: always()
@@ -1033,12 +1033,6 @@ jobs:
           name: playwright-traces-${{ github.run_id }}
           path: frontend/test-results/
           if-no-files-found: ignore
-      - name: Fail on test failure
-        if: steps.regression-tests.outcome == 'failure'
-        shell: pwsh
-        run: |
-          Write-Host "::error::One or more staging suites failed."
-          exit 1
 
   deploy-production:
     name: Deploy to app.modulo.run
@@ -1058,8 +1052,9 @@ jobs:
       # Same restructure as deploy-staging: build-only -> pre-migrate on a
       # one-off machine -> deploy the pre-built image -> destroy the machine.
       # The release command remains the AUTHORITATIVE migrator; the
-      # pre-migrate step is a best-effort optimisation that moves the
-      # migration wait BEFORE the deploy swap (2026-08-27 incident).
+      # pre-migrate step moves the migration wait BEFORE the deploy swap
+      # (2026-08-27 incident), and pre-migrate failure is fatal (deploy
+      # aborted).
       - name: Build image (no deploy)
         id: build
         shell: bash
@@ -1106,30 +1101,30 @@ jobs:
       - name: Pre-deploy migrations (one-off machine)
         id: pre-migrate
         shell: bash
-        # BEST-EFFORT optimisation: run release.sh (bootstrap + alembic
+        # Pre-migrate failure is FATAL: run release.sh (bootstrap + alembic
         # upgrade heads) on a one-off machine from the just-built image so
-        # migrations complete BEFORE `fly deploy` swaps the release. The
-        # release command inside `fly deploy` remains the AUTHORITATIVE
-        # migrator - it fails the deploy if migrations fail - so a failure
-        # here must never fail the deploy: we warn and fall back to the old
-        # behaviour (release-command migration during the deploy; the health
-        # gate absorbs the wait). Best-effort keeps the deploy path resilient
-        # to one-off-machine quirks (e.g. app secrets not being injected into
-        # `fly machine run` machines).
+        # migrations complete BEFORE `fly deploy` swaps the release. Any
+        # failure here (launch failure, machine not identifiable, machine
+        # vanished, poll timeout) fails the run and the deploy is aborted -
+        # the root cause must be fixed; there is no silent fallback to
+        # release-command migration.
         #
-        # Assumption needing live validation: Fly app secrets (DATABASE_URL
-        # etc.) are injected into machines created via `fly machine run`
-        # within the app. If that proves false, release.sh fails fast in this
-        # step and the fallback above engages. flyctl does not reliably
-        # expose a stopped machine's exit code, so a fast-failing release.sh
-        # here is indistinguishable from success - harmless, because the
-        # authoritative release command still gates the deploy on migration
-        # success.
+        # The release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - and acts as
+        # defence-in-depth for the case where pre-migrate succeeded but
+        # migrations ran long (re-running `alembic upgrade heads` at head is
+        # an instant no-op). It is NOT a fallback for pre-migrate failure: a
+        # pre-migrate failure aborts the deploy before it starts.
+        #
+        # Known limitation (inherent to flyctl): the exit code of a stopped
+        # one-off machine is not reliably exposed, so a fast-failing
+        # release.sh looks like a clean stop here. That is exactly why the
+        # authoritative release command in `fly deploy` still gates the
+        # deploy on migration success.
         #
         # The machine does NOT auto-destroy when its command exits
         # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
         # machine" step below removes it in every outcome.
-        continue-on-error: true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
@@ -1159,10 +1154,10 @@ jobs:
           echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
           fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
             --entrypoint /bin/bash --command "/release.sh" \
-            --vm-size shared-cpu-1x-1gb
+            --vm-size shared-cpu-1x --memory 1024
           if [ $? -ne 0 ]; then
-            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-            exit 0
+            echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
+            exit 1
           fi
 
           MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
@@ -1187,16 +1182,16 @@ jobs:
                   break
           ')"
           if [ -z "$MID" ]; then
-            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-            exit 0
+            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            exit 1
           fi
           echo "$MID" > /tmp/premigrate-machine-id.txt
           export MID
           echo "Pre-migrate machine: ${MID}"
 
           # Bounded poll until the one-off machine stops (release.sh has
-          # exited). On timeout we warn and let the deploy's release command
-          # take over.
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # swapping onto an unverified database.
           TIMEOUT_MIN=40
           INTERVAL_SEC=20
           ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
@@ -1222,22 +1217,20 @@ jobs:
               exit 0
             fi
             if [ "$STATE" = "destroyed" ]; then
-              echo "Pre-migrate machine ${MID} vanished (state: destroyed) - falling back."
-              break
+              echo "::error::Pre-migrate machine ${MID} vanished before migrations completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
             fi
             echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
             sleep "$INTERVAL_SEC"
           done
-          echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
-          exit 0
+          echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          exit 1
 
       - name: Deploy to app-modulo
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
-        # Best-effort by design - the [release] command inside fly deploy remains the authoritative migrator.
-        continue-on-error: true  # nosemgrep:semgrep.continue-on-error-in-ci
         run: |
           curl -fsSL https://fly.io/install.sh | sh
           export FLYCTL_INSTALL="/home/runner/.fly"
@@ -1262,12 +1255,13 @@ jobs:
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
-              else
-                echo "Deploy failed after $MAX_RETRIES attempts"
-                exit $EXIT_CODE
               fi
             fi
           done
+          # Exhaustion is fatal: a masked deploy failure must never count as a
+          # fresh successful deploy for the throttle (2026-08-27 incident).
+          echo "::error::Deploy failed after $MAX_RETRIES attempts - failing the run so the throttle does not count it as a fresh deploy (2026-08-27: masked failure poisoned the throttle for 3h)."
+          exit 1
 
       - name: Destroy pre-migrate machine
         if: always()
@@ -1625,13 +1619,5 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
-        continue-on-error: true # nosemgrep: continue-on-error-in-ci
-        # Deliberate: failures are surfaced by the "Fail on smoke test failure"
-        # aggregate step below instead of hard-failing here.
-
-      - name: Fail on smoke test failure
-        if: steps.smoke-tests.outcome == 'failure'
-        shell: pwsh
-        run: |
-          Write-Host "::error::Smoke tests against production failed."
-          exit 1
+        # No failure masking: a broken deploy must not ship green, so smoke
+        # failures hard-fail the run.
