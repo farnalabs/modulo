@@ -55,7 +55,16 @@
                 data-testid="admin-connectors-description-input"
               />
             </div>
-            <div>
+            <div v-if="isRestConnector">
+              <RestConnectorConfigForm
+                ref="restFormRef"
+                v-model:config="restConfig"
+                v-model:credentials="restCreds"
+                v-model:credsDirty="credsDirty"
+                :mode="formMode"
+              />
+            </div>
+            <div v-else>
               <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
               <textarea id="adminconnectorsview-field-4"
                 v-model="formData.config_json"
@@ -196,7 +205,16 @@
                 data-testid="admin-connectors-edit-description"
               />
             </div>
-            <div>
+            <div v-if="isRestConnector">
+              <RestConnectorConfigForm
+                ref="restFormRef"
+                v-model:config="restConfig"
+                v-model:credentials="restCreds"
+                v-model:credsDirty="credsDirty"
+                :mode="formMode"
+              />
+            </div>
+            <div v-else>
               <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
               <textarea id="adminconnectorsview-field-1"
                 v-model="formData.config_json"
@@ -260,6 +278,8 @@ import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { useI18n } from 'vue-i18n'
+import RestConnectorConfigForm from '../components/connectors/RestConnectorConfigForm.vue'
+import type { RestConfigState, RestCredsState } from '../components/connectors/RestConnectorConfigForm.vue'
 
 const { t } = useI18n()
 
@@ -272,6 +292,7 @@ interface ConnectorItem {
   description?: string | null
   enabled?: boolean
   tier?: 'native' | 'preview' | 'in_dev'
+  config_json?: Record<string, unknown> | null
 }
 
 interface ConnectorFormState {
@@ -288,6 +309,127 @@ function emptyForm(): ConnectorFormState {
     description: '',
     config_json: '',
   }
+}
+
+// REST connector (Generic REST) structured form state. Operational config is
+// kept separate from credentials (auth) so they are never conflated on submit.
+const REST_ADVANCED_FIELDS = [
+  'path',
+  'headers',
+  'params',
+  'body',
+  'body_template',
+  'operations',
+  'next_cursor_path',
+  'passthrough',
+  'max_response_size',
+  'idempotency_header',
+  'fan_out',
+]
+
+const REST_ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
+
+function defaultRestConfig(): RestConfigState {
+  return {
+    base_url: '',
+    method: 'GET',
+    timeout_seconds: 30,
+    verify_tls: true,
+    on_unknown: 'fail_open',
+    records_path: '',
+    allowed_hosts: '',
+    advanced_json: '',
+  }
+}
+
+function defaultRestCreds(): RestCredsState {
+  return {
+    auth_mode: 'bearer',
+    token: '',
+    username: '',
+    password: '',
+    api_key: '',
+    apiKeyIn: 'header',
+    header_name: '',
+    query_param_name: '',
+  }
+}
+
+const restConfig = ref<RestConfigState>(defaultRestConfig())
+const restCreds = ref<RestCredsState>(defaultRestCreds())
+const credsDirty = ref(false)
+const restFormRef = ref<InstanceType<typeof RestConnectorConfigForm> | null>(null)
+const isRestConnector = computed(() => formData.connector_type === 'rest')
+
+function resetRestForm() {
+  Object.assign(restConfig.value, defaultRestConfig())
+  Object.assign(restCreds.value, defaultRestCreds())
+  credsDirty.value = false
+}
+
+function prefillRestConfig(connector: ConnectorItem) {
+  const cfg = connector.config_json ?? {}
+  restConfig.value.base_url = typeof cfg.base_url === 'string' ? cfg.base_url : ''
+  restConfig.value.method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET'
+  restConfig.value.timeout_seconds = typeof cfg.timeout_seconds === 'number' ? cfg.timeout_seconds : 30
+  restConfig.value.verify_tls = typeof cfg.verify_tls === 'boolean' ? cfg.verify_tls : true
+  restConfig.value.on_unknown = REST_ON_UNKNOWN_OPTIONS.includes(String(cfg.on_unknown)) ? String(cfg.on_unknown) : 'fail_open'
+  restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
+  restConfig.value.allowed_hosts = Array.isArray(cfg.allowed_hosts)
+    ? (cfg.allowed_hosts as unknown[]).join(', ')
+    : typeof cfg.allowed_hosts === 'string'
+      ? cfg.allowed_hosts
+      : ''
+  const advanced: Record<string, unknown> = {}
+  for (const key of REST_ADVANCED_FIELDS) {
+    if (cfg[key] !== undefined) advanced[key] = cfg[key]
+  }
+  restConfig.value.advanced_json = Object.keys(advanced).length ? JSON.stringify(advanced, null, 2) : ''
+  // Credentials are write-only in the API (has_credentials boolean only) — the
+  // auth profile can never be read back, so it resets to defaults and is only
+  // re-sent when the user explicitly edits it.
+  Object.assign(restCreds.value, defaultRestCreds())
+  credsDirty.value = false
+}
+
+function buildRestConfig(): Record<string, unknown> {
+  const cfg: Record<string, unknown> = {
+    description: formData.description.trim(),
+    base_url: restConfig.value.base_url.trim(),
+    method: String(restConfig.value.method).toUpperCase(),
+    timeout_seconds: Number(restConfig.value.timeout_seconds) || 30,
+    verify_tls: !!restConfig.value.verify_tls,
+    on_unknown: restConfig.value.on_unknown,
+    records_path: restConfig.value.records_path.trim(),
+  }
+  if (restConfig.value.allowed_hosts.trim()) {
+    cfg.allowed_hosts = restConfig.value.allowed_hosts.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  if (restConfig.value.advanced_json.trim()) {
+    try {
+      Object.assign(cfg, JSON.parse(restConfig.value.advanced_json) as Record<string, unknown>)
+    } catch {
+      // validated in the form component; never reached here
+    }
+  }
+  return cfg
+}
+
+function buildRestCredentials(): string {
+  const mode = restCreds.value.auth_mode
+  const creds: Record<string, unknown> = { auth_mode: mode }
+  if (mode === 'bearer') creds.token = restCreds.value.token
+  if (mode === 'basic') {
+    creds.username = restCreds.value.username
+    creds.password = restCreds.value.password
+  }
+  if (mode === 'api_key') {
+    creds.api_key = restCreds.value.api_key
+    creds.in = restCreds.value.apiKeyIn
+    if (restCreds.value.apiKeyIn === 'header') creds.header_name = restCreds.value.header_name
+    else creds.query_param_name = restCreds.value.query_param_name
+  }
+  return JSON.stringify(creds)
 }
 
 const { loading, error, data, load: loadConnectors } = useDataFetch(
@@ -315,6 +457,7 @@ watch(data, response => {
     description: typeof item.config_json?.description === 'string' ? item.config_json.description : null,
     enabled: item.status === 'active',
     tier: item.tier === 'preview' || item.tier === 'in_dev' ? item.tier : 'native',
+    config_json: item.config_json ?? null,
   }))
 }, { immediate: true })
 const nativeConnectors = computed(() => connectors.value.filter(c => (c.tier ?? 'native') !== 'preview' && (c.tier ?? 'native') !== 'in_dev'))
@@ -338,6 +481,7 @@ function openAddForm() {
   editConnectorId.value = null
   deleteConfirmConnectorId.value = null
   formError.value = null
+  resetRestForm()
 }
 
 function openEditForm(connector: ConnectorItem) {
@@ -351,21 +495,39 @@ function openEditForm(connector: ConnectorItem) {
     description: connector.description ?? '',
     config_json: '',
   })
+  if (connector.connector_type === 'rest') {
+    prefillRestConfig(connector)
+  } else {
+    resetRestForm()
+  }
 }
 
 function closeForm() {
   formMode.value = null
   Object.assign(formData, emptyForm())
   formError.value = null
+  resetRestForm()
 }
 
 function closeEditForm() {
   editConnectorId.value = null
   Object.assign(formData, emptyForm())
   formError.value = null
+  resetRestForm()
 }
 
 function buildCreateBody() {
+  if (isRestConnector.value) {
+    return {
+      name: formData.name.trim(),
+      connector_type_id: formData.connector_type,
+      credentials: buildRestCredentials(),
+      config_json: buildRestConfig(),
+      allowed_operations: [],
+      visibility: 'org',
+      tier: 'native' as const,
+    }
+  }
   return {
     name: formData.name.trim(),
     connector_type_id: formData.connector_type,
@@ -378,6 +540,17 @@ function buildCreateBody() {
 }
 
 function buildUpdateBody() {
+  if (isRestConnector.value) {
+    const body: Record<string, unknown> = {
+      name: formData.name.trim() || null,
+      config_json: buildRestConfig(),
+    }
+    // Credentials are write-only; only re-send (full replace) when the user
+    // actually edited the auth section, otherwise the existing encrypted
+    // credential is preserved.
+    if (credsDirty.value) body.credentials = buildRestCredentials()
+    return body
+  }
   return {
     name: formData.name.trim() || null,
     credentials: formData.config_json.trim() || null,
@@ -387,6 +560,13 @@ function buildUpdateBody() {
 
 async function createConnector() {
   if (!formData.name.trim()) return
+  if (isRestConnector.value) {
+    const valid = restFormRef.value ? restFormRef.value.validate() : true
+    if (!valid) {
+      formError.value = 'Please fix the highlighted configuration fields.'
+      return
+    }
+  }
   saving.value = true
   formError.value = null
   try {
@@ -402,6 +582,7 @@ async function createConnector() {
         connector_type: data.connector_type_id,
         description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
         enabled: true,
+        config_json: data.config_json ?? null,
       })
       closeForm()
     }
@@ -414,6 +595,13 @@ async function createConnector() {
 
 async function updateConnector() {
   if (!editConnectorId.value || !formData.name.trim()) return
+  if (isRestConnector.value) {
+    const valid = restFormRef.value ? restFormRef.value.validate() : true
+    if (!valid) {
+      formError.value = 'Please fix the highlighted configuration fields.'
+      return
+    }
+  }
   saving.value = true
   formError.value = null
   try {
@@ -432,6 +620,7 @@ async function updateConnector() {
           connector_type: data.connector_type_id,
           description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
           enabled: true,
+          config_json: data.config_json ?? null,
         }
       }
       closeEditForm()

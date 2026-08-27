@@ -3385,7 +3385,25 @@ export default {
       "api_key": "API key",
       "username": "Username",
       "password": "Password",
-      "operations": "Named resources (operations)"
+      "operations": "Named resources (operations)",
+      "section_operational": "Operational configuration",
+      "section_credentials": "Credentials (authentication)",
+      "section_advanced": "Advanced (templated)",
+      "on_unknown": "On unknown response shape",
+      "on_unknown_fail_open": "fail_open",
+      "on_unknown_fail_closed": "fail_closed",
+      "on_unknown_off": "off",
+      "on_unknown_fail_open_help": "Return whatever was fetched even if no records were extracted — safe when a re-run can recover duplicates.",
+      "on_unknown_fail_closed_help": "Fail the run when records cannot be extracted — safe when a silent miss is catastrophic.",
+      "on_unknown_off_help": "No on-unknown handling — classic root-mapping only.",
+      "records_path_help": "JMESPath expression locating the records list (e.g. data.items).",
+      "allowed_hosts_help": "Comma-separated hostnames allowed in rendered URLs (SSRF/egress allowlist).",
+      "verify_tls_help": "Verify the TLS certificate of the target endpoint.",
+      "api_key_in": "Send API key",
+      "advanced_json": "Advanced configuration (JSON)",
+      "advanced_json_help": "Templated / advanced fields: path, headers, params, body, body_template, operations, next_cursor_path, passthrough, max_response_size, idempotency_header, fan_out.",
+      "credentials_write_only": "Credentials are write-only — they can never be read back. Re-enter to change; leave untouched to keep the existing stored credential.",
+      "no_authentication": "The REST connector requires an authentication profile (bearer, api_key, or basic)."
     }
   }
 }

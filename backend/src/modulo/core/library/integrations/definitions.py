@@ -840,6 +840,100 @@ REST_INTEGRATION: dict[str, Any] = {
         "timeout_seconds": 30,
         "verify_tls": True,
     },
+    # Structured operational-config metadata (FAR-466). This is the schema the
+    # AdminConnectorsView REST form renders from: flat, discoverable fields are
+    # first-class controls; genuinely templated/advanced fields remain a JSON
+    # editor (advanced_fields). Authentication is deliberately separated into
+    # its own credential payload (auth + credential_fields) — never conflated
+    # with operational config.
+    "config_schema": {
+        "type": "object",
+        "title": "Generic REST operational configuration",
+        "description": (
+            "Flat, discoverable operational config fields the connector form "
+            "renders as first-class controls. Advanced/templated fields stay in "
+            "the JSON editor (see advanced_fields). Authentication is a separate "
+            "credential payload (auth_mode + per-mode secret fields)."
+        ),
+        "fields": {
+            "base_url": {
+                "type": "string",
+                "default": "",
+                "description": "Root URL of the REST endpoint (no trailing slash).",
+            },
+            "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+                "default": "GET",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "default": 30,
+                "description": "Per-request timeout in seconds.",
+            },
+            "verify_tls": {
+                "type": "boolean",
+                "default": True,
+                "description": "Verify the TLS certificate of the target.",
+            },
+            "on_unknown": {
+                "type": "string",
+                "enum": ["fail_open", "fail_closed", "off"],
+                "default": "fail_open",
+                "description": (
+                    "Behaviour when the response shape is unknown or no records can be extracted at records_path."
+                ),
+                "help": (
+                    "fail_open: return whatever was fetched even if no records were "
+                    "extracted (safe when a re-run can recover duplicates). "
+                    "fail_closed: fail the run when records cannot be extracted (safe "
+                    "when a silent miss is catastrophic). "
+                    "off: no on-unknown handling — classic root-mapping only."
+                ),
+            },
+            "records_path": {
+                "type": "string",
+                "default": "",
+                "description": "JMESPath expression (e.g. data.items) locating the records list in the response.",
+            },
+            "allowed_hosts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "default": [],
+                "description": "Egress/SSRF allowlist of hostnames permitted in rendered URLs.",
+            },
+        },
+        # Authentication profile. Stored with the connector credentials (never in
+        # operational config). The enum mirrors the REST connector's
+        # ``_normalise_auth`` — a public/unauthenticated profile is not supported
+        # by the connector, so no 'none' option is offered.
+        "auth": {
+            "description": "Authentication profile stored with the connector credentials.",
+            "auth_mode": {
+                "type": "string",
+                "enum": ["bearer", "api_key", "basic"],
+                "default": "bearer",
+            },
+            "credential_fields": {
+                "bearer": ["token"],
+                "basic": ["username", "password"],
+                "api_key": ["api_key", "in", "header_name", "query_param_name"],
+            },
+        },
+        "advanced_fields": [
+            "path",
+            "headers",
+            "params",
+            "body",
+            "body_template",
+            "operations",
+            "next_cursor_path",
+            "passthrough",
+            "max_response_size",
+            "idempotency_header",
+            "fan_out",
+        ],
+    },
     "credential_fields": {
         "auth_mode": {
             "type": "string",
