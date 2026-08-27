@@ -3,6 +3,9 @@
 Covers both the derivation primitive (:func:`stable_idempotency_key`) and the
 FAR-438 run-record persistence contract (run-level key persist + read-back,
 per-node derivation from a persisted key, and the read-before-write dedupe).
+Also covers the FAR-458 :func:`read_before_write_ambiguous` primitive — the
+couldn't-confirm-delivery detection that the per-connector ``on_unknown`` policy
+consumes (distinct from the confirmed-delivered suppression).
 """
 
 import uuid
@@ -11,6 +14,7 @@ import pytest
 
 from modulo.core.pipeline_engine.idempotency import (
     node_idempotency_key,
+    read_before_write_ambiguous,
     read_before_write_suppression,
     stable_idempotency_key,
 )
@@ -243,6 +247,68 @@ def test_read_before_write_changed_payload_derives_different_key() -> None:
     assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v2") is False
     # Unchanged payload probe => same key + delivery_done => suppressed.
     assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v1") is True
+
+
+# ── read-before-write ambiguous detection (FAR-458) ─────────────────────────
+
+
+def test_read_before_write_ambiguous_true_on_unconfirmed_delivery() -> None:
+    """A marker carrying the SAME derived key but WITHOUT ``delivery_done`` is the
+    ambiguous (couldn't-confirm-delivery) state — the exact case the per-connector
+    ``on_unknown`` policy governs. It must NOT count as confirmed (suppression is
+    False) but MUST be detectable as ambiguous."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    derived = node_idempotency_key(persisted, "node-a", index=0)
+    markers = {"attempt-0": {"_modulo_marker": True, "status": "failed", "idempotency_key": derived}}
+    # A failure stamp is NOT a confirmed delivery (never suppress on it)...
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+    # ...but it IS ambiguous (a prior attempt touched this exact write, unconfirmed).
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0) is True
+
+
+def test_read_before_write_ambiguous_false_on_confirmed_delivery() -> None:
+    """A CONFIRMED-delivered marker (``delivery_done is True`` + matching key) is
+    NOT ambiguous — it is the dedup's confirmed case, governed by suppression,
+    never by ``on_unknown``."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    derived = node_idempotency_key(persisted, "node-a", index=0)
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": derived}}
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is True
+
+
+def test_read_before_write_ambiguous_false_on_first_time() -> None:
+    """A first-time write (no marker) is never ambiguous — there is no prior
+    attempt, so nothing to fail-closed on."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    assert read_before_write_ambiguous({}, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_ambiguous_false_on_changed_payload() -> None:
+    """A changed-payload re-run derives a DIFFERENT key, so it is never ambiguous
+    against the unedited marker (and never suppressed under ``fail_closed``)."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    original_key = node_idempotency_key(persisted, "node-a", index=0, payload="v1")
+    markers = {"attempt-0": {"_modulo_marker": True, "idempotency_key": original_key}}
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v2") is False
+    # The unedited probe IS ambiguous (matching key, no delivery_done).
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v1") is True
+
+
+def test_read_before_write_ambiguous_fails_open_on_malformed_ref() -> None:
+    """A missing / malformed run_ref never counts as ambiguous (fail-open) — a
+    misconfigured run record must not drive a fail-closed write drop."""
+    marker = {"attempt-0": {"_modulo_marker": True, "delivery_done": False, "idempotency_key": "x"}}
+    assert read_before_write_ambiguous(marker, run_ref="", node_ref="node-a") is False
+    bare_uuid = "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"
+    assert read_before_write_ambiguous(marker, run_ref=bare_uuid, node_ref="node-a") is False
+    assert read_before_write_ambiguous(marker, run_ref="pipeline:42", node_ref="") is False
+
+
+def test_read_before_write_ambiguous_fails_open_on_non_dict_markers() -> None:
+    """Non-dict markers never count as ambiguous (fail-open)."""
+    assert read_before_write_ambiguous(None, run_ref="pipeline:42", node_ref="node-a") is False
+    assert read_before_write_ambiguous(["x"], run_ref="pipeline:42", node_ref="node-a") is False
 
 
 def test_run_ref_shape_regex_consistent_with_db_layer() -> None:

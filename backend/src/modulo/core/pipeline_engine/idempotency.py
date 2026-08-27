@@ -77,6 +77,20 @@ _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
 # is documented in the SCOPE note as an honest gap. New wiring must keep the
 # ``delivery_done is True`` + same-``idempotency_key`` contract — never suppress
 # a first-time write or a changed-payload re-run.
+#
+# FAR-458 refinement (per-connector ``on_unknown``): the CONFIRMED-delivered
+# suppression (``delivery_done is True`` + matching key) is mode-independent —
+# dedup's whole point. The AMBIGUOUS case — a prior attempt that touched the
+# SAME derived key but whose delivery could not be confirmed (``delivery_done``
+# absent) — is a SEPARATE decision governed by the per-connector-per-write
+# ``on_unknown`` option (:func:`read_before_write_ambiguous`). The per-action
+# reasoning: a MISS (fail_closed suppresses a write that might never have
+# landed) can be catastrophic for an action that is not self-healing (e.g. a
+# one-way email/notification the operator cannot easily re-send), while a
+# DUPLICATE (fail_open re-fires an indeterminate write) is usually recoverable
+# (a duplicate record can be reconciled/cleaned). Choose fail_closed only when
+# a silent miss is the worse outcome (a non-idempotent, hard-to-restore write);
+# default is fail_open.
 
 
 def stable_idempotency_key(
@@ -195,5 +209,56 @@ def read_before_write_suppression(
         return False
     return any(
         isinstance(marker, dict) and marker.get("delivery_done") is True and marker.get("idempotency_key") == derived
+        for marker in markers.values()
+    )
+
+
+def read_before_write_ambiguous(
+    markers: Any,
+    *,
+    run_ref: str,
+    node_ref: str,
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+) -> bool:
+    """READ-BEFORE-WRITE UNKNOWN detection (FAR-458): was there a prior attempt
+    for this exact write whose delivery is UNCONFIRMED?
+
+    True ONLY when a marker carries the SAME derived ``idempotency_key`` as this
+    write (computed with the SAME ``run_ref`` / ``node_ref`` / ``index`` /
+    ``payload`` as the marker write) but WITHOUT ``delivery_done is True``. That
+    is the AMBIGUOUS state: a prior attempt touched this exact write but its
+    side-effecting delivery could not be confirmed (an indeterminate upstream
+    result, or the process died after the write before confirming). The
+    connector-write idempotency gate (:func:`_connector_write_gate`) uses this to
+    apply the per-connector-per-write ``on_unknown`` policy: ``fail_closed``
+    SUPPRESSES the ambiguous write (possible silent miss; the operator
+    reconciles), ``fail_open`` lets it FIRE (possible duplicate, usually
+    recoverable).
+
+    This is DELIBERATELY distinct from :func:`read_before_write_suppression`,
+    which returns True ONLY for the CONFIRMED-delivered case (``delivery_done is
+    True`` + matching key). A confirmed-delivered write is mode-independent (it
+    always suppresses) — ``on_unknown`` governs ONLY the couldn't-confirm case.
+    A first-time write (no marker) or a changed-payload/target re-run (derives a
+    DIFFERENT key) is never ambiguous and never suppressed on this branch.
+
+    Fail-open: a missing/None ``run_ref``, a malformed ``run_ref``, a missing
+    ``node_ref``, or a non-dict ``markers`` returns ``False`` (never treated as
+    ambiguous), so a misconfigured run record never falsely fail-closes a write.
+    """
+    if not run_ref or not node_ref:
+        return False
+    if not isinstance(markers, dict):
+        return False
+    try:
+        derived = node_idempotency_key(run_ref, node_ref, index=index, payload=payload)
+    except ValueError:
+        # A malformed persisted run key must fail open (never treat as ambiguous).
+        return False
+    return any(
+        isinstance(marker, dict)
+        and marker.get("idempotency_key") == derived
+        and marker.get("delivery_done") is not True
         for marker in markers.values()
     )

@@ -87,7 +87,11 @@ from modulo.core.node_output_split import (
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
-from modulo.core.pipeline_engine.idempotency import node_idempotency_key, read_before_write_suppression
+from modulo.core.pipeline_engine.idempotency import (
+    node_idempotency_key,
+    read_before_write_ambiguous,
+    read_before_write_suppression,
+)
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
@@ -323,6 +327,14 @@ _IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
 # FAR-228: best-effort marker persist bounded inside a caught CancelledError
 # (5s — the node is being cancelled, the write must not delay the re-raise).
 _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
+# FAR-458: the per-connector-per-write ``on_unknown`` default. Governs the
+# connector-write idempotency gate's AMBIGUOUS (couldn't-confirm-delivery)
+# decision: ``fail_open`` (default) re-fires the write on ambiguity (possible
+# duplicate, usually recoverable); ``fail_closed`` SUPPRESSES it (possible
+# silent miss; the operator reconciles); ``off`` bypasses the gate entirely.
+# A CONFIRMED-delivered write (delivery_done + matching key) is ALWAYS suppressed
+# regardless of the mode (that is the point of dedup).
+_DEFAULT_CONNECTOR_ON_UNKNOWN = "fail_open"
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
@@ -1448,6 +1460,33 @@ def _connector_marker_attempt_key(run_id: str, node_id: str) -> str:
     return f"run:{run_id}:node:{node_id}:connector"
 
 
+def _connector_on_unknown(connector: Any, resource: str) -> str:
+    """Read the effective ``on_unknown`` mode for a connector write to *resource*.
+
+    FAR-458: decisions of fail-open vs fail-closed on the ambiguous
+    (couldn't-confirm-delivery) path belong to the ACTION's semantics, so each
+    connector-op declares its own mode (``ConnectorBase.on_unknown_for``; REST
+    reads a per-op config value defaulting to ``fail_open``). The lookup is
+    defensive: a connector that does not expose ``on_unknown_for`` (or a reader
+    that raises) falls back to the fail-open default, so the gate never blocks a
+    write on a missing/illegible policy. Any value outside the three valid modes
+    is also coerced to ``fail_open`` (an invalid value is a config error the
+    connector surfaces loudly at parse time; the gate stays fail-open).
+    """
+    reader = getattr(connector, "on_unknown_for", None)
+    if not callable(reader):
+        return _DEFAULT_CONNECTOR_ON_UNKNOWN
+    try:
+        mode = reader(resource)
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate.on_unknown_read_failed",
+            extra={"resource": resource},
+        )
+        return _DEFAULT_CONNECTOR_ON_UNKNOWN
+    return mode if mode in ("fail_open", "fail_closed", "off") else _DEFAULT_CONNECTOR_ON_UNKNOWN
+
+
 async def _stamp_connector_write_delivered(
     session_factory: Callable[..., Any] | None,
     *,
@@ -1527,16 +1566,33 @@ async def _connector_write_gate(
     resource: str,
     filters: dict[str, Any] | None,
     data: dict[str, Any],
+    on_unknown: str = "fail_open",
 ) -> dict[str, Any] | None:
     """FAR-458 read-before-write gate for a connector write.
 
-    Suppresses (returns a skipped envelope) ONLY when the run's persisted
-    idempotency key derives a per-node key that a recorded marker already
-    carries with ``delivery_done is True`` — a genuine prior upstream delivery.
-    On an UNKNOWN write no ``delivery_done`` marker exists, so this returns
-    ``None`` and the write proceeds (fail-open: an indeterminate side-effect is
-    never treated as delivered; it is re-attempted rather than silently
-    dropped).
+    Suppresses (returns a skipped envelope) in EXACTLY two situations:
+
+    1. **CONFIRMED delivery** (the dedup's whole point, mode-INDEPENDENT): the
+       run's persisted idempotency key derives a per-node key that a recorded
+       marker carries WITH ``delivery_done is True`` — a genuine prior upstream
+       delivery. Always suppressed, regardless of ``on_unknown``.
+    2. **AMBIGUOUS delivery** (governed by ``on_unknown``): a recorded marker
+       carries the SAME derived key but WITHOUT ``delivery_done is True`` — a
+       prior attempt touched this exact write but its delivery could not be
+       confirmed. ``on_unknown="fail_closed"`` suppresses (possible silent miss;
+       the operator reconciles); ``on_unknown="fail_open"`` (default) does NOT
+       suppress (the write fires, possible duplicate — usually recoverable).
+
+    A first-time write (no marker) or a changed-payload/target re-run (a
+    DIFFERENT derived key) is NEVER suppressed. ``on_unknown="off"`` bypasses
+    the gate entirely — the write always fires, never deduped.
+
+    ``on_unknown`` (FAR-458) is the per-connector-per-write idempotency mode read
+    from the connector's write op config (see ``ConnectorBase.on_unknown_for`` /
+    ``_connector_on_unknown``). The default ``fail_open`` preserves the
+    pre-existing fail-open gate contract: an ambiguous-but-unconfirmed delivery is
+    re-attempted rather than silently dropped. A CONFIRMED-delivered write is
+    still suppressed in every mode except ``off``.
 
     ``resource`` / ``filters`` / ``data`` (MAJOR 2) are the FULL write identity
     folded into the derived key (via :func:`_connector_write_payload_hash`) on
@@ -1554,6 +1610,11 @@ async def _connector_write_gate(
     mode here rather than inverting it to opt-out.
     """
     if session_factory is None or not run_id:
+        return None
+    # FAR-458 per-op bypass: ``off`` never dedupes — the write always fires. This
+    # short-circuits BEFORE the killswitch and the marker read (the gate is
+    # bypassed entirely for this op).
+    if on_unknown == "off":
         return None
     try:
         from modulo.settings import get_settings
@@ -1586,13 +1647,30 @@ async def _connector_write_gate(
         )
     except ValueError:
         return None
-    if not suppressed:
-        return None
-    _log.info(
-        "connector.idempotency_gate.suppressed_write",
-        extra={"run_id": run_id, "node_id": node_id},
-    )
-    return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_suppressed")
+    if suppressed:
+        _log.info(
+            "connector.idempotency_gate.suppressed_write",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_suppressed")
+    if on_unknown == "fail_closed":
+        try:
+            ambiguous = read_before_write_ambiguous(
+                markers,
+                run_ref=persisted_key,
+                node_ref=node_id,
+                index=None,
+                payload=payload,
+            )
+        except ValueError:
+            ambiguous = False
+        if ambiguous:
+            _log.info(
+                "connector.idempotency_gate.fail_closed_suppressed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+            return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_fail_closed")
+    return None
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -2978,6 +3056,14 @@ def make_connector_fn(
     session factory / persisted key, or a DB error, proceeds exactly as before
     (write sent, no suppression), so the gate can never block or change a
     connector write that has no idempotency context.
+
+    FAR-458 refinement: the AMBIGUOUS (couldn't-confirm-delivery) decision is
+    per-connector-per-write via the connector's ``on_unknown`` mode
+    (``ConnectorBase.on_unknown_for`` / ``_connector_on_unknown``). The default
+    ``fail_open`` keeps the gate fail-open on ambiguity (possible duplicate);
+    ``fail_closed`` suppresses an ambiguous write (possible silent miss);
+    ``off`` bypasses the gate entirely. The CONFIRMED-delivered suppression is
+    mode-independent.
     """
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
@@ -3019,10 +3105,13 @@ def make_connector_fn(
         # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
         # decision point. Only a WRITE is side-effecting; a query never double-
         # submits. The gate reads the run's persisted idempotency key + markers,
-        # and suppresses ONLY when a marker for the SAME derived key carries
-        # ``delivery_done`` (the write genuinely reached upstream). Fail-open in
+        # and suppresses a CONFIRMED-delivered duplicate (matching key +
+        # ``delivery_done``) in EVERY mode, and additionally suppresses an
+        # AMBIGUOUS (matching key, no ``delivery_done``) write when the
+        # connector's ``on_unknown`` policy is ``fail_closed``. Fail-open in
         # every direction — no run id / session factory / persisted key, the
-        # killswitch, or a DB error all proceed to send the write normally.
+        # killswitch, a DB error, or ``on_unknown="off"`` all proceed to send the
+        # write normally; default ``fail_open`` lets an unconfirmed write fire.
         if op == "write":
             run_id = str(state.get("_run_id", "") or "")
             gate_result = await _connector_write_gate(
@@ -3033,6 +3122,7 @@ def make_connector_fn(
                 resource=resource,
                 filters=filters,
                 data=data,
+                on_unknown=_connector_on_unknown(connector, resource),
             )
             if gate_result is not None:
                 return gate_result

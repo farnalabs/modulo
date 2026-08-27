@@ -15,6 +15,14 @@ these tests exercise the connector helpers that CONSUME those primitives:
   - ``_stamp_connector_write_delivered`` — the ``delivery_done`` marker stamp
     that PROMOTES the newest delivered key on a content-edit re-run
 
+FAR-458 adds the per-connector-per-write ``on_unknown`` mode to the gate: it
+governs ONLY the AMBIGUOUS (couldn't-confirm-delivery) case — a marker carrying
+the SAME derived key but WITHOUT ``delivery_done``. ``fail_open`` (default) re-fires
+that write, ``fail_closed`` SUPPRESSES it, and ``off`` bypasses the gate entirely.
+A CONFIRMED-delivered write (``delivery_done`` + matching key) is ALWAYS
+suppressed regardless of mode; a first-time / changed-payload write is NEVER
+suppressed. See ``TestConnectorWriteGateOnUnknown``.
+
 The gate is unit-tested by monkeypatching the DB read
 (``_read_connector_idempotency_gate_state``) and the killswitch setting, so no
 DB is required. The newest-key promotion (MAJOR 1) is tested against a fake DB
@@ -81,6 +89,7 @@ async def _run_gate(
     gate_enabled: bool = True,
     resource: str = _DEFAULT_RESOURCE,
     filters: dict | None = None,
+    on_unknown: str = "fail_open",
 ) -> object:
     """Invoke ``_connector_write_gate`` with controlled gate state.
 
@@ -106,6 +115,7 @@ async def _run_gate(
             resource=resource,
             filters=filters or {},
             data=data,
+            on_unknown=on_unknown,
         )
 
 
@@ -326,6 +336,119 @@ class TestConnectorWriteGate:
             persisted_key=_PERSISTED_KEY,
             data={"name": "n1"},
             session_factory=lambda: None,
+        )
+        assert result is None
+
+
+# ── per-connector ``on_unknown`` mode (FAR-458 refinement) ──────────────────
+
+
+class TestConnectorWriteGateOnUnknown:
+    """FAR-458 refinement: the per-connector-per-write ``on_unknown`` mode
+    governs ONLY the ambiguous (couldn't-confirm-delivery) case. A
+    CONFIRMED-delivered write (``delivery_done`` + matching key) is ALWAYS
+    suppressed regardless of mode; a first-time / changed-payload write is NEVER
+    suppressed; ``off`` bypasses the gate entirely."""
+
+    async def test_fail_closed_suppresses_ambiguous_write(self) -> None:
+        """An ambiguous prior attempt (matching key, NO ``delivery_done``) is
+        SUPPRESSED under ``fail_closed`` — the write does not fire (possible
+        silent miss; the operator reconciles)."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+            on_unknown="fail_closed",
+        )
+        assert isinstance(result, dict)
+        assert result["artifacts"][0]["status"] == "skipped"
+        assert result["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "connector_write_fail_closed"
+
+    async def test_fail_open_default_fires_ambiguous_write(self) -> None:
+        """Under the default ``fail_open``, an ambiguous prior attempt (matching
+        key, no ``delivery_done``) is NOT suppressed — the write fires (possible
+        duplicate, usually recoverable)."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+        )
+        assert result is None
+
+    async def test_fail_open_explicit_fires_ambiguous_write(self) -> None:
+        """Explicit ``fail_open`` also lets the ambiguous write fire."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+            on_unknown="fail_open",
+        )
+        assert result is None
+
+    async def test_off_never_dedupes_confirmed_delivery(self) -> None:
+        """``off`` bypasses the gate entirely — even a CONFIRMED-delivered marker
+        does not suppress (the write always fires, never deduped)."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+            on_unknown="off",
+        )
+        assert result is None
+
+    async def test_confirmed_delivery_suppressed_regardless_of_mode(self) -> None:
+        """A CONFIRMED-delivered write (``delivery_done`` + matching key) is
+        ALWAYS suppressed — under both ``fail_open`` and ``fail_closed`` (the
+        whole point of dedup, independent of the ambiguous-case policy)."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": applied}}
+        for mode in ("fail_open", "fail_closed"):
+            result = await _run_gate(
+                markers=markers,
+                persisted_key=_PERSISTED_KEY,
+                data={"name": "n1"},
+                session_factory=lambda: None,
+                on_unknown=mode,
+            )
+            assert isinstance(result, dict)
+            assert result["artifacts"][0]["status"] == "skipped"
+            assert result["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "connector_write_suppressed"
+
+    async def test_first_time_write_never_suppressed_even_fail_closed(self) -> None:
+        """A first-time write (no marker at all) is NEVER suppressed, even under
+        ``fail_closed`` — there is no prior attempt, so nothing is ambiguous."""
+        result = await _run_gate(
+            markers={},
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+            on_unknown="fail_closed",
+        )
+        assert result is None
+
+    async def test_changed_payload_never_suppressed_even_fail_closed(self) -> None:
+        """A changed-payload re-run derives a DIFFERENT key, so it is never
+        ambiguous and never suppressed — even under ``fail_closed``."""
+        applied = _applied_key({"name": "v1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "v2"},
+            session_factory=lambda: None,
+            on_unknown="fail_closed",
         )
         assert result is None
 
