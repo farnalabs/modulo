@@ -516,7 +516,17 @@ jobs:
             exit 1
           fi
 
-          MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          # fly machine list reports the image WITH its digest suffix
+          # (...:tag@sha256:...), so match on PREFIX. Machine creation takes
+          # ~25s, so poll for the new machine with a bounded retry instead of
+          # a single list call.
+          MID=""
+          DISCOVERY_ATTEMPTS=12
+          DISCOVERY_INTERVAL_SEC=5
+          discovery_attempt=0
+          while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+            discovery_attempt=$(( discovery_attempt + 1 ))
+            MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
           import json, os, sys
           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
           try:
@@ -533,10 +543,18 @@ jobs:
               mid = m.get("id")
               cfg = m.get("config") or {}
               mimage = cfg.get("image") or m.get("image") or ""
-              if mid and mimage == image and mid not in pre:
+              if mid and image and mimage.startswith(image) and mid not in pre:
                   print(mid)
                   break
           ')"
+            if [ -n "$MID" ]; then
+              break
+            fi
+            if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+              echo "Pre-migrate machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+              sleep "$DISCOVERY_INTERVAL_SEC"
+            fi
+          done
           if [ -z "$MID" ]; then
             echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
             exit 1
@@ -1160,7 +1178,17 @@ jobs:
             exit 1
           fi
 
-          MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          # fly machine list reports the image WITH its digest suffix
+          # (...:tag@sha256:...), so match on PREFIX. Machine creation takes
+          # ~25s, so poll for the new machine with a bounded retry instead of
+          # a single list call.
+          MID=""
+          DISCOVERY_ATTEMPTS=12
+          DISCOVERY_INTERVAL_SEC=5
+          discovery_attempt=0
+          while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+            discovery_attempt=$(( discovery_attempt + 1 ))
+            MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
           import json, os, sys
           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
           try:
@@ -1177,10 +1205,18 @@ jobs:
               mid = m.get("id")
               cfg = m.get("config") or {}
               mimage = cfg.get("image") or m.get("image") or ""
-              if mid and mimage == image and mid not in pre:
+              if mid and image and mimage.startswith(image) and mid not in pre:
                   print(mid)
                   break
           ')"
+            if [ -n "$MID" ]; then
+              break
+            fi
+            if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+              echo "Pre-migrate machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+              sleep "$DISCOVERY_INTERVAL_SEC"
+            fi
+          done
           if [ -z "$MID" ]; then
             echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
             exit 1
