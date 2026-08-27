@@ -38,6 +38,12 @@ from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
+from modulo.db.crud.invitations import (
+    create_invitation,
+    has_live_for_email,
+    list_pending_for_org,
+    revoke_invitation,
+)
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
     LastAdminLockoutUnavailableError,
@@ -82,6 +88,7 @@ from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.invitation import Invitation
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
@@ -117,6 +124,9 @@ _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
 _RE_GREEN_OR_AMBER = "^(green|amber)$"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again later."
 _MSG_TEAM_NOT_FOUND = "Team not found"
+_MSG_INVITATION_NOT_FOUND = "Invitation not found"
+_MSG_EMAIL_ALREADY_MEMBER = "A user with this email already exists in this organisation"
+_MSG_INVITE_ALREADY_PENDING = "An active invitation for this email already exists in this organisation"
 
 
 logger = logging.getLogger(__name__)
@@ -1605,6 +1615,237 @@ async def admin_reset_password(
         _raise_this_feature_not_available()
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
+
+
+# ── User Invitations ─────────────────────────────────────────
+
+
+class InviteUserRequest(BaseModel):
+    email: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    org_role: str = Field(default="runner")
+
+
+class InviteUserResponse(BaseModel):
+    id: str
+    invite_url: str
+    expires_at: str
+
+
+class InvitationItem(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    org_role: str
+    invited_by: str
+    created_at: str
+    expires_at: str
+
+
+class InvitationListResponse(BaseModel):
+    items: list[InvitationItem]
+    total: int
+    page: int
+    page_size: int
+
+
+def _to_invitation_item(invitation: Invitation) -> InvitationItem:
+    return InvitationItem(
+        id=str(invitation.id),
+        email=invitation.email,
+        display_name=invitation.display_name,
+        org_role=invitation.org_role,
+        invited_by=str(invitation.invited_by),
+        created_at=invitation.created_at.isoformat(),
+        expires_at=invitation.expires_at.isoformat(),
+    )
+
+
+async def _append_invite_audit_event_fail_open(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    *,
+    event_type: str,
+    invitation_id: uuid.UUID,
+    payload: dict[str, object],
+) -> None:
+    """Append an invitation audit event inside the caller's transaction.
+
+    Degrades to a warning on failure so a broken audit write never fails the
+    completed invite/revoke (CancelledError always propagates).
+    """
+    try:
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type=event_type,
+            actor_user_id=current_user.account_id,
+            resource_type="invitation",
+            resource_id=invitation_id,
+            payload_json=payload,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "routes.admin.invite_audit_failed",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "invitation_id": str(invitation_id),
+                "event_type": event_type,
+            },
+            exc_info=True,
+        )
+
+
+@router.post("/users/invite", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.admin_invite_user")
+async def admin_invite_user(
+    req: InviteUserRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> InviteUserResponse:
+    """Mint a one-time in-app enrollment link (FAR-461).
+
+    The response embeds the token plaintext exactly once — it is never
+    persisted (only its SHA-256 hash is stored). ``invite_url`` is anchored to
+    ``settings.modulo_public_url`` (same origin decision as
+    ``mcp_setup_handoff`` / SSO routes): the admin may copy the link from any
+    machine/proxy and self-hosted deployments set this once globally; deriving
+    from the request's Host header would mint proxy-dependent URLs.
+    """
+    _require_admin(current_user, "invite users")
+
+    if req.org_role not in ("admin", "operator", "runner", "viewer"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer"),
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+
+            existing = await get_account_by_email(session, req.email)
+            if existing is not None:
+                membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
+                if membership is not None:
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_MSG_EMAIL_ALREADY_MEMBER)
+
+            if await has_live_for_email(session, org_id=current_user.organisation_id, email=req.email):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_MSG_INVITE_ALREADY_PENDING)
+
+            expires_at = datetime.now(UTC) + timedelta(hours=settings.invitation_expiry_hours)
+            invitation, plaintext = await create_invitation(
+                session,
+                organisation_id=current_user.organisation_id,
+                email=req.email,
+                display_name=req.display_name,
+                org_role=req.org_role,
+                invited_by=current_user.account_id,
+                expires_at=expires_at,
+            )
+            await session.flush()
+
+            await _append_invite_audit_event_fail_open(
+                session,
+                current_user,
+                event_type="invite_created",
+                invitation_id=invitation.id,
+                payload={"email": req.email, "org_role": req.org_role},
+            )
+    except HTTPException:
+        raise
+    except IntegrityError:
+        logger.exception("admin_invite_user IntegrityError", extra={"org_id": str(current_user.organisation_id)})
+        _raise_conflict()
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        _raise_feature_not_available()
+    except SQLAlchemyError:
+        logger.exception("admin_invite_user SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        _raise_db_temporarily_unavailable()
+
+    base_url = settings.modulo_public_url.rstrip("/")
+    return InviteUserResponse(
+        id=str(invitation.id),
+        invite_url=f"{base_url}/accept-invite?token={plaintext}",
+        expires_at=expires_at.isoformat(),
+    )
+
+
+@router.get("/users/invitations")
+@handle_db_errors("admin.admin_list_invitations")
+async def admin_list_invitations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=1000),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> InvitationListResponse:
+    _require_admin(current_user, "list invitations")
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            invitations, total = await list_pending_for_org(
+                session,
+                org_id=current_user.organisation_id,
+                page=page,
+                page_size=page_size,
+            )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        _raise_this_feature_not_available()
+    except SQLAlchemyError:
+        logger.exception("admin_list_invitations SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        _raise_db_temporarily_unavailable()
+
+    return InvitationListResponse(
+        items=[_to_invitation_item(i) for i in invitations],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.delete("/users/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.admin_revoke_invitation")
+async def admin_revoke_invitation(
+    invitation_id: uuid.UUID,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    _require_admin(current_user, "revoke invitations")
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            revoked = await revoke_invitation(session, invitation_id=invitation_id, org_id=current_user.organisation_id)
+            if not revoked:
+                # Row missing / other-org / consumed / already revoked all map to 404
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_INVITATION_NOT_FOUND)
+
+            await _append_invite_audit_event_fail_open(
+                session,
+                current_user,
+                event_type="invite_revoked",
+                invitation_id=invitation_id,
+                payload={"invitation_id": str(invitation_id)},
+            )
+    except HTTPException:
+        raise
+    except IntegrityError:
+        logger.exception("admin_revoke_invitation IntegrityError", extra={"org_id": str(current_user.organisation_id)})
+        _raise_conflict()
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        _raise_feature_not_available()
+    except SQLAlchemyError:
+        logger.exception("admin_revoke_invitation SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        _raise_db_temporarily_unavailable()
 
 
 # ── Team Management ──────────────────────────────────────────

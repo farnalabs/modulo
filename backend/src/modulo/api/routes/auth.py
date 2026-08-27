@@ -5,7 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
-from typing import NamedTuple
+from typing import NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -32,13 +32,32 @@ from modulo.auth.jwt import (
     create_refresh_token,
     decode_refresh_token_claims,
 )
-from modulo.auth.passwords import authenticate_db_user
+from modulo.auth.passwords import (
+    authenticate_db_user,
+    hash_password,
+    validate_password_strength,
+)
 from modulo.auth.ws_token import create_ws_token
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.db.crud.account import get_account_by_email, get_account_by_id, update_last_login
+from modulo.db.crud.account import (
+    create_account,
+    get_account_by_email,
+    get_account_by_id,
+    update_last_login,
+)
 from modulo.db.crud.break_glass_deny import is_break_glass_denied
-from modulo.db.crud.org_membership import list_memberships_for_account
+from modulo.db.crud.invitations import (
+    consume_invitation,
+    get_valid_by_token_hash,
+    hash_invitation_token,
+)
+from modulo.db.crud.org_membership import (
+    create_membership,
+    get_membership_by_account_and_org,
+    list_memberships_for_account,
+)
 from modulo.db.crud.token_family import (
     advance_sequence,
     blacklist_family,
@@ -49,11 +68,17 @@ from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.token_family import TokenFamily
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"  # nosec B105 — error message, not a real credential
 _CODE_AUTH_REFRESH = "auth.refresh"
 _CODE_AUTH_LOGOUT = "auth.logout"
+# Byte-identical generic rejection for every invitation-validation failure:
+# never leak WHICH of unknown/expired/consumed/revoked the token is.
+_MSG_INVALID_OR_EXPIRED_INVITATION = "Invalid or expired invitation"
+_CODE_AUTH_ACCEPT_INVITE = "auth.accept_invite"
+_MSG_INVITE_NOT_LOCAL_ACCOUNT = "This email belongs to an SSO account. Sign in with your identity provider instead."
 
 
 _log = logging.getLogger(__name__)
@@ -543,6 +568,178 @@ async def demo_login(
     response = JSONResponse(content=content)
     _set_auth_cookies(response, access_token, settings, max_age_seconds=settings.modulo_demo_token_minutes * 60)
     return response
+
+
+# Accept invite (FAR-461 — unauthenticated one-time enrollment)
+# ---------------------------------------------------------------------------
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AcceptInviteResponse(BaseModel):
+    detail: str = "Invitation accepted"
+    existing_account: bool = False
+
+
+async def _reject_invitation(limiter: AuthRateLimiter | None, ip: str) -> NoReturn:
+    """Denial path shared by every invalid-invitation branch.
+
+    Records the rate-limit failure and raises the byte-identical generic 400
+    so unknown / expired / consumed / revoked tokens are indistinguishable.
+    """
+    if limiter is not None:
+        await limiter.record_failure(ip)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=_MSG_INVALID_OR_EXPIRED_INVITATION,
+    )
+
+
+async def _audit_invite_consumed_fail_open(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    invitation_id: uuid.UUID,
+) -> None:
+    """Record ``invite_consumed``; an audit failure never fails enrollment."""
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="invite_consumed",
+            resource_type="invitation",
+            resource_id=invitation_id,
+            payload_json={"invitation_id": str(invitation_id)},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("auth.accept_invite.audit_failed", exc_info=True)
+
+
+@router.post("/accept-invite")
+@handle_db_errors(_CODE_AUTH_ACCEPT_INVITE)
+async def accept_invite(
+    req: AcceptInviteRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> AcceptInviteResponse:
+    """Redeem a one-time invitation token and enroll the holder (FAR-461).
+
+    Unauthenticated by design — the token IS the credential. Account
+    resolution rules:
+      (a) no account → create local account + membership;
+      (b) non-local (SSO/SCIM) account → 409, never set a local password;
+      (c) local without password_hash → set it + membership;
+      (d) local with password_hash → membership only when absent, password
+          untouched, ``existing_account=true`` in the response.
+
+    The invitation compare-and-swap consumption runs as the FINAL DB statement
+    of the success path: if another consumer raced us, the CAS matches zero
+    rows and the whole transaction aborts. RLS context is set to the
+    *invitation's* org before any membership write (the caller is otherwise
+    pre-authenticated); the invitations table itself deliberately carries no
+    RLS policy. IP-based failures are recorded for every denial path.
+    """
+    ip = _client_ip(request)
+    limiter = get_auth_rate_limiter(settings)
+
+    try:
+        async with session.begin():
+            invitation = await get_valid_by_token_hash(session, hash_invitation_token(req.token))
+            if invitation is None:
+                await _reject_invitation(limiter, ip)
+
+            try:
+                validate_password_strength(req.password)
+            except ValueError as exc:
+                if limiter is not None:
+                    await limiter.record_failure(ip)
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+            # The pre-authenticated holder acts on behalf of the inviting org.
+            await set_rls_org(session, invitation.organisation_id)
+
+            pw_hash = hash_password(req.password)
+            account = await get_account_by_email(session, invitation.email)
+            existing_account = False
+
+            if account is None:
+                # (a) brand-new member
+                account = await create_account(
+                    session,
+                    email=invitation.email,
+                    display_name=invitation.display_name,
+                    password_hash=pw_hash,
+                    auth_provider="local",
+                )
+            elif account.auth_provider != "local":
+                # (b) SSO/SCIM accounts must never gain a local password
+                if limiter is not None:
+                    await limiter.record_failure(ip)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_MSG_INVITE_NOT_LOCAL_ACCOUNT,
+                )
+            elif account.password_hash is None:
+                # (c) adopt the locally-created-but-passwordless account
+                account.password_hash = pw_hash
+            else:
+                # (d) leave an existing local password untouched — the UI
+                # tells them to sign in with their existing credentials.
+                existing_account = True
+
+            if await get_membership_by_account_and_org(session, account.id, invitation.organisation_id) is None:
+                await create_membership(
+                    session,
+                    account_id=account.id,
+                    org_id=invitation.organisation_id,
+                    role=invitation.org_role,
+                )
+
+            consumed = await consume_invitation(session, invitation)
+            if not consumed:
+                await _reject_invitation(limiter, ip)
+
+            await _audit_invite_consumed_fail_open(
+                session,
+                org_id=invitation.organisation_id,
+                invitation_id=invitation.id,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_AUTH_ACCEPT_INVITE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email cannot be enrolled with this invitation.",
+        ) from None
+    except ProgrammingError:
+        _log.warning("accept_invite.programming_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_AUTH_ACCEPT_INVITE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invitation acceptance is temporarily unavailable. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in accept_invite")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return AcceptInviteResponse(existing_account=existing_account)
 
 
 # ---------------------------------------------------------------------------

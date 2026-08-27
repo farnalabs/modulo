@@ -28,6 +28,10 @@ export function formatDateFilename(date: Date | string | number | null | undefin
   return format(d, 'yyyy-MM-dd')
 }
 
+/**
+ * Humanised relative time ("3 minutes ago"). Dash placeholder for invalid input.
+ * Shared single source of truth for relative-time formatting.
+ */
 export function formatRelativeTime(date: Date | string | number | null | undefined): string {
   const d = toDate(date)
   if (!d) return '—'

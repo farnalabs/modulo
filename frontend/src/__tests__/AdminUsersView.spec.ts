@@ -7,14 +7,15 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbkBleGFtcGxlLmNvbSJ9.AAA'),
 }))
 
-const { mockGet, mockPut, mockPost } = vi.hoisted(() => ({
+const { mockGet, mockPut, mockPost, mockDelete } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPut: vi.fn(),
   mockPost: vi.fn(),
+  mockDelete: vi.fn(),
 }))
 
 vi.mock('../composables/useApi', () => ({
-  useApi: () => ({ get: mockGet, put: mockPut, post: mockPost }),
+  useApi: () => ({ get: mockGet, put: mockPut, post: mockPost, delete: mockDelete }),
 }))
 
 vi.mock('../composables/useDataFetch', async () => {
@@ -110,11 +111,38 @@ async function mountViewWithPlan(planPatch: Record<string, unknown>) {
   return wrapper
 }
 
+function baseMocks() {
+  mockGet.mockImplementation((path: string) => {
+    if (path.startsWith('/api/v1/admin/users?')) {
+      return Promise.resolve(USERS_RESPONSE)
+    }
+    if (path.startsWith('/api/v1/admin/users/invitations')) {
+      return Promise.resolve({
+        items: [
+          {
+            id: 'inv-1',
+            email: 'newbie@example.com',
+            display_name: 'Newbie',
+            org_role: 'runner',
+            invited_by: 'u-9',
+            created_at: '2026-08-20T10:00:00+00:00',
+            expires_at: '2026-08-23T10:00:00+00:00',
+          },
+        ],
+        total: 1,
+        page: 1,
+        page_size: 100,
+      })
+    }
+    throw new Error(`unexpected GET ${path}`)
+  })
+}
+
 describe('AdminUsersView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    mockGet.mockResolvedValue(USERS_RESPONSE)
+    baseMocks()
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
   })
 
@@ -240,6 +268,68 @@ describe('AdminUsersView', () => {
     expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="feature-gate-lock"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Users')
+  })
+
+  it('lists pending invitations with role and a Revoke action', async () => {
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(true)
+    })
+    const row = wrapper.findAll('[data-testid="admin-invitations-row"]')[0]
+    expect(row.text()).toContain('newbie@example.com')
+    expect(row.text()).toContain('runner')
+  })
+
+  it('revokes a pending invitation after confirmation via DELETE', async () => {
+    mockDelete.mockResolvedValue(undefined)
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(true)
+    })
+    await wrapper.findAll('[data-testid="admin-invitations-row"]')[0].find('button').trigger('click')
+    await nextTick()
+    const confirmButton = wrapper.find('[data-testid="admin-invitations-confirm-revoke"]')
+    expect(confirmButton.exists()).toBe(true)
+    await confirmButton.trigger('click')
+    await vi.waitFor(() => {
+      expect(mockDelete).toHaveBeenCalledWith('/api/v1/admin/users/invitations/inv-1')
+    })
+  })
+
+  it('invite mode hides the password field; password mode keeps it', async () => {
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-users-create-password"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-users-create-password"]').exists()).toBe(false)
+  })
+
+  it('clears the temporary password when the credential dialog is dismissed', async () => {
+    mockPost.mockResolvedValue({ temporary_password: '$2b$12$tempsecret' })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('button').some(b => b.text() === 'Reset Password')).toBe(true)
+    })
+    const resetButton = wrapper.findAll('button').find(b => b.text() === 'Reset Password')
+    expect(resetButton).toBeDefined()
+    await resetButton!.trigger('click')
+    await vi.waitFor(() => {
+      const code = wrapper.find('[data-testid="admin-users-credential-value"]')
+      expect(code.exists()).toBe(true)
+      expect(code.text()).toBe('$2b$12$tempsecret')
+    })
+    const doneButton = wrapper.findAll('button').find(b => b.text() === 'Done')
+    expect(doneButton).toBeDefined()
+    await doneButton!.trigger('click')
+    await nextTick()
+    const codeAfter = wrapper.find('[data-testid="admin-users-credential-value"]')
+    // Either unmounted or rendered empty — the secret must be gone either way.
+    if (codeAfter.exists()) expect(codeAfter.text()).toBe('')
   })
 })
 

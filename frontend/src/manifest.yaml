@@ -48,6 +48,18 @@ routes:
         deprecated: false
         exact: true
 
+    /accept-invite:
+        name: accept-invite
+        breadcrumb: Accept Invitation
+        parent:
+        product_map: [feat-auth]
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /onboarding:
         name: onboarding
         breadcrumb: Onboarding
