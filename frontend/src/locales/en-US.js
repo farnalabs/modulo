@@ -3471,6 +3471,12 @@ export default {
     "deleting": "Deleting...",
     "enabled": "Enabled",
     "disabled": "Disabled",
+    "password_rules": {
+      "too_short": "Password must be at least 8 characters",
+      "missing_uppercase": "Password must contain at least one uppercase letter",
+      "missing_lowercase": "Password must contain at least one lowercase letter",
+      "missing_digit": "Password must contain at least one digit"
+    },
     "trigger_types": {
       "manual": "Manual",
       "webhook": "Webhook",

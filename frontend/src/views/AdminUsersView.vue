@@ -348,6 +348,7 @@ import TableActions from '../components/shared/TableActions.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
 import { generateStrongPassword } from '../utils/password'
+import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 import Select from 'primevue/select'
 
 interface UserItem {
@@ -628,12 +629,9 @@ async function createUser() {
     createError.value = preError
     return
   }
-  if (!password || password.length < 8) {
-    createError.value = t('views.AdminUsersView.password_must_be_at_least_8_characters')
-    return
-  }
-  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
-    createError.value = t('views.AdminUsersView.password_must_contain_at_least_one_uppercase_letter_one_lowe')
+  const ruleCode = validatePasswordClient(password)
+  if (ruleCode) {
+    createError.value = t(passwordRuleKey(ruleCode))
     return
   }
   createLoading.value = true
