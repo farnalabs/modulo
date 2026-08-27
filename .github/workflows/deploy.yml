@@ -137,6 +137,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
+
       - name: Backend unit tests
         working-directory: backend
         run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
@@ -190,6 +194,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
 
       # Expensive tests
       - name: Start Postgres
@@ -248,6 +256,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      - name: Sync deps
+        run: uv sync --project backend --frozen
 
       - name: Security audit
         shell: bash
