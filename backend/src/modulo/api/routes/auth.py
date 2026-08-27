@@ -68,6 +68,7 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     requires_bootstrap: bool = False
+    must_change_password: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -98,6 +99,7 @@ class MeResponse(BaseModel):
     active: bool
     created_at: str
     is_system_admin: bool = False
+    must_change_password: bool = False
 
 
 class _LoginContext(NamedTuple):
@@ -331,6 +333,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
         access_token=access_token,
         refresh_token=refresh_token,
         requires_bootstrap=requires_bootstrap,
+        must_change_password=bool(ctx.account.must_change_password),
     ).model_dump()
     response = JSONResponse(content=content)
     _set_auth_cookies(response, access_token, settings)
@@ -784,6 +787,7 @@ async def me(
         active=account.active,
         created_at=account.created_at.isoformat(),
         is_system_admin=current_user.is_system_admin,
+        must_change_password=bool(account.must_change_password),
     )
 
 

@@ -475,6 +475,10 @@ export default {
       "my_teams": "My Teams",
       "not_a_member_of_any_team": "You are not a member of any team."
     },
+    "ForceChangePasswordView": {
+      "change_your_password": "Set a new password",
+      "you_must_set_a_new_password_before_continuing": "Your password was reset by an administrator. Set a new password to continue to the app."
+    },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
       "preview_badge": "Preview",

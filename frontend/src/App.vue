@@ -1,5 +1,6 @@
 <template>
   <LoginView v-if="!isAuthenticated" />
+  <ForceChangePasswordView v-else-if="passwordChangeRequired" />
   <RemyOnlyView v-else-if="isBareRoute" />
   <AppLayout v-else />
 </template>
@@ -10,8 +11,10 @@ import { useRouter, useRoute } from 'vue-router'
 import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
+import { setMustChangePassword, useMustChangePassword } from './lib/mustChangePassword'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
+import ForceChangePasswordView from './views/ForceChangePasswordView.vue'
 import RemyOnlyView from './views/RemyOnlyView.vue'
 import { useWebVitals } from './composables/useWebVitals'
 
@@ -22,6 +25,11 @@ const route = useRoute()
 // immediately. Auto-login (below) only runs when no session exists yet.
 const autoLogin = getAutoLoginConfig()
 const isAuthenticated = ref(getInitialAuthState(!!getAccessToken()))
+
+// FAR-460: when the account must change its password, App renders ONLY the
+// forced-change view — navigation is blocked by construction. The flag is
+// synced from the login response and (for restored sessions) once from /me.
+const passwordChangeRequired = useMustChangePassword()
 
 // Routes flagged meta.bare (e.g. /remy) render without the AppLayout chrome.
 const isBareRoute = computed(() => route.meta.bare === true)
@@ -58,6 +66,9 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
     const data = await res.json()
     setAccessToken(data.access_token)
     if (data.refresh_token) setRefreshToken(data.refresh_token)
+    if (typeof data.must_change_password === 'boolean') {
+      setMustChangePassword(data.must_change_password)
+    }
     if (data.user) {
       const tracker = getErrorTracker()
       if (tracker) {
@@ -109,8 +120,28 @@ onAuthChange((token) => {
   isAuthenticated.value = !!token
 })
 
+// Sync the must-change-password gate for a restored (stored-token) session —
+// auto-login only reports it when it actually POSTs /login. Fails silently:
+// if /me is unreachable, default to not blocking (the backend enforces
+// nothing beyond this flag; UX gate only).
+async function syncMustChangePassword(): Promise<void> {
+  try {
+    const res = await fetch('/api/v1/auth/me')
+    if (!res.ok) return
+    const data = await res.json()
+    if (typeof data.must_change_password === 'boolean') {
+      setMustChangePassword(data.must_change_password)
+    }
+  } catch {
+    // Silent — gating is best-effort on restored sessions.
+  }
+}
+
 onMounted(() => {
-  if (isAuthenticated.value) return
+  if (isAuthenticated.value) {
+    syncMustChangePassword()
+    return
+  }
   runAutoLogin(true)
 })
 </script>
