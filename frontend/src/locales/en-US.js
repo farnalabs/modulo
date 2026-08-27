@@ -2134,6 +2134,8 @@ export default {
       "auth": "Auth",
       "created": "Created",
       "actions": "Actions",
+      "last_login": "Last Login",
+      "never_logged_in": "Never logged in",
       "admin": "Admin",
       "operator": "Operator",
       "runner": "Runner",

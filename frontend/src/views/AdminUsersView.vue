@@ -28,7 +28,7 @@
             <th class="table-header">{{ $t('views.AdminUsersView.role') }}</th>
             <th class="table-header capitalize">{{ $t('views.AdminUsersView.status') }}</th>
             <th class="table-header">{{ $t('views.AdminUsersView.auth') }}</th>
-            <th class="table-header">Last Login</th>
+            <th class="table-header">{{ $t('views.AdminUsersView.last_login') }}</th>
             <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.created') }}</th>
             <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.actions') }}</th>
           </tr>
@@ -76,7 +76,7 @@
             </td>
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
             <td class="table-cell">
-              <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">Never logged in</span>
+              <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">{{ $t('views.AdminUsersView.never_logged_in') }}</span>
               <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(new Date(u.last_login))">
                 {{ formatRelativeTime(u.last_login) }}
               </span>

@@ -67,7 +67,7 @@ const USERS_RESPONSE = {
       is_active: true,
       auth_provider: 'local',
       created_at: '2026-01-01T00:00:00Z',
-      last_login: new Date(Date.now() - 60_000).toISOString(),
+      last_login: new Date(Date.now() - 60_000).toISOString(), // nosemgrep: new-date-without-guard
     },
   ],
   total: 2,
