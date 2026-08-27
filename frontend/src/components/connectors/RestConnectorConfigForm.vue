@@ -12,10 +12,12 @@
             v-model="config.base_url"
             type="url"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="https://api.example.com"
+            :placeholder="$t('connectors.rest.base_url_placeholder')"
             data-testid="rest-connector-base-url"
+            :aria-invalid="!!errors.base_url"
+            :aria-describedby="errors.base_url ? 'restconn-base-url-error' : undefined"
           />
-          <p v-if="errors.base_url" class="mt-1 text-sm text-destructive">{{ errors.base_url }}</p>
+          <p v-if="errors.base_url" id="restconn-base-url-error" class="mt-1 text-sm text-destructive">{{ errors.base_url }}</p>
         </div>
 
         <div>
@@ -24,10 +26,12 @@
             v-model="config.method"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="rest-connector-method"
+            :aria-invalid="!!errors.method"
+            :aria-describedby="errors.method ? 'restconn-method-error' : undefined"
           >
             <option v-for="m in METHOD_OPTIONS" :key="m" :value="m">{{ m }}</option>
           </select>
-          <p v-if="errors.method" class="mt-1 text-sm text-destructive">{{ errors.method }}</p>
+          <p v-if="errors.method" id="restconn-method-error" class="mt-1 text-sm text-destructive">{{ errors.method }}</p>
         </div>
 
         <div>
@@ -36,10 +40,13 @@
             v-model="config.timeout_seconds"
             type="number"
             min="1"
+            step="1"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="rest-connector-timeout"
+            :aria-invalid="!!errors.timeout_seconds"
+            :aria-describedby="errors.timeout_seconds ? 'restconn-timeout-error' : undefined"
           />
-          <p v-if="errors.timeout_seconds" class="mt-1 text-sm text-destructive">{{ errors.timeout_seconds }}</p>
+          <p v-if="errors.timeout_seconds" id="restconn-timeout-error" class="mt-1 text-sm text-destructive">{{ errors.timeout_seconds }}</p>
         </div>
 
         <div>
@@ -56,11 +63,13 @@
             v-model="config.on_unknown"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="rest-connector-on-unknown"
+            :aria-invalid="!!errors.on_unknown"
+            :aria-describedby="errors.on_unknown ? 'restconn-on-unknown-error restconn-on-unknown-help' : 'restconn-on-unknown-help'"
           >
             <option v-for="o in ON_UNKNOWN_OPTIONS" :key="o" :value="o">{{ $t(`connectors.rest.on_unknown_${o}`) }}</option>
           </select>
-          <p v-if="errors.on_unknown" class="mt-1 text-sm text-destructive">{{ errors.on_unknown }}</p>
-          <p class="mt-1 text-xs text-muted-foreground">{{ $t(`connectors.rest.on_unknown_${config.on_unknown}_help`) }}</p>
+          <p v-if="errors.on_unknown" id="restconn-on-unknown-error" class="mt-1 text-sm text-destructive">{{ errors.on_unknown }}</p>
+          <p id="restconn-on-unknown-help" class="mt-1 text-xs text-muted-foreground">{{ $t(`connectors.rest.on_unknown_${config.on_unknown}_help`) }}</p>
         </div>
 
         <div>
@@ -71,8 +80,9 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
             placeholder="data.items"
             data-testid="rest-connector-records-path"
+            :aria-describedby="'restconn-records-path-help'"
           />
-          <p class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.records_path_help') }}</p>
+          <p id="restconn-records-path-help" class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.records_path_help') }}</p>
         </div>
 
         <div>
@@ -83,8 +93,9 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             placeholder="api.example.com,cdn.example.com"
             data-testid="rest-connector-allowed-hosts"
+            :aria-describedby="'restconn-allowed-hosts-help'"
           />
-          <p class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.allowed_hosts_help') }}</p>
+          <p id="restconn-allowed-hosts-help" class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.allowed_hosts_help') }}</p>
         </div>
       </div>
     </section>
@@ -102,10 +113,12 @@
             v-model="credentials.auth_mode"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="rest-connector-auth-mode"
+            :aria-invalid="!!errors.auth_mode"
+            :aria-describedby="errors.auth_mode ? 'restconn-auth-mode-error' : undefined"
           >
             <option v-for="m in AUTH_MODE_OPTIONS" :key="m" :value="m">{{ $t(`connectors.rest.auth_mode_${m}`) }}</option>
           </select>
-          <p v-if="errors.auth_mode" class="mt-1 text-sm text-destructive">{{ errors.auth_mode }}</p>
+          <p v-if="errors.auth_mode" id="restconn-auth-mode-error" class="mt-1 text-sm text-destructive">{{ errors.auth_mode }}</p>
         </div>
 
         <template v-if="credentials.auth_mode === 'bearer'">
@@ -116,8 +129,10 @@
               type="password"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="rest-connector-token"
+              :aria-invalid="!!errors.token"
+              :aria-describedby="errors.token ? 'restconn-token-error' : undefined"
             />
-            <p v-if="errors.token" class="mt-1 text-sm text-destructive">{{ errors.token }}</p>
+            <p v-if="errors.token" id="restconn-token-error" class="mt-1 text-sm text-destructive">{{ errors.token }}</p>
           </div>
         </template>
 
@@ -129,8 +144,10 @@
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="rest-connector-username"
+              :aria-invalid="!!errors.username"
+              :aria-describedby="errors.username ? 'restconn-username-error' : undefined"
             />
-            <p v-if="errors.username" class="mt-1 text-sm text-destructive">{{ errors.username }}</p>
+            <p v-if="errors.username" id="restconn-username-error" class="mt-1 text-sm text-destructive">{{ errors.username }}</p>
           </div>
           <div>
             <label for="restconn-connector-password" class="mb-1 block text-sm font-medium">{{ $t('connectors.rest.password') }}</label>
@@ -139,8 +156,10 @@
               type="password"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="rest-connector-password"
+              :aria-invalid="!!errors.password"
+              :aria-describedby="errors.password ? 'restconn-password-error' : undefined"
             />
-            <p v-if="errors.password" class="mt-1 text-sm text-destructive">{{ errors.password }}</p>
+            <p v-if="errors.password" id="restconn-password-error" class="mt-1 text-sm text-destructive">{{ errors.password }}</p>
           </div>
         </template>
 
@@ -152,8 +171,10 @@
               type="password"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="rest-connector-api-key"
+              :aria-invalid="!!errors.api_key"
+              :aria-describedby="errors.api_key ? 'restconn-api-key-error' : undefined"
             />
-            <p v-if="errors.api_key" class="mt-1 text-sm text-destructive">{{ errors.api_key }}</p>
+            <p v-if="errors.api_key" id="restconn-api-key-error" class="mt-1 text-sm text-destructive">{{ errors.api_key }}</p>
           </div>
           <div>
             <label for="restconn-connector-api-key-in" class="mb-1 block text-sm font-medium">{{ $t('connectors.rest.api_key_in') }}</label>
@@ -201,16 +222,53 @@
           class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
           placeholder='{ "path": "/items", "headers": { "Accept": "application/json" }, "operations": {}, "fan_out": {} }'
           data-testid="rest-connector-advanced-json"
+          :aria-invalid="!!errors.advanced_json"
+          :aria-describedby="errors.advanced_json ? 'restconn-advanced-error' : 'restconn-advanced-help'"
         ></textarea>
-        <p class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.advanced_json_help') }}</p>
-        <p v-if="errors.advanced_json" class="mt-1 text-sm text-destructive">{{ errors.advanced_json }}</p>
+        <p id="restconn-advanced-help" class="mt-1 text-xs text-muted-foreground">{{ $t('connectors.rest.advanced_json_help') }}</p>
+        <p v-if="errors.advanced_json" id="restconn-advanced-error" class="mt-1 text-sm text-destructive">{{ errors.advanced_json }}</p>
       </div>
     </section>
   </div>
 </template>
 
+<script lang="ts">
+// The canonical field surfaces for the Generic REST connector (FAR-466). These
+// are the single source of truth the AdminConnectorsView prefill and the
+// config_schema parity guard both rely on, so a drift in the connector schema
+// is caught rather than silently losing config on an edit round-trip.
+export const REST_FLAT_FIELDS = [
+  'base_url',
+  'method',
+  'timeout_seconds',
+  'verify_tls',
+  'on_unknown',
+  'records_path',
+  'allowed_hosts',
+] as const
+
+// Advanced / templated fields stay a JSON editor. Mirror the connector's
+// config_schema.advanced_fields exactly. `body_template` is a phantom key (the
+// connector reads `body`); `rate_limit` IS read by the connector and is
+// surfaced here so it is not silently dropped.
+export const REST_ADVANCED_FIELDS = [
+  'path',
+  'headers',
+  'params',
+  'body',
+  'operations',
+  'next_cursor_path',
+  'passthrough',
+  'max_response_size',
+  'idempotency_header',
+  'fan_out',
+  'rate_limit',
+] as const
+</script>
+
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 export interface RestConfigState {
   base_url: string
@@ -238,7 +296,8 @@ const config = defineModel<RestConfigState>('config', { required: true })
 const credentials = defineModel<RestCredsState>('credentials', { required: true })
 const credsDirty = defineModel<boolean>('credsDirty', { default: false })
 
-defineProps<{ mode: 'add' | 'edit' | null }>()
+const props = defineProps<{ mode: 'add' | 'edit' | null }>()
+const { t } = useI18n()
 
 const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 const ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
@@ -249,47 +308,76 @@ const errors = reactive<Record<string, string>>({})
 function validate(): boolean {
   Object.keys(errors).forEach(k => { errors[k] = '' })
 
+  const baseUrl = String(config.value.base_url || '').trim()
+  if (!baseUrl) {
+    errors.base_url = t('connectors.rest.base_url_required')
+  } else {
+    try {
+      // eslint-disable-next-line no-new
+      new URL(baseUrl)
+    } catch {
+      errors.base_url = t('connectors.rest.base_url_invalid')
+    }
+  }
   const method = String(config.value.method || '').toUpperCase()
   if (method && !METHOD_OPTIONS.includes(method)) {
-    errors.method = `Invalid method ${method}; expected one of ${METHOD_OPTIONS.join(', ')}`
+    errors.method = t('connectors.rest.method_invalid', { method, options: METHOD_OPTIONS.join(', ') })
   }
   const timeout = config.value.timeout_seconds
-  if (timeout === '' || timeout === null || Number.isNaN(Number(timeout)) || Number(timeout) < 1) {
-    errors.timeout_seconds = 'Timeout must be a positive integer'
+  const numTimeout = Number(timeout)
+  if (timeout === '' || timeout === null || Number.isNaN(numTimeout) || !Number.isInteger(numTimeout) || numTimeout < 1) {
+    errors.timeout_seconds = t('connectors.rest.timeout_invalid')
   }
   const onUnknown = config.value.on_unknown
   if (onUnknown && !ON_UNKNOWN_OPTIONS.includes(onUnknown)) {
-    errors.on_unknown = `Invalid on_unknown ${onUnknown}; expected one of ${ON_UNKNOWN_OPTIONS.join(', ')}`
+    errors.on_unknown = t('connectors.rest.on_unknown_invalid', { value: onUnknown, options: ON_UNKNOWN_OPTIONS.join(', ') })
   }
   const authMode = credentials.value.auth_mode
   if (authMode && !AUTH_MODE_OPTIONS.includes(authMode)) {
-    errors.auth_mode = `Invalid auth_mode ${authMode}; expected one of ${AUTH_MODE_OPTIONS.join(', ')}`
+    errors.auth_mode = t('connectors.rest.auth_mode_invalid', { value: authMode })
   }
-  if (authMode === 'bearer' && !credentials.value.token) {
-    errors.token = 'Bearer token is required'
-  }
-  if (authMode === 'basic') {
-    if (!credentials.value.username) errors.username = 'Username is required'
-    if (!credentials.value.password) errors.password = 'Password is required'
-  }
-  if (authMode === 'api_key' && !credentials.value.api_key) {
-    errors.api_key = 'API key is required'
+  // CRITICAL (FAR-466): editing an existing connector must not demand a
+  // credential the user has not re-entered. In edit mode, the stored secret is
+  // write-only and read back as empty, so a prefill (credsDirty === false)
+  // must not be forced to validate a secret. Only validate a credential the
+  // user actually edited. On create it stays strictly required.
+  const editingExisting = props.mode === 'edit' && !credsDirty.value
+  if (!editingExisting) {
+    if (authMode === 'bearer' && !credentials.value.token) {
+      errors.token = t('connectors.rest.token_required')
+    }
+    if (authMode === 'basic') {
+      if (!credentials.value.username) errors.username = t('connectors.rest.username_required')
+      if (!credentials.value.password) errors.password = t('connectors.rest.password_required')
+    }
+    if (authMode === 'api_key' && !credentials.value.api_key) {
+      errors.api_key = t('connectors.rest.api_key_required')
+    }
   }
   if (config.value.advanced_json && config.value.advanced_json.trim()) {
     try {
       JSON.parse(config.value.advanced_json)
       errors.advanced_json = ''
     } catch {
-      errors.advanced_json = 'Advanced JSON is not valid JSON'
+      errors.advanced_json = t('connectors.rest.advanced_json_invalid')
     }
   }
 
   return !Object.values(errors).some(v => v)
 }
 
+// CRITICAL (FAR-466): credsDirty must reflect ONLY a genuine user edit of the
+// auth section, never a programmatic prefill/reset. We capture a baseline at
+// mount (after the parent has prefilled/reset the credentials) and recompute
+// dirty by comparing to that baseline — so a config-only save never re-sends
+// empty/default credentials and clobbers the stored secret.
+const credsBaseline = ref(JSON.stringify(credentials.value))
+onMounted(() => {
+  credsBaseline.value = JSON.stringify(credentials.value)
+})
 watch(
   () => ({ ...credentials.value }),
-  () => { credsDirty.value = true },
+  () => { credsDirty.value = JSON.stringify(credentials.value) !== credsBaseline.value },
 )
 
 defineExpose({ validate })

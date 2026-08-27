@@ -850,10 +850,14 @@ REST_INTEGRATION: dict[str, Any] = {
         "type": "object",
         "title": "Generic REST operational configuration",
         "description": (
-            "Flat, discoverable operational config fields the connector form "
-            "renders as first-class controls. Advanced/templated fields stay in "
-            "the JSON editor (see advanced_fields). Authentication is a separate "
-            "credential payload (auth_mode + per-mode secret fields)."
+            "Modelled on the AdminConnectorsView REST form: the form's flat, "
+            "discoverable operational config fields are modelled on the "
+            "``fields`` map below, and advanced/templated fields stay in the "
+            "JSON editor (``advanced_fields``). Authentication is a separate "
+            "credential payload (auth_mode + per-mode secret fields) — the form "
+            "never conflates it with operational config. This schema is "
+            "advisory documentation, not an authoritative renderer; the form is "
+            "the consumer and a parity guard keeps the two in sync."
         ),
         "fields": {
             "base_url": {
@@ -906,7 +910,10 @@ REST_INTEGRATION: dict[str, Any] = {
         # Authentication profile. Stored with the connector credentials (never in
         # operational config). The enum mirrors the REST connector's
         # ``_normalise_auth`` — a public/unauthenticated profile is not supported
-        # by the connector, so no 'none' option is offered.
+        # by the connector, so no 'none' option is offered. Requiredness of the
+        # per-mode secret fields is resolved per ``auth_mode`` by
+        # ``_normalise_auth`` (a field is required only for its matching mode),
+        # not by the static ``required`` flags in ``credential_fields``.
         "auth": {
             "description": "Authentication profile stored with the connector credentials.",
             "auth_mode": {
@@ -925,13 +932,13 @@ REST_INTEGRATION: dict[str, Any] = {
             "headers",
             "params",
             "body",
-            "body_template",
             "operations",
             "next_cursor_path",
             "passthrough",
             "max_response_size",
             "idempotency_header",
             "fan_out",
+            "rate_limit",
         ],
     },
     "credential_fields": {

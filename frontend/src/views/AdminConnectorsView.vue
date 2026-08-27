@@ -3,7 +3,7 @@
 
     <div class="page-wide">
     <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminConnectorsView.connectors')" :subtitle="$t('views.AdminConnectorsView.manage_connector_instances_for_data_source_integration')" />
+      <PageHeader :title="$t('views.AdminConnectorsView.title')" :subtitle="$t('views.AdminConnectorsView.subtitle')" />
       <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-connectors-add" @click="openAddForm">
         {{ $t('views.AdminConnectorsView.add_connector') }}
       </Button>
@@ -95,7 +95,7 @@
       <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">{{ $t('views.AdminConnectorsView.no_connectors_configured') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.AdminConnectorsView.add_connector_hint') }}
+          {{ $t('views.AdminConnectorsView.add_a_connector_to_integrate') }}
         </p>
       </div>
 
@@ -242,7 +242,7 @@
       </div>
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminConnectorsView.delete_connector_confirm', { name: deleteConfirmName }) }}</p>
+        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
@@ -266,6 +266,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
@@ -279,10 +280,9 @@ import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { useI18n } from 'vue-i18n'
 import RestConnectorConfigForm from '../components/connectors/RestConnectorConfigForm.vue'
-import type { RestConfigState, RestCredsState } from '../components/connectors/RestConnectorConfigForm.vue'
+import { REST_FLAT_FIELDS, type RestConfigState, type RestCredsState } from '../components/connectors/RestConnectorConfigForm.vue'
 
 const { t } = useI18n()
-
 const planStore = usePlanStore()
 
 interface ConnectorItem {
@@ -313,21 +313,13 @@ function emptyForm(): ConnectorFormState {
 
 // REST connector (Generic REST) structured form state. Operational config is
 // kept separate from credentials (auth) so they are never conflated on submit.
-const REST_ADVANCED_FIELDS = [
-  'path',
-  'headers',
-  'params',
-  'body',
-  'body_template',
-  'operations',
-  'next_cursor_path',
-  'passthrough',
-  'max_response_size',
-  'idempotency_header',
-  'fan_out',
-]
+// The flat + advanced field lists come from the form component so they stay the
+// single source of truth (REST_FLAT_FIELDS / REST_ADVANCED_FIELDS).
+const AUTH_IDENTITY_FIELDS = ['auth_mode', 'in', 'header_name', 'query_param_name']
+const NON_ADVANCED_FIELDS = new Set<string>([...REST_FLAT_FIELDS, ...AUTH_IDENTITY_FIELDS])
 
 const REST_ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
+const REST_AUTH_MODE_OPTIONS = ['bearer', 'api_key', 'basic']
 
 function defaultRestConfig(): RestConfigState {
   return {
@@ -381,14 +373,27 @@ function prefillRestConfig(connector: ConnectorItem) {
       ? cfg.allowed_hosts
       : ''
   const advanced: Record<string, unknown> = {}
-  for (const key of REST_ADVANCED_FIELDS) {
-    if (cfg[key] !== undefined) advanced[key] = cfg[key]
+  for (const [key, value] of Object.entries(cfg)) {
+    // Snapshot any stored config key the form does not surface as a first-class
+    // control back into the JSON editor: known advanced_fields AND genuinely
+    // unknown keys. This preserves them on an edit-save instead of silently
+    // dropping the config (no data loss on edit, FAR-466).
+    if (NON_ADVANCED_FIELDS.has(key)) continue
+    advanced[key] = value
   }
   restConfig.value.advanced_json = Object.keys(advanced).length ? JSON.stringify(advanced, null, 2) : ''
   // Credentials are write-only in the API (has_credentials boolean only) — the
-  // auth profile can never be read back, so it resets to defaults and is only
-  // re-sent when the user explicitly edits it.
-  Object.assign(restCreds.value, defaultRestCreds())
+  // secret VALUES can never be read back. But the NON-SECRET auth identity
+  // (auth_mode, api_key in/header_name, query_param_name) is echoed back from
+  // config_json so edit mode displays the real auth profile instead of
+  // silently resetting to defaults. Only the secret values stay write-only.
+  const creds = defaultRestCreds()
+  const storedMode = String(cfg.auth_mode || '').toLowerCase()
+  if (REST_AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
+  if (String(cfg.in) === 'query') creds.apiKeyIn = 'query'
+  if (typeof cfg.header_name === 'string') creds.header_name = cfg.header_name
+  if (typeof cfg.query_param_name === 'string') creds.query_param_name = cfg.query_param_name
+  Object.assign(restCreds.value, creds)
   credsDirty.value = false
 }
 
@@ -411,6 +416,17 @@ function buildRestConfig(): Record<string, unknown> {
     } catch {
       // validated in the form component; never reached here
     }
+  }
+  // Echo the NON-SECRET auth identity into config_json so a subsequent edit can
+  // prefill it. The secret VALUES are protected — they live only in the
+  // credentials payload, never here. The connector reads auth from the
+  // credentials (creds) payload, so these mirrored keys are purely for the
+  // edit-mode echo and never leak a secret.
+  cfg.auth_mode = restCreds.value.auth_mode
+  if (restCreds.value.auth_mode === 'api_key') {
+    cfg.in = restCreds.value.apiKeyIn
+    if (restCreds.value.apiKeyIn === 'header') cfg.header_name = restCreds.value.header_name
+    else cfg.query_param_name = restCreds.value.query_param_name
   }
   return cfg
 }
@@ -563,7 +579,7 @@ async function createConnector() {
   if (isRestConnector.value) {
     const valid = restFormRef.value ? restFormRef.value.validate() : true
     if (!valid) {
-      formError.value = 'Please fix the highlighted configuration fields.'
+      formError.value = t('views.AdminConnectorsView.please_fix')
       return
     }
   }
@@ -598,7 +614,7 @@ async function updateConnector() {
   if (isRestConnector.value) {
     const valid = restFormRef.value ? restFormRef.value.validate() : true
     if (!valid) {
-      formError.value = 'Please fix the highlighted configuration fields.'
+      formError.value = t('views.AdminConnectorsView.please_fix')
       return
     }
   }
