@@ -79,6 +79,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
+import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -107,11 +108,9 @@ const successMessage = computed(() =>
 )
 
 function clientValidation(): string {
-  if (!password.value || !/[A-Z]/.test(password.value) || !/[a-z]/.test(password.value) || !/\d/.test(password.value)) {
-    return t('views.AcceptInviteView.requirement_mixed')
-  }
-  if (password.value.length < 8) {
-    return t('views.AcceptInviteView.requirement_length')
+  const ruleCode = validatePasswordClient(password.value)
+  if (ruleCode) {
+    return t(passwordRuleKey(ruleCode))
   }
   if (password.value !== confirmPassword.value) {
     return t('views.AcceptInviteView.mismatch_error')

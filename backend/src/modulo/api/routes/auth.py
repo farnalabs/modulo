@@ -486,7 +486,8 @@ async def accept_invite(
     rows and the whole transaction aborts. RLS context is set to the
     *invitation's* org before any membership write (the caller is otherwise
     pre-authenticated); the invitations table itself deliberately carries no
-    RLS policy. IP-based failures are recorded for every denial path.
+    RLS policy. IP-based failures are recorded for every denial path; a
+    successful enrollment clears them (``record_success``).
     """
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
@@ -554,6 +555,11 @@ async def accept_invite(
                 org_id=invitation.organisation_id,
                 invitation_id=invitation.id,
             )
+
+        # Committed: mirror login's success path so a few denied attempts on
+        # stale tokens never leak into login lockout on this IP.
+        if limiter is not None:
+            await limiter.record_success(ip)
     except IntegrityError:
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
