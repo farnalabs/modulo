@@ -403,7 +403,16 @@ jobs:
         id: git
         uses: ./.github/actions/capture-git-metadata
 
-      - name: Deploy to staging-modulo
+      # Deploy restructure (2026-08-27 incident: migrations ran ~30 min inside
+      # fly deploy's release phase and the post-deploy health gate had to
+      # absorb the residual wait): build-only -> pre-migrate on a one-off
+      # machine -> deploy the pre-built image -> destroy the machine. The
+      # release command inside `fly deploy` remains the AUTHORITATIVE
+      # migrator (it fails the deploy if migrations fail); the pre-migrate
+      # step is a best-effort optimisation that moves the wait BEFORE the
+      # swap so the health gate measures pure app startup.
+      - name: Build image (no deploy)
+        id: build
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -412,17 +421,187 @@ jobs:
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
+          # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
+          # --push --image-label). The image label carries the deploy SHA so
+          # the pre-migrate machine and the deploy step can both reference it.
+          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_REF="registry.fly.io/staging-modulo:${IMAGE_LABEL}"
+          echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
           MAX_RETRIES=3
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app staging-modulo --config fly.staging.toml \
+            echo "--- Build attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --build-only --push --image-label "$IMAGE_LABEL" --config fly.staging.toml \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
               --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Build + push succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Build failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Pre-deploy migrations (one-off machine)
+        id: pre-migrate
+        shell: bash
+        # BEST-EFFORT optimisation: run release.sh (bootstrap + alembic
+        # upgrade heads) on a one-off machine from the just-built image so
+        # migrations complete BEFORE `fly deploy` swaps the release. The
+        # release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - so a failure
+        # here must never fail the deploy: we warn and fall back to the old
+        # behaviour (release-command migration during the deploy; the health
+        # gate absorbs the wait). Best-effort keeps the deploy path resilient
+        # to one-off-machine quirks (e.g. app secrets not being injected into
+        # `fly machine run` machines).
+        #
+        # Assumption needing live validation: Fly app secrets (DATABASE_URL
+        # etc.) are injected into machines created via `fly machine run`
+        # within the app. If that proves false, release.sh fails fast in this
+        # step and the fallback above engages. flyctl does not reliably
+        # expose a stopped machine's exit code, so a fast-failing release.sh
+        # here is indistinguishable from success - harmless, because the
+        # authoritative release command still gates the deploy on migration
+        # success.
+        #
+        # The machine does NOT auto-destroy when its command exits
+        # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
+        # machine" step below removes it in every outcome.
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app staging-modulo --json > /tmp/premigrate-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/premigrate-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/premigrate-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh
+          # (Dockerfile.fly COPYs it to /release.sh, matching the [release]
+          # command in fly.toml).
+          echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
+            --entrypoint /bin/bash --command "/release.sh" \
+            --vm-size shared-cpu-1x-1gb
+          if [ $? -ne 0 ]; then
+            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+            exit 0
+          fi
+
+          MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ')"
+          if [ -z "$MID" ]; then
+            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+            exit 0
+          fi
+          echo "$MID" > /tmp/premigrate-machine-id.txt
+          export MID
+          echo "Pre-migrate machine: ${MID}"
+
+          # Bounded poll until the one-off machine stops (release.sh has
+          # exited). On timeout we warn and let the deploy's release command
+          # take over.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "Pre-migrate machine ${MID} vanished (state: destroyed) - falling back."
+              break
+            fi
+            echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+          exit 0
+
+      - name: Deploy to staging-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          # Deploy the pre-built image instead of building from source
+          # (precedent: the FAR-403 rollback path already deploys by --image).
+          # The [release] command still runs here as the AUTHORITATIVE
+          # migrator: `alembic upgrade heads` is an instant no-op when the DB
+          # is already at head, and it fails the deploy if migrations failed.
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --image "$IMAGE_REF" --config fly.staging.toml; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
             else
@@ -437,6 +616,60 @@ jobs:
               fi
             fi
           done
+
+      - name: Destroy pre-migrate machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # The one-off pre-migrate machine does NOT auto-destroy when its
+          # command exits (--restart=no leaves it 'stopped'); remove it in
+          # every outcome (success, failure, cancel) so it cannot accumulate
+          # against the Fly machine limit. This step must never fail the job.
+          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/premigrate-machine-id.txt ]; then
+            MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the pre-migrate step created anything.
+            fly machine list --app staging-modulo --json > /tmp/premigrate-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/premigrate-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app staging-modulo --force || true
+            echo "Pre-migrate machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-migrate machine found to destroy (it may never have been created)."
+          fi
+          exit 0
 
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
@@ -822,27 +1055,205 @@ jobs:
         id: git
         uses: ./.github/actions/capture-git-metadata
 
-      - name: Deploy to app-modulo
+      # Same restructure as deploy-staging: build-only -> pre-migrate on a
+      # one-off machine -> deploy the pre-built image -> destroy the machine.
+      # The release command remains the AUTHORITATIVE migrator; the
+      # pre-migrate step is a best-effort optimisation that moves the
+      # migration wait BEFORE the deploy swap (2026-08-27 incident).
+      - name: Build image (no deploy)
+        id: build
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        continue-on-error: true
         run: |
           curl -fsSL https://fly.io/install.sh | sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
+          # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
+          # --push --image-label). The image label carries the deploy SHA so
+          # the pre-migrate machine and the deploy step can both reference it.
+          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_REF="registry.fly.io/app-modulo:${IMAGE_LABEL}"
+          echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
           MAX_RETRIES=3
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app app-modulo --config fly.toml \
+            echo "--- Build attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --build-only --push --image-label "$IMAGE_LABEL" --config fly.toml \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
               --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Build + push succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Build failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Pre-deploy migrations (one-off machine)
+        id: pre-migrate
+        shell: bash
+        # BEST-EFFORT optimisation: run release.sh (bootstrap + alembic
+        # upgrade heads) on a one-off machine from the just-built image so
+        # migrations complete BEFORE `fly deploy` swaps the release. The
+        # release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - so a failure
+        # here must never fail the deploy: we warn and fall back to the old
+        # behaviour (release-command migration during the deploy; the health
+        # gate absorbs the wait). Best-effort keeps the deploy path resilient
+        # to one-off-machine quirks (e.g. app secrets not being injected into
+        # `fly machine run` machines).
+        #
+        # Assumption needing live validation: Fly app secrets (DATABASE_URL
+        # etc.) are injected into machines created via `fly machine run`
+        # within the app. If that proves false, release.sh fails fast in this
+        # step and the fallback above engages. flyctl does not reliably
+        # expose a stopped machine's exit code, so a fast-failing release.sh
+        # here is indistinguishable from success - harmless, because the
+        # authoritative release command still gates the deploy on migration
+        # success.
+        #
+        # The machine does NOT auto-destroy when its command exits
+        # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
+        # machine" step below removes it in every outcome.
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app app-modulo --json > /tmp/premigrate-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/premigrate-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/premigrate-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh
+          # (Dockerfile.fly COPYs it to /release.sh, matching the [release]
+          # command in fly.toml).
+          echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
+            --entrypoint /bin/bash --command "/release.sh" \
+            --vm-size shared-cpu-1x-1gb
+          if [ $? -ne 0 ]; then
+            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+            exit 0
+          fi
+
+          MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ')"
+          if [ -z "$MID" ]; then
+            echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+            exit 0
+          fi
+          echo "$MID" > /tmp/premigrate-machine-id.txt
+          export MID
+          echo "Pre-migrate machine: ${MID}"
+
+          # Bounded poll until the one-off machine stops (release.sh has
+          # exited). On timeout we warn and let the deploy's release command
+          # take over.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "Pre-migrate machine ${MID} vanished (state: destroyed) - falling back."
+              break
+            fi
+            echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::warning::Pre-deploy migration machine failed - falling back to release-command migration during deploy (health gate absorbs the wait)."
+          exit 0
+
+      - name: Deploy to app-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        # Best-effort by design - the [release] command inside fly deploy remains the authoritative migrator.
+        continue-on-error: true  # nosemgrep:semgrep.continue-on-error-in-ci
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          # Deploy the pre-built image instead of building from source
+          # (precedent: the FAR-403 rollback path below already deploys by
+          # --image). The [release] command still runs here as the
+          # AUTHORITATIVE migrator: `alembic upgrade heads` is an instant
+          # no-op when the DB is already at head, and it fails the deploy if
+          # migrations failed.
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --image "$IMAGE_REF" --config fly.toml; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
             else
@@ -857,6 +1268,60 @@ jobs:
               fi
             fi
           done
+
+      - name: Destroy pre-migrate machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # The one-off pre-migrate machine does NOT auto-destroy when its
+          # command exits (--restart=no leaves it 'stopped'); remove it in
+          # every outcome (success, failure, cancel) so it cannot accumulate
+          # against the Fly machine limit. This step must never fail the job.
+          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/premigrate-machine-id.txt ]; then
+            MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the pre-migrate step created anything.
+            fly machine list --app app-modulo --json > /tmp/premigrate-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/premigrate-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app app-modulo --force || true
+            echo "Pre-migrate machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-migrate machine found to destroy (it may never have been created)."
+          fi
+          exit 0
 
       - name: Post-deploy verify + auto-rollback (never leave prod down)
         id: verify
