@@ -48,8 +48,9 @@ import { clearAccessToken } from '../lib/api/client'
 
 const router = useRouter()
 
-// Long enough for the role="status" announcement to register before the view
-// unmounts into LoginView.
+// Announce window for the role="status" success message. It must elapse while
+// the session is still live — see onChanged for why clearing tokens up-front
+// unmounts the gate and kills the announcement.
 const STATUS_VISIBLE_MS = 1500
 
 const changed = ref(false)
@@ -57,6 +58,13 @@ let navigateTimer: ReturnType<typeof setTimeout> | undefined
 
 function exitGateAndRouteToLogin(delayMs = 0) {
   const navigate = () => {
+    // Tokens are cleared here rather than by the callers up-front:
+    // clearAccessToken() notifies auth listeners synchronously, App.vue flips
+    // isAuthenticated and renders LoginView over this gate on the next render
+    // tick. Deferring the flip until after the announce window lets the status
+    // message paint and be announced first. The replace below is then
+    // belt-and-braces behind that flip, not redundant navigation.
+    clearAccessToken()
     void router.replace('/login')
   }
   if (delayMs > 0) {
@@ -69,17 +77,17 @@ function exitGateAndRouteToLogin(delayMs = 0) {
 function onChanged() {
   // Backend cleared the flag in the same transaction as the hash swap, but the
   // token family used before the swap is blacklisted server-side, so silently
-  // continuing to '/' would race dead-token 401s. Make the correct path
-  // explicit: end the session and sign back in with the new password.
+  // continuing to '/' would race dead-token 401s. End the session explicitly —
+  // but only after STATUS_VISIBLE_MS has fully elapsed while still
+  // authenticated; clearing tokens here would unmount this view (and kill the
+  // status announcement) on the very next render tick.
   changed.value = true
   setMustChangePassword(false)
-  clearAccessToken()
   exitGateAndRouteToLogin(STATUS_VISIBLE_MS)
 }
 
 function onSignOut() {
   setMustChangePassword(false)
-  clearAccessToken()
   exitGateAndRouteToLogin()
 }
 
