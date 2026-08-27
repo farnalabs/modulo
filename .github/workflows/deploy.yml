@@ -655,7 +655,9 @@ jobs:
           # serving end-to-end. If /healthz/ready never returns 200, roll back to
           # the previous release so prod is never left down (the 2026-08-23 outage
           # left prod in a 'started' but connection-refused state for ~7h - FAR-400).
-          TIMEOUT_MIN=10
+          # 45-min default: long data migrations (e.g. jsonb backfill, 2026-08-27) must not trigger rollback; tune via repo variable HEALTH_GATE_TIMEOUT_MIN.
+          HEALTH_GATE_MIN="${{ vars.HEALTH_GATE_TIMEOUT_MIN || '45' }}"
+          TIMEOUT_MIN="$HEALTH_GATE_MIN"
           INTERVAL_SEC=15
           ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
           attempt=0
@@ -864,6 +866,8 @@ jobs:
         run: |
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # 45-min default: long data migrations (e.g. jsonb backfill, 2026-08-27) must not trigger rollback; tune via repo variable HEALTH_GATE_TIMEOUT_MIN.
+          HEALTH_GATE_MIN="${{ vars.HEALTH_GATE_TIMEOUT_MIN || '45' }}"
           # FAR-403: an intermittent Fly control-plane blip can make `fly deploy`
           # exit non-zero and leave the machines in a bad state (prod down). Roll
           # back to the last COMPLETE release so a control-plane blip can NEVER
@@ -879,7 +883,7 @@ jobs:
             done
             echo "TIMEOUT"; return 1
           }
-          if wait_healthy "https://app.modulo.run" 10; then
+          if wait_healthy "https://app.modulo.run" "$HEALTH_GATE_MIN"; then
             echo "deploy_healthy=true" >> "$GITHUB_OUTPUT"
             echo "rolled_back=false" >> "$GITHUB_OUTPUT"
             echo "app.modulo.run healthy - new release deployed."
@@ -909,6 +913,8 @@ jobs:
           echo "deploy_healthy=true" >> "$GITHUB_OUTPUT"
           echo "rolled_back=true" >> "$GITHUB_OUTPUT"
           echo "::warning::New release was rolled back; prod restored to $LAST_GOOD (FAR-403)."
+          # A rollback means prod is NOT running main - fail the run so staleness is visible (2026-08-27: prod silently 5 days stale).
+          exit 1
 
       - name: Check deployed SHA
         if: steps.verify.outputs.rolled_back == 'false'
