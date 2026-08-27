@@ -19,8 +19,8 @@ FAR-458 adds the per-connector-per-write ``on_unknown`` mode to the gate: it
 governs ONLY the AMBIGUOUS (couldn't-confirm-delivery) case — a marker carrying
 the SAME derived key but WITHOUT ``delivery_done``. ``fail_open`` (default) re-fires
 that write, ``fail_closed`` SUPPRESSES it, and ``off`` bypasses the gate entirely.
-A CONFIRMED-delivered write (``delivery_done`` + matching key) is ALWAYS
-suppressed regardless of mode; a first-time / changed-payload write is NEVER
+A CONFIRMED-delivered write (``delivery_done`` + matching key) is suppressed
+in every mode except ``off``; a first-time / changed-payload write is NEVER
 suppressed. See ``TestConnectorWriteGateOnUnknown``.
 
 The gate is unit-tested by monkeypatching the DB read

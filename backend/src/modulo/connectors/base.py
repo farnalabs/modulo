@@ -514,7 +514,7 @@ class ConnectorBase(ABC):
         - ``"off"``: the write is never deduped (gate bypassed entirely).
 
         A CONFIRMED-delivered write (``delivery_done is True`` + matching key)
-        is ALWAYS suppressed regardless of mode — that is the point of dedup.
+        is suppressed in every mode except ``off`` — that is the point of dedup.
         The default implements the fail-open contract of every other gate
         failure mode here; connectors override to declare a per-op policy.
         """

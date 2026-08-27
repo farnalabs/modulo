@@ -41,7 +41,7 @@ the runtime variables supplied per call:
                                                                   #   Top-level value applies to every op unless a
                                                                   #   per-resource op overrides it. A CONFIRMED-
                                                                   #   delivered write (delivery_done + matching key)
-                                                                  #   is ALWAYS suppressed regardless of mode.
+                                                                  #   is suppressed in every mode except `off`.
     timeout_seconds:      <number>                             # per-request timeout (default 30.0)
     verify_tls:           true                                 # verify the server TLS cert (default true)
     fan_out:              {                                     # optional fan-out / iterator mode (FAR-411)
