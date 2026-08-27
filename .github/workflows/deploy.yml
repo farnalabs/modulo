@@ -183,7 +183,7 @@ jobs:
     needs: [deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
