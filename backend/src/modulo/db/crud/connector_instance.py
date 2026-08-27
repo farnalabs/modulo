@@ -118,6 +118,14 @@ async def update_connector_instance(
     connector_id: uuid.UUID,
     updates: dict[str, Any],
 ) -> ConnectorInstance | None:
+    """Apply a partial update to a connector instance.
+
+    ``updates`` may carry ``credentials_ciphertext`` as a PARTIAL credential
+    update — the route that calls this overlays the supplied credential identity
+    (non-secret) fields onto the decrypted stored credential and re-encrypts, so
+    an identity-only edit applies while any absent/empty secret field is left
+    intact (FAR-466). This CRUD just persists whatever ciphertext it is given.
+    """
     ci = await get_connector_instance(session, connector_id)
     if ci is None:
         return None

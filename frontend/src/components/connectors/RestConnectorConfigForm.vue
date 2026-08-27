@@ -295,6 +295,12 @@ export interface RestCredsState {
 const config = defineModel<RestConfigState>('config', { required: true })
 const credentials = defineModel<RestCredsState>('credentials', { required: true })
 const credsDirty = defineModel<boolean>('credsDirty', { default: false })
+// Separate SECRET (secret) dirtiness from AUTH-IDENTITY dirtiness so an
+// identity-only edit (auth_mode / apiKeyIn / header_name / query_param_name)
+// re-sends the credentials payload (and the backend overlays the new identity
+// while preserving the stored secret), without ever triggering the secret
+// clobber invariant or demanding a re-entered secret (FAR-466).
+const credsIdentityDirty = defineModel<boolean>('credsIdentityDirty', { default: false })
 
 const props = defineProps<{ mode: 'add' | 'edit' | null }>()
 const { t } = useI18n()
@@ -370,27 +376,46 @@ function validate(): boolean {
   return !Object.values(errors).some(v => v)
 }
 
-// CRITICAL (FAR-466): credsDirty must reflect ONLY a genuine user edit of the
-// SECRET credential fields (token / api_key / username / password) — never a
-// programmatic prefill/reset, and never an identity-only edit (auth_mode,
-// apiKeyIn, header_name, query_param_name). The non-secret auth identity is
-// echoed/persisted via buildRestConfig in the parent (config-level), so an
-// identity-only edit must save without touching the secret payload: the secret
-// is write-only, and the presence of a real secret edit is what decides whether
-// the credentials payload is re-sent at all. We capture a baseline at mount and
-// compare only the secret fields, so the secret-preservation invariant holds by
-// construction rather than by the validation gate.
+// CRITICAL (FAR-466): dirtiness is tracked in two independent channels so the
+// secret-preservation invariant holds by construction AND an identity-only edit
+// actually persists.
+//   - credsDirty reflects ONLY a genuine user edit of the SECRET credential
+//     fields (token / api_key / username / password). The secret is write-only;
+//     the presence of a real secret edit is what decides whether the credentials
+//     payload is re-sent as a secret replacement, and it is what the validate()
+//     gate uses to decide whether a re-entered secret is demanded.
+//   - credsIdentityDirty reflects ANY edit of the NON-SECRET auth identity
+//     (auth_mode / apiKeyIn / header_name / query_param_name). An identity-only
+//     edit must re-send the credentials payload so the backend overlays the new
+//     identity onto the stored (decrypted) credential while preserving the
+//     secret. Crucially, an identity edit never flips credsDirty — so it never
+//     demands a re-entered secret, and the secret-preservation invariant still
+//     holds (the parent's PATCH gate is `credsDirty || credsIdentityDirty`,
+//     and the backend only replaces a secret field when the request supplies a
+//     real value).
+// Both baselines are captured at mount and compared per-field-set, so a
+// programmatic prefill/reset never marks either channel dirty.
 const SECRET_FIELDS = ['token', 'api_key', 'username', 'password'] as const
+const IDENTITY_FIELDS = ['auth_mode', 'apiKeyIn', 'header_name', 'query_param_name'] as const
 function secretSnapshot(): string {
   return JSON.stringify(SECRET_FIELDS.map(f => credentials.value[f]))
 }
+function identitySnapshot(): string {
+  return JSON.stringify(IDENTITY_FIELDS.map(f => credentials.value[f]))
+}
 const credsBaseline = ref(secretSnapshot())
+const identityBaseline = ref(identitySnapshot())
 onMounted(() => {
   credsBaseline.value = secretSnapshot()
+  identityBaseline.value = identitySnapshot()
 })
 watch(
   () => secretSnapshot(),
   (v) => { credsDirty.value = v !== credsBaseline.value },
+)
+watch(
+  () => identitySnapshot(),
+  (v) => { credsIdentityDirty.value = v !== identityBaseline.value },
 )
 
 defineExpose({ validate })

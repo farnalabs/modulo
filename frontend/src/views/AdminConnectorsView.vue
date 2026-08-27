@@ -61,6 +61,7 @@
                 v-model:config="restConfig"
                 v-model:credentials="restCreds"
                 v-model:credsDirty="credsDirty"
+                v-model:credsIdentityDirty="credsIdentityDirty"
                 :mode="formMode"
               />
             </div>
@@ -211,6 +212,7 @@
                 v-model:config="restConfig"
                 v-model:credentials="restCreds"
                 v-model:credsDirty="credsDirty"
+                v-model:credsIdentityDirty="credsIdentityDirty"
                 :mode="formMode"
               />
             </div>
@@ -350,6 +352,10 @@ function defaultRestCreds(): RestCredsState {
 const restConfig = ref<RestConfigState>(defaultRestConfig())
 const restCreds = ref<RestCredsState>(defaultRestCreds())
 const credsDirty = ref(false)
+// Tracks NON-SECRET auth identity edits (auth_mode / apiKeyIn / header_name /
+// query_param_name) so an identity-only change re-sends the credentials payload
+// (the backend overlays it while preserving the stored secret, FAR-466).
+const credsIdentityDirty = ref(false)
 const restFormRef = ref<InstanceType<typeof RestConnectorConfigForm> | null>(null)
 const isRestConnector = computed(() => formData.connector_type === 'rest')
 
@@ -357,6 +363,7 @@ function resetRestForm() {
   Object.assign(restConfig.value, defaultRestConfig())
   Object.assign(restCreds.value, defaultRestCreds())
   credsDirty.value = false
+  credsIdentityDirty.value = false
 }
 
 function prefillRestConfig(connector: ConnectorItem) {
@@ -395,6 +402,7 @@ function prefillRestConfig(connector: ConnectorItem) {
   if (typeof cfg.query_param_name === 'string') creds.query_param_name = cfg.query_param_name
   Object.assign(restCreds.value, creds)
   credsDirty.value = false
+  credsIdentityDirty.value = false
 }
 
 function buildRestConfig(): Record<string, unknown> {
@@ -563,8 +571,12 @@ function buildUpdateBody() {
     }
     // Credentials are write-only; only re-send (full replace) when the user
     // actually edited the auth section, otherwise the existing encrypted
-    // credential is preserved.
-    if (credsDirty.value) body.credentials = buildRestCredentials()
+    // credential is preserved. An identity-only edit (credsIdentityDirty) still
+    // re-sends the credentials so the backend overlays the new identity while
+    // preserving the stored secret (FAR-466); credsDirty alone was insufficient
+    // because the connector reads auth identity from the credentials payload,
+    // not config_json.
+    if (credsDirty.value || credsIdentityDirty.value) body.credentials = buildRestCredentials()
     return body
   }
   return {

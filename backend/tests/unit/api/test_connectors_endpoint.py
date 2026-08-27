@@ -4,9 +4,11 @@ Credentials (raw credential strings) must NEVER appear in responses.
 Only `has_credentials: true/false` is exposed.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -456,3 +458,108 @@ def test_delete_connector_foreign_org_returns_404(client: TestClient) -> None:
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 404
+
+
+def _make_rest_connector(credentials_ciphertext: bytes) -> MagicMock:
+    ci = _make_connector(credentials_ciphertext=credentials_ciphertext)
+    ci.connector_type_id = "rest"
+    return ci
+
+
+def _encrypt_creds(creds: dict[str, object]) -> bytes:
+    return Fernet(_FERNET_KEY.encode()).encrypt(json.dumps(creds).encode())
+
+
+def test_patch_identity_only_edit_preserves_secret_and_updates_identity(client: TestClient) -> None:
+    """PATCH with credentials containing an identity change but NO secret value
+    must leave the stored secret intact AND apply the new identity (so
+    ``_normalise_auth`` reads the new identity)."""
+    stored = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
+    existing = _make_rest_connector(_encrypt_creds(stored))
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        if "credentials_ciphertext" in updates:
+            existing.credentials_ciphertext = updates["credentials_ciphertext"]
+        return existing
+
+    mock_update.side_effect = fake_update
+    incoming = {"auth_mode": "api_key", "api_key": "", "in": "header", "header_name": "X-Key-V2"}
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": json.dumps(incoming), "name": "Test Connector"},
+        )
+    assert resp.status_code == 200
+    decoded = json.loads(Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode())
+    assert decoded["api_key"] == "secret123", f"Secret must be preserved, got {decoded}"
+    assert decoded["header_name"] == "X-Key-V2", f"Identity must be updated, got {decoded}"
+    assert decoded["auth_mode"] == "api_key"
+
+
+def test_patch_with_real_secret_replaces_it(client: TestClient) -> None:
+    """PATCH with a real (non-empty) secret value replaces the stored secret."""
+    stored = {"auth_mode": "api_key", "api_key": "old-secret", "in": "header", "header_name": "X-Key"}
+    existing = _make_rest_connector(_encrypt_creds(stored))
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        if "credentials_ciphertext" in updates:
+            existing.credentials_ciphertext = updates["credentials_ciphertext"]
+        return existing
+
+    mock_update.side_effect = fake_update
+    incoming = {"auth_mode": "api_key", "api_key": "new-secret", "in": "header", "header_name": "X-Key"}
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
+    assert resp.status_code == 200
+    decoded = json.loads(Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode())
+    assert decoded["api_key"] == "new-secret", f"Secret must be replaced, got {decoded}"
+
+
+def test_patch_identity_only_edit_round_trip_reads_new_identity(client: TestClient) -> None:
+    """After an identity-only PATCH, the persisted credential, when decrypted and
+    passed to the REST connector's ``_normalise_auth``, yields the NEW identity."""
+    from modulo.connectors.rest import RestConnector
+
+    stored = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
+    existing = _make_rest_connector(_encrypt_creds(stored))
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        if "credentials_ciphertext" in updates:
+            existing.credentials_ciphertext = updates["credentials_ciphertext"]
+        return existing
+
+    mock_update.side_effect = fake_update
+    incoming = {"auth_mode": "api_key", "api_key": "", "in": "header", "header_name": "X-Key-V2"}
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
+    assert resp.status_code == 200
+    stored_after = json.loads(
+        Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode()
+    )
+    auth = RestConnector._normalise_auth(stored_after)
+    assert auth["header_name"] == "X-Key-V2"
+    assert auth["api_key"] == "secret123"

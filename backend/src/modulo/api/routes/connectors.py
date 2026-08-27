@@ -4,12 +4,13 @@ Credentials are encrypted at rest with Fernet. The ciphertext is never exposed
 in any response — only a boolean `has_credentials` field indicates presence.
 """
 
+import json
 import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from httpx import HTTPStatusError, RequestError
 from pydantic import BaseModel, Field
@@ -76,6 +77,50 @@ def _github_missing_scope_detail(token: str, missing: set[str]) -> str:
 
 def _encrypt(credentials: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(credentials.encode())
+
+
+# Credential payloads are treated as a PARTIAL update on PATCH (FAR-466). The
+# connector reads auth identity (auth_mode, in, header_name, query_param_name)
+# from the DECRYPTED credential payload, NOT config_json. So an identity-only
+# edit must actually reach the stored credentials while preserving the secret.
+# A credential dict splits into "secret" fields (replaced only when a real value
+# is supplied) and everything else (identity + legacy keys, always overlaid).
+_CRED_SECRET_FIELDS = {"token", "api_key", "username", "password"}
+
+
+def _decrypt_credentials(ciphertext: bytes | None, fernet_key: str) -> dict[str, Any]:
+    """Decrypt a stored credential ciphertext, returning ``{}`` when absent or
+    undecryptable (so a PATCH overlay degrades to the incoming payload alone)."""
+    if not ciphertext:
+        return {}
+    try:
+        payload = Fernet(fernet_key.encode()).decrypt(ciphertext).decode()
+    except (InvalidToken, ValueError, TypeError):
+        return {}
+    try:
+        decoded = json.loads(payload)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Overlay an incoming credential dict onto the decrypted stored one.
+
+    Identity fields (non-secret) are always applied from ``incoming``, so an
+    identity-only edit takes effect. Secret fields are replaced only when the
+    request supplies a real, non-empty, non-masked value; otherwise the stored
+    secret is left intact. Keys outside both groups (legacy/unknown payloads)
+    are overlaid as-is, preserving the historical replace-all behaviour.
+    """
+    merged = dict(previous)
+    for key, value in incoming.items():
+        if key in _CRED_SECRET_FIELDS:
+            if isinstance(value, str) and value and value != SENSITIVE_VALUE_MASK:
+                merged[key] = value
+        else:
+            merged[key] = value
+    return merged
 
 
 class ConnectorCreate(TeamVisibilityMixin):
@@ -400,10 +445,9 @@ async def update_connector_endpoint(
 ) -> ConnectorResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     credentials_updated = "credentials" in updates
+    new_credentials: str | None = None
     if credentials_updated:
         new_credentials = updates.pop("credentials")
-        ct = _encrypt(new_credentials, settings.fernet_key)
-        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -424,7 +468,34 @@ async def update_connector_endpoint(
                     else:
                         merged_cfg[k] = v
                 updates["config_json"] = merged_cfg
+            if credentials_updated and existing is not None:
+                assert new_credentials is not None
+                # Partial credential update (FAR-466): overlay the supplied
+                # identity/non-secret fields onto the stored (decrypted) credential
+                # so an identity-only edit applies, while a secret field that is
+                # absent/empty is left intact.
+                incoming: dict[str, Any] | None = None
+                try:
+                    parsed = json.loads(new_credentials)
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    incoming = _credential_overlay(
+                        _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key),
+                        parsed,
+                    )
+                if incoming is not None:
+                    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+                        json.dumps(incoming), settings.fernet_key
+                    )
+                else:
+                    # A non-JSON credential payload (e.g. a raw GitHub token) keeps
+                    # the historical full-replace behaviour.
+                    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+                        new_credentials, settings.fernet_key
+                    )
             if existing is not None and existing.connector_type_id == "github" and credentials_updated:
+                assert new_credentials is not None
                 temp = GitHubConnector(token=new_credentials)
                 try:
                     missing = await temp.verify_scopes()

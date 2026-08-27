@@ -41,6 +41,7 @@ function mountForm(mode: 'add' | 'edit' = 'add', initialCreds?: Partial<RestCred
   const config = ref(defaultConfig())
   const credentials = ref(initialCreds ? { ...defaultCreds(), ...initialCreds } : defaultCreds())
   const credsDirty = ref(false)
+  const credsIdentityDirty = ref(false)
   const wrapper = mount(RestConnectorConfigForm, {
     global: {
       /** nothing extra — i18n/lints/plugin come from setup */
@@ -50,12 +51,14 @@ function mountForm(mode: 'add' | 'edit' = 'add', initialCreds?: Partial<RestCred
       config: config.value,
       credentials: credentials.value,
       credsDirty: credsDirty.value,
+      credsIdentityDirty: credsIdentityDirty.value,
       'onUpdate:config': (v: RestConfigState) => { config.value = v },
       'onUpdate:credentials': (v: RestCredsState) => { credentials.value = v },
       'onUpdate:credsDirty': (v: boolean) => { credsDirty.value = v },
+      'onUpdate:credsIdentityDirty': (v: boolean) => { credsIdentityDirty.value = v },
     },
   })
-  return { wrapper, config, credentials, credsDirty }
+  return { wrapper, config, credentials, credsDirty, credsIdentityDirty }
 }
 
 function validate(wrapper: ReturnType<typeof mountForm>['wrapper']): boolean {
@@ -133,24 +136,27 @@ describe('RestConnectorConfigForm', () => {
   })
 
   it('does NOT mark credentials dirty on a config-only edit (stored secret preserved)', async () => {
-    const { wrapper, config, credsDirty } = mountForm('edit')
+    const { wrapper, config, credsDirty, credsIdentityDirty } = mountForm('edit')
     config.value.base_url = 'https://api.example.com/v2'
     config.value.timeout_seconds = 60
     config.value.records_path = 'data.items'
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     // Only operational config changed — the auth section is untouched, so the
-    // stored credential must not be re-sent (credsDirty must stay false).
+    // stored credential must not be re-sent (credsDirty AND credsIdentityDirty
+    // must both stay false → the parent sends NO credentials).
     expect(credsDirty.value).toBe(false)
+    expect(credsIdentityDirty.value).toBe(false)
   })
 
-  it('does NOT mark credentials dirty on an identity-only edit, and saves without demanding the secret', async () => {
+  it('marks credsIdentityDirty (NOT credsDirty) on an identity-only edit, and saves without demanding the secret', async () => {
     // Edit-mode prefill echoes the non-secret auth identity (header_name,
     // apiKeyIn, auth_mode) while the secret stays write-only/empty. Editing ONLY
-    // that identity must not mark credsDirty (so the credentials payload is
-    // never re-sent empty, clobbering the stored secret) and must not demand a
-    // re-entered secret on validate().
-    const { wrapper, credsDirty, credentials } = mountForm('edit', {
+    // that identity must set credsIdentityDirty (so the credentials payload IS
+    // re-sent and the backend overlays the new identity) while credsDirty stays
+    // false (so the secret-preservation invariant holds and no secret is
+    // clobbered), and must not demand a re-entered secret on validate().
+    const { wrapper, credsDirty, credsIdentityDirty, credentials } = mountForm('edit', {
       auth_mode: 'api_key',
       api_key: '',
       apiKeyIn: 'header',
@@ -160,12 +166,16 @@ describe('RestConnectorConfigForm', () => {
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     expect(credsDirty.value).toBe(false)
+    expect(credsIdentityDirty.value).toBe(false)
     credentials.value.header_name = 'X-API-Key-V2'
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
+    // The identity field changed → credentials ARE sent (credsIdentityDirty),
+    // but credsDirty stays false (no secret touched) so the parent re-sends the
+    // credentials and the backend preserves the stored secret.
     expect(credsDirty.value).toBe(false)
-    // credsDirty is false → the parent does NOT resend the credentials payload,
-    // and validate() must pass without a re-entered secret.
+    expect(credsIdentityDirty.value).toBe(true)
+    // credsDirty is false → validate() must pass without a re-entered secret.
     expect(await validateAndFlush(wrapper)).toBe(true)
   })
 
@@ -182,7 +192,9 @@ describe('RestConnectorConfigForm', () => {
   it('does not clobber the stored secret on an edit prefill round-trip', async () => {
     // Edit-mode prefill echoes the stored config; the secret stays write-only and
     // credsDirty stays false so the credentials payload is never re-sent empty.
-    const { wrapper, credsDirty, credentials } = mountForm('edit', {
+    // The identity channel is likewise untouched, so credsIdentityDirty stays
+    // false (NO credentials re-sent on an untouched edit).
+    const { wrapper, credsDirty, credsIdentityDirty, credentials } = mountForm('edit', {
       auth_mode: 'api_key',
       api_key: 'sk-...',
       apiKeyIn: 'query',
@@ -192,6 +204,7 @@ describe('RestConnectorConfigForm', () => {
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     expect(credsDirty.value).toBe(false)
+    expect(credsIdentityDirty.value).toBe(false)
     expect(credentials.value.auth_mode).toBe('api_key')
   })
 
