@@ -117,6 +117,7 @@ const EnvironmentProfileList = () => import('../views/environment-profiles/Envir
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
+const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
 const RemyOnlyView = () => import('../views/RemyOnlyView.vue')
 
 const router = createRouter({
@@ -148,6 +149,15 @@ const router = createRouter({
       name: 'oauth-authorize',
       component: OAuthConsentView,
       meta: { public: true, breadcrumb: 'Authorize' },
+    },
+    {
+      // One-time invite enrollment (FAR-461): <origin>/accept-invite?token=...
+      // Public by design — the token IS the credential; no session exists yet.
+      // The view sets a password and then hands off to /login.
+      path: '/accept-invite',
+      name: 'accept-invite',
+      component: AcceptInviteView,
+      meta: { public: true, breadcrumb: 'Accept Invitation' },
     },
     {
       path: '/',
