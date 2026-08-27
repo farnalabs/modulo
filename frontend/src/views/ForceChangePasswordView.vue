@@ -49,8 +49,9 @@ import { clearAccessToken } from '../lib/api/client'
 const router = useRouter()
 
 // Announce window for the role="status" success message. It must elapse while
-// the session is still live — see onChanged for why clearing tokens up-front
-// unmounts the gate and kills the announcement.
+// the session is still live AND the gate flag still set — see
+// exitGateAndRouteToLogin for why both flips land inside the delayed callback:
+// flipping either up-front unmounts this view and kills the announcement.
 const STATUS_VISIBLE_MS = 1500
 
 const changed = ref(false)
@@ -58,18 +59,29 @@ let navigateTimer: ReturnType<typeof setTimeout> | undefined
 
 function exitGateAndRouteToLogin(delayMs = 0) {
   const navigate = () => {
-    // Tokens are cleared here rather than by the callers up-front:
-    // clearAccessToken() notifies auth listeners synchronously, App.vue flips
-    // isAuthenticated and renders LoginView over this gate on the next render
-    // tick. Deferring the flip until after the announce window lets the status
-    // message paint and be announced first. The replace below is then
-    // belt-and-braces behind that flip, not redundant navigation.
+    // Both state flips App.vue branches on happen HERE — after any delay, not
+    // up-front. The GATE flip is setMustChangePassword(false): while
+    // authenticated + gated, App.vue keeps this gate view mounted, and
+    // dropping that flag re-renders away from it on the next render tick.
+    // clearAccessToken() likewise notifies auth listeners synchronously. Both
+    // flips land together inside this callback, so a delayed call lets the
+    // role="status" message stay mounted and genuinely paint/announce for
+    // STATUS_VISIBLE_MS first, with no dead-token background fetches (the
+    // session stays live until this moment). router.replace is belt-and-braces
+    // behind those flips, not redundant navigation.
+    setMustChangePassword(false)
     clearAccessToken()
     void router.replace('/login')
   }
+  // Timer-overwrite guard: cancel any pending scheduled navigation BEFORE
+  // assigning a new one, so a second entry (e.g. Sign out clicked while a
+  // success-announce timer is still pending) cannot leave the stale callback
+  // armed to fire later.
+  if (navigateTimer !== undefined) clearTimeout(navigateTimer)
   if (delayMs > 0) {
     navigateTimer = setTimeout(navigate, delayMs)
   } else {
+    navigateTimer = undefined
     navigate()
   }
 }
@@ -79,15 +91,18 @@ function onChanged() {
   // token family used before the swap is blacklisted server-side, so silently
   // continuing to '/' would race dead-token 401s. End the session explicitly —
   // but only after STATUS_VISIBLE_MS has fully elapsed while still
-  // authenticated; clearing tokens here would unmount this view (and kill the
-  // status announcement) on the very next render tick.
+  // authenticated AND gated: flipping must_change_password or tokens here
+  // would unmount this view on the very next render tick, and onBeforeUnmount
+  // would then cancel the timer so navigation never ran. All flips are
+  // deferred into the shared callback below so the status announcement
+  // genuinely paints first.
   changed.value = true
-  setMustChangePassword(false)
   exitGateAndRouteToLogin(STATUS_VISIBLE_MS)
 }
 
 function onSignOut() {
-  setMustChangePassword(false)
+  // Immediate exit: the shared callback runs now (delayMs=0), which clears the
+  // gate flag AND tokens together in one synchronous pass before routing.
   exitGateAndRouteToLogin()
 }
 
