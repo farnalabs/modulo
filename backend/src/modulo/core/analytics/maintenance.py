@@ -200,7 +200,7 @@ async def backfill_facts(session: Any, day: date) -> int:
     # functions must be selected per dialect; all three degrade to defaults when
     # the graph is malformed/absent — backfilled rows must NEVER carry NULL here
     # (NULL facts on backfilled rows are a bug).
-    graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
+    graph_nodes_expr = PipelineSnapshot.graph_json.op("->")("nodes")
     _is_pg = (await _dialect_name(session)) == "postgresql"
     # ``graph_json`` is declared ``json`` on the ORM (generic JSON for SQLite/
     # MariaDB) but promoted to ``jsonb`` on Postgres by migration 0147. Coerce
@@ -210,7 +210,9 @@ async def backfill_facts(session: Any, day: date) -> int:
     if _is_pg:
         from sqlalchemy.dialects.postgresql import JSONB
 
-        graph_nodes_json = sa.cast(graph_nodes_json, JSONB)
+        graph_nodes_json: Any = sa.cast(graph_nodes_expr, JSONB)
+    else:
+        graph_nodes_json = graph_nodes_expr
     _json_array_length = sa.func.jsonb_array_length if _is_pg else sa.func.json_array_length
     _json_array_elements = sa.func.jsonb_array_elements if _is_pg else sa.func.json_array_elements
     node_count_expr = sa.case(
