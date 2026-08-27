@@ -87,24 +87,74 @@ jobs:
             fi
           fi
 
-  pre-deploy-tests:
-    name: Pre-deploy tests (fast + expensive)
+  # FAR-459: the former monolithic pre-deploy test job (~75-90 min, strictly
+  # sequential) is split into five parallel atomic jobs plus an aggregate gate
+  # below. Per-suite jobs mean per-job live status and partial logs mid-run via
+  # `gh run view <id>` / the jobs API — you no longer have to wait for one giant
+  # job to conclude before seeing which stage broke — and the independent suites
+  # run concurrently for speed. Commands are copied verbatim from the old job;
+  # timeout-minutes act as per-suite budgets.
+
+  backend-lint:
+    name: "Pre-deploy: Backend lint"
     needs: [deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
-    # Explicit budget: this job runs the full unit + integration suites.
-    # Without a timeout the ephemeral runner can recycle mid-run.
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           python-version: "3.12"
           enable-cache: true
+
+      - name: Backend lint
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run --no-build --no-sync ruff check .
+          uv run --no-build --no-sync mypy src/modulo/
+          uv run --no-build --no-sync bandit -r src/modulo/ -ll
+
+  backend-unit:
+    name: "Pre-deploy: Backend unit tests"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Backend unit tests
+        working-directory: backend
+        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
+
+  frontend-checks:
+    name: "Pre-deploy: Frontend checks"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.21.0
@@ -113,23 +163,6 @@ jobs:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      # Fast tests (belt-and-braces re-run)
-      - name: Backend lint
-        working-directory: backend
-        run: |
-          uv sync --frozen
-          uv run --no-build --no-sync ruff check .
-          uv run --no-build --no-sync mypy src/modulo/
-          uv run --no-build --no-sync bandit -r src/modulo/ -ll
-          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
-          uv run --no-build --no-sync pip-audit
-
-      - name: Backend unit tests
-        working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
-        env:
-          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
 
       - name: Frontend checks
         working-directory: frontend
@@ -140,6 +173,23 @@ jobs:
           pnpm run test:unit
           pnpm run build
           pnpm audit --audit-level=critical
+
+  integration-tests:
+    name: "Pre-deploy: Integration tests"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
 
       # Expensive tests
       - name: Start Postgres
@@ -174,12 +224,6 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
-      - name: Security audit
-        working-directory: backend
-        run: |
-          uv run --no-build --no-sync pip-audit
-          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
-
       - name: Stop containers
         if: always()
         shell: bash
@@ -187,20 +231,91 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
+  security-audit:
+    name: "Pre-deploy: Security audit"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    steps:
+      # Full history required: semgrep diffs against --baseline-commit HEAD^.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Security audit
+        shell: bash
+        run: |
+          uv run --no-build --project backend --no-sync pip-audit
+          if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi
+
+  pre-deploy-gate:
+    name: Pre-deploy gate
+    needs: [backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
+    # The gate only means something when the children actually ran - a throttled
+    # run skips all five pre-deploy jobs, so the gate must stay skipped too.
+    if: always() && needs.backend-lint.result != 'skipped'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate pre-deploy results
+        shell: bash
+        run: |
+          echo "Pre-deploy results:"
+          echo "  backend-lint:      ${{ needs.backend-lint.result }}"
+          echo "  backend-unit:      ${{ needs.backend-unit.result }}"
+          echo "  frontend-checks:   ${{ needs.frontend-checks.result }}"
+          echo "  integration-tests: ${{ needs.integration-tests.result }}"
+          echo "  security-audit:    ${{ needs.security-audit.result }}"
+
+          FAILED=""
+          if [ "${{ needs.backend-lint.result }}" != "success" ]; then
+            FAILED="$FAILED backend-lint"
+          fi
+          if [ "${{ needs.backend-unit.result }}" != "success" ]; then
+            FAILED="$FAILED backend-unit"
+          fi
+          if [ "${{ needs.frontend-checks.result }}" != "success" ]; then
+            FAILED="$FAILED frontend-checks"
+          fi
+          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+            FAILED="$FAILED integration-tests"
+          fi
+          if [ "${{ needs.security-audit.result }}" != "success" ]; then
+            FAILED="$FAILED security-audit"
+          fi
+
+          if [ -n "$FAILED" ]; then
+            for JOB in $FAILED; do
+              echo "::error::${JOB} failed"
+            done
+            exit 1
+          fi
+
+          echo "All pre-deploy jobs succeeded."
+
   notify-deploy-failure:
     name: Trigger Branch Fixer on deploy failure
-    needs: [deploy-throttle, pre-deploy-tests]
-    # Fires ONLY when the pre-deploy tests actually ran AND failed (result ==
-    # 'failure'), and only when the deploy was actually attempted
-    # (should_deploy was true). A throttled run skips pre-deploy-tests entirely
-    # (result == 'skipped'), so it can never look like a failure to fix.
+    needs: [deploy-throttle, pre-deploy-gate]
+    # Fires ONLY when the pre-deploy gate actually ran AND failed (result ==
+    # 'failure') — i.e. any of the five parallel pre-deploy jobs failed, as
+    # aggregated by the gate — and only when the deploy was actually attempted
+    # (should_deploy was true). A throttled run skips every pre-deploy job and
+    # the gate entirely (result == 'skipped'), so it can never look like a
+    # failure to fix.
     # This job only sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer (running on
     # app.modulo.run with the same GITHUB_TOKEN as the improve-* pipelines)
     # creates its own fix branch from main, diagnoses the failure, fixes it,
     # and raises the PR — exactly like the improve-* pipelines do. No checkout,
     # no git, no branch creation happens here.
-    if: always() && needs.pre-deploy-tests.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: always() && needs.pre-deploy-gate.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -254,7 +369,7 @@ jobs:
 
   deploy-staging:
     name: Deploy to staging
-    needs: [pre-deploy-tests]
+    needs: [pre-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -670,7 +785,7 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [pre-deploy-tests, staging-e2e]
+    needs: [pre-deploy-gate, staging-e2e]
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
