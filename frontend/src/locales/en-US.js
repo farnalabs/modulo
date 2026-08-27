@@ -477,7 +477,8 @@ export default {
     },
     "ForceChangePasswordView": {
       "change_your_password": "Set a new password",
-      "you_must_set_a_new_password_before_continuing": "Your password was reset by an administrator. Set a new password to continue to the app."
+      "you_must_set_a_new_password_before_continuing": "Your password was reset by an administrator. Set a new password to continue to the app.",
+      "password_changed_sign_in_again": "Password changed. Taking you to the sign-in screen…"
     },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",

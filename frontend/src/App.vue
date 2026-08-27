@@ -11,7 +11,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
-import { setMustChangePassword, useMustChangePassword } from './lib/mustChangePassword'
+import { applyMustChangePassword, syncFromMe, useMustChangePassword } from './lib/mustChangePassword'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 import ForceChangePasswordView from './views/ForceChangePasswordView.vue'
@@ -66,9 +66,7 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
     const data = await res.json()
     setAccessToken(data.access_token)
     if (data.refresh_token) setRefreshToken(data.refresh_token)
-    if (typeof data.must_change_password === 'boolean') {
-      setMustChangePassword(data.must_change_password)
-    }
+    applyMustChangePassword(data.must_change_password)
     if (data.user) {
       const tracker = getErrorTracker()
       if (tracker) {
@@ -120,26 +118,13 @@ onAuthChange((token) => {
   isAuthenticated.value = !!token
 })
 
-// Sync the must-change-password gate for a restored (stored-token) session —
-// auto-login only reports it when it actually POSTs /login. Fails silently:
-// if /me is unreachable, default to not blocking (the backend enforces
-// nothing beyond this flag; UX gate only).
-async function syncMustChangePassword(): Promise<void> {
-  try {
-    const res = await fetch('/api/v1/auth/me')
-    if (!res.ok) return
-    const data = await res.json()
-    if (typeof data.must_change_password === 'boolean') {
-      setMustChangePassword(data.must_change_password)
-    }
-  } catch {
-    // Silent — gating is best-effort on restored sessions.
-  }
-}
-
+// The restored-session gate sync lives in ./lib/mustChangePassword (syncFromMe)
+// so the OIDC/SAML callback and this path cannot drift apart. Fails open:
+// if /me is unreachable the gate clears — the backend enforces nothing beyond
+// this flag; UX gate only.
 onMounted(() => {
   if (isAuthenticated.value) {
-    syncMustChangePassword()
+    void syncFromMe()
     return
   }
   runAutoLogin(true)

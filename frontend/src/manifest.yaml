@@ -1233,16 +1233,16 @@ elements:
       - testid: my-profile-my-team
         type: element
         dynamic_testid: false
-      - testid: my-profile-current-password
+      - testid: change-password-current
         type: input
         dynamic_testid: false
-      - testid: my-profile-new-password
+      - testid: change-password-new
         type: input
         dynamic_testid: false
-      - testid: my-profile-confirm-password
+      - testid: change-password-confirm
         type: input
         dynamic_testid: false
-      - testid: my-profile-update-password
+      - testid: change-password-submit
         type: button
         dynamic_testid: false
     /admin/node-categories:
