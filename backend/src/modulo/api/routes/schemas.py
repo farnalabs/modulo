@@ -353,7 +353,7 @@ async def get_schema_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    if schema is None:
+    if schema is None or schema.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
@@ -560,7 +560,7 @@ async def list_schema_versions_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
-            if schema is None:
+            if schema is None or schema.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
             result = await list_schema_versions(session, schema_id, page=page, page_size=page_size)
     except IntegrityError:
@@ -697,7 +697,7 @@ async def get_schema_version_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    if sv is None:
+    if sv is None or sv.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found")
     return SchemaVersionResponse.model_validate(sv)
 
@@ -737,7 +737,7 @@ async def list_schema_fields_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
-            if schema is None:
+            if schema is None or schema.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
             sv = await _get_latest_version(session, schema_id)
             if sv is None:

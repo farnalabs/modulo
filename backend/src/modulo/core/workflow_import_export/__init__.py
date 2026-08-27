@@ -1549,6 +1549,7 @@ async def _materialize_edges(
             source_node_id=source_id,
             target_node_id=target_id,
             edge_type=edge_type,
+            condition_expression=ed.get("condition_expression"),
             hitl_gate_config=ed.get("hitl_gate_config"),
             source_port=ed.get("source_port", "out"),
             target_port=ed.get("target_port", "in"),

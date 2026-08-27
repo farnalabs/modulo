@@ -265,6 +265,7 @@ async def rollback_to_snapshot(
             "source_node_id": edge_data.get("source") or edge_data.get("source_node_id", ""),
             "target_node_id": edge_data.get("target") or edge_data.get("target_node_id", ""),
             "edge_type": edge_data.get("edge_type", edge_data.get("type", "normal")),
+            "condition_expression": edge_data.get("condition_expression"),
             "hitl_gate_config": edge_data.get("hitl_gate_config"),
             "hitl_gate_config_present": True,
         }
@@ -307,6 +308,7 @@ async def rollback_to_snapshot(
             source_node_id=edge_data["source_node_id"],
             target_node_id=edge_data["target_node_id"],
             edge_type=edge_data["edge_type"],
+            condition_expression=edge_data.get("condition_expression"),
             hitl_gate_config=edge_data["hitl_gate_config"],
             source_port=edge_data.get("source_port", "out"),
             target_port=edge_data.get("target_port", "in"),

@@ -21,7 +21,7 @@ from modulo.db.crud.hitl_gate_guard import (
     DiffResult,
     HitlGateWeakeningDenied,
 )
-from modulo.db.crud.pipeline import replace_pipeline_graph
+from modulo.db.crud.pipeline import _edge_to_plain_dict, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -59,6 +59,9 @@ class _EdgeRow:
         self.target_node_id = uuid.UUID(target)
         self.edge_type = edge_type
         self.hitl_gate_config = copy.deepcopy(cfg)
+        self.condition_expression = None
+        self.source_port = None
+        self.target_port = None
 
 
 class _SnapshotRow:
@@ -1018,3 +1021,61 @@ async def test_rollback_to_snapshot_allows_guardrail_strip_for_admin(
         is_guardrail_admin=True,
     )
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-455: condition_expression is persisted on conditional edges
+# ---------------------------------------------------------------------------
+
+
+async def test_replace_pipeline_graph_persists_condition_expression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conditional edge whose dict carries ``condition_expression`` must have
+    that expression persisted onto the stored PipelineEdge row, not silently
+    dropped (was GraphValidationError CONDITION_MISSING_EXPRESSION at run time).
+    """
+    expr = "result.answer != 'UNKNOWN'"
+    edge = {
+        "id": uuid.uuid4(),
+        "source_node_id": _NODE_A,
+        "target_node_id": _NODE_B,
+        "edge_type": "conditional",
+        "condition_expression": expr,
+        "hitl_gate_config": None,
+        "hitl_gate_config_present": True,
+    }
+    pipeline = _PipelineRow()
+    session = _build_session(_pipeline_result(pipeline), _edges_result([]))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=[edge],
+        is_privileged=True,
+        caller_type="mcp",
+    )
+    assert result is not None
+    _, persisted_edges = result
+    assert len(persisted_edges) == 1
+    assert persisted_edges[0].condition_expression == expr
+
+
+def test_edge_to_plain_dict_preserves_condition_expression() -> None:
+    """``_edge_to_plain_dict`` (clone snapshot + graph-replace read path) must
+    carry a conditional edge's ``condition_expression`` onto the plain data so
+    clones and snapshot reads don't silently drop it (FAR-455)."""
+    expr = "result.score >= `50`"
+    edge = _EdgeRow(edge_type="conditional")
+    edge.condition_expression = expr
+
+    plain = _edge_to_plain_dict(edge)
+
+    assert plain["condition_expression"] == expr
+    assert plain["edge_type"] == "conditional"
+    assert plain["source_node_id"] == uuid.UUID(_NODE_A)
+    assert plain["target_node_id"] == uuid.UUID(_NODE_B)

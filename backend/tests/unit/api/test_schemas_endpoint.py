@@ -333,6 +333,23 @@ def test_schema_version_crud(client: TestClient, case: dict[str, object]) -> Non
             p.stop()
 
 
+def test_get_schema_cross_org_returns_404(client: TestClient) -> None:
+    """IDOR guard: a schema belonging to another org must not be readable.
+
+    This test FAILS on the pre-fix code (the route returned 200 and leaked the
+    row) and PASSES once the organisation_id ownership check is enforced.
+    """
+    cross_org_schema = _make_schema()
+    cross_org_schema.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    assert cross_org_schema.organisation_id != _ORG_ID
+    with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=cross_org_schema),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}")
+    assert resp.status_code == 404
+
+
 def test_list_schemas_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/schemas")
     assert resp.status_code in (401, 403)
