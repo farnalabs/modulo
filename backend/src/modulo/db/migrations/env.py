@@ -231,11 +231,25 @@ def _invocation_is_upgrade() -> bool:
     no-op (dist/runtime-ops fix). The app lifespan calls
     ``command.upgrade(config, 'heads')`` programmatically, where ``cmd_opts``
     is absent — the direction is upgrade by construction, so the default is
-    True. The CLI sets ``config.cmd_opts.command`` ('upgrade'/'downgrade').
+    True.
+
+    The CLI stores parsed options on ``config.cmd_opts``, and the sub-command
+    lives in ``cmd_opts.cmd`` — a ``(fn, positional, kwarg)`` tuple whose first
+    element is the command function, so the invocation name is that function's
+    ``__name__`` (``"upgrade"`` / ``"downgrade"``). There is no
+    ``cmd_opts.command`` attribute on the CLI namespace: reading it made every
+    CLI invocation (including downgrades) classify as an upgrade-at-head and
+    fast-path-skip into a permanent silent no-op. Tests may inject either shape
+    explicitly (``SimpleNamespace(command="downgrade")``), so both are honoured.
     """
     opts = getattr(config, "cmd_opts", None) if config is not None else None
-    command = getattr(opts, "command", None) if opts is not None else None
-    return command != "downgrade"
+    command_name = getattr(opts, "command", None)
+    if isinstance(command_name, str):
+        return command_name != "downgrade"
+    fn = getattr(opts, "cmd", None)
+    if isinstance(fn, tuple):
+        fn = fn[0]
+    return getattr(fn, "__name__", None) != "downgrade"
 
 
 def run_migrations_online() -> None:
@@ -253,7 +267,7 @@ def run_migrations_online() -> None:
     run entirely so boot is instant and machines never contend for the lock.
     """
     if config is None:
-        raise RuntimeError("Alembic config is unavailable")
+        raise RuntimeError("Alembic env config unavailable")
     url = config.get_main_option(_CONFIG_KEY_SQLALCHEMY_URL) or ""
     sync_url = _to_sync_url(url)
 
