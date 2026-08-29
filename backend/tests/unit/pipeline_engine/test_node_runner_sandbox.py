@@ -2044,3 +2044,316 @@ async def test_context_scope_gates_sandbox_agent_render_view():
     assert "tier=tier-2" in rendered
     assert "leak-rc=X" not in rendered
     assert "leak-state=X" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# FAR-488b: sandbox teardown audit — kill asserted on EVERY exit path
+# ---------------------------------------------------------------------------
+
+
+def _dead_connection_sandbox(cmd_result: MagicMock) -> MagicMock:
+    """A sandbox mock whose command COMPLETED (cmd_result returned) but whose
+    connection is otherwise inert (drain probe transfers nothing)."""
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox
+
+
+async def test_cancelled_command_still_kills_sandbox():
+    """A CancelledError escaping the command wait still reaches the
+    finally-block teardown — the sandbox is killed, never leaked (FAR-488b:
+    the E2B 20-concurrent-sandbox cap outage)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    sandbox.kill.assert_awaited()
+
+
+async def test_failure_between_create_and_command_still_kills_sandbox():
+    """A failure AFTER the sandbox is created but BEFORE the command starts
+    (e.g. context-file/prompt write blows up) lands in the generic failed
+    envelope and the finally-block teardown still kills the sandbox (FAR-488b)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock(side_effect=RuntimeError("e2b file write exploded"))
+    sandbox.files.read = AsyncMock(return_value="")
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock()
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    sandbox.kill.assert_awaited()
+    sandbox.commands.run.assert_not_called()
+
+
+async def test_output_read_failure_still_kills_sandbox():
+    """A dead sandbox at output.json read time still reaches the finally-block
+    kill and raises the retryable no-output failure (FAR-488b)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent ran"
+    cmd_result.stderr = ""
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("sandbox connection lost")
+        return ""
+
+    sandbox = _dead_connection_sandbox(cmd_result)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    sandbox.kill.assert_awaited()
+
+
+async def test_schema_validation_failure_still_kills_sandbox():
+    """A schema-rejected output returns the failed envelope AND the sandbox is
+    still killed in the finally block (FAR-488b)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    node_def["output_schema_json"] = {"required": ["status", "summary"]}
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}')
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    assert "schema validation" in result["output"]["summary"]
+    sandbox.kill.assert_awaited()
+
+
+async def test_rate_limit_retry_loop_leaves_no_sandbox_behind():
+    """A RateLimitException attempt never leaves a sandbox object behind (the
+    create coroutine either returns a sandbox or raises before assignment), so
+    the retry loop cannot accumulate sandboxes; the single successful sandbox
+    is killed in teardown (FAR-488b)."""
+    from e2b.exceptions import RateLimitException
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    create = AsyncMock(side_effect=[RateLimitException("429"), RateLimitException("429"), sandbox])
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=create),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0.001),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert create.await_count == 3
+    sandbox.kill.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-487: no-parseable-output diagnostics name the CAUSE
+# ---------------------------------------------------------------------------
+
+
+def test_classify_no_output_cause_missing_file():
+    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+
+    cause = _classify_no_output_cause(read_error="NotFoundException: file not found", read_raw="")
+    assert "MISSING" in cause
+
+
+def test_classify_no_output_cause_unreadable():
+    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+
+    cause = _classify_no_output_cause(read_error="OSError: connection reset", read_raw="")
+    assert "could not be read" in cause
+    assert "connection reset" in cause
+
+
+def test_classify_no_output_cause_invalid_json():
+    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+
+    cause = _classify_no_output_cause(read_error="", read_raw="<<< not json >>>")
+    assert "NOT valid JSON" in cause
+
+
+def test_classify_no_output_cause_json_null():
+    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+
+    cause = _classify_no_output_cause(read_error="", read_raw="null")
+    assert "JSON null" in cause
+
+
+async def test_missing_output_json_message_names_missing_file():
+    """FAR-487: a failed output.json read whose error names a missing file is
+    reported as MISSING — distinguishing 'the agent never wrote it' from a
+    parse failure of bytes that exist."""
+    from e2b.exceptions import NotFoundException
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent finished"
+    cmd_result.stderr = ""
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise NotFoundException("/home/user/output.json not found")
+        return ""
+
+    sandbox = _dead_connection_sandbox(cmd_result)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.sandbox_id = "sbx-missing"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "MISSING" in message
+    assert "exit code 0" in message
+
+
+async def test_unreadable_output_json_message_names_read_error():
+    """FAR-487: a read failure that is NOT a missing-file error names the
+    underlying read error in the raised message."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent finished"
+    cmd_result.stderr = ""
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("connection reset by peer")
+        return ""
+
+    sandbox = _dead_connection_sandbox(cmd_result)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "could not be read" in message
+    assert "connection reset by peer" in message
+
+
+async def test_invalid_json_output_message_says_invalid():
+    """FAR-487: bytes were read but json.loads failed -> the message says the
+    file is NOT valid JSON (the synthesized-output case)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(0, stdout="booting agent", output_json="{not json")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "NOT valid JSON" in message
+    assert "{not json" in message
+
+
+async def test_json_null_output_message_says_null():
+    """FAR-487: output.json containing literal JSON null is named as such."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(0, stdout="agent ran", output_json="null")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "JSON null" in message
+
+
+async def test_schema_validation_summary_names_missing_field():
+    """FAR-487: the schema-rejection summary names the rejected field so an
+    operator can align the agent's output shape with the schema (no schema
+    loosening)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    node_def["output_schema_json"] = {"required": ["status", "summary"]}
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}')
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    summary = result["output"]["summary"]
+    assert "schema validation" in summary
+    assert "'status'" in summary
+
+
+# ---------------------------------------------------------------------------
+# FAR-487: the E2B sandbox LIFETIME must strictly exceed the command timeout
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_lifetime_exceeds_command_timeout():
+    """FAR-487 mechanism: AsyncSandbox.create is given a lifetime strictly
+    greater than the node's command timeout (grace window), so the E2B
+    endAt platform kill can never preempt the runner's own timeout path.
+    Without the grace, a mid-command sandbox death closed the SDK's command
+    event stream, ``handle.wait()`` fabricated a zero-exit completion, and the
+    node misreported the failure as "no parseable output.json (exit code 0)"
+    (15+ production PR-Reviewer runs, 2026-08-29)."""
+    from modulo.core.pipeline_engine.node_runner import _SANDBOX_LIFETIME_GRACE_S
+
+    node_def = _base_node_def(timeout_seconds=60)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create:
+        await fn(_run_state())
+
+    create.assert_awaited_once()
+    lifetime = create.await_args.kwargs["timeout"]
+    assert lifetime == 60 + _SANDBOX_LIFETIME_GRACE_S
+    assert lifetime > 60

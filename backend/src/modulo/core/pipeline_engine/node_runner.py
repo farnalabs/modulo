@@ -293,6 +293,19 @@ _NO_OUTPUT_STDOUT_TAIL = 1024
 _NO_OUTPUT_RAW_SNIPPET = 512
 
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
+# FAR-487: the E2B sandbox LIFETIME must outlast the runner's command timeout.
+# Both used to be set from the same ``sandbox_timeout`` value, so the platform
+# killed the sandbox (``endAt``) at the same instant the runner's command
+# timeout fired. In that race the SDK's command event stream closes first and
+# ``handle.wait()`` resolves a zero-exit CommandResult (no exit event ever
+# arrives — the process died with the sandbox), so the runner took the
+# "completed, exit 0" path and then tried to read /home/user/output.json from
+# a DEAD sandbox: the read raised, ``output_json`` stayed None, and the node
+# failed as "Sandbox agent produced no parseable output.json (exit code 0)" —
+# 15+ production PR-Reviewer runs on 2026-08-29. The grace window makes the
+# runner's OWN timeout path (clean kill + correct stall/timeout
+# classification) win the race deterministically.
+_SANDBOX_LIFETIME_GRACE_S = 120.0
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 # FAR-188 (QA round 1): the raw-output retention DB write is bounded to fit
 # inside the node decorator's grace budget (_DECORATOR_GRACE = 5.0s) so a hung
@@ -697,6 +710,34 @@ def _bounded_tail(text: str, limit: int) -> str:
     return f"...[truncated {len(text) - limit} chars]...\n{text[-limit:]}"
 
 
+def _classify_no_output_cause(*, read_error: str, read_raw: str) -> str:
+    """Name WHY output.json was unparseable (FAR-487).
+
+    The runner reads AND parses output.json inside ONE try block, so a JSON
+    parse failure surfaces here as a ``JSONDecodeError`` read error with the
+    raw bytes still captured. Classification order: a parse failure of bytes
+    that were read (invalid JSON), a missing-file read error, any other read
+    failure (dead sandbox, network), a successful read whose bytes parse to
+    JSON null. The schema-rejection case is a DIFFERENT code path (validated
+    dicts) and is not classified here. Returns "" when the evidence cannot
+    classify.
+    """
+    if read_error:
+        if "JSONDecodeError" in read_error:
+            return "output.json was written but is NOT valid JSON"
+        if "NotFound" in read_error or "FileNotFound" in read_error:
+            return "output.json was MISSING (the agent never wrote it)"
+        return f"output.json could not be read ({read_error[:200]})"
+    if read_raw:
+        try:
+            parsed = json.loads(read_raw)
+        except (ValueError, TypeError):
+            return "output.json was written but is NOT valid JSON"
+        if parsed is None:
+            return "output.json was JSON null"
+    return ""
+
+
 def _build_no_output_message(
     *,
     exit_code: int,
@@ -704,12 +745,15 @@ def _build_no_output_message(
     stderr_raw: str,
     sandbox_id: str | None,
     read_raw: str = "",
+    read_error: str = "",
     log_tail: str = "",
 ) -> str:
     """Compose the FAR-197 diagnostic for an unparseable/missing output.json.
 
     A compact, bounded message: a prefix naming the exit code and sandbox id,
-    then bounded tails ordered by diagnostic value — the best-effort E2B log
+    then a cause line naming WHY the output was unparseable (missing file /
+    unreadable / invalid JSON — FAR-487), then bounded tails ordered by
+    diagnostic value — the best-effort E2B log
     tail FIRST (the only place the kill reason lives), then the captured agent
     stderr and stdout (agent errors typically sit at the END of stderr), and
     any raw bytes read back from output.json (the invalid-JSON case) LAST.
@@ -727,6 +771,9 @@ def _build_no_output_message(
     log_tail = str(log_tail)
 
     parts = [f"Sandbox agent produced no parseable output.json (exit code {exit_code})"]
+    cause = _classify_no_output_cause(read_error=read_error, read_raw=read_raw)
+    if cause:
+        parts.append(cause)
     if isinstance(sandbox_id, str) and sandbox_id:
         parts.append(f"sandbox id: {sandbox_id}")
     log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
@@ -4369,7 +4416,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 sandbox = await asyncio.wait_for(
                     AsyncSandbox.create(
                         template=template_id,
-                        timeout=sandbox_timeout,
+                        # FAR-487: lifetime STRICTLY greater than the command
+                        # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
+                        # endAt kill can never preempt the runner's own timeout
+                        # path — a mid-command sandbox death fabricated a
+                        # zero-exit completion and misreported the failure as
+                        # "no parseable output.json (exit code 0)".
+                        timeout=sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S,
                         allow_internet_access=(egress_policy not in ("deny_all", "selected")),
                         # deny_all/selected -> no internet; default/None ->
                         # internet allowed (e2b default). IMPORTANT
@@ -4942,6 +4995,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             stderr_raw=agent_stderr_raw,
                             sandbox_id=_sandbox_id,
                             read_raw=raw_output,
+                            read_error=output_read_error,
                             log_tail=_no_output_log_tail,
                         )
                     )
@@ -4952,6 +5006,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         stderr_raw=agent_stderr_raw,
                         sandbox_id=_sandbox_id,
                         read_raw=raw_output,
+                        read_error=output_read_error,
                         log_tail=_no_output_log_tail,
                     ),
                     node_id=node_id,
@@ -5001,7 +5056,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
             try:
                 _validate_against_schema(output_json, output_schema_json)
-            except ValueError:
+            except ValueError as _schema_exc:
                 _log.exception(
                     "sandbox_agent.schema_validation_failed",
                     extra={"node_id": node_id},
@@ -5017,7 +5072,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # generic ``schema_validation_failure`` code is SHARED
                     # with LLM-mode/manual paths and must stay retryable.
                     raise ScriptInvalidOutputError(
-                        f"Script-mode output failed schema validation for node '{node_id}'"
+                        f"Script-mode output failed schema validation for node '{node_id}': {_schema_exc}"
                     ) from None
                 elapsed = time.monotonic() - start_time
                 _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
@@ -5025,7 +5080,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     node_id=node_id,
                     output=_SandboxNodeOutput(
                         status="failed",
-                        summary="Output failed schema validation",
+                        # FAR-487: name the rejected field so an operator can
+                        # align the agent's output shape (e.g. a synthesized
+                        # failed-output) with what the schema accepts —
+                        # without loosening the schema itself.
+                        summary=f"Output failed schema validation: {_schema_exc}",
                         exit_code=exit_code,
                         wall_clock_time_ms=int(elapsed * 1000),
                         cost_estimate_usd=_cost_estimate_usd,
