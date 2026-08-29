@@ -2628,8 +2628,12 @@ async def resolve_env_var_refs(
     """Resolve ``{{ secrets.KEY }}`` references in env var values.
 
     Non-reference values pass through unchanged. ``{{ secrets.KEY }}`` values
-    are resolved via *resolver*; a missing secret resolves to ``""`` and logs a
-    warning (legacy behaviour), never raising.
+    are resolved via *resolver*; an UNRESOLVED reference (resolver returns
+    None) is OMITTED from the returned dict with a warning naming the key
+    (FAR-480). It is never resolved to an empty string: an empty value would
+    still reach the sandbox envs dict and CLOBBER the system-injected default
+    (e.g. the host GITHUB_TOKEN), silently breaking the sandbox credential.
+    Never raises.
     """
     resolved: dict[str, str] = {}
     for key, value in env_vars.items():
@@ -2638,10 +2642,14 @@ async def resolve_env_var_refs(
             secret_key = m.group(1)
             resolved_value = await resolver(secret_key)
             if resolved_value is None:
-                _log.warning("env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key})
-                resolved[key] = ""
-            else:
-                resolved[key] = resolved_value
+                _log.warning(
+                    "env_var.secret_ref_not_found: env var %s references secret %r "
+                    "which could not be resolved — key omitted from sandbox envs",
+                    key,
+                    secret_key,
+                )
+                continue
+            resolved[key] = resolved_value
         else:
             resolved[key] = value
     return resolved
@@ -2852,6 +2860,11 @@ async def _sandbox_resolve_secret_ref(
     rotation on every run. Returns None if the key is not in the vault
     (does NOT fall back to the process environment to prevent secret
     exfiltration via pipeline references).
+
+    FAR-480: the unresolvable-context paths (no session_factory, missing or
+    invalid org_id) log a warning naming the secret key — they used to be
+    silent, which made an unresolved ``{{ secrets.X }}`` env ref invisible in
+    production until the sandbox failed on the missing credential.
     """
     if session_factory is not None:
         org_uuid: uuid.UUID | None = None
@@ -2876,6 +2889,18 @@ async def _sandbox_resolve_secret_ref(
                 pass  # not in vault -> return None
             except Exception:
                 _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+        else:
+            _log.warning(
+                "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
+                "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
+                secret_key,
+            )
+    else:
+        _log.warning(
+            "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the "
+            "org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
+            secret_key,
+        )
     return None
 
 
@@ -5538,8 +5563,12 @@ def make_sandbox_agent_fn(
 
     env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
     resolved at run time from the org vault (when a ``session_factory`` is
-    provided) and fall back to the process environment, so secret rotation
-    takes effect on the next run and secrets never enter the compiled graph.
+    provided), so secret rotation takes effect on the next run and secrets
+    never enter the compiled graph. There is NO process-environment fallback
+    (anti-exfiltration). An unresolved reference is OMITTED from the sandbox
+    envs with a warning (FAR-480) — never resolved to an empty string, which
+    would clobber the system-injected default (e.g. the host GITHUB_TOKEN) and
+    silently break the sandbox credential.
     """
     config = _build_sandbox_node_config(
         node_def,

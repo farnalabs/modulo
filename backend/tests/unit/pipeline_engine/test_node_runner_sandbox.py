@@ -245,7 +245,8 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
 
 
 # ---------------------------------------------------------------------------
-# {{ secrets.KEY }} env var resolution (org vault -> host env fallback)
+# {{ secrets.KEY }} env var resolution (org vault; unresolved refs are omitted,
+# never empty-string clobbers — FAR-480)
 # ---------------------------------------------------------------------------
 
 
@@ -268,8 +269,9 @@ def _run_state() -> dict:
     }
 
 
-async def test_env_var_secret_ref_missing_resolves_to_empty_string(caplog):
-    """No session_factory and no host env value -> '' plus a warning (legacy)."""
+async def test_env_var_secret_ref_missing_omits_key_and_warns(caplog):
+    """No session_factory -> unresolved ref is OMITTED (not '') plus a warning
+    naming the env var and secret key (FAR-480)."""
     node_def = _base_node_def(env_vars={"FOO": "{{ secrets.FOO }}"})
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
@@ -283,8 +285,11 @@ async def test_env_var_secret_ref_missing_resolves_to_empty_string(caplog):
 
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
-    assert not envs["FOO"]
-    assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
+    assert "FOO" not in envs
+    warnings = [m for m in caplog.messages if "env_var.secret_ref_not_found" in m]
+    assert warnings, "expected an env_var.secret_ref_not_found warning"
+    assert "FOO" in warnings[0]
+    assert any("env_var.secret_ref_no_db_context" in m for m in caplog.messages)
 
 
 async def test_env_var_secret_ref_resolves_from_vault():
@@ -345,7 +350,7 @@ async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
 
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
-    assert not envs["FOO"]
+    assert "FOO" not in envs
     assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
 
 
@@ -373,7 +378,79 @@ async def test_resolve_env_var_refs_calls_resolver_per_ref():
 
     resolved = await resolve_env_var_refs({"A": "{{ secrets.A }}", "B": "plain", "C": "{{ secrets.C }}"}, _resolver)
     assert calls == ["A", "C"]
-    assert resolved == {"A": "a-secret", "B": "plain", "C": ""}
+    # C is unresolved -> omitted entirely (FAR-480), never an empty string.
+    assert resolved == {"A": "a-secret", "B": "plain"}
+
+
+async def test_resolve_env_var_refs_unresolved_ref_warns_with_key_names(caplog):
+    """An unresolved {{ secrets.X }} ref logs a WARNING naming the env var key
+    and the secret key (FAR-480) and is omitted from the result."""
+    calls: list[str] = []
+
+    async def _resolver(secret_key: str) -> str | None:
+        calls.append(secret_key)
+        return None
+
+    with caplog.at_level(logging.WARNING):
+        resolved = await resolve_env_var_refs({"GITHUB_TOKEN": "{{ secrets.GITHUB_TOKEN }}", "PLAIN": "x"}, _resolver)
+
+    assert calls == ["GITHUB_TOKEN"]
+    assert resolved == {"PLAIN": "x"}
+    warnings = [m for m in caplog.messages if "env_var.secret_ref_not_found" in m]
+    assert warnings, "expected an env_var.secret_ref_not_found warning"
+    assert "GITHUB_TOKEN" in warnings[0]
+
+
+async def test_unresolved_secret_ref_does_not_clobber_system_default(caplog):
+    """FAR-480 regression: an unresolved {{ secrets.GITHUB_TOKEN }} env ref must
+    NOT emit an empty GITHUB_TOKEN that clobbers the system-injected default
+    (host GITHUB_DOGFOOD_PAT_* / GITHUB_TOKEN) — the system token survives."""
+    node_def = _base_node_def(env_vars={"GITHUB_TOKEN": "{{ secrets.GITHUB_TOKEN }}"})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.dict(os.environ, {"GITHUB_TOKEN": "system-default-pat"}, clear=False),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert envs["GITHUB_TOKEN"] == "system-default-pat"
+    assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
+
+
+async def test_sandbox_resolve_secret_ref_warns_on_missing_db_context(caplog):
+    """_sandbox_resolve_secret_ref with no session_factory returns None and
+    logs a warning naming the secret key (FAR-480 — was silent)."""
+    from modulo.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
+
+    with caplog.at_level(logging.WARNING):
+        result = await _sandbox_resolve_secret_ref("GITHUB_TOKEN", session_factory=None, org_id=_ORG_ID)
+
+    assert result is None
+    assert any("env_var.secret_ref_no_db_context" in m and "GITHUB_TOKEN" in m for m in caplog.messages)
+
+
+async def test_sandbox_resolve_secret_ref_warns_on_invalid_org_id(caplog):
+    """_sandbox_resolve_secret_ref with an unparseable org_id returns None and
+    logs a warning naming the secret key (FAR-480 — was silent)."""
+    from modulo.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
+
+    session = MagicMock()
+
+    def _fake_session_factory():
+        return session
+
+    with caplog.at_level(logging.WARNING):
+        result = await _sandbox_resolve_secret_ref(
+            "GITHUB_TOKEN", session_factory=_fake_session_factory, org_id="not-a-uuid"
+        )
+
+    assert result is None
+    assert any("env_var.secret_ref_no_org_context" in m and "GITHUB_TOKEN" in m for m in caplog.messages)
 
 
 async def test_sandbox_agent_command_timeout_raises_retryable_failure():
