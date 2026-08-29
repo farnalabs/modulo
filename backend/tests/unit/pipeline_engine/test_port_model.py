@@ -64,6 +64,15 @@ def test_is_port_declared():
     assert is_port_declared(_node("a", outputs=[{"port": "out"}]))
 
 
+def test_is_port_declared_null_keys_are_not_declared():
+    # FAR-480 regression: the API serializer round-trips every node with
+    # inputs/outputs keys present but set to null. Key presence alone must
+    # not declare ports — null keys are legacy port-less nodes.
+    assert not is_port_declared(_node("a", inputs=None, outputs=None))
+    assert not is_port_declared(_node("a", inputs=None))
+    assert not is_port_declared(_node("a", outputs=None))
+
+
 # ---------------------------------------------------------------------------
 # Port -> state-key identity mapping
 # ---------------------------------------------------------------------------
@@ -121,6 +130,24 @@ def test_fan_in_legacy_graph_not_rejected():
     graph = {
         "nodes": [_node("a"), _node("b"), _node("c")],
         "edges": [_edge("a", "b"), _edge("a", "c")],
+    }
+    result = ValidationResult()
+    validate_port_topology(graph, result)
+    assert not any(i.code == PORT_FAN_IN_ERROR for i in result.issues)
+
+
+def test_fan_in_null_port_keys_api_round_trip_not_rejected():
+    # FAR-480 regression (the exact production failure): every node round-tripped
+    # through the API carries inputs/outputs = null, and a 2-edge fan-in target
+    # (conditional low-risk path + normal path; only one fires per run) is legacy
+    # last-write-wins fan-in — must NOT raise PORT_FAN_IN_VIOLATION.
+    graph = {
+        "nodes": [
+            _node("a", inputs=None, outputs=None),
+            _node("c", inputs=None, outputs=None),
+            _node("b", inputs=None, outputs=None),
+        ],
+        "edges": [_edge("a", "b"), _edge("c", "b")],
     }
     result = ValidationResult()
     validate_port_topology(graph, result)

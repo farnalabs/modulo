@@ -78,8 +78,23 @@ jobs:
           )
           BODY=$(echo "${PAYLOAD}")
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-          curl -s -X POST "${MODULO_WEBHOOK_URL}" \
+          RESPONSE_FILE=$(mktemp)
+          HTTP_CODE=$(curl -s -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
             -H "Content-Type: application/json" \
             -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
             -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "${BODY}"
+            -d "${BODY}") || true
+          echo "Modulo PR Review webhook responded with HTTP ${HTTP_CODE}"
+          echo "Response body:"
+          cat "${RESPONSE_FILE}" || true
+          echo
+          rm -f "${RESPONSE_FILE}"
+          case "${HTTP_CODE}" in
+            2*)
+              echo "Webhook POST accepted."
+              ;;
+            *)
+              echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} - no pipeline run was created."
+              exit 1
+              ;;
+          esac
