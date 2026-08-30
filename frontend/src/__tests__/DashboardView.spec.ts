@@ -193,7 +193,7 @@ describe('DashboardView', () => {
     expect(badgeTexts).toContain('complete')
     expect(badgeTexts).toContain('running')
     expect(badgeTexts).toContain('failed')
-    expect(badgeTexts).toContain('awaiting_human')
+    expect(badgeTexts).toContain('awaiting human')
   })
 
   it('shows trigger type for each run', async () => {

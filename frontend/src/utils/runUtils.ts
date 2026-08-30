@@ -36,7 +36,8 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   eval_failed: 'eval failed',
 }
 
-export function runStatusLabel(status: string): string {
+export function runStatusLabel(status: string | null | undefined): string {
+  if (status == null) return ''
   if (RUN_STATUS_LABELS[status]) return RUN_STATUS_LABELS[status]
   return status.replace(/_/g, ' ')
 }
