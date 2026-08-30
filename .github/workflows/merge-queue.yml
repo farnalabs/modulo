@@ -132,7 +132,12 @@ jobs:
         shell: bash
         run: |
           echo "Fetching open PRs sorted by age..."
-          gh pr list --state open --json number,title,headRefName,createdAt --limit 50 2>&1 | \
+          # NOTE: gh pr list returns the NEWEST PRs first and --limit truncates
+          # before the sort_by below runs. A limit at/below the number of open
+          # PRs therefore silently drops the OLDEST PRs -- the exact ones this
+          # step claims to prioritise -- so long-lived approved PRs can never be
+          # merged. Keep this limit comfortably above the open-PR count.
+          gh pr list --state open --json number,title,headRefName,createdAt --limit 500 2>&1 | \
             jq 'sort_by(.createdAt)' > /tmp/all_prs.json
           ALL_COUNT=$(jq 'length' /tmp/all_prs.json)
           echo "Found $ALL_COUNT open PR(s)"
