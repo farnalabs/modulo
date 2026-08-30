@@ -113,10 +113,8 @@ def evaluate_run_spend_ceiling(
         at ``run_cost_so_far_cents`` (the org view is owned by
         ``evaluate_org_spend_ceiling``).
     """
-    if run_cost_so_far_cents < 0:
-        run_cost_so_far_cents = 0
-    if estimated_next_step_cents < 0:
-        estimated_next_step_cents = 0
+    run_cost_so_far_cents = max(run_cost_so_far_cents, 0)
+    estimated_next_step_cents = max(estimated_next_step_cents, 0)
     if max_run_cost_cents is not None and max_run_cost_cents >= 0:
         projected = run_cost_so_far_cents + estimated_next_step_cents
         if projected > max_run_cost_cents:
@@ -165,10 +163,8 @@ def evaluate_org_spend_ceiling(
         A ``SpendCeilingDecision`` with ``projected_org_cumulative_cents`` set to
         the resulting org total.
     """
-    if org_cumulative_spend_cents < 0:
-        org_cumulative_spend_cents = 0
-    if additional_cents < 0:
-        additional_cents = 0
+    org_cumulative_spend_cents = max(org_cumulative_spend_cents, 0)
+    additional_cents = max(additional_cents, 0)
     projected = org_cumulative_spend_cents + additional_cents
     if spend_ceiling_cents is not None and spend_ceiling_cents >= 0 and projected > spend_ceiling_cents:
         return SpendCeilingDecision(

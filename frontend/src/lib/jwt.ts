@@ -9,7 +9,7 @@
  * returns null on any decode/parse failure.
  */
 
-export function decodeBase64Url(s: string): string {
+function decodeBase64Url(s: string): string {
   s = s.replaceAll('-', '+').replaceAll('_', '/')
   const pad = s.length % 4
   if (pad) s += '='.repeat(4 - pad)

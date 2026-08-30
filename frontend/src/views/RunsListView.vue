@@ -6,24 +6,24 @@
           :search="{ placeholder: $t('views.RunsListView.search_by_pipeline_name') }"
           :search-value="filterSearch"
           :filters="[
-            { key: 'status', label: 'Status', options: [
-              { value: RUN_STATUS.PENDING, label: 'Pending' },
-              { value: RUN_STATUS.RUNNING, label: 'Running' },
-              { value: RUN_STATUS.AWAITING_HUMAN, label: 'Awaiting Human' },
-              { value: RUN_STATUS.COMPLETE, label: 'Complete' },
-              { value: RUN_STATUS.FAILED, label: 'Failed' },
-              { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
-              { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
-              { value: RUN_STATUS.STALLED, label: 'Stalled' },
+            { key: 'status', label: $t('views.RunsListView.status_filter'), options: [
+              { value: RUN_STATUS.PENDING, label: $t('views.RunsListView.status_pending') },
+              { value: RUN_STATUS.RUNNING, label: $t('views.RunsListView.status_running') },
+              { value: RUN_STATUS.AWAITING_HUMAN, label: $t('views.RunsListView.status_awaiting_human') },
+              { value: RUN_STATUS.COMPLETE, label: $t('views.RunsListView.status_complete') },
+              { value: RUN_STATUS.FAILED, label: $t('views.RunsListView.status_failed') },
+              { value: RUN_STATUS.CANCELLED, label: $t('views.RunsListView.status_cancelled') },
+              { value: RUN_STATUS.EVAL_FAILED, label: $t('views.RunsListView.status_eval_failed') },
+              { value: RUN_STATUS.STALLED, label: $t('views.RunsListView.status_stalled') },
             ]},
-            { key: 'trigger_type', label: 'Trigger Type', options: [
-              { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
-              { value: TRIGGER_TYPE.WEBHOOK, label: 'Webhook' },
-              { value: TRIGGER_TYPE.CRON, label: 'Cron' },
-              { value: TRIGGER_TYPE.POLLING, label: 'Polling' },
-              { value: TRIGGER_TYPE.AGENT_SIGNAL, label: 'Agent Signal' },
-              { value: TRIGGER_TYPE.ONGOING, label: 'Ongoing' },
-              { value: TRIGGER_TYPE.CORRECTION, label: 'Correction' },
+            { key: 'trigger_type', label: $t('views.RunsListView.trigger_type_filter'), options: [
+              { value: TRIGGER_TYPE.MANUAL, label: $t('views.RunsListView.trigger_manual') },
+              { value: TRIGGER_TYPE.WEBHOOK, label: $t('views.RunsListView.trigger_webhook') },
+              { value: TRIGGER_TYPE.CRON, label: $t('views.RunsListView.trigger_cron') },
+              { value: TRIGGER_TYPE.POLLING, label: $t('views.RunsListView.trigger_polling') },
+              { value: TRIGGER_TYPE.AGENT_SIGNAL, label: $t('views.RunsListView.trigger_agent_signal') },
+              { value: TRIGGER_TYPE.ONGOING, label: $t('views.RunsListView.trigger_ongoing') },
+              { value: TRIGGER_TYPE.CORRECTION, label: $t('views.RunsListView.trigger_correction') },
             ]},
           ]"
           :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"
@@ -40,7 +40,7 @@
     <EmptyState
       v-else-if="runs.length === 0"
       :title="$t('views.RunsListView.no_runs_found')"
-      description="Try adjusting your filters or trigger a pipeline run."
+      :description="$t('views.RunsListView.empty_state_description')"
     />
 
     <template v-else>
@@ -67,7 +67,7 @@
               class="font-medium hover:underline"
               :data-testid="`runs-list-view-${row.run_id}`"
             >
-              {{ row.pipeline_name || '(deleted pipeline)' }}
+              {{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}
             </router-link>
           </template>
           <template #cell-status="{ value, row }">
@@ -142,8 +142,8 @@
                 @click.stop="cancelRun(row as RunListItem)"
                 @keydown.stop
               >
-                <svg v-if="cancellingIds.has(row.run_id as string)" class="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                <LoaderCircle v-if="cancellingIds.has(row.run_id as string)" aria-hidden="true" class="h-3.5 w-3.5 animate-spin" />
+                <Square v-else aria-hidden="true" class="h-3.5 w-3.5" />
                 {{ cancelLabel(row.run_id as string) }}
               </button>
               <span
@@ -159,27 +159,29 @@
 
       <div class="flex items-center justify-between">
         <span class="text-sm text-muted-foreground">
-          {{ total }} run{{ total === 1 ? '' : 's' }}
+          {{ $t('views.RunsListView.run_count', total) }}
         </span>
         <div class="flex items-center gap-2">
           <button
             type="button"
             :disabled="page <= 1"
+            data-testid="runs-list-prev-page"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="prevPage"
           >
-            Previous
+            {{ $t('views.RunsListView.previous') }}
           </button>
           <span class="text-sm text-muted-foreground">
-            Page {{ page }}
+            {{ $t('views.RunsListView.page_label', { page }) }}
           </span>
           <button
             type="button"
             :disabled="page * pageSize >= total"
+            data-testid="runs-list-next-page"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="nextPage"
           >
-            Next
+            {{ $t('views.RunsListView.next') }}
           </button>
         </div>
       </div>
@@ -206,6 +208,7 @@ import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { LoaderCircle, Square } from '@lucide/vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -259,7 +262,7 @@ function buildParams(): FetchRunsParams {
 const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items: RunListItem[]; total: number }>(
   () => fetchRuns(buildParams()).then(
     d => ({ data: d }),
-    e => ({ error: { detail: `Failed to load runs: ${formatApiError(e)}` } }),
+    e => ({ error: { detail: t('views.RunsListView.failed_to_load_runs', { detail: formatApiError(e) }) } }),
   ),
   { initialValue: { items: [] as RunListItem[], total: 0 } },
 )

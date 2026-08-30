@@ -2,13 +2,14 @@
 in modulo.core.saq_worker.
 
 Proves that _get_system_async_engine creates an engine from
-MODULO_SYSTEM_DATABASE_URL when set, and logs a WARNING + falls back to the app
-engine (modulo_app, NOBYPASSRLS) when it is not set — the silent RLS-zero-rows
-data-loss posture. Also locks the pool-sizing helpers (_max_concurrent_ops,
-_effective_redis_pool_size, _effective_db_pool_size), the cron-interval mapping,
-queue-name derivation, fail-closed web auth, and the fail-open startup cron
-reconciliation — the settings that govern the worker's Redis/DB connection
-reserve and heartbeat health.
+MODULO_SYSTEM_DATABASE_URL when set, and FAILS CLOSED (raises RuntimeError +
+logs an error) when it is not set — refusing to fall back to the app engine
+(modulo_app, NOBYPASSRLS) that would silently return zero RLS-scoped rows. Also
+locks the pool-sizing helpers (_max_concurrent_ops, _effective_redis_pool_size,
+_effective_db_pool_size), the cron-interval mapping, queue-name derivation,
+fail-closed web auth, and the fail-open startup cron reconciliation — the
+settings that govern the worker's Redis/DB connection reserve and heartbeat
+health.
 """
 
 from __future__ import annotations
@@ -52,19 +53,17 @@ def test_creates_engine_with_system_url_when_configured(reset_system_engine, mon
     assert create_engine.call_args.args[0] == system_url
 
 
-def test_logs_warning_and_uses_app_engine_when_unset(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    app_engine = MagicMock()
+def test_fails_closed_when_unset(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sw, "get_settings", lambda: _settings(system_url=""))
-    monkeypatch.setattr(sw, "_get_async_engine", lambda: app_engine)
-    warnings: list[tuple[object, object]] = []
-    monkeypatch.setattr(sw._log, "warning", lambda msg, extra=None: warnings.append((msg, extra)))
+    errors: list[tuple[object, object]] = []
+    monkeypatch.setattr(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra)))
 
-    engine = sw._get_system_async_engine()
+    with pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"):
+        sw._get_system_async_engine()
 
-    assert engine is app_engine
-    assert len(warnings) == 1
-    msg, extra = warnings[0]
-    assert msg == "saq_worker.system_engine_fallback"
+    assert len(errors) == 1
+    msg, extra = errors[0]
+    assert msg == "saq_worker.system_engine_misconfigured"
     assert "MODULO_SYSTEM_DATABASE_URL not set" in extra["reason"]
 
 

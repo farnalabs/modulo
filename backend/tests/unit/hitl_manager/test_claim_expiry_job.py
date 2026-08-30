@@ -303,7 +303,7 @@ async def test_expire_once_notifier_cancelled_error_propagates() -> None:
     notifier = MagicMock()
 
     async def _cancel(*args: Any, **kwargs: Any) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     notifier.dispatch_event = _cancel
     with pytest.raises(asyncio.CancelledError):

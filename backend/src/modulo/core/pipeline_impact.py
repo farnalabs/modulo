@@ -101,28 +101,28 @@ def diff_node_ports(na: dict[str, Any], nb: dict[str, Any]) -> list[dict[str, An
         new_ports = node_port_signature(nb)[direction]
         old_names = set(old_ports)
         new_names = set(new_ports)
-        for name in new_names - old_names:
-            changes.append(
-                {
-                    "node_id": node_id,
-                    "direction": direction,
-                    "port": name,
-                    "change": "added",
-                    "old": None,
-                    "new": new_ports[name],
-                }
-            )
-        for name in old_names - new_names:
-            changes.append(
-                {
-                    "node_id": node_id,
-                    "direction": direction,
-                    "port": name,
-                    "change": "removed",
-                    "old": old_ports[name],
-                    "new": None,
-                }
-            )
+        changes.extend(
+            {
+                "node_id": node_id,
+                "direction": direction,
+                "port": name,
+                "change": "added",
+                "old": None,
+                "new": new_ports[name],
+            }
+            for name in new_names - old_names
+        )
+        changes.extend(
+            {
+                "node_id": node_id,
+                "direction": direction,
+                "port": name,
+                "change": "removed",
+                "old": old_ports[name],
+                "new": None,
+            }
+            for name in old_names - new_names
+        )
         for name in old_names & new_names:
             old_ref = old_ports[name]
             new_ref = new_ports[name]

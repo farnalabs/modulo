@@ -136,6 +136,12 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
+        "name": "user_management",
+        "description": "Basic user management — create, deactivate, and role-assign organisation users",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
         "name": "remy",
         "description": "Remy in-app AI assistant",
         "tier_id": "community",

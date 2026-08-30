@@ -38,6 +38,24 @@ def test_create_access_token_and_decode_principal_roundtrip() -> None:
     assert principal.username == "alice"
 
 
+def test_create_access_token_respects_custom_ttl() -> None:
+    from datetime import timedelta
+
+    token = create_access_token(
+        "alice",
+        _KEY,
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="admin",
+        ttl_minutes=120,
+    )
+    claims = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    now = datetime.now(UTC)
+    exp = claims["exp"] if isinstance(claims["exp"], datetime) else datetime.fromtimestamp(claims["exp"], tz=UTC)
+    # 120 minutes from now (allow 2 min slack for clock drift)
+    assert timedelta(minutes=118) <= (exp - now) <= timedelta(minutes=122)
+
+
 def test_decode_principal_user_id_proxies_account_id() -> None:
     token = _make_access_token()
     principal = decode_principal(token, _KEY)

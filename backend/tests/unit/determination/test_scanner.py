@@ -326,7 +326,7 @@ async def test_connector_query_cancellation_propagates() -> None:
             return None
 
         async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - always cancelled
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
     hub._connectors = {cid: _CancellingConnector()}
     hub._initialised = True
@@ -344,7 +344,7 @@ async def test_connector_health_check_cancellation_propagates() -> None:
         connector_type = ConnectorType.GITHUB
 
         async def health_check(self) -> None:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - never reached
             raise AssertionError("query should not be reached")

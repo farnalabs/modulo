@@ -5,6 +5,7 @@ adr: []
 code:
   - backend/src/modulo/api/routes/triggers.py
   - backend/src/modulo/api/routes/webhooks.py
+  - backend/src/modulo/api/routes/slack.py
   - backend/src/modulo/core/trigger_engine/__init__.py
   - backend/src/modulo/core/trigger_engine/polling.py
   - backend/src/modulo/core/trigger_engine/agent_signal.py
@@ -17,6 +18,8 @@ code:
 unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
   - backend/tests/unit/trigger_engine/test_polling.py
+  - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
+  - backend/tests/unit/trigger_engine/test_polling_shared_redis.py
   - backend/tests/unit/trigger_engine/test_agent_signal.py
   - backend/tests/unit/trigger_engine/test_slack_app_mention.py
   - backend/tests/unit/cron_scheduler/test_cron_validation.py
@@ -106,3 +109,9 @@ rate-limited by the `TriggerEngine`.
   verified against `api/routes/triggers.py`, `api/routes/webhooks.py`, the
   `core/trigger_engine/*` package, `core/cron_helpers.py`, and the trigger
   unit/BDD suites. Status: covered.
+- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+  had added a second `feat-triggers` tracker at `configure/triggers.md`, breaking
+  the one-entry-per-feature invariant. This entry is the superset and is
+  retained; the duplicate's unique citations (`api/routes/slack.py`, the polling
+  connector-drift and shared-redis unit suites) were folded in here. Status:
+  covered.

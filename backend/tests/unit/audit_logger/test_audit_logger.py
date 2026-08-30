@@ -1228,7 +1228,7 @@ class TestAppendAuditEventIsolated:
         from modulo.core import audit_logger as mod
 
         async def _cancel(*args, **kwargs):
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         monkeypatch.setattr(mod, "append_audit_event", _cancel)
         monkeypatch.setattr(mod, "set_rls_org", AsyncMock())

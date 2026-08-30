@@ -437,6 +437,15 @@ class HealthResult:
     detail: str = ""
 
 
+def health_check_failure(exc: Exception) -> HealthResult:
+    """Degrade a failed connector health check into a not-ok result.
+
+    Centralises the truncation policy applied to the error detail so every
+    connector reports a consistent, bounded failure message.
+    """
+    return HealthResult(ok=False, detail=str(exc)[:200])
+
+
 class CIRunStatus(StrEnum):
     PENDING = "pending"
     QUEUED = "queued"

@@ -16,7 +16,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
 
 const NARROW_VIEWPORT_PX = 640
 
-export function extractErrorMessage(err: unknown): string {
+function extractErrorMessage(err: unknown): string {
   return formatApiError(err)
 }
 

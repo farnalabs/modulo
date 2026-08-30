@@ -20,7 +20,6 @@ unit-tests:
 bdd:
   - backend/tests/bdd/features/licensing/license_management.feature
   - backend/tests/bdd/features/licensing/team_gates.feature
-  - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
   - backend/tests/bdd/steps/test_license_management.py
   - backend/tests/bdd/steps/test_team_gates.py
 depends-on:
@@ -52,7 +51,7 @@ and feature-flag inspection endpoints.
       features stay accessible without a license (`team_gates.feature`)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
       supports per-flag detail and override toggles, and 404s unknown flags
-      (`feature_flag_inspection.feature`)
+      (`test_admin_feature_flags.py`)
 - [x] Keys are cryptographically verified (`core/license_signing.py`) and exercised
       adversarially (`test_license_adversarial.py`, `test_license_key.py`)
 - [x] Tier activation feeds licensing/feature parity for team surfaces
@@ -63,6 +62,13 @@ and feature-flag inspection endpoints.
 - **`stripe_webhook.py` and `admin_tiers.py` are cited as adjacents but not behaviour-covered
   here** — subscription fulfilments and the tier catalogue are separate surfaces under the
   same feature id; their behaviours are not asserted by the licensing BDD suite.
+- **No executing BDD surface for feature-flag inspection** —
+  `licensing/feature_flag_inspection.feature` ships under
+  `tests/bdd/features/licensing/` but no step module registers it via
+  `scenarios(...)`, so it never executes and is no longer cited as coverage here.
+  The inspection/override endpoints are unit-tested
+  (`test_admin_feature_flags.py`); wiring the feature file up needs its missing
+  step definitions written.
 
 ## QA History
 

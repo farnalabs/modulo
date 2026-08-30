@@ -816,10 +816,7 @@ _TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
 # access keys, shared from the sensitive_mask canonical list.
 _TOKEN_VALUE_PATTERN = _re.compile(
     r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+"
-    + r"|"
-    + GITHUB_PAT_PATTERN.pattern
-    + r"|"
-    + AWS_ACCESS_KEY_PATTERN.pattern
+    r"|" + GITHUB_PAT_PATTERN.pattern + r"|" + AWS_ACCESS_KEY_PATTERN.pattern
 )
 
 
@@ -4079,9 +4076,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     scoped_state = dict(state)
     scoped_state["run_context"] = scoped_run_context
 
-    run_id: str = str(state.get("_run_id", ""))
-    pipeline_id: str = str(state.get("_pipeline_id", ""))
-    org_id: str = str(state.get("_org_id", ""))
+    _run_id = state.get("_run_id")
+    _pipeline_id = state.get("_pipeline_id")
+    _org_id = state.get("_org_id")
+    run_id: str = str(_run_id) if _run_id is not None else ""
+    pipeline_id: str = str(_pipeline_id) if _pipeline_id is not None else ""
+    org_id: str = str(_org_id) if _org_id is not None else ""
 
     # FAR-296 mode split: llm mode renders the prompt + agent_command through
     # the SandboxedEnvironment; script mode runs script_command VERBATIM —

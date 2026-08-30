@@ -6,11 +6,11 @@ of the ``EvidenceResult`` values: ``has_work`` | ``verified_empty`` |
 ``unverifiable``. ``unverifiable`` never fires a flag — downstream renders a
 muted "work could not be verified" notice instead.
 
-The table is deliberately NOT org-scoped: it carries no ``organisation_id``
-column. Rows are written/read only by the harness probe machinery with an
-explicit run_id; the UNIQUE(run_id, node_id) primary key is the tenant anchor.
-A surrogate ``id`` is omitted — the composite PK IS the natural key, matching
-the §15.12 schema diff exactly.
+The table is org-scoped (migration 0133 added ``organisation_id`` NOT NULL,
+FK -> organisations, plus ``ENABLE``/``FORCE ROW LEVEL SECURITY`` and the
+``rls_org_isolation`` policy), sourced from the parent run's org. A surrogate
+``id`` is omitted — the composite ``(run_id, node_id)`` PK IS the natural key,
+matching the §15.12 schema diff exactly.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ class RunEvidence(Base):
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)

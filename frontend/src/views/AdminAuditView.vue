@@ -89,7 +89,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
-          <input aria-label="date"
+          <input :aria-label="$t('views.AdminAuditView.from')"
             v-model="filterDateFrom"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -108,7 +108,7 @@
         <div>
           <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
           <Select
-  aria-label="Target Type"
+  :aria-label="$t('views.AdminAuditView.target_type')"
   v-model="filterTargetType"
   :placeholder="$t('views.AdminAuditView.target_type')"
   data-testid="admin-audit-target-type"
@@ -220,22 +220,15 @@
                 <button
                   type="button"
                   class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :aria-label="'Expand event ' + event.id"
+                  :aria-label="$t('views.AdminAuditView.expand_event', { id: event.id })"
                   :data-testid="'admin-audit-event-expand-' + event.id"
                   @click.stop="toggleExpand(event.id)"
                 >
-                  <svg
+                  <ChevronDown
                     class="h-4 w-4 transition-transform"
                     :class="{ 'rotate-180': expandedId === event.id }"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
                     aria-hidden="true"
-                  >
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
+                  />
                 </button>
               </td>
             </tr>
@@ -313,6 +306,7 @@ import Button from 'primevue/button'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from 'primevue/select'
+import { ChevronDown } from '@lucide/vue'
 
 const { t } = useI18n()
 

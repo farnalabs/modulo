@@ -372,27 +372,47 @@ async def _enqueue_with_retry(
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", run_id, exc)
-        for attempt in (1, 2, 3):
-            await asyncio.sleep(attempt)
-            try:
-                job_id, deduped = await _enqueue_saq(
-                    str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
-                )
-                break
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc2:
-                _log.warning(
-                    "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
-                    attempt,
-                    run_id,
-                    exc2,
-                )
-        else:
+        retried = await _retry_enqueue_saq(run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix)
+        if retried is None:
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
+        job_id, deduped = retried
     await _record_saq_job_session(run_id, org_id, job_id)
     return ("deduped" if deduped else "enqueued", job_id)
+
+
+async def _retry_enqueue_saq(
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    queue_name: str,
+    job_type: str,
+    resume_data: dict[str, Any] | None,
+    *,
+    key_suffix: str | None,
+) -> tuple[str, bool] | None:
+    """Retry the SAQ enqueue a bounded number of times.
+
+    Returns ``(job_id, deduped)`` once an attempt succeeds, or ``None`` when
+    every retry failed (the caller then marks the run ``enqueue_failed`` for
+    ``dispatcher_reconcile`` recovery). Must not be called on the fail-fast
+    (webhook) path.
+    """
+    for attempt in (1, 2, 3):
+        await asyncio.sleep(attempt)
+        try:
+            return await _enqueue_saq(
+                str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc2:
+            _log.warning(
+                "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
+                attempt,
+                run_id,
+                exc2,
+            )
+    return None
 
 
 async def dispatch_run(

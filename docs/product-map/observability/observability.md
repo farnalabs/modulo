@@ -9,6 +9,7 @@ code:
   - backend/src/modulo/api/routes/admin_monitor_config.py
   - backend/src/modulo/api/routes/error_notification_rules.py
   - backend/src/modulo/core/error_tracking/
+  - backend/src/modulo/otel_bridge/
   - backend/src/modulo/db/crud/error_tracking.py
   - backend/src/modulo/db/crud/observability.py
   - backend/src/modulo/db/models/error_event.py
@@ -23,10 +24,20 @@ unit-tests:
   - backend/tests/unit/api/test_error_forwarder_config.py
   - backend/tests/unit/api/test_admin_monitor_config.py
   - backend/tests/unit/api/test_error_notification_rules_route.py
+  - backend/tests/unit/error_tracking/test_error_ingestion.py
+  - backend/tests/unit/error_tracking/test_error_dashboard.py
+  - backend/tests/unit/error_tracking/test_error_alerting.py
+  - backend/tests/unit/error_tracking/test_error_metrics.py
+  - backend/tests/unit/error_tracking/test_alert_dispatcher.py
+  - backend/tests/unit/error_tracking/test_forwarders.py
+  - backend/tests/unit/error_tracking/test_saq_hooks.py
 bdd:
   - backend/tests/bdd/features/observability/metrics.feature
   - backend/tests/bdd/features/observability/error_forwarders.feature
   - backend/tests/bdd/features/observability/monitor_config.feature
+  - backend/tests/bdd/features/observability/otel_traces.feature
+  - backend/tests/bdd/features/errors/failed_state.feature
+  - backend/tests/bdd/features/errors/retry.feature
   - backend/tests/bdd/features/error_tracking/error_dashboard.feature
   - backend/tests/bdd/features/error_tracking/error_ingestion.feature
   - backend/tests/bdd/features/error_tracking/error_notifications.feature
@@ -103,3 +114,9 @@ browser-monitoring config). Surfaces: `/admin/errors`, `/admin/errors/:id`,
   the `/api/v1/errors*` + `/api/v1/settings/observability` +
   `/api/v1/admin/monitor-config` routes, the error-observability BDD features,
   and the observability-forwarder-monitor unit suites. Status: covered.
+- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+  had added a second `feat-observability` tracker at `monitor/observability.md`,
+  breaking the one-entry-per-feature invariant. This entry is retained; the
+  duplicate's unique citations (`otel_bridge/`, the seven `error_tracking` unit
+  suites, and the `otel_traces` / `errors/failed_state` / `errors/retry` BDD
+  features) were folded in here. Status: covered.

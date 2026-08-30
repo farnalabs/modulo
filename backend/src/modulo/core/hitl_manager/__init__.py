@@ -692,9 +692,9 @@ class HITLManager:
             try:
                 _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), gate_id=gate_id)
             except ExpiredSignatureError as err:
-                raise ClaimTokenExpiredError() from err
+                raise ClaimTokenExpiredError from err
             except JWTError as err:
-                raise ClaimTokenInvalidError() from err
+                raise ClaimTokenInvalidError from err
 
         stmt = (
             update(HitlClaim)
@@ -726,10 +726,10 @@ class HITLManager:
             if existing.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
             if existing.claim_token is None:
-                raise ClaimTokenExpiredError()
+                raise ClaimTokenExpiredError
             if existing.claim_token != claim_token:
-                raise ClaimTokenInvalidError()
-            raise ClaimTokenExpiredError()
+                raise ClaimTokenInvalidError
+            raise ClaimTokenExpiredError
         gate = await session.get(HitlClaim, claim_id, populate_existing=True)
         if gate is None:
             raise GateVanishedError(run_id, gate_id, "decided")

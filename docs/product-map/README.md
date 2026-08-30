@@ -134,15 +134,17 @@ Fresh entries for these features are added to the graph below as behaviour track
 Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
-> **Known gap (2026-08-27 product-map walk):** the following registered manifest
-> features still lack a behaviour-tracker entry here and are therefore absent from the
-> feature graph's human-readable layer: `feat-analytics`, `feat-auth`,
-> `feat-connectors` (behaviours are tracked inline in `manifest.yaml`), `feat-costs`,
-> `feat-dashboard`, `feat-environments`, `feat-evals`, `feat-feedback`, `feat-guardrails`,
-> `feat-lifecycle-maps`, `feat-observability`, `feat-onboarding`, `feat-org`,
-> `feat-plugins`, `feat-product-analytics`, `feat-remy`, `feat-runs`,
-> `feat-runtime`, `feat-sso`, `feat-system-config`, `feat-system-orgs`,
-> `feat-variants`.
+> **Known gaps:** registered manifest features that still lack a behaviour-tracker
+> entry here are listed once, at the end of this file — see
+> [Known graph gaps](#known-graph-gaps). Keeping a single list stops the two copies
+> drifting apart (they did: the older inline copy still named features whose trackers
+> had already landed in the index below).
+
+### Admin
+- [feat-product-analytics](admin/product-analytics.md) => PRD N/A
+
+### Analytics
+- [feat-analytics](analytics/analytics.md) => PRD N/A
 
 ### Audit
 - [feat-audit](audit/audit-trail.md) => PRD N/A
@@ -152,6 +154,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
+- [feat-onboarding](auth/onboarding.md) => PRD N/A
 
 ### Configure
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
@@ -162,9 +165,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
+- [feat-core-ssrf](core/ssrf.md) => PRD N/A
+- [feat-core-secrets-backend](core/secrets-backend.md) => PRD N/A
 
 ### Improve
 - [feat-evals](improve/evals.md) => PRD N/A
+- [feat-variants](improve/variants.md) => PRD N/A
+- [feat-feedback](improve/feedback.md) => PRD 8.20
 
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
@@ -200,3 +207,25 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Triggers
 - [feat-triggers](triggers/trigger-engine.md) => PRD N/A
+
+### Build
+- [feat-dashboard](build/dashboard.md) => PRD 8.20
+- [feat-runs](build/runs.md) => PRD N/A
+
+### Monitor
+- [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
+
+### Configure
+- [feat-remy](configure/remy.md) => PRD 8.23
+
+### Admin
+- [feat-plugins](admin/plugins.md) => PRD N/A
+
+## Known graph gaps
+
+Registered manifest features with no `docs/product-map/` behaviour-tracker yet (the
+graph stays honest about what remains untracked; each improve-architecture product-map
+walk closes a batch): `feat-auth`, `feat-connectors` (behaviours are tracked inline in
+`manifest.yaml`), `feat-environments`, `feat-lifecycle-maps`, `feat-org`,
+`feat-runtime`, `feat-sso`, `feat-system-config`, `feat-system-orgs` —
+9 registered features remain untracked after this walk.

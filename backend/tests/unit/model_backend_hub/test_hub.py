@@ -98,7 +98,7 @@ async def _broken_health_check() -> HealthResult:
 
 
 async def _cancelled_health_check() -> HealthResult:
-    raise asyncio.CancelledError()
+    raise asyncio.CancelledError
 
 
 class _KWVFakeBackend(ModelBackendBase):
@@ -1007,7 +1007,7 @@ async def test_failover_event_audit_logger_cancelled_propagates():
     hub._fallbacks[primary] = [fallback]
 
     async def _cancel_audit(event: dict[str, Any]) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
         await hub.get(primary, audit_logger=_cancel_audit)
@@ -1161,7 +1161,7 @@ def test_build_backend_plugin_cancelled_propagates():
     from modulo.core.plugin_registry import PluginManifest, PluginRegistry
 
     def _cancelling_builder(api_key: str, model_id: str, **kwargs: Any) -> ModelBackendBase:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     reg = PluginRegistry()
     reg.register_model_backend(

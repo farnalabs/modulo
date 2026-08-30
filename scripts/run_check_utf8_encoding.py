@@ -92,7 +92,7 @@ def main() -> int:
                 print("  Fixed: removed UTF-8 BOM", file=sys.stderr)
             continue
 
-        if data.startswith(_UTF16_LE_BOM) or data.startswith(_UTF16_BE_BOM):
+        if data.startswith((_UTF16_LE_BOM, _UTF16_BE_BOM)):
             print(f"UTF-16 BOM found: {rel}", file=sys.stderr)
             found = True
             if fix:

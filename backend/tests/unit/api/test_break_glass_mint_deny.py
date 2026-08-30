@@ -100,6 +100,21 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
     "admin_rotation.py": {
         "rotate_key",
     },
+    # admin org API-key regeneration (break-glass secret mint)
+    "admin.py": {
+        "admin_regenerate_api_key",
+    },
+    # error forwarder configs — stores Sentry dsn, DataDog api_key,
+    # PagerDuty routing_key, Rollbar access_token, OpsGenie api_key.
+    "error_forwarder_config.py": {
+        "configure_forwarder",
+        "delete_forwarder",
+        "restore_forwarder",
+    },
+    # org email settings — stores the encrypted smtp_password.
+    "admin_email.py": {
+        "admin_update_email_settings",
+    },
     # product-analytics identity rotation — mints a new HMAC secret.
     "product_analytics_identity.py": {
         "rotate_identity_secret",

@@ -1290,7 +1290,7 @@ def test_write_fanout_cancellation_preserves_partial_outcomes(monkeypatch):
         nonlocal call_count
         call_count += 1
         if call_count == 2:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
         return await original(self, request, surface=surface, request_timeout=request_timeout, max_retries=max_retries)
 
     monkeypatch.setattr(RestConnector, "_execute", cancelling)

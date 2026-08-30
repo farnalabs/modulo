@@ -43,6 +43,15 @@ regression that silently weakens the suite:
   tuple twin of the empty-container lens; an empty tuple is falsy, so these
   should read ``assert not x`` / ``assert x`` (``is``/``is not`` against ``()``
   is deliberately left alone because ``()`` is interned)
+- ``assert x == b""`` / ``assert x != b""`` against an empty bytes literal —
+  the bytes twin of the empty-string lens; an empty ``b""`` is falsy, so these
+  should read ``assert not x`` / ``assert x``. The membership forms
+  ``assert x in b""`` / ``assert x not in b""`` are dead too — an empty bytes
+  can never contain anything, so ``in`` always FAILS and ``not in`` always
+  PASSES no matter what ``x`` evaluates to. The sibling ``bytes()``
+  call-form lens and the ``b""`` constant truthiness lens cannot see the
+  ``b""`` literal because it parses as a plain ``ast.Constant`` (not a call or
+  a standalone constant assertion)
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -288,6 +297,19 @@ regression that silently weakens the suite:
   too (``assert row['x'] and not row['x']``); complementary comparisons
   written with mirrored operators (``x == y or x != y``) are left alone
   because they need operator algebra rather than syntax to prove
+- ``assert x or True`` / ``assert x and False`` (their constant-literal
+  cousins, in either operand position, in a chain, and the ``not``-wrapped
+  twins) — a boolean assertion whose test expression couples a value with a
+  *literal constant* that fixes the verdict. A truthy constant under ``or``
+  (``True``, ``1``, ``"y"``, ``2.5``, ...) is an identity element that absorbs
+  the other operand(s), so the assert ALWAYS PASSES whatever the code under
+  test does; a falsy constant under ``and`` (``False``, ``0``, ``None``, ``""``,
+  ...) is an absorbent element that makes the assert ALWAYS FAIL. ``not``
+  wrapped around the compound inverts the verdict. Only a literal
+  ``ast.Constant`` operand counts (complex values excluded, mirroring the
+  literal-constant lens), and a constant in the *wrong* position (falsy under
+  ``or``, truthy under ``and``) does not pin the outcome and is left alone —
+  that is the legitimate default/refinement idiom
 - wall-clock sleeps with a *computed* duration — ``time.sleep(<name>)`` /
   ``asyncio.sleep(<name>)`` where the argument is a bare name rather than a
   literal constant. A duration computed from other values (a refill rate, a
@@ -366,6 +388,10 @@ regression that silently weakens the suite:
   ``monkeypatch.setenv()``/``delenv()`` restore the value at teardown
   automatically and are the pytest-blessed form; a function that requests
   ``monkeypatch`` is left alone even when it mutates ``os.environ`` directly
+  (reads — ``os.getenv``/``os.environ.get``/subscript loads — and the
+  module-level ``os.environ.setdefault(...)`` bootstrap that pins
+  ``DATABASE_URL`` once at import time are deliberately left alone, since
+  those are idempotent configuration rather than between-test leakage)
 - an ``assert`` that is *unreachable* because an earlier top-level statement
   in the same function body unconditionally ``return``s or ``raise``s before
   it — the verification can never execute, so the test reports green no
@@ -397,37 +423,6 @@ regression that silently weakens the suite:
   ``def``/``class``/``@pytest.fixture`` helpers are left alone — those are the
    legitimate local-helper spellings
 
-- a freshly-constructed Mock nested *inside* a container literal in an
-  ``assert`` — ``assert result == {'status': MagicMock()}``,
-  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
-  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
-  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
-  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
-  truthy) ALWAYS PASS — every one decided at source time, never by the code
-  under test. This is the nested-or-direct-container twin of the Mock-
-  constructor lens, which owns only the *direct* positions (the assert's test
-  expression, a ``not``-wrap, or a single comparison operand): a fresh
-  constructor buried in a list/dict/tuple/set literal is a different AST shape
-  that the direct lens provably misses. The configure-then-assert fix is the
-  same — configure the double (``return_value``/``side_effect``) and verify
-  through ``assert_called*``/attribute checks instead of comparing to a
-  constructor call
-- a direct mutation of the process environment made without the ``monkeypatch``
-  fixture in scope — subscript set/delete on the ``os.environ`` mapping
-  (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
-  ``from os import environ`` twin), the mutating ``environ`` methods
-  (``pop``/``update``/``setdefault``/``clear`` and their ``__*__`` / pydantic
-  twins), and ``os.putenv()``/``os.unsetenv()``. A test that mutates
-  ``os.environ`` and never restores it leaks state into every test that runs
-  afterwards, so the suite becomes order-dependent: a test can pass alone and
-  silently corrupt a sibling (or be corrupted by one) in the full run.
-  ``monkeypatch.setenv()``/``monkeypatch.delenv()`` restore the value at
-  teardown automatically and are the pytest-blessed form — a function that
-  requests ``monkeypatch`` is left alone even when it mutates ``os.environ``
-  directly. Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
-  module-level ``os.environ.setdefault(...)`` bootstrap (the   ``conftest.py``
-  pattern that pins ``DATABASE_URL`` once at import time, which is idempotent
-  configuration rather than between-test leakage) are deliberately left alone
 - a reseed of the process-global random generator made without the
   ``monkeypatch`` fixture in scope — ``random.seed(...)`` (the ``import random``
   attribute form and its ``from random import seed`` twin). Seeding resets the
@@ -537,6 +532,64 @@ regression that silently weakens the suite:
    import sleep`` bare-name spelling is deliberately not matched because a local
    ``sleep`` helper (e.g. an asyncio-driven retry) cannot be distinguished
    statically
+- an ``assert`` placed in a ``finally:`` clause — an assertion that only runs
+  during unwinding either masks the failure that triggered the unwind (an
+  ``AssertionError`` raised from ``finally`` *replaces* the exception
+  propagating out of ``try``/``except``, discarding the original traceback a
+  reader needs to find the real regression) or verifies nothing that a check
+  on the normal path could not express more clearly. This is the unwind-twin
+  of the assert-inside-``except`` lens: there the assert masks the exception
+  that dispatched the handler, here it masks whatever exception the
+  ``finally`` is unwinding past. Move the check to the normal path (after the
+  ``try``/``except``/``else``/``finally`` block) or into the ``except``
+  handler that owns the failure being asserted, so an assertion failure names
+  the real error instead of replacing it
+- a *name-spelled* ``except BaseException:`` handler — the bare ``except:``
+  spelling is already owned by the bare-except lens, but naming
+  ``BaseException`` explicitly is the same swallow wearing a mask:
+  ``BaseException`` is the base of ``KeyboardInterrupt``/``SystemExit``/
+  ``GeneratorExit`` as well as ``Exception``, so a handler that names it
+  catches the control-flow signals a test can never want, silently converting
+  an interrupt during a hang into a false green. The tuple twin
+  (``except (ValueError, BaseException):``) is covered too; ``except
+  Exception:`` and tuples of concrete exceptions are the sanctioned narrow
+  form and are left alone
+- an unbounded ``while`` loop with a statically-foldable constant-true
+  condition (``while True:``, ``while 1:``, ...) in test-support code — a
+  loop whose condition is a language-level constant can never become false on
+  its own and terminates only via a ``break`` targeting it or a
+  ``return``/``raise`` unwinding the enclosing function, so one with none of
+  those reachable is an infinite loop: it hangs CI indefinitely the way an
+  unbounded subprocess or thread join does, and the failure is opaque (the
+  runner just stops). Add an explicit ``break`` on a completion condition, or
+  drive the loop with a real (non-constant) guard. Loops whose condition is a
+  name, call, or comparison are left alone — those can change through side
+  effects
+- ``@pytest.mark.skip``/``@pytest.mark.skipif``/``@pytest.mark.xfail`` (and the
+  bare imported ``@skip``/``@skipif``/``@xfail`` twins) applied to a
+  ``@pytest.fixture`` function — pytest only honours selection markers on
+  *collected test items*, and a fixture is not one, so the marker is silently
+  ignored: a ``skipif`` that was meant to gate the tests built from the
+  fixture never triggers, and the coverage loss is invisible because nothing
+  reports the marker as dead. This is the fixture twin of the
+  ``unconditional-skip-marker`` lens, which deliberately leaves fixtures
+  alone. Hoist the gate into the fixture body (``pytest.skip(...)`` inside an
+  ``if``), where it takes effect when the fixture is requested
+- ``asyncio.wait_for(...)`` / ``asyncio.wait(...)`` without a timeout bound —
+  ``asyncio.wait_for(coro)`` with no ``timeout`` argument, or an explicit
+  ``timeout=None`` (the API default, meaning "wait forever"), suspends until
+  the awaited coroutine finishes with no bound, so a coroutine that never
+  completes hangs the test — and every test after it on the same event loop —
+  indefinitely, and the failure is opaque (the runner just stops). The same
+  applies to ``asyncio.wait(tasks)``, whose ``timeout`` also defaults to
+  ``None``. This is the asyncio sibling of the unbounded-subprocess and
+  unbounded-thread-``join`` lenses, which guard the child-process and
+  in-process versions of the identical hazard. Always pass an explicit
+  numeric ``timeout=<secs>`` (``wait_for(coro, 5)`` or the keyword form);
+  ``asyncio.wait_for(coro, 0)`` is bounded-by-construction and allowed.
+  Only the ``asyncio.*`` attribute spelling is matched — a local helper named
+  ``wait_for``/``wait`` (e.g. a retry wrapper) cannot be distinguished
+  statically and is deliberately left alone
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -1449,6 +1502,173 @@ def test_empty_tuple_lens_flags_empty_tuple():
         assert not _empty_tuple_comparisons(tree), f"lens should NOT flag:\n{source}"
 
 
+def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose outcome is
+    fixed by an empty ``bytes`` literal (``b""``).
+
+    Two shapes are owned:
+
+    - equality/inequality against ``b""`` — an empty bytes is falsy, so
+      ``assert x == b""`` should read ``assert not x`` and ``assert x != b""``
+      should read ``assert x`` (the literal twin of the ``bytes()`` call-form
+      lens, which cannot see ``b""`` because it parses as an ``ast.Constant``
+      rather than a call)
+    - membership against ``b""`` — an empty bytes can never contain anything,
+      so ``x in b""`` always FAILS and ``x not in b""`` always PASSES; but the
+      check is *asymmetric*: ``b"" in x`` is always True (the empty sequence is a
+      subsequence of every ``bytes`` value), so ``b"" in x`` always PASSES and
+      ``b"" not in x`` always FAILS. The verdict therefore depends on which side
+      the empty literal sits on (element vs container), and must not be derived
+      from the operator alone.
+
+    Equality uses the same exclusions as the empty-string/tuple lenses: a bare
+    name is left alone (it may bind ``None``), and a ``.get(...)`` lookup is
+    left alone (``None`` vs ``b""`` is a meaningful distinction). Membership
+    flags all operands except a literal constant — literal-vs-literal
+    membership (``b"" in b""``) is owned by the literal-comparison lens."""
+    found: list[tuple[int, str]] = []
+
+    def _is_empty_bytes(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, bytes) and node.value == b""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        op = test.ops[0]
+        sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+        if isinstance(op, (ast.Eq, ast.NotEq)):
+            for operand, literal in sides:
+                if not _is_empty_bytes(literal):
+                    continue
+                if isinstance(operand, ast.Name):
+                    continue
+                if (
+                    isinstance(operand, ast.Call)
+                    and isinstance(operand.func, ast.Attribute)
+                    and operand.func.attr == "get"
+                ):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                    continue
+                op_name = "==" if isinstance(op, ast.Eq) else "!="
+                prefer = "assert not ..." if isinstance(op, ast.Eq) else "assert ..."
+                found.append((node.lineno, f"asserts value {op_name} b'' — prefer '{prefer}'"))
+                break
+        elif isinstance(op, (ast.In, ast.NotIn)):
+            # `in`/`not in` are asymmetric: `A in B` asks whether A is a member of
+            # B. The left operand is the *element* and the comparator is the
+            # *container*. The empty literal flips the verdict depending on which
+            # side it occupies, so we must not derive the verdict from `op` alone.
+            element_is_empty = _is_empty_bytes(test.left)
+            container_is_empty = _is_empty_bytes(test.comparators[0])
+            if not (element_is_empty or container_is_empty):
+                continue
+            # The other operand must not itself be a literal constant — literal-vs-
+            # literal membership is owned by the literal-comparison lens.
+            other = test.comparators[0] if element_is_empty else test.left
+            if isinstance(other, ast.Constant):
+                continue
+            op_name = "in" if isinstance(op, ast.In) else "not in"
+            if element_is_empty:
+                # b"" in x is always True; b"" not in x is always False.
+                verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
+            else:
+                # x in b"" is always False; x not in b"" is always True.
+                verdict = "always FAILS" if isinstance(op, ast.In) else "always PASSES"
+            found.append(
+                (
+                    node.lineno,
+                    f"asserts value {op_name} b'' — {verdict} (an empty bytes can never contain anything)",
+                )
+            )
+    return found
+
+
+def test_no_empty_bytes_tautologies():
+    """``assert x == b""`` / ``assert x != b""`` compare a value against an empty
+    bytes literal — the bytes twin of the empty-string lens. An empty ``b""`` is
+    falsy, so ``assert x == b""`` should read ``assert not x`` and ``assert x !=
+    b""`` should read ``assert x``. The membership forms ``assert x in b""`` /
+    ``assert x not in b""`` are already dead as written: an empty bytes can never
+    contain an element, so ``in`` always FAILS (an unconditionally red test) and
+    ``not in`` always PASSES (a silent false green). The sibling lenses miss
+    ``b""`` entirely — the empty-container lens matches ``list``/``dict``/
+    ``set``/``tuple`` literal nodes, the empty-string lens matches ``str``
+    constants, the ``bytes()`` call-form lens matches a zero-argument ``ast.Call``,
+    the constant-literal lens only fires when ``b""`` is the *entire* assert test
+    expression, and literal-vs-literal membership is owned by the
+    literal-comparison lens."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_bytes_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-bytes assertion(s).\n"
+        "An empty b'' is falsy and can never contain anything; write "
+        "'assert not <expr>' / 'assert <expr>' instead of '== b\"\"' / '!= b\"\"'\n"
+        "and drop the dead membership check.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_bytes_tautology_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the empty-bytes lens: must flag
+    ``== b""``/``!= b""`` on attribute/subscript/call/await operands (either
+    operand order) and ``in b""``/``not in b""`` on any non-literal operand;
+    ignore bare names, ``.get(...)``, non-empty bytes, empty str/tuple/etc
+    literals owned by sibling lenses, and literal-vs-literal membership."""
+    positive_sources = [
+        "def test_foo():\n    assert result.blob == b''\n",
+        "def test_foo():\n    assert result['blob'] != b''\n",
+        "def test_foo():\n    assert fetch_blob() == b''\n",
+        "def test_foo():\n    assert await fetch_blob() == b''\n",
+        "def test_foo():\n    assert b'' != result['blob']\n",
+        "def test_foo():\n    assert needle in b''\n",
+        "def test_foo():\n    assert needle not in b''\n",
+        "def test_foo():\n    assert b'' not in haystack\n",
+        "def test_foo():\n    assert result.blob[:1] == b''\n",
+    ]
+    # Membership sources mapped to their *correct* verdict (element-side empty
+    # literal flips the In/NotIn outcome relative to container-side empty).
+    positive_verdicts = {
+        "def test_foo():\n    assert needle in b''\n": "always FAILS",
+        "def test_foo():\n    assert needle not in b''\n": "always PASSES",
+        "def test_foo():\n    assert b'' not in haystack\n": "always FAILS",
+    }
+    for source in positive_sources:
+        tree = ast.parse(source)
+        findings = _empty_bytes_tautologies(tree)
+        assert findings, f"lens should flag:\n{source}"
+        if source in positive_verdicts:
+            expected = positive_verdicts[source]
+            assert any(expected in detail for _, detail in findings), (
+                f"lens should report '{expected}' for:\n{source}\n got: {findings}"
+            )
+
+    negative_sources = [
+        "def test_foo():\n    assert x == b''\n",
+        "def test_foo():\n    assert load_config().get('blob') == b''\n",
+        "def test_foo():\n    assert result.blob == b'\\x00\\x01'\n",
+        "def test_foo():\n    assert result.blob == b''.join(parts)\n",
+        "def test_foo():\n    assert b'' in b''\n",
+        "def test_foo():\n    assert needle in b'abc'\n",
+        "def test_foo():\n    assert result.blob == ''\n",
+        "def test_foo():\n    assert result.blob == ()\n",
+        "def test_foo():\n    assert result.blob == bytes()\n",
+        "def test_foo():\n    assert b''\n",
+        "def test_foo():\n    assert not b''\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_bytes_tautologies(tree), f"lens should NOT flag:\n{source}"
+
+
 _EMPTY_BUILTIN_CALLS = frozenset({"list", "dict", "set", "tuple", "bytes", "bytearray", "frozenset"})
 """Zero-argument builtin calls that always produce an empty (falsy) container.
 
@@ -1753,6 +1973,105 @@ def test_no_assert_inside_except():
         f"Found {len(violations)} assertion(s) inside except handler(s).\n"
         "Use pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
     )
+
+
+def _assert_inside_finally(tree: ast.AST) -> list[ast.Assert]:
+    """Return the ``ast.Assert`` nodes reachable from any ``finally`` body.
+
+    Mirrors the except-handler lens: a ``finally`` body runs on *every* exit
+    path — success, ``return``/``break``/``continue``, and exceptions alike —
+    so an assertion placed there also runs when the ``try`` body already
+    failed. When both the body and the cleanup assertion fail, the
+    ``AssertionError`` from the ``finally`` block silently replaces the
+    original exception (a ``finally`` body's exception always takes precedence
+    over the one being propagated), discarding the traceback that explains why
+    the code under test broke."""
+    found: list[ast.Assert] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try) or not node.finalbody:
+            continue
+        for stmt in node.finalbody:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Assert):
+                    found.append(sub)
+    return found
+
+
+def test_no_assert_inside_finally():
+    """An ``assert`` nested in a ``finally`` block is the masking hazard twin of
+    the except-handler lens (``test_no_assert_inside_except``): the block runs
+    on every exit path, so its assertions execute even when the ``try`` body
+    already failed, and if such an assertion fires while an exception is
+    propagating, the ``AssertionError`` silently replaces the original
+    exception — losing the traceback that explains why the code under test
+    raised. Assert cleanup invariants in the ``try``/``with`` body *before* the
+    ``finally`` handles teardown, or assert on the specific path the check
+    verifies."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for assert_node in _assert_inside_finally(tree):
+            violations.append(f"  {rel}:{assert_node.lineno}  assert inside finally block")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) inside finally block(s).\n"
+        "A finally block runs on every exit path; an assert there can mask the\n"
+        "original exception when both the body and the cleanup check fail.\n"
+        "Assert cleanup invariants in the try/with body, before the finally teardown.\n" + "\n".join(violations)
+    )
+
+
+def test_assert_inside_finally_lens_flags_masking_hazard():
+    """Synthetic positive/negative control for the assert-in-finally lens: it
+    must flag an assert reachable from a ``finally`` body (however deeply
+    nested) and ignore asserts in the ``try`` body, an ``except`` handler, a
+    ``finally`` that only runs cleanup, or a plain ``pytest.raises`` context."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleaned\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    finally:\n"
+            "        with ctx:\n"
+            "            bar()\n"
+            "            assert bar.done\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "    finally:\n"
+            "        assert cleanup()\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    finally:\n"
+            "        def helper():\n"
+            "            assert finished()\n"
+            "        helper()\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _assert_inside_finally(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        assert foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    try:\n        foo()\n    except ValueError:\n        assert err\n",
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        pass\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _assert_inside_finally(tree), f"lens should NOT flag:\n{source}"
 
 
 _RAISES_CONTEXT_NAMES = frozenset(
@@ -2847,6 +3166,119 @@ def test_unbounded_thread_join_lens_flags_hang_risks():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unbounded_thread_join_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``asyncio.wait_for`` /
+    ``asyncio.wait`` call without a timeout bound.
+
+    ``asyncio.wait_for(coro)`` with no ``timeout`` argument — or an explicit
+    ``timeout=None``, the API default meaning "wait forever" — suspends until
+    the awaited coroutine finishes with no upper bound, so a coroutine that
+    never completes hangs the test, and every test after it on the same event
+    loop, indefinitely. ``asyncio.wait(tasks)`` has the same contract and the
+    same ``None`` default. This is the asyncio twin of the unbounded-subprocess
+    and unbounded-thread-``join`` safety nets: bound the wait so a hang fails
+    loudly as a ``TimeoutError`` with a named bound instead of stalling the
+    whole run. ``wait_for(coro, 0)`` and any non-``None`` ``timeout`` (literal,
+    name, call) are bounded and left alone. Only the ``asyncio.*`` attribute
+    spelling is matched; a local helper named ``wait_for``/``wait`` cannot be
+    distinguished statically and is deliberately not flagged."""
+    found: list[tuple[int, str]] = []
+
+    def _timeout_is_bounded(call: ast.Call) -> bool:
+        if call.keywords:
+            for kw in call.keywords:
+                if kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                    return True
+        if len(call.args) >= 2:
+            second = call.args[1]
+            if not (isinstance(second, ast.Constant) and second.value is None):
+                return True
+        return False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("wait_for", "wait"):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "asyncio":
+            continue
+        if not node.args:
+            continue
+        if _timeout_is_bounded(node):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} — unbounded asyncio {'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
+                "with no timeout; pass timeout=<secs> so a hung coroutine fails loudly "
+                "instead of stalling the whole test run",
+            )
+        )
+    return found
+
+
+def test_no_unbounded_async_wait():
+    """An ``asyncio.wait_for``/``asyncio.wait`` called without a timeout bound
+    can hang the whole test run: a coroutine or task that never completes makes
+    the await wait forever, the runner simply stops, and every test after it on
+    the same event loop is lost without a trace. This is the asyncio sibling of
+    the unbounded-subprocess and unbounded-thread-``join`` lenses, which guard
+    the child-process and in-process versions of the same hazard. Always pass
+    an explicit numeric ``timeout=<secs>`` so a hang surfaces as a bounded
+    ``TimeoutError`` instead of stalling CI."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unbounded_async_wait_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unbounded asyncio wait call(s).\n"
+        "Give every asyncio.wait_for / asyncio.wait an explicit timeout bound: "
+        "pass timeout=<secs> (a None or omitted timeout means 'wait forever' "
+        "and can hang the whole test run).\n" + "\n".join(violations)
+    )
+
+
+def test_unbounded_async_wait_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the unbounded-async-wait lens:
+    it must flag ``asyncio.wait_for``/``asyncio.wait`` calls with an omitted or
+    ``None`` timeout (positional or keyword, awaited or not), and ignore
+    bounded calls (numeric literal or bound name), ``wait_for(coro, 0)``,
+    non-``asyncio`` callers, and local helpers that merely share the name."""
+    positive_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), None)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=None)\n",
+        "async def test_foo():\n    await asyncio.wait(futures)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=None)\n",
+        "async def test_foo():\n    asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    task = asyncio.create_task(coro())\n    await asyncio.wait_for(task)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unbounded_async_wait_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=TIMEOUT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 0)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=10)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=SHORT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(proc.communicate(), 10)\n",
+        "def test_foo():\n    wait_for(a)\n",
+        "def test_foo():\n    wait(a)\n",
+        "async def test_foo():\n    await socket.wait()\n",
+        "async def test_foo():\n    await asyncio.gather(coro())\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unbounded_async_wait_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_compound_boolean_assertions():
@@ -5249,6 +5681,147 @@ def test_complementary_boolean_lens_flags_fixed_outcomes():
         assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+def _constant_boolean_absorbent_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression is — or ``not``-wraps — a ``BoolOp`` whose verdict a literal
+    constant operand pins.
+
+    An ``or`` disjunction that contains a truthy literal constant (``assert x or
+    True``, ``assert x or 1``, ``assert x or "y"``) short-circuits to a truthy
+    value for every input, so the assert ALWAYS PASSES no matter what the code
+    under test does; an ``and`` conjunction that contains a falsy literal
+    constant (``assert x and False``, ``assert x and 0``, ``assert x and None``)
+    short-circuits to a falsy value, so the assert ALWAYS FAILS. Such a constant
+    is an identity/absorbent element for the operator: it pins the outcome and
+    absorbs the value's contribution, a fixed result exactly like the
+    ``assert True``/``assert False`` literal forms but spelled through a
+    compound. ``not`` around the compound (``assert not (x or True)``,
+    ``assert not (x and False)``) inverts the verdict. Only *literal*
+    ``ast.Constant`` operands of the top-level ``BoolOp`` are counted;
+    complex-valued constants are deliberately excluded (their truthiness is an
+    edge case the sibling literal-constant lens also skips). A falsy constant
+    under ``or`` (``assert x or None``) and a truthy constant under ``and``
+    (``assert x and True``) do NOT pin the outcome — those are the legitimate
+    default/refinement idioms and are left alone. These are almost always a
+    leftover from stripping a real condition down while debugging, where the
+    operator was pasted in with a throwaway literal."""
+    found: list[tuple[int, str]] = []
+
+    def _absorbing_constant(node: ast.BoolOp) -> ast.Constant | None:
+        is_and = isinstance(node.op, ast.And)
+        for value in node.values:
+            if not isinstance(value, ast.Constant) or isinstance(value.value, complex):
+                continue
+            constant = value.value
+            if (is_and and not constant) or (not is_and and constant):
+                return value
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        negated = False
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            negated = True
+            test = test.operand
+        if not isinstance(test, ast.BoolOp):
+            continue
+        absorbing = _absorbing_constant(test)
+        if absorbing is None:
+            continue
+        is_and = isinstance(test.op, ast.And)
+        # ``or``+truthy and ``and``+falsy pass; the negated twins invert.
+        verdict = "always PASSES" if is_and == negated else "always FAILS"
+        operator = "and" if is_and else "or"
+        found.append(
+            (
+                node.lineno,
+                f"assert {'not ' if negated else ''}{ast.unparse(test)} — the "
+                f"{'falsy ' if is_and else 'truthy '}constant {ast.unparse(absorbing)} under "
+                f"'{operator}' absorbs the other operand(s), so the assert {verdict} "
+                "regardless of the code under test",
+            )
+        )
+    return found
+
+
+def test_no_constant_absorbed_boolean_assertions():
+    """An ``assert`` whose test expression is a ``BoolOp`` coupling a value
+    with a literal constant that pins the verdict is dead code with a fixed
+    outcome. ``or`` with a truthy constant (``assert x or True``,
+    ``assert x or 1``) ALWAYS PASSES and ``and`` with a falsy constant
+    (``assert x and False``, ``assert x and 0``) ALWAYS FAILS, no matter what
+    the code under test does — a constant-absorbed twin of the literal-constant
+    and complementary-boolean lenses that needs its own AST shape (a ``BoolOp``
+    with a ``Constant`` operand, which the literal-constant lens provably
+    misses because it only reads the whole test expression, and the
+    complementary lens misses because it hunts paired operands). These are
+    almost always a leftover from stripping a condition down while debugging;
+    assert the real behaviour instead."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _constant_boolean_absorbent_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) whose verdict a constant boolean operand absorbs.\n"
+        "'or' joined with a truthy constant is always True (ALWAYS PASSES) and 'and' joined with "
+        "a falsy constant is always False (ALWAYS FAILS), so the outcome never depends on the "
+        "code under test.\nAssert the real condition instead.\n" + "\n".join(violations)
+    )
+
+
+def test_constant_absorbed_boolean_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the constant-absorbed-boolean
+    lens: must flag an ``assert`` whose top-level ``BoolOp`` (or a single
+    ``not`` around it) couples a value with a literal constant that pins the
+    result — truthy constants under ``or``, falsy constants under ``and``, in
+    either operand position and inside a longer chain — and ignore constant
+    operands that do NOT pin the verdict (falsy under ``or``, truthy under
+    ``and``), single operands, comparisons/``not``-wrapped comparisons, and the
+    complementary shapes owned by the sibling lens."""
+    positive_sources = [
+        "def test_foo():\n    assert x or True\n",
+        "def test_foo():\n    assert 1 or x\n",
+        "def test_foo():\n    assert x or 2.5\n",
+        "def test_foo():\n    assert x or 'y'\n",
+        "def test_foo():\n    assert x and False\n",
+        "def test_foo():\n    assert 0 and x\n",
+        "def test_foo():\n    assert x and None\n",
+        "def test_foo():\n    assert x and ''\n",
+        "def test_foo():\n    assert not (x or True)\n",
+        "def test_foo():\n    assert not (x and False)\n",
+        "def test_foo():\n    assert x or status or 1\n",
+        "def test_foo():\n    assert x and status and 0\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _constant_boolean_absorbent_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x or None\n",
+        "def test_foo():\n    assert x or False\n",
+        "def test_foo():\n    assert x and True\n",
+        "def test_foo():\n    assert 1 and x\n",
+        "def test_foo():\n    assert x or y\n",
+        "def test_foo():\n    assert x and y\n",
+        "def test_foo():\n    assert x\n",
+        "def test_foo():\n    assert True\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert x == 1 or y == 2\n",
+        "def test_foo():\n    assert result is not None and result.status == 'ok'\n",
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert x or not x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _constant_boolean_absorbent_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``time.sleep(<name>)`` /
     ``asyncio.sleep(<name>)`` whose duration is a bare name rather than a
@@ -5497,7 +6070,7 @@ def test_any_equality_lens_flags_fixed_outcomes():
         assert not _any_equality_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-_CONTAINER_LITERALS = (ast.List, ast.Dict, ast.Set, ast.Tuple)
+_CONTAINER_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.Tuple)
 
 
 def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
@@ -5530,7 +6103,7 @@ def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, s
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             negated = True
             test = test.operand
-        if not isinstance(test, _CONTAINER_LITERALS):
+        if not isinstance(test, _CONTAINER_LITERAL_NODES):
             continue
         if isinstance(test, ast.Dict):
             if any(key is None for key in test.keys):
@@ -6972,7 +7545,473 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
         assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+_SELECTION_MARKERS = frozenset({"skip", "skipif", "xfail"})
+"""Selection/outcome marker names that are silently ignored when applied to a
+fixture. ``@pytest.mark.parametrize`` is deliberately NOT in the set: pytest
+honours parametrize on a fixture (that is how parametrized fixtures work), and
+``@pytest.mark.asyncio``/``@pytest.mark.anyio`` are behaviour markers, not
+selection markers, so they are left to the async-decorator lenses."""
+
+
+def _selection_marker_on_fixture_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@pytest.fixture``-decorated
+    function that also carries a selection marker — ``@pytest.mark.skip``,
+    ``@pytest.mark.skipif``, ``@pytest.mark.xfail``, or the bare imported
+    ``@skip``/``@skipif``/``@xfail`` spellings.
+
+    pytest only honours selection markers on *collected test items*; a fixture
+    is not collected as an item, so the marker is silently ignored: the tests
+    that request the fixture run unconditionally no matter what condition the
+    ``skipif`` was meant to gate, and nothing in the run reports the marker as
+    dead. Both spellings are covered — the ``@pytest.mark.*`` chain (via
+    ``_is_mark_decorator``) and the bare imported decorator — because a custom
+    ``@skip``/``@xfail`` decorator stacked on a fixture is the same silent
+    no-op either way. ``@pytest.mark.parametrize`` is deliberately left alone
+    (legitimate on fixtures, see ``_SELECTION_MARKERS``), as is a module-level
+    ``pytestmark = pytest.mark.skip`` deselecting the whole module.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _selection_name(dec: ast.AST) -> str | None:
+        name = _decorator_name(dec)
+        if name in _SELECTION_MARKERS:
+            return name
+        if _is_mark_decorator(dec):
+            if isinstance(dec, ast.Call):
+                dec = dec.func
+            if isinstance(dec, ast.Attribute) and dec.attr in _SELECTION_MARKERS:
+                return dec.attr
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        is_fixture = any(_decorator_name(dec) == "fixture" for dec in node.decorator_list)
+        if not is_fixture:
+            continue
+        for dec in node.decorator_list:
+            name = _selection_name(dec)
+            if name is None:
+                continue
+            marker_repr = ast.unparse(dec)
+            found.append(
+                (
+                    dec.lineno,
+                    f"@pytest.mark.{name} on a @pytest.fixture function {node.name!r} — "
+                    "pytest only honours selection markers on collected test items, so this "
+                    "marker is silently ignored: the tests using the fixture run regardless of "
+                    f"the {name} condition. Hoist the gate into the fixture body with "
+                    f"pytest.skip(...) instead ({marker_repr})",
+                )
+            )
+    return found
+
+
+def test_no_selection_markers_on_fixtures():
+    """A ``@pytest.mark.skip``/``skipif``/``xfail`` (or bare ``@skip``/``@skipif``/
+    ``@xfail``) stacked on a ``@pytest.fixture`` function is silently ignored:
+    pytest only honours selection markers on *collected test items*, and a
+    fixture is never collected as one. A ``skipif`` that was meant to gate the
+    tests built from the fixture therefore never triggers — a true condition
+    still runs the tests, and nothing in the run reports the marker as dead —
+    while a reader believes the conditional skip is in force. It is the fixture
+    twin of the ``unconditional-skip-marker`` lens, which deliberately leaves
+    fixtures alone, and the ``skip-without-reason``/``constant-condition-skip``
+    siblings check *reason*/*condition*, not whether the marker is even on a
+    test. Move the gate into the fixture body (``pytest.skip(...)`` behind the
+    real ``if``), where it fires when the fixture is requested."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _selection_marker_on_fixture_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} selection marker(s) on a @pytest.fixture function.\n"
+        "pytest only honours skip/skipif/xfail on collected test items — a fixture is never one,\n"
+        "so the marker is silently ignored and a skipif that was meant to gate the tests built\n"
+        "from the fixture never fires. Hoist the gate into the fixture body with\n"
+        "pytest.skip(...) behind the real if, where it takes effect when the fixture is\n"
+        "requested.\n" + "\n".join(violations)
+    )
+
+
+def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` for every ``assert obj.attr`` /
+    ``assert not obj.attr`` whose attribute is a *method* — evidenced by the
+    same attribute being called (``obj.attr(...)``) elsewhere in the file —
+    but is asserted without trailing parentheses.
+
+    A bare attribute access on a bound method returns the method object
+    itself, which is always truthy; the ``assert`` is therefore a silent
+    false-green (``assert obj.method`` always passes) or a permanent failure
+    (``assert not obj.method`` always fails, since a method object is never
+    falsy). Either way the assertion says nothing about the behaviour under
+    test. The call-site evidence keeps this lens precise: an attribute that
+    is *never* called (a plain boolean/property attribute, e.g.
+    ``assert response.ok``) is a legitimate truthiness check and is left
+    alone; only a demonstrably-invocable method trips it."""
+    called = {
+        ast.dump(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    violations: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            test = test.operand
+        if not isinstance(test, ast.Attribute):
+            continue
+        if ast.dump(test) not in called:
+            continue
+        name = test.attr
+        violations.append((node.lineno, f"assert {name} — bare bound-method reference is always truthy; call {name}()"))
+    return violations
+
+
+def test_no_bound_method_truthiness_asserts():
+    """An ``assert obj.method`` / ``assert not obj.method`` against a bound
+    method (verified to be a method by its use as a call elsewhere in the same
+    file) asserts the method object itself, which is always truthy. The
+    positive spelling is a silent false-green — the test passes regardless of
+    whether ``method()`` would return a truthy value — and the ``not``-wrapped
+    spelling always fails. Both are almost always a missing ``()`` from a
+    forgotten call. The lens only fires when the attribute is demonstrably a
+    method (it is invoked parenthesised elsewhere); a plain truthiness check on
+    a boolean/property attribute (``assert response.ok``) is legitimate."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _bound_method_truthiness_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} truthiness assert(s) against a bare bound method.\n"
+        "assert obj.method() — a bound method object is always truthy, so asserting the bare\n"
+        "reference is a silent false-green (or, under 'not', always fails). Add the calling ()\n"
+        "so the assertion actually exercises the method's return value." + "\n".join(violations)
+    )
+
+
+def test_selection_marker_on_fixture_lens_flags_silent_noops():
+    """Synthetic positive/negative control for the selection-marker-on-fixture
+    lens: it must flag ``@pytest.mark.skip``/``skipif``/``xfail`` (called and
+    bare, ``@pytest.fixture`` and ``@pytest_asyncio.fixture``, module-level
+    fixture too, bare ``@skipif``/``@xfail`` imported spellings) stacked on a
+    fixture, and ignore the same markers on tests/classes, ``@pytest.mark.
+    parametrize`` on a fixture (legitimate), behaviour markers such as
+    ``@pytest.mark.asyncio`` on a fixture, and a module-level
+    ``pytestmark = pytest.mark.skip``."""
+    positive_sources = [
+        "@pytest.fixture\n@pytest.mark.skip\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@pytest.mark.skip(reason='why')\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@pytest.mark.skipif(not pkg, reason='no pkg')\ndef fx():\n    return 1\n",
+        (
+            "@pytest.fixture(scope='session')\n"
+            "@pytest.mark.skipif(sys.platform == 'win32', reason='win')\n"
+            "def fx():\n"
+            "    return 1\n"
+        ),
+        "@pytest_asyncio.fixture\n@pytest.mark.xfail(reason='known bug')\ndef afx():\n    return 1\n",
+        "@pytest.fixture\n@skipif(not openssl_available, reason='no ssl')\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@xfail(reason='flaky')\nasync def afx():\n    return 1\n",
+        (
+            "import pytest\n"
+            "\n"
+            "class TestFoo:\n"
+            "    @pytest.fixture\n"
+            "    @pytest.mark.skip(reason='legacy')\n"
+            "    def fx(self):\n"
+            "        return 1\n"
+        ),
+        (
+            "import pytest\n"
+            "\n"
+            "fx_value = None\n"
+            "\n"
+            "@pytest.fixture\n"
+            "@pytest.mark.skipif(True, reason='temp')\n"
+            "def fx():\n"
+            "    global fx_value\n"
+            "    return fx_value\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _selection_marker_on_fixture_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.fixture\n@pytest.mark.parametrize('x', [1, 2])\ndef fx(x):\n    return x\n",
+        "@pytest.fixture\n@pytest.mark.asyncio\nasync def afx():\n    return 1\n",
+        "@pytest.fixture\ndef fx():\n    return 1\n",
+        "@pytest.mark.skip(reason='legacy')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not pkg, reason='no pkg')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
+        "pytestmark = pytest.mark.skip(reason='whole module dormant')\ndef test_foo():\n    assert x\n",
+        (
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skip(reason='legacy')\n"
+            "class TestFoo:\n"
+            "    def test_bar(self):\n"
+            "        assert x\n"
+        ),
+        (
+            "import pytest\n"
+            "\n"
+            "def make_fx():\n"
+            "    @pytest.mark.skipif(True, reason='x')\n"
+            "    def inner():\n"
+            "        return 1\n"
+            "    return inner\n"
+        ),
+        "@pytest.fixture\n@something_else\ndef fx():\n    return 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _selection_marker_on_fixture_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def test_bound_method_lens_flags_missing_call_parens():
+    """The bound-method lens must flag a bare assert on an attribute that is
+    called parenthesised elsewhere (proving it is a method), and must NOT flag
+    a plain truthiness check on a boolean/property attribute, a comparison, or
+    a method that is genuinely invoked in the assert."""
+    positive_sources = [
+        ("def test_foo():\n    result = service.lookup(1)\n    assert service.lookup\n"),
+        ("def test_foo():\n    started = runner.start()\n    assert not runner.start\n"),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _bound_method_truthiness_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert response.ok\n",
+        "def test_foo():\n    assert not config.enabled\n",
+        "def test_foo():\n    service.lookup(1)\n    assert service.lookup(1) is not None\n",
+        "def test_foo():\n    assert service.lookup(1) == expected\n",
+        "def test_foo():\n    assert obj.method()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _bound_method_truthiness_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# LENS: impossible cross-container-type equality (dict-view / set / list)
+# ---------------------------------------------------------------------------
+_DICT_VIEW_METHODS = {"keys", "values", "items"}
+
+
+_DIRECT_CONTAINERS = {"set": "set", "frozenset": "set", "list": "list", "tuple": "list"}
+_CONTAINER_LITERALS = {
+    "set": (ast.Set,),
+    "list": (ast.List, ast.Tuple),
+    "dict": (ast.Dict,),
+}
+
+
+def _is_dict_view_call(node: ast.AST) -> str | None:
+    """Return the dict-view kind (``keys``/``values``/``items``) for a
+    ``<obj>.keys()`` / ``.values()`` / ``.items()`` call, else None.
+
+    Any receiver is accepted: if the object is a real dict the view comparison
+    is a guaranteed type mismatch, and if it is a test double the comparison is
+    a mock tautology either way."""
+    if not isinstance(node, ast.Call):
+        return None
+    if not isinstance(node.func, ast.Attribute):
+        return None
+    if node.func.attr not in _DICT_VIEW_METHODS:
+        return None
+    if node.args or node.keywords:
+        return None
+    return node.func.attr
+
+
+def _container_kind(node: ast.AST) -> str | None:
+    """Categorise a comparison operand into a container family, or None if it is
+    not one the cross-type lens reasons about.
+
+    Returns ``"dictview:<keys|values|items>"`` for a dict view call, ``"set"``
+    for a set/frozenset literal or ``set(...)``/``frozenset(...)`` conversion,
+    and ``"list"`` for a list/tuple literal or ``list(...)``/``tuple(...)``
+    conversion. Non-container expressions, calls with arguments beyond a single
+    iterable, and ``dict(...)``/``frozenset(...)``-with-multiple-args return
+    None so the lens never over-reaches."""
+    view = _is_dict_view_call(node)
+    if view is not None:
+        return f"dictview:{view}"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in _DIRECT_CONTAINERS and len(node.args) == 1 and not node.keywords:
+            return _DIRECT_CONTAINERS[node.func.id]
+        return None
+    for kind, types in _CONTAINER_LITERALS.items():
+        if isinstance(node, types):
+            return kind
+    return None
+
+
+def _cross_type_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for ``assert`` comparisons whose two
+    operands are container families that can never compare equal.
+
+    All of these are decided at source time, so the assertion either ALWAYS
+    FAILS (``==``) or ALWAYS PASSES (``!=``) no matter what the code under test
+    produces:
+
+    - a dict view (``d.keys()`` / ``d.values()`` / ``d.items()``) on one side
+      compared with a set/list/tuple/dict literal or a ``set(...)``/``list(...)``
+      conversion — ``dict_keys``-and-friends only compare equal to a same-kind
+      *view*, so they never equal a literal or another container type;
+    - a dict view compared with a *different* dict-view kind (``d.keys()`` vs
+      ``e.values()``) — ``dict_keys`` never equals ``dict_values``;
+    - a ``set`` family (literal or conversion) compared with a ``list`` family
+      (literal or conversion) in either position — a ``set`` never equals a
+      ``list``/``tuple``.
+
+    ``set(x) == {set literal}`` (both sides ``set``), ``sorted(x) == [list]``
+    (both sides ``list``), and same-kind dict-view comparisons
+    (``d.keys() == e.keys()``) are deliberately left alone — those are the valid
+    idioms. Only ``==``/``!=`` are considered; ``in``/``not in`` and ordering
+    comparisons are other lenses' business.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node.test):
+            if not isinstance(sub, ast.Compare) or len(sub.ops) != 1:
+                continue
+            if not isinstance(sub.ops[0], (ast.Eq, ast.NotEq)):
+                continue
+            op = sub.ops[0]
+            left, right = sub.left, sub.comparators[0]
+
+            left_kind = _container_kind(left)
+            right_kind = _container_kind(right)
+            if left_kind is None or right_kind is None:
+                continue
+
+            if left_kind == right_kind and left_kind not in ("set", "list"):
+                continue
+
+            detail = None
+            if left_kind.startswith("dictview:") or right_kind.startswith("dictview:"):
+                if left_kind == right_kind:
+                    continue
+                kind_names = {
+                    "dictview:keys": "dict.keys()",
+                    "dictview:values": "dict.values()",
+                    "dictview:items": "dict.items()",
+                    "set": "a set",
+                    "list": "a list/tuple",
+                }
+                lname = kind_names.get(left_kind, left_kind)
+                rname = kind_names.get(right_kind, right_kind)
+                detail = (
+                    f"{ast.unparse(sub)} — compares {lname} against {rname}; "
+                    f"a dict view only compares equal to a view of the same kind, so this "
+                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
+                    f"regardless of the dict contents"
+                )
+            else:
+                if left_kind == right_kind:
+                    continue
+                detail = (
+                    f"{ast.unparse(sub)} — compares {left_kind} against {right_kind}; "
+                    f"a {left_kind} never compares equal to a {right_kind}, so this "
+                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
+                    f"regardless of the operands (normalise both sides with the same container)"
+                )
+
+            found.append((sub.lineno, detail))
+    return found
+
+
+def test_no_cross_container_type_equality():
+    """``assert d.keys() == {"a", "b"}`` / ``assert set(x) == [a, b]`` — equality
+    between two operands that can never be the same type. A dict ``keys()``/
+    ``values()``/``items()`` view only compares equal to a view *of the same
+    kind*, so comparing it against a set/list/tuple/dict literal (or a
+    ``set(...)``/``list(...)``/``tuple(...)`` conversion) is ALWAYS False under
+    ``==`` and ALWAYS True under ``!=`` — a silent false-green every time the
+    test author reaches for ``!=``, and an always-red that masks the real bug
+    under ``==``. Likewise ``set(...) == [list literal]`` and
+    ``list(...) == {set literal}`` can never hold because a ``set`` never equals
+    a ``list``/``tuple``. The fix is to normalise both sides with the same
+    container (``set(d.keys()) == {...}``); ``set(x) == {set literal}`` and
+    ``sorted(x) == [list literal]`` are left alone because both operands are
+    already the same type."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _cross_type_comparison_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} cross-container-type equality comparison(s).\n"
+        "Comparing operands of different container types (a dict view vs a set/list literal,\n"
+        "or a set(...) vs a list/tuple literal) is decided at source time: dict views only\n"
+        "equal same-kind views, and a set never equals a list/tuple. Normalise both sides\n"
+        "with the same container, e.g. set(d.keys()) == {...}.\n" + "\n".join(violations)
+    )
+
+
+def test_cross_container_type_lens_flags_impossible_equality():
+    """Synthetic positive/negative control for the cross-container-type-equality
+    lens: it must flag dict-view-vs-literal, set-vs-list/tuple, and
+    list-vs-set comparisons, and ignore the valid same-type idioms
+    (``set(x) == {set}``, ``sorted(x) == [list]``, and pair-of-same-kind-view
+    comparisons)."""
+    positive_sources = [
+        "def test_foo():\n    assert d.keys() == {'a', 'b'}\n",
+        "def test_foo():\n    assert d.keys() != ['a', 'b']\n",
+        "def test_foo():\n    assert d.values() == ('x', 'y')\n",
+        "def test_foo():\n    assert d.items() == {'a': 1}\n",
+        "def test_foo():\n    assert {'a': 1}.keys() == list(d)\n",
+        "def test_foo():\n    assert set(d) == ['a', 'b']\n",
+        "def test_foo():\n    assert set(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert list(x) == {'a', 'b'}\n",
+        "def test_foo():\n    assert tuple(x) == {1, 2}\n",
+        "def test_foo():\n    assert set(x) != ('a', 'b')\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _cross_type_comparison_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert set(x) == {'a', 'b'}\n",
+        "def test_foo():\n    assert set(x) == frozenset({'a', 'b'})\n",
+        "def test_foo():\n    assert sorted(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert list(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert tuple(x) == (1, 2)\n",
+        "def test_foo():\n    assert d.keys() == e.keys()\n",
+        "def test_foo():\n    assert d.items() == e.items()\n",
+        "def test_foo():\n    assert d.keys() == {'a': 1}.keys()\n",
+        "def test_foo():\n    assert {'a', 'b'} == set(d)\n",
+        "def test_foo():\n    assert set(x) == set(y)\n",
+        "def test_foo():\n    assert 'a' in d.keys()\n",
+        "def test_foo():\n    assert len(set(x)) == 3\n",
+        "def test_foo():\n    assert set(x) <= {'a', 'b'}\n",
+        "def _helper():\n    return set(x) == ['a', 'b']\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _cross_type_comparison_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 # LENS: empty-string membership / str-method tautologies
 # ---------------------------------------------------------------------------
 _EMPTY_STRING_METHODS = frozenset(
@@ -7331,3 +8370,307 @@ def test_single_element_isinstance_lens_flags_redundant_tuples():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_element_isinstance_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _assert_in_finally_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` placed in a
+    ``finally:`` clause, where it runs only during unwinding.
+
+    A failing assert in ``finally`` runs while an exception (or another
+    failure) is unwinding, so it *replaces* that in-flight error with its own
+    ``AssertionError`` and the original traceback is lost; a passing assert
+    in ``finally`` adds nothing a check on the normal path would not express.
+    This is the unwind-twin of the assert-inside-``except`` lens. Both
+    ``try``/``finally`` and ``except*``/``finally`` (``ast.TryStar``) forms
+    are covered."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Try, ast.TryStar)):
+            continue
+        for stmt in node.finalbody:
+            if isinstance(stmt, ast.Assert):
+                found.append(
+                    (
+                        stmt.lineno,
+                        f"assert {ast.unparse(stmt.test)} in a finally: clause masks any in-flight exception",
+                    )
+                )
+    return found
+
+
+def test_no_assert_in_finally():
+    """An assertion in a ``finally:`` clause runs only during unwinding, so it
+    either masks the exception that triggered the unwind (an ``AssertionError``
+    replaces the original traceback a reader needs to debug the real
+    regression) or verifies nothing that a check on the normal path could not
+    express more clearly. Move the check to the normal path or into the
+    ``except`` handler that owns the failure."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _assert_in_finally_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assert(s) inside a finally: clause.\n"
+        "An assert in finally runs during unwinding and masks the original failure.\n"
+        "Move the check to the normal path or into the except handler that owns it.\n" + "\n".join(violations)
+    )
+
+
+def test_assert_in_finally_lens_flags_unwind_time_verification():
+    """Synthetic positive/negative control for the assert-in-finally lens: it
+    must flag an ``assert`` in a ``finally:`` clause (plain ``try`` and
+    ``try/except`` twins) and ignore asserts on the normal path, asserts in
+    ``except`` handlers (owned by the sibling lens), and non-assert ``finally``
+    statements."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleanup_done\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except Exception:\n"
+            "        raise\n"
+            "    finally:\n"
+            "        assert x == 1\n"
+        ),
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert result is not None\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _assert_in_finally_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    try:\n        assert x\n    except Exception:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception as e:\n        assert e.args\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except Exception as e:\n"
+            "        assert e.args\n"
+            "    finally:\n"
+            "        cleanup()\n"
+        ),
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _assert_in_finally_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _exception_names(node: ast.AST) -> list[str]:
+    """Collect the class names named in an ``except`` type expression — a bare
+    name (``except BaseException:``) or the elements of a handled tuple
+    (``except (ValueError, BaseException):``). Attribute-qualified spellings
+    (``except infra.Error:``) and nested tuples deliberately return nothing."""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Tuple):
+        return [e.id for e in node.elts if isinstance(e, ast.Name)]
+    return []
+
+
+def _named_base_exception_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``except`` handler that
+    names ``BaseException`` — directly or as an element of a handled tuple.
+
+    ``BaseException`` is the base of ``KeyboardInterrupt``/``SystemExit``/
+    ``GeneratorExit`` as well as ``Exception``, so a test handler that names it
+    swallows the control-flow signals a test can never want to catch, silently
+    converting an interrupt during a hang into a false green. This is the
+    name-spelled mask the bare-``except:`` lens exists to forbid; a bare
+    ``except:`` (no type) is owned by that sibling lens and is left alone
+    here."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler) or node.type is None:
+            continue
+        if "BaseException" in _exception_names(node.type):
+            found.append(
+                (node.lineno, "except BaseException swallows KeyboardInterrupt/SystemExit alongside Exception")
+            )
+    return found
+
+
+def test_no_named_base_exception_handler():
+    """A handler that names ``BaseException`` explicitly is the bare-``except:``
+    swallow wearing a mask: it catches ``KeyboardInterrupt``/``SystemExit``/
+    ``GeneratorExit`` as well as ``Exception``, so a test can accidentally
+    absorb an interrupt that should have aborted the run and report false
+    green. Name ``Exception`` (or the concrete failures the code is documented
+    to raise) instead."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _named_base_exception_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} except handler(s) naming BaseException.\n"
+        "BaseException catches KeyboardInterrupt/SystemExit too; name Exception\n"
+        "or the specific failure the code is documented to raise.\n" + "\n".join(violations)
+    )
+
+
+def test_named_base_exception_lens_flags_control_flow_swallows():
+    """Synthetic positive/negative control for the named-BaseException lens: it
+    must flag ``except BaseException`` directly, with ``as``, and inside a
+    handled tuple, and ignore bare ``except:`` (owned by the sibling lens),
+    ``except Exception``, tuples of concrete exceptions, and
+    attribute-qualified handlers."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    except BaseException:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except (ValueError, BaseException):\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except BaseException as exc:\n        handle(exc)\n",
+        "def test_foo():\n    try:\n        foo()\n    except (BaseException,):\n        pass\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _named_base_exception_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        foo()\n    except:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception as exc:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except (TypeError, ValueError):\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except ExceptionGroup:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except infra.Error:\n        pass\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _named_base_exception_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _loop_has_exit(node: ast.While) -> bool:
+    """True when ``node``'s body reaches a statement that terminates it: a
+    ``break`` targeting ``node`` itself, or a ``return``/``raise`` that
+    unwinds the enclosing function and therefore the loop.
+
+    A ``break`` inside a nested ``for``/``while`` targets the *inner* loop and
+    never exits ``node``, so it does not count; a ``return``/``raise`` inside a
+    nested loop (or via a ``try``/``except``) still unwinds the function and
+    *does* count. ``try``/``except``/``else``/``finally`` create no loop scope
+    of their own. Nested function/class/lambda definitions are skipped
+    entirely — their ``return``s belong to a different scope and cannot exit
+    ``node``."""
+
+    def walk(n: ast.AST, in_nested_loop: bool) -> bool:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return False
+        if isinstance(n, ast.Break):
+            return not in_nested_loop
+        if isinstance(n, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(n, (ast.For, ast.AsyncFor, ast.While)) and n is not node:
+            in_nested_loop = True
+        return any(walk(child, in_nested_loop) for child in ast.iter_child_nodes(n))
+
+    return walk(node, False)
+
+
+def _infinite_exit_less_loop_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``while`` loop whose
+    condition is a statically-foldable constant-true literal and whose body has
+    no statement that can terminate it — no ``break`` targeting the loop and no
+    reachable ``return``/``raise`` unwinding the enclosing function.
+
+    A ``while True:``/``while 1:`` loop's condition never becomes false at the
+    language level, so it terminates only via ``break``/``return``/``raise``.
+    One with none of those reachable is an infinite loop that hangs the test —
+    and every test after it in the same process — with an opaque failure, the
+    exact hazard the unbounded-subprocess and unbounded-thread-join lenses
+    already guard. Dynamic conditions (names, calls, comparisons) are left
+    alone: those can change through the code under test."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.While):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Constant):
+            continue
+        if isinstance(test.value, complex) or not test.value:
+            continue
+        if _loop_has_exit(node):
+            continue
+        found.append(
+            (node.lineno, f"while {ast.unparse(test)} has no break/return/raise that stops it — the loop is infinite")
+        )
+    return found
+
+
+def test_no_infinite_constant_condition_loops():
+    """A ``while`` loop whose condition is a statically-foldable constant-true
+    literal (``while True:``, ``while 1:``, ...) terminates only via ``break``;
+    without one, it is an infinite loop that hangs the test and every test
+    after it in the same process, with an opaque failure. Guard on a real
+    condition or break explicitly when the work completes."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _infinite_exit_less_loop_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} exit-less constant-condition while loop(s).\n"
+        "A while True loop with no break can never terminate; add a break on the\n"
+        "completion condition or drive the loop with a real (non-constant) guard.\n" + "\n".join(violations)
+    )
+
+
+def test_infinite_loop_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the infinite-loop lens: it must
+    flag ``while True:``/``while 1:`` bodies with no way out — no ``break``
+    targeting the loop (a nested-loop ``break`` does not count) and no reachable
+    ``return``/``raise`` — and ignore loops with a direct ``break`` (even one
+    reached through an ``if`` or a ``try`` body), loops that unwind via
+    ``return``/``raise``, loops with a dynamic condition, and ``for`` loops."""
+    positive_sources = [
+        "def test_foo():\n    while True:\n        step()\n",
+        "def test_foo():\n    while 1:\n        x = foo()\n        x.bar()\n",
+        "def test_foo():\n    while True:\n        for i in items:\n            break\n",
+        (
+            "def test_foo():\n"
+            "    while True:\n"
+            "        try:\n"
+            "            work()\n"
+            "        except Exception:\n"
+            "            pass\n"
+        ),
+        "def test_foo():\n    while True:\n        step(1)\n        step(2)\n    return\n",
+        "async def test_foo():\n    while True:\n        await tick()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _infinite_exit_less_loop_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    while True:\n        if done:\n            break\n",
+        "def test_foo():\n    while True:\n        if not done:\n            continue\n        break\n",
+        (
+            "def test_foo():\n"
+            "    while True:\n"
+            "        try:\n"
+            "            work()\n"
+            "            break\n"
+            "        except Exception:\n"
+            "            retry()\n"
+        ),
+        "def test_foo():\n    while True:\n        if end:\n            return obj\n",
+        ("def test_foo():\n    while True:\n        if text[index] == 'X':\n            raise AssertionError('bad')\n"),
+        "def test_foo():\n    while condition:\n        step()\n",
+        "def test_foo():\n    while not done:\n        step()\n",
+        "def test_foo():\n    for x in items:\n        if x:\n            break\n",
+        "def test_foo():\n    while True:\n        break\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _infinite_exit_less_loop_violations(tree), f"lens should NOT flag:\n{source}"
