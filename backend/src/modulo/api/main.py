@@ -645,6 +645,15 @@ async def _seed_sso_providers(settings: Settings) -> None:
         if existing.scalar_one_or_none() is not None:
             return
 
+        from modulo.db.models.organisation import Organisation
+
+        org = (
+            await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+        ).scalar_one_or_none()
+        if org is None:
+            logger.warning("startup.sso_provider_seed_no_organisation")
+            return
+
         try:
             entries = json.loads(settings.modulo_oidc_providers)
         except (json.JSONDecodeError, TypeError):
@@ -663,6 +672,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
             provider = SsoProvider(
                 provider_type="oidc",
                 name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
+                provider_id=entry["provider_id"],
                 client_id=entry["client_id"],
                 client_secret=encrypt_stored_secret(entry["client_secret"], settings.fernet_key),
                 discovery_url=entry["discovery_url"],
@@ -670,6 +680,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 enabled=True,
                 auto_provision=True,
                 default_role=settings.modulo_sso_default_role,
+                organisation_id=org.id,
             )
             session.add(provider)
             logger.info(
