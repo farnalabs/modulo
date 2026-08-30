@@ -53,57 +53,73 @@ class DiscordConnector(ConnectorBase):
         except Exception as exc:
             return health_check_failure(exc)
 
+    def _require_filter(self, q: ConnectorQuery, key: str, message: str) -> str:
+        value = q.filters.get(key, "")
+        if not value:
+            raise ValueError(message)
+        return str(value)
+
+    @staticmethod
+    def _records_result(data: Any) -> ConnectorResult:
+        records = _safe_records_list(data)
+        return ConnectorResult(records=records, total=len(records))
+
+    async def _query_guilds(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        resp = await c.get("/users/@me/guilds", params={"limit": min(q.limit, 200)})
+        resp.raise_for_status()
+        return self._records_result(resp.json())
+
+    async def _query_channels(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        guild_id = self._require_filter(q, "guild_id", "Discord channels query requires 'guild_id' in filters")
+        resp = await c.get(f"/guilds/{guild_id}/channels")
+        resp.raise_for_status()
+        data = _safe_records_list(resp.json())
+        limited = data[: q.limit] if q.limit else data
+        return ConnectorResult(records=limited, total=len(data))
+
+    async def _query_messages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        channel_id = self._require_filter(q, "channel_id", "Discord messages query requires 'channel_id' in filters")
+        params: dict[str, Any] = {"limit": min(q.limit, 100)}
+        for key in ("around", "before", "after"):
+            if key in q.filters:
+                params[key] = q.filters[key]
+        resp = await c.get(f"/channels/{channel_id}/messages", params=params)
+        resp.raise_for_status()
+        return self._records_result(resp.json())
+
+    async def _query_guild_members(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        guild_id = self._require_filter(q, "guild_id", "Discord guild_members query requires 'guild_id' in filters")
+        resp = await c.get(f"/guilds/{guild_id}/members", params={"limit": min(q.limit, 100)})
+        resp.raise_for_status()
+        return self._records_result(resp.json())
+
+    async def _query_roles(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        guild_id = self._require_filter(q, "guild_id", "Discord roles query requires 'guild_id' in filters")
+        resp = await c.get(f"/guilds/{guild_id}/roles")
+        resp.raise_for_status()
+        return self._records_result(resp.json())
+
+    async def _query_guild(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        guild_id = self._require_filter(q, "guild_id", "Discord guild query requires 'guild_id' in filters")
+        resp = await c.get(f"/guilds/{guild_id}")
+        resp.raise_for_status()
+        return ConnectorResult(records=[cast(_DICT_STR_ANY, resp.json())], total=1)
+
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:
             match q.resource:
                 case "guilds":
-                    resp = await c.get("/users/@me/guilds", params={"limit": min(q.limit, 200)})
-                    resp.raise_for_status()
-                    data = _safe_records_list(resp.json())
-                    return ConnectorResult(records=data, total=len(data))
+                    return await self._query_guilds(c, q)
                 case "channels":
-                    guild_id = q.filters.get("guild_id", "")
-                    if not guild_id:
-                        raise ValueError("Discord channels query requires 'guild_id' in filters")
-                    resp = await c.get(f"/guilds/{guild_id}/channels")
-                    resp.raise_for_status()
-                    data = _safe_records_list(resp.json())
-                    return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
+                    return await self._query_channels(c, q)
                 case "messages":
-                    channel_id = q.filters.get("channel_id", "")
-                    if not channel_id:
-                        raise ValueError("Discord messages query requires 'channel_id' in filters")
-                    params: dict[str, Any] = {"limit": min(q.limit, 100)}
-                    for key in ("around", "before", "after"):
-                        if key in q.filters:
-                            params[key] = q.filters[key]
-                    resp = await c.get(f"/channels/{channel_id}/messages", params=params)
-                    resp.raise_for_status()
-                    data = _safe_records_list(resp.json())
-                    return ConnectorResult(records=data, total=len(data))
+                    return await self._query_messages(c, q)
                 case "guild_members":
-                    guild_id = q.filters.get("guild_id", "")
-                    if not guild_id:
-                        raise ValueError("Discord guild_members query requires 'guild_id' in filters")
-                    resp = await c.get(f"/guilds/{guild_id}/members", params={"limit": min(q.limit, 100)})
-                    resp.raise_for_status()
-                    data = _safe_records_list(resp.json())
-                    return ConnectorResult(records=data, total=len(data))
+                    return await self._query_guild_members(c, q)
                 case "roles":
-                    guild_id = q.filters.get("guild_id", "")
-                    if not guild_id:
-                        raise ValueError("Discord roles query requires 'guild_id' in filters")
-                    resp = await c.get(f"/guilds/{guild_id}/roles")
-                    resp.raise_for_status()
-                    data = _safe_records_list(resp.json())
-                    return ConnectorResult(records=data, total=len(data))
+                    return await self._query_roles(c, q)
                 case "guild":
-                    guild_id = q.filters.get("guild_id", "")
-                    if not guild_id:
-                        raise ValueError("Discord guild query requires 'guild_id' in filters")
-                    resp = await c.get(f"/guilds/{guild_id}")
-                    resp.raise_for_status()
-                    return ConnectorResult(records=[cast(_DICT_STR_ANY, resp.json())])
+                    return await self._query_guild(c, q)
                 case _:
                     raise ValueError(f"Unsupported Discord resource: {q.resource!r}")
 
