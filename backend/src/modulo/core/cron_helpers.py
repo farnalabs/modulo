@@ -1153,6 +1153,151 @@ async def fire_cron_trigger(
     return {"status": "error", "reason": "unexpected"}
 
 
+async def _polling_pre_fire_gate(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Advisory-lock + fetch the polling trigger; ``(trigger, None)`` when due to fire.
+
+    Also enforces the kill-switch pause, the concurrency gate and the daily
+    spend gate so the fire-job body stays within the cognitive-complexity
+    bound. Returns ``(None, skip)`` with the outcome dict when the fire must be
+    skipped (``trigger_busy`` first, mirroring ``fire_cron_trigger``).
+    """
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.db.models.trigger import Trigger
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(
+        text(_SQL_TRY_ADVISORY_LOCK),
+        {"key1": key1, "key2": key2},
+    )
+    if not lock_result.scalar_one():
+        return None, {"status": "skipped", "reason": "trigger_busy"}
+    trigger = (
+        await session.execute(
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return None, {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+
+    # Org-wide pause (kill-switch). No paused TriggerEvent here (race backstop
+    # only; the create_run gate is the authority). Degraded on a pre-migration
+    # ProgrammingError (not-paused) inside a savepoint.
+    if await _org_is_paused_degraded(session, org_id):
+        return None, {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+
+    active_count = await _count_active_runs(session, trigger_id)
+    if active_count >= trigger.max_concurrent_runs:
+        await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="concurrency_limit_reached",
+            error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
+        )
+        return None, {"status": "skipped", "reason": "concurrency_limit", "active_runs": active_count}
+
+    # Daily spend limit check (mirrors fire_cron_trigger) — run BEFORE the
+    # connector query so an over-budget trigger stops polling the external
+    # service instead of running the query every cycle.
+    skip = await _polling_spend_gate_skip(session, trigger, org_id, trigger_id)
+    if skip is not None:
+        return None, skip
+    return trigger, None
+
+
+async def _run_poll_fire(
+    session: AsyncSession,
+    *,
+    trigger: Any,
+    connector: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    poll_query: str,
+    condition_expression: str | None,
+) -> dict[str, Any]:
+    """Run the poll query, evaluate the condition and create the run when met.
+
+    Encapsulates the whole poll-fire decision (query -> condition -> create) so
+    the fire-job body stays within the cognitive-complexity bound. The caller
+    OWNS the connector/Redis lifecycle (released in a ``finally``) and the
+    ``SharedBudgetUnavailableError`` / ``CancelledError`` propagation.
+    """
+    from sqlalchemy import update
+
+    from modulo.db.crud.run import create_run
+    from modulo.db.models.trigger import Trigger
+
+    query_result, query_skip = await _run_poll_query(session, connector, trigger, org_id, trigger_id, poll_query)
+    if query_skip is not None:
+        return query_skip
+
+    condition_met, condition_error = await _evaluate_poll_condition(
+        session, query_result, trigger, org_id, trigger_id, condition_expression
+    )
+    if condition_error is not None:
+        return {"status": "error", "reason": "condition_eval_failed", "error": condition_error}
+
+    if not condition_met:
+        await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="no_match",
+        )
+        return {"status": "no_match"}
+
+    config = trigger.config_json or {}
+    snapshot_id_str = config.get("snapshot_id")
+    try:
+        snapshot_id = uuid.UUID(str(snapshot_id_str)) if snapshot_id_str else uuid.UUID(int=0)
+    except (ValueError, TypeError):
+        snapshot_id = uuid.UUID(int=0)
+
+    input_payload: dict[str, Any] = {
+        "records": query_result.records,
+        "total": query_result.total,
+        "poll_query": poll_query,
+    }
+
+    try:
+        run = await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type="polling",
+            trigger_id=trigger_id,
+            input_payload=input_payload,
+        )
+    except TriggersPausedError:
+        _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
+        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+
+    event = await _log_poll_event(
+        session,
+        trigger=trigger,
+        org_id=org_id,
+        result="condition_met",
+        run_id=run.id,
+    )
+
+    # last_fired_at only — next_fire_at was advanced at enqueue time.
+    await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC)))
+
+    _log.info("Polling trigger %s fired -> run %s (condition met)", trigger_id, run.id)
+    return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id)}
+
+
 async def fire_polling_trigger(
     *,
     trigger_id: uuid.UUID,
@@ -1169,11 +1314,8 @@ async def fire_polling_trigger(
     created (condition met). It does NOT re-check ``next_fire_at`` (the advance
     is enqueue-time by design).
     """
-
     from sqlalchemy import update
 
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-    from modulo.db.crud.run import create_run
     from modulo.db.models.connector_instance import ConnectorInstance
     from modulo.db.models.trigger import Trigger
 
@@ -1182,45 +1324,7 @@ async def fire_polling_trigger(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(
-            text(_SQL_TRY_ADVISORY_LOCK),
-            {"key1": key1, "key2": key2},
-        )
-        if not lock_result.scalar_one():
-            return {"status": "skipped", "reason": "trigger_busy"}
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None or not trigger.active:
-            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-
-        # Org-wide pause (kill-switch). No paused TriggerEvent here (race
-        # backstop only; the create_run gate is the authority). Degraded on a
-        # pre-migration ProgrammingError (not-paused) inside a savepoint.
-        if await _org_is_paused_degraded(session, org_id):
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-
-        active_count = await _count_active_runs(session, trigger_id)
-        if active_count >= trigger.max_concurrent_runs:
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="concurrency_limit_reached",
-                error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
-            )
-            return {"status": "skipped", "reason": "concurrency_limit", "active_runs": active_count}
-
-        # Daily spend limit check (mirrors fire_cron_trigger) — run BEFORE the
-        # connector query so an over-budget trigger stops polling the external
-        # service instead of running the query every cycle.
-        skip = await _polling_spend_gate_skip(session, trigger, org_id, trigger_id)
+        trigger, skip = await _polling_pre_fire_gate(session, trigger_id=trigger_id, org_id=org_id)
         if skip is not None:
             return skip
 
@@ -1259,70 +1363,16 @@ async def fire_polling_trigger(
             )
             if connector is None:
                 return {"status": "error", "reason": "connector_init_failed"}
-
-            query_result, query_skip = await _run_poll_query(
-                session, connector, trigger, org_id, trigger_id, poll_query
-            )
-            if query_skip is not None:
-                return query_skip
-
-            condition_met, condition_error = await _evaluate_poll_condition(
-                session, query_result, trigger, org_id, trigger_id, condition_expression
-            )
-            if condition_error is not None:
-                return {"status": "error", "reason": "condition_eval_failed", "error": condition_error}
-
-            if not condition_met:
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="no_match",
-                )
-                return {"status": "no_match"}
-
-            config = trigger.config_json or {}
-            snapshot_id_str = config.get("snapshot_id")
-            try:
-                snapshot_id = uuid.UUID(str(snapshot_id_str)) if snapshot_id_str else uuid.UUID(int=0)
-            except (ValueError, TypeError):
-                snapshot_id = uuid.UUID(int=0)
-
-            input_payload: dict[str, Any] = {
-                "records": query_result.records,
-                "total": query_result.total,
-                "poll_query": poll_query,
-            }
-
-            try:
-                run = await create_run(
-                    session,
-                    org_id=org_id,
-                    pipeline_id=pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="polling",
-                    trigger_id=trigger_id,
-                    input_payload=input_payload,
-                )
-            except TriggersPausedError:
-                _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
-                return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-
-            event = await _log_poll_event(
+            return await _run_poll_fire(
                 session,
                 trigger=trigger,
+                connector=connector,
                 org_id=org_id,
-                result="condition_met",
-                run_id=run.id,
+                trigger_id=trigger_id,
+                pipeline_id=pipeline_id,
+                poll_query=poll_query,
+                condition_expression=condition_expression,
             )
-
-            # last_fired_at only — next_fire_at was advanced at enqueue time.
-            await session.execute(
-                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
-            )
-
-            _log.info("Polling trigger %s fired -> run %s (condition met)", trigger_id, run.id)
-            return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id)}
         except asyncio.CancelledError:
             raise
         except SharedBudgetUnavailableError as exc:
@@ -2004,6 +2054,243 @@ async def fire_ongoing_trigger(
             await redis_client.aclose()
 
 
+async def _acquire_suite_run_trigger(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Advisory-lock + fetch the suite_run trigger; ``(trigger, None)`` when due to fire.
+
+    Guarded by the same lock-then-fetch order as ``fire_cron_trigger``; also
+    enforces the ``run_kind == 'suite_run'`` contract and the org-wide pause
+    (kill-switch). Returns ``(None, skip)`` with the outcome dict on any skip so
+    the fire-job body stays within the cognitive-complexity bound.
+    """
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.db.models.trigger import Trigger
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
+    if not lock_result.scalar_one():
+        return None, {"status": "skipped", "reason": "trigger_busy"}
+
+    trigger = (
+        await session.execute(
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return None, {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+    if trigger.run_kind != "suite_run" or trigger.eval_suite_id is None:
+        return None, {"status": "skipped", "reason": "not_suite_run_trigger"}
+
+    # Org-wide pause (kill-switch) — race backstop before building the run.
+    if await _org_is_paused_degraded(session, org_id):
+        return None, {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    return trigger, None
+
+
+def _resolve_suite_run_config(
+    config: dict[str, Any],
+) -> tuple[uuid.UUID | None, uuid.UUID | None, dict[str, Any] | None]:
+    """Resolve dataset/model-backend ids from the trigger config.
+
+    Returns ``(dataset_id, model_backend_id, None)`` on success or
+    ``(None, None, skip)`` when the config is missing/invalid.
+    """
+    dataset_id_raw = config.get("dataset_id")
+    model_backend_id_raw = config.get("model_backend_id")
+    if not dataset_id_raw or not model_backend_id_raw:
+        return None, None, {"status": "skipped", "reason": "missing_suite_run_config"}
+    try:
+        return uuid.UUID(str(dataset_id_raw)), uuid.UUID(str(model_backend_id_raw)), None
+    except (ValueError, TypeError):
+        return None, None, {"status": "skipped", "reason": "invalid_suite_run_config"}
+
+
+async def _suite_run_fire_gates(
+    session: AsyncSession,
+    trigger: Any,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    dataset_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Enforce the suite-run concurrency + daily-spend pools; ``skip`` when gated.
+
+    Uses the SUITE-RUN pools (never ``runs``): non-terminal ``suite_runs`` for
+    the trigger's suite + dataset, and the per-trigger daily spend over
+    ``suite_runs.extra``. Skip-not-defer (PR #982): a gated fire stamps
+    ``last_fired_at`` so a serviced low-cadence trigger does not trip the
+    hourly missed-fire alert on a stale ``last_fired_at``.
+    """
+    from sqlalchemy import func, update
+
+    from modulo.core.eval_engine.execute_suite_run import (
+        suite_run_daily_spend_exceeded,
+        suite_run_daily_spend_used_for_trigger,
+    )
+    from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
+    from modulo.db.models.trigger import Trigger
+
+    # Separate concurrency pool: non-terminal SuiteRuns for this suite+dataset.
+    active_count = (
+        await session.execute(
+            select(func.count()).where(
+                SuiteRun.organisation_id == org_id,
+                SuiteRun.suite_id == trigger.eval_suite_id,
+                SuiteRun.dataset_id == dataset_id,
+                SuiteRun.state.in_([SuiteRunState.PENDING.value, SuiteRunState.RUNNING.value]),
+            )
+        )
+    ).scalar_one() or 0
+    if int(active_count) >= int(trigger.max_concurrent_runs):
+        await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC)))
+        return {
+            "status": "skipped",
+            "reason": "concurrency_limit",
+            "active_suite_runs": int(active_count),
+        }
+
+    # Separate daily spend pool: sum TODAY's suite_runs cost for THIS trigger
+    # only (never the org, never runs). ``daily_spend_limit`` is a per-trigger
+    # knob, so the pool must be scoped to the trigger that owns the run (id
+    # stamped onto ``suite_runs.extra`` at fire time).
+    if trigger.daily_spend_limit is not None:
+        used = await suite_run_daily_spend_used_for_trigger(session, org_id, trigger_id)
+        if suite_run_daily_spend_exceeded(used, trigger.daily_spend_limit):
+            await session.execute(
+                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+            )
+            return {
+                "status": "skipped",
+                "reason": "spend_limit",
+                "daily_spend_limit": str(trigger.daily_spend_limit),
+                "today_cost": str(used),
+            }
+    return None
+
+
+async def _suite_run_llm_judge_guard(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    eval_suite_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Reject an ``llm_judge`` suite_run fire up front; ``skip`` when unsupported.
+
+    ``llm_judge`` suites are not yet supported on the scheduled path: the SAQ
+    ``execute_suite_run`` job does not wire a judge callable, so any
+    ``llm_judge`` definition would hard-fail the run at execution time
+    (``suite contains llm_judge definitions but no judge callable was
+    provided``). Reject the fire up front (a clear, observable skip) rather
+    than letting the run build and then fail — config must not promise a run it
+    cannot deliver. This is the fire-boundary guard that mirrors "reject
+    llm_judge suite_run triggers" (FAR-377 reviewer finding).
+    """
+    from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+
+    suite_defs = await load_suite_definitions(session, org_id, eval_suite_id)
+    if any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
+        _log.warning(
+            "fire_suite_run_trigger: suite %s contains llm_judge definitions which are not "
+            "supported on the scheduled path; skipping fire (run would hard-fail at execution)",
+            eval_suite_id,
+        )
+        return {
+            "status": "skipped",
+            "reason": "llm_judge_unsupported",
+            "suite_id": str(eval_suite_id),
+        }
+    return None
+
+
+async def _build_suite_run_or_skip(
+    session: AsyncSession,
+    trigger: Any,
+    org_id: uuid.UUID,
+    dataset_id: uuid.UUID,
+    model_backend_id: uuid.UUID,
+    config: dict[str, Any],
+    pipeline_id: uuid.UUID,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Build the SuiteRun; ``(run, None)`` on success, ``(None, skip)`` otherwise.
+
+    A non-skip failure class is deliberately NOT swallowed: ``build_suite_run``
+    is expected to raise only the two typed errors, which map to explicit skips
+    (``empty_dataset`` / ``suite_run_config_error``) — a genuinely unexpected
+    error still propagates so the SAQ job fails and retries.
+    """
+    from modulo.core.eval_engine.execute_suite_run import (
+        SuiteRunEmptyDatasetError,
+        SuiteRunExecutionError,
+        build_suite_run,
+    )
+
+    scenario_inputs = config.get("scenario_inputs") or {}
+    try:
+        run = await build_suite_run(
+            session,
+            org_id=org_id,
+            suite_id=trigger.eval_suite_id,
+            dataset_id=dataset_id,
+            model_backend_id=model_backend_id,
+            scenario_inputs=scenario_inputs,
+            pipeline_id=pipeline_id,
+        )
+    except SuiteRunEmptyDatasetError as exc:
+        # Never a silent pass — surface the empty dataset as a missed run.
+        return None, {"status": "skipped", "reason": "empty_dataset", "detail": str(exc)}
+    except SuiteRunExecutionError as exc:
+        return None, {"status": "skipped", "reason": "suite_run_config_error", "detail": str(exc)}
+    return run, None
+
+
+def _stamp_suite_run_extra(
+    run: Any,
+    trigger_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    dataset_id: uuid.UUID,
+    model_backend_id: uuid.UUID,
+    config: dict[str, Any],
+) -> None:
+    """Stamp the config-derived execution context + the owning trigger id onto the run.
+
+    The id stamps let the SAQ job run the suite and ensure a finished eval never
+    touches the production pool. ``str(None)`` would render as the literal
+    ``'None'`` and crash ``Decimal``, so a config key explicitly set to
+    ``null`` falls back to the default.
+    """
+    from decimal import Decimal
+
+    from modulo.core.eval_engine.execute_suite_run import _DEFAULT_COST_PER_LLM_CASE
+
+    scenario_inputs = config.get("scenario_inputs") or {}
+    cost_raw = config.get("cost_per_llm_case")
+    cost_per_case = _DEFAULT_COST_PER_LLM_CASE if cost_raw is None else Decimal(str(cost_raw))
+    suite_ceiling_raw = config.get("suite_ceiling")
+    run.extra = {
+        "trigger_id": str(trigger_id),
+        "pipeline_id": str(pipeline_id),
+        "dataset_id": str(dataset_id),
+        "model_backend_id": str(model_backend_id),
+        "scenario_inputs": scenario_inputs,
+        "entity_thresholds": config.get("entity_thresholds") or {},
+        # ``extra`` is a plain ``JSON`` column with no ``default=str``
+        # serializer, so every value written here MUST be JSON-native.
+        # Store ``cost_per_llm_case`` and ``suite_ceiling`` as ``str`` — the
+        # SAQ job coerces them back to ``Decimal`` on read. Writing a raw
+        # ``Decimal`` here raises ``TypeError`` at flush (json.dumps), which
+        # kills every fire inside ``session.begin()``.
+        "suite_ceiling": str(suite_ceiling_raw) if suite_ceiling_raw is not None else None,
+        "eval_definition_version": int(config.get("eval_definition_version", 1)),
+        "cost_per_llm_case": str(cost_per_case),
+    }
+
+
 async def fire_suite_run_trigger(
     *,
     trigger_id: uuid.UUID,
@@ -2023,167 +2310,45 @@ async def fire_suite_run_trigger(
     dict. The caller (SAQ wrapper) enqueues the ``execute_suite_run`` job after
     commit.
     """
-    from decimal import Decimal
+    from sqlalchemy import update
 
-    from sqlalchemy import func, update
-
-    from modulo.core.eval_engine.execute_suite_run import (
-        _DEFAULT_COST_PER_LLM_CASE,
-        SuiteRunEmptyDatasetError,
-        SuiteRunExecutionError,
-        build_suite_run,
-        load_suite_definitions,
-        suite_run_daily_spend_exceeded,
-        suite_run_daily_spend_used_for_trigger,
-    )
-    from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
     from modulo.db.models.trigger import Trigger
 
     factory = _open_factory()
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
-        # Advisory lock on the trigger so two ticks cannot double-fire it.
-        from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
-        if not lock_result.scalar_one():
-            return {"status": "skipped", "reason": "trigger_busy"}
-
-        trigger = (
-            await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == org_id,
-                    Trigger.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if trigger is None or not trigger.active:
-            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-        if trigger.run_kind != "suite_run" or trigger.eval_suite_id is None:
-            return {"status": "skipped", "reason": "not_suite_run_trigger"}
-
-        # Org-wide pause (kill-switch) — race backstop before building the run.
-        if await _org_is_paused_degraded(session, org_id):
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+        trigger, skip = await _acquire_suite_run_trigger(session, trigger_id=trigger_id, org_id=org_id)
+        if skip is not None:
+            return skip
 
         config = trigger.config_json or {}
-        dataset_id_raw = config.get("dataset_id")
-        model_backend_id_raw = config.get("model_backend_id")
-        if not dataset_id_raw or not model_backend_id_raw:
-            return {"status": "skipped", "reason": "missing_suite_run_config"}
-        try:
-            dataset_id = uuid.UUID(str(dataset_id_raw))
-            model_backend_id = uuid.UUID(str(model_backend_id_raw))
-        except (ValueError, TypeError):
-            return {"status": "skipped", "reason": "invalid_suite_run_config"}
+        dataset_id, model_backend_id, skip = _resolve_suite_run_config(config)
+        if skip is not None:
+            return skip
+        assert dataset_id is not None and model_backend_id is not None  # nosec B101 - non-None whenever skip is None (see _resolve_suite_run_config)
 
-        # Separate concurrency pool: non-terminal SuiteRuns for this suite+dataset.
-        active_count = (
-            await session.execute(
-                select(func.count()).where(
-                    SuiteRun.organisation_id == org_id,
-                    SuiteRun.suite_id == trigger.eval_suite_id,
-                    SuiteRun.dataset_id == dataset_id,
-                    SuiteRun.state.in_([SuiteRunState.PENDING.value, SuiteRunState.RUNNING.value]),
-                )
-            )
-        ).scalar_one() or 0
-        if int(active_count) >= int(trigger.max_concurrent_runs):
-            # Skip-not-defer (PR #982): stamp the attempt so a low-cadence
-            # trigger that is being serviced does not trip the hourly
-            # check_missed_fire_alerts on a stale last_fired_at.
-            await session.execute(
-                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
-            )
-            return {
-                "status": "skipped",
-                "reason": "concurrency_limit",
-                "active_suite_runs": int(active_count),
-            }
+        skip = await _suite_run_fire_gates(session, trigger, org_id, trigger_id, dataset_id)
+        if skip is not None:
+            return skip
 
-        # Separate daily spend pool: sum TODAY's suite_runs cost for THIS
-        # trigger only (never the org, never runs). ``daily_spend_limit`` is a
-        # per-trigger knob, so the pool must be scoped to the trigger that owns
-        # the run (id stamped onto ``suite_runs.extra`` at fire time).
-        if trigger.daily_spend_limit is not None:
-            used = await suite_run_daily_spend_used_for_trigger(session, org_id, trigger_id)
-            if suite_run_daily_spend_exceeded(used, trigger.daily_spend_limit):
-                await session.execute(
-                    update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
-                )
-                return {
-                    "status": "skipped",
-                    "reason": "spend_limit",
-                    "daily_spend_limit": str(trigger.daily_spend_limit),
-                    "today_cost": str(used),
-                }
+        skip = await _suite_run_llm_judge_guard(session, org_id, trigger.eval_suite_id)
+        if skip is not None:
+            return skip
 
-        # llm_judge suites are not yet supported on the scheduled path: the SAQ
-        # ``execute_suite_run`` job does not wire a judge callable, so any
-        # ``llm_judge`` definition would hard-fail the run at execution time
-        # (``suite contains llm_judge definitions but no judge callable was
-        # provided``). Reject the fire up front (a clear, observable skip) rather
-        # than letting the run build and then fail — config must not promise a
-        # run it cannot deliver. This is the fire-boundary guard that mirrors
-        # "reject llm_judge suite_run triggers" (FAR-377 reviewer finding).
-        suite_defs = await load_suite_definitions(session, org_id, trigger.eval_suite_id)
-        if any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
-            _log.warning(
-                "fire_suite_run_trigger: suite %s contains llm_judge definitions which are not "
-                "supported on the scheduled path; skipping fire (run would hard-fail at execution)",
-                trigger.eval_suite_id,
-            )
-            return {
-                "status": "skipped",
-                "reason": "llm_judge_unsupported",
-                "suite_id": str(trigger.eval_suite_id),
-            }
+        run, skip = await _build_suite_run_or_skip(
+            session,
+            trigger,
+            org_id,
+            dataset_id,
+            model_backend_id,
+            config,
+            pipeline_id,
+        )
+        if skip is not None:
+            return skip
 
-        scenario_inputs = config.get("scenario_inputs") or {}
-        try:
-            run = await build_suite_run(
-                session,
-                org_id=org_id,
-                suite_id=trigger.eval_suite_id,
-                dataset_id=dataset_id,
-                model_backend_id=model_backend_id,
-                scenario_inputs=scenario_inputs,
-                pipeline_id=pipeline_id,
-            )
-        except SuiteRunEmptyDatasetError as exc:
-            # Never a silent pass — surface the empty dataset as a missed run.
-            return {"status": "skipped", "reason": "empty_dataset", "detail": str(exc)}
-        except SuiteRunExecutionError as exc:
-            return {"status": "skipped", "reason": "suite_run_config_error", "detail": str(exc)}
-
-        # Stamp the config-derived execution context + the owning trigger id
-        # onto the run so the SAQ job can run it and a finished eval never
-        # touches the production pool.
-        # ``str(None)`` would render as the literal 'None' and crash ``Decimal``,
-        # so a config key explicitly set to ``null`` falls back to the default.
-        cost_raw = config.get("cost_per_llm_case")
-        cost_per_case = _DEFAULT_COST_PER_LLM_CASE if cost_raw is None else Decimal(str(cost_raw))
-        suite_ceiling_raw = config.get("suite_ceiling")
-        run.extra = {
-            "trigger_id": str(trigger_id),
-            "pipeline_id": str(pipeline_id),
-            "dataset_id": str(dataset_id),
-            "model_backend_id": str(model_backend_id),
-            "scenario_inputs": scenario_inputs,
-            "entity_thresholds": config.get("entity_thresholds") or {},
-            # ``extra`` is a plain ``JSON`` column with no ``default=str``
-            # serializer, so every value written here MUST be JSON-native.
-            # Store ``cost_per_llm_case`` and ``suite_ceiling`` as ``str`` — the
-            # SAQ job coerces them back to ``Decimal`` on read. Writing a raw
-            # ``Decimal`` here raises ``TypeError`` at flush (json.dumps), which
-            # kills every fire inside ``session.begin()``.
-            "suite_ceiling": str(suite_ceiling_raw) if suite_ceiling_raw is not None else None,
-            "eval_definition_version": int(config.get("eval_definition_version", 1)),
-            "cost_per_llm_case": str(cost_per_case),
-        }
+        _stamp_suite_run_extra(run, trigger_id, pipeline_id, dataset_id, model_backend_id, config)
         await session.flush()
         await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC)))
         _log.info("suite_run trigger %s fired -> suite_run %s", trigger_id, run.id)
@@ -3404,44 +3569,59 @@ async def _process_due_report_rows(
 ) -> None:
     """Advance + enqueue the due scheduled-report rows (one epoch each, atomic)."""
     for row in report_rows:
-        # FAR-377: never mis-dispatch a ``run_kind == 'suite_run'`` row through the
-        # report path (which drives ``fire_report_trigger``, a scheduled report
-        # delivery — not a pipeline Run). A suite_run scheduled report should not
-        # exist, but the guard keeps a mis-typed row from firing a report.
-        if getattr(row, "run_kind", "run") == "suite_run":
-            summary["report_skipped_suite_run"] += 1
-            continue
-        summary["report_due"] += 1
-        try:
-            if not await _advance_report_next_send(session, row.id, row.cron_expression):
-                continue
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("fire_due_triggers: report advance failed %s", row.id)
-            continue
-        try:
-            job_id = await _enqueue_fire_job_async(
-                q,
-                "modulo.core.saq_worker.fire_report_trigger",
-                f"fire:report:{row.id}:{int(now.timestamp())}",
-                report_id=str(row.id),
-                org_id=str(org_id),
-            )
-            if job_id is not None:
-                summary["report_enqueued"] += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            summary["enqueue_failures"] += 1
-            _log.exception("fire_due_triggers: report enqueue failed %s", row.id)
-            await _ingest_saq_error(
-                session,
-                org_id,
-                function="fire_due_triggers",
-                message=f"fire_due_triggers: enqueue failed for report {row.id}",
-                context={"report_id": str(row.id), "trigger_type": "report"},
-            )
+        await _process_one_due_report_row(session, q, now, org_id, row, summary)
+
+
+async def _process_one_due_report_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    row: Any,
+    summary: dict[str, Any],
+) -> None:
+    """Advance + enqueue ONE due scheduled-report row (one epoch each, atomic).
+
+    Extracted from ``_process_due_report_rows`` (complexity bound).
+    """
+    # FAR-377: never mis-dispatch a ``run_kind == 'suite_run'`` row through the
+    # report path (which drives ``fire_report_trigger``, a scheduled report
+    # delivery — not a pipeline Run). A suite_run scheduled report should not
+    # exist, but the guard keeps a mis-typed row from firing a report.
+    if getattr(row, "run_kind", "run") == "suite_run":
+        summary["report_skipped_suite_run"] += 1
+        return
+    summary["report_due"] += 1
+    try:
+        if not await _advance_report_next_send(session, row.id, row.cron_expression):
+            return
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: report advance failed %s", row.id)
+        return
+    try:
+        job_id = await _enqueue_fire_job_async(
+            q,
+            "modulo.core.saq_worker.fire_report_trigger",
+            f"fire:report:{row.id}:{int(now.timestamp())}",
+            report_id=str(row.id),
+            org_id=str(org_id),
+        )
+        if job_id is not None:
+            summary["report_enqueued"] += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["enqueue_failures"] += 1
+        _log.exception("fire_due_triggers: report enqueue failed %s", row.id)
+        await _ingest_saq_error(
+            session,
+            org_id,
+            function="fire_due_triggers",
+            message=f"fire_due_triggers: enqueue failed for report {row.id}",
+            context={"report_id": str(row.id), "trigger_type": "report"},
+        )
 
 
 async def _process_one_ongoing_row(
