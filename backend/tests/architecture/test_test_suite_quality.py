@@ -5785,7 +5785,7 @@ def test_any_equality_lens_flags_fixed_outcomes():
         assert not _any_equality_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-_CONTAINER_LITERALS = (ast.List, ast.Dict, ast.Set, ast.Tuple)
+_CONTAINER_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.Tuple)
 
 
 def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
@@ -5818,7 +5818,7 @@ def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, s
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             negated = True
             test = test.operand
-        if not isinstance(test, _CONTAINER_LITERALS):
+        if not isinstance(test, _CONTAINER_LITERAL_NODES):
             continue
         if isinstance(test, ast.Dict):
             if any(key is None for key in test.keys):
@@ -7348,6 +7348,213 @@ def test_bound_method_lens_flags_missing_call_parens():
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# LENS: impossible cross-container-type equality (dict-view / set / list)
+# ---------------------------------------------------------------------------
+_DICT_VIEW_METHODS = {"keys", "values", "items"}
+
+
+_DIRECT_CONTAINERS = {"set": "set", "frozenset": "set", "list": "list", "tuple": "list"}
+_CONTAINER_LITERALS = {
+    "set": (ast.Set,),
+    "list": (ast.List, ast.Tuple),
+    "dict": (ast.Dict,),
+}
+
+
+def _is_dict_view_call(node: ast.AST) -> str | None:
+    """Return the dict-view kind (``keys``/``values``/``items``) for a
+    ``<obj>.keys()`` / ``.values()`` / ``.items()`` call, else None.
+
+    Any receiver is accepted: if the object is a real dict the view comparison
+    is a guaranteed type mismatch, and if it is a test double the comparison is
+    a mock tautology either way."""
+    if not isinstance(node, ast.Call):
+        return None
+    if not isinstance(node.func, ast.Attribute):
+        return None
+    if node.func.attr not in _DICT_VIEW_METHODS:
+        return None
+    if node.args or node.keywords:
+        return None
+    return node.func.attr
+
+
+def _container_kind(node: ast.AST) -> str | None:
+    """Categorise a comparison operand into a container family, or None if it is
+    not one the cross-type lens reasons about.
+
+    Returns ``"dictview:<keys|values|items>"`` for a dict view call, ``"set"``
+    for a set/frozenset literal or ``set(...)``/``frozenset(...)`` conversion,
+    and ``"list"`` for a list/tuple literal or ``list(...)``/``tuple(...)``
+    conversion. Non-container expressions, calls with arguments beyond a single
+    iterable, and ``dict(...)``/``frozenset(...)``-with-multiple-args return
+    None so the lens never over-reaches."""
+    view = _is_dict_view_call(node)
+    if view is not None:
+        return f"dictview:{view}"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in _DIRECT_CONTAINERS and len(node.args) == 1 and not node.keywords:
+            return _DIRECT_CONTAINERS[node.func.id]
+        return None
+    for kind, types in _CONTAINER_LITERALS.items():
+        if isinstance(node, types):
+            return kind
+    return None
+
+
+def _cross_type_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for ``assert`` comparisons whose two
+    operands are container families that can never compare equal.
+
+    All of these are decided at source time, so the assertion either ALWAYS
+    FAILS (``==``) or ALWAYS PASSES (``!=``) no matter what the code under test
+    produces:
+
+    - a dict view (``d.keys()`` / ``d.values()`` / ``d.items()``) on one side
+      compared with a set/list/tuple/dict literal or a ``set(...)``/``list(...)``
+      conversion — ``dict_keys``-and-friends only compare equal to a same-kind
+      *view*, so they never equal a literal or another container type;
+    - a dict view compared with a *different* dict-view kind (``d.keys()`` vs
+      ``e.values()``) — ``dict_keys`` never equals ``dict_values``;
+    - a ``set`` family (literal or conversion) compared with a ``list`` family
+      (literal or conversion) in either position — a ``set`` never equals a
+      ``list``/``tuple``.
+
+    ``set(x) == {set literal}`` (both sides ``set``), ``sorted(x) == [list]``
+    (both sides ``list``), and same-kind dict-view comparisons
+    (``d.keys() == e.keys()``) are deliberately left alone — those are the valid
+    idioms. Only ``==``/``!=`` are considered; ``in``/``not in`` and ordering
+    comparisons are other lenses' business.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node.test):
+            if not isinstance(sub, ast.Compare) or len(sub.ops) != 1:
+                continue
+            if not isinstance(sub.ops[0], (ast.Eq, ast.NotEq)):
+                continue
+            op = sub.ops[0]
+            left, right = sub.left, sub.comparators[0]
+
+            left_kind = _container_kind(left)
+            right_kind = _container_kind(right)
+            if left_kind is None or right_kind is None:
+                continue
+
+            if left_kind == right_kind and left_kind not in ("set", "list"):
+                continue
+
+            detail = None
+            if left_kind.startswith("dictview:") or right_kind.startswith("dictview:"):
+                if left_kind == right_kind:
+                    continue
+                kind_names = {
+                    "dictview:keys": "dict.keys()",
+                    "dictview:values": "dict.values()",
+                    "dictview:items": "dict.items()",
+                    "set": "a set",
+                    "list": "a list/tuple",
+                }
+                lname = kind_names.get(left_kind, left_kind)
+                rname = kind_names.get(right_kind, right_kind)
+                detail = (
+                    f"{ast.unparse(sub)} — compares {lname} against {rname}; "
+                    f"a dict view only compares equal to a view of the same kind, so this "
+                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
+                    f"regardless of the dict contents"
+                )
+            else:
+                if left_kind == right_kind:
+                    continue
+                detail = (
+                    f"{ast.unparse(sub)} — compares {left_kind} against {right_kind}; "
+                    f"a {left_kind} never compares equal to a {right_kind}, so this "
+                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
+                    f"regardless of the operands (normalise both sides with the same container)"
+                )
+
+            found.append((sub.lineno, detail))
+    return found
+
+
+def test_no_cross_container_type_equality():
+    """``assert d.keys() == {"a", "b"}`` / ``assert set(x) == [a, b]`` — equality
+    between two operands that can never be the same type. A dict ``keys()``/
+    ``values()``/``items()`` view only compares equal to a view *of the same
+    kind*, so comparing it against a set/list/tuple/dict literal (or a
+    ``set(...)``/``list(...)``/``tuple(...)`` conversion) is ALWAYS False under
+    ``==`` and ALWAYS True under ``!=`` — a silent false-green every time the
+    test author reaches for ``!=``, and an always-red that masks the real bug
+    under ``==``. Likewise ``set(...) == [list literal]`` and
+    ``list(...) == {set literal}`` can never hold because a ``set`` never equals
+    a ``list``/``tuple``. The fix is to normalise both sides with the same
+    container (``set(d.keys()) == {...}``); ``set(x) == {set literal}`` and
+    ``sorted(x) == [list literal]`` are left alone because both operands are
+    already the same type."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _cross_type_comparison_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} cross-container-type equality comparison(s).\n"
+        "Comparing operands of different container types (a dict view vs a set/list literal,\n"
+        "or a set(...) vs a list/tuple literal) is decided at source time: dict views only\n"
+        "equal same-kind views, and a set never equals a list/tuple. Normalise both sides\n"
+        "with the same container, e.g. set(d.keys()) == {...}.\n" + "\n".join(violations)
+    )
+
+
+def test_cross_container_type_lens_flags_impossible_equality():
+    """Synthetic positive/negative control for the cross-container-type-equality
+    lens: it must flag dict-view-vs-literal, set-vs-list/tuple, and
+    list-vs-set comparisons, and ignore the valid same-type idioms
+    (``set(x) == {set}``, ``sorted(x) == [list]``, and pair-of-same-kind-view
+    comparisons)."""
+    positive_sources = [
+        "def test_foo():\n    assert d.keys() == {'a', 'b'}\n",
+        "def test_foo():\n    assert d.keys() != ['a', 'b']\n",
+        "def test_foo():\n    assert d.values() == ('x', 'y')\n",
+        "def test_foo():\n    assert d.items() == {'a': 1}\n",
+        "def test_foo():\n    assert {'a': 1}.keys() == list(d)\n",
+        "def test_foo():\n    assert set(d) == ['a', 'b']\n",
+        "def test_foo():\n    assert set(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert list(x) == {'a', 'b'}\n",
+        "def test_foo():\n    assert tuple(x) == {1, 2}\n",
+        "def test_foo():\n    assert set(x) != ('a', 'b')\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _cross_type_comparison_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert set(x) == {'a', 'b'}\n",
+        "def test_foo():\n    assert set(x) == frozenset({'a', 'b'})\n",
+        "def test_foo():\n    assert sorted(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert list(x) == ['a', 'b']\n",
+        "def test_foo():\n    assert tuple(x) == (1, 2)\n",
+        "def test_foo():\n    assert d.keys() == e.keys()\n",
+        "def test_foo():\n    assert d.items() == e.items()\n",
+        "def test_foo():\n    assert d.keys() == {'a': 1}.keys()\n",
+        "def test_foo():\n    assert {'a', 'b'} == set(d)\n",
+        "def test_foo():\n    assert set(x) == set(y)\n",
+        "def test_foo():\n    assert 'a' in d.keys()\n",
+        "def test_foo():\n    assert len(set(x)) == 3\n",
+        "def test_foo():\n    assert set(x) <= {'a', 'b'}\n",
+        "def _helper():\n    return set(x) == ['a', 'b']\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _cross_type_comparison_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 # LENS: empty-string membership / str-method tautologies
 # ---------------------------------------------------------------------------
 _EMPTY_STRING_METHODS = frozenset(
