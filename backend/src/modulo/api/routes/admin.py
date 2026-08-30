@@ -674,6 +674,12 @@ async def admin_create_user(
                     password_hash=pw_hash,
                 )
 
+            # FAR-460: an admin-minted credential must be replaced by the user
+            # on first sign-in — this mirrors admin_reset_password and matches the
+            # migration docstring. The forced-change gate (login response + /me +
+            # frontend) enforces the rotation.
+            account.must_change_password = True
+
             membership = await create_membership(
                 session,
                 account_id=account.id,

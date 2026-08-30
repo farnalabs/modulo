@@ -141,7 +141,7 @@
           <div class="flex gap-2">
             <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
             <Button type="button" severity="secondary" outlined class="shrink-0 border-primary/30" data-testid="admin-users-generate-password" @click="generatePassword">
-              Generate
+              {{ $t('views.AdminUsersView.generate_password') }}
             </Button>
           </div>
         </div>
@@ -171,15 +171,11 @@
       <template #header>
         <div class="text-lg font-semibold">{{ credentialTitle }}</div>
       </template>
-      <p class="text-sm text-muted-foreground">
-        <template v-if="credentialMode === 'reset'">
-          A temporary password has been generated for <strong>{{ credentialEmail }}</strong>.
-          Share it with them - they will be prompted to change it on their next login.
-        </template>
-        <template v-else>
-          The password for new user <strong>{{ credentialEmail }}</strong> is shown below.
-          Copy it now and share it with them - it cannot be retrieved later (only reset).
-        </template>
+      <p v-if="credentialMode === 'reset'" class="text-sm text-muted-foreground">
+        {{ $t('views.AdminUsersView.credential_body_reset', { email: credentialEmail }) }}
+      </p>
+      <p v-else class="text-sm text-muted-foreground">
+        {{ $t('views.AdminUsersView.credential_body_created', { email: credentialEmail }) }}
       </p>
       <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3 mt-2">
         <code class="flex-1 text-sm font-mono break-all">{{ credentialPassword }}</code>
@@ -262,7 +258,7 @@ const credentialPassword = ref('')
 const credentialTitle = computed(() =>
   credentialMode.value === 'reset'
     ? t('views.AdminUsersView.password_reset')
-    : 'Credentials'
+    : t('views.AdminUsersView.credentials')
 )
 const copied = ref(false)
 const flashMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)

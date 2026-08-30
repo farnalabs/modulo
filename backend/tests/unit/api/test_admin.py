@@ -519,7 +519,7 @@ class TestDeleteOrgImmediate:
 
 
 class TestAdminListTeamsOwnedResourceCount:
-    """GET /api/v1/admin/teams includes owned_resource_count (PRD Â§9.3)."""
+    """GET /api/v1/admin/teams includes owned_resource_count (PRD §9.3)."""
 
     URL = "/api/v1/admin/teams"
 
@@ -585,7 +585,7 @@ class TestAdminListTeamsOwnedResourceCount:
 
 
 class TestAdminUpdateTeamOptimisticLock:
-    """PUT /api/v1/admin/teams/{id} with expected_updated_at â€” optimistic concurrency."""
+    """PUT /api/v1/admin/teams/{id} with expected_updated_at — optimistic concurrency."""
 
     URL = "/api/v1/admin/teams"
 
@@ -984,7 +984,7 @@ class TestBillingOverviewAggregation:
 
 
 class TestOrgSlugImmutability:
-    """The org slug is immutable once set â€” the profile update endpoint
+    """The org slug is immutable once set — the profile update endpoint
     (PUT /api/v1/admin/org) must never change it."""
 
     URL = "/api/v1/admin/org"
@@ -1022,7 +1022,7 @@ class TestOrgSlugImmutability:
             assert updates.get("name") == "Renamed"
 
     def test_update_org_model_has_no_slug_field(self) -> None:
-        """The request model exposes no slug field â€” a client cannot even
+        """The request model exposes no slug field — a client cannot even
         express a slug change."""
         from modulo.api.routes.admin import UpdateOrgRequest
 

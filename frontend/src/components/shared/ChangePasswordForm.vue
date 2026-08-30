@@ -5,6 +5,7 @@
       <input id="changepassword-current"
         v-model="currentPassword"
         type="password"
+        autocomplete="current-password"
         class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
         required
         data-testid="change-password-current"
@@ -15,6 +16,7 @@
       <input id="changepassword-new"
         v-model="newPassword"
         type="password"
+        autocomplete="new-password"
         class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
         minlength="8"
         required
@@ -26,6 +28,7 @@
       <input id="changepassword-confirm"
         v-model="confirmPassword"
         type="password"
+        autocomplete="new-password"
         class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
         minlength="8"
         required
