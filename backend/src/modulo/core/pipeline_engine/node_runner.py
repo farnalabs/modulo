@@ -87,6 +87,7 @@ from modulo.core.node_output_split import (
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.idempotency import node_idempotency_key
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
@@ -944,6 +945,8 @@ async def _retain_raw_output_marker(
     stderr_length: int,
     delivery_sentinel: str | None = None,
     status: str = "failed",
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -970,6 +973,14 @@ async def _retain_raw_output_marker(
     monotone at the same-key write (see ``_persist_raw_output_marker``): a
     retry marker without the sentinel never unsets an existing
     ``delivery_done``.
+
+    ``index`` / ``payload`` (FAR-438) are threaded through to the persisted
+    marker's ``idempotency_key`` derivation so a fan-out cardinality position
+    and a content-version payload are folded into the key — the SAME arguments
+    the executor's suppression read passes, so both sides compute the identical
+    key. The sandbox node body call sites pass ``None`` (a single node has no
+    separate fan-out item / content-edit payload here; the node_id already
+    encodes ``parent+index`` for fan-out children).
     """
     text = _normalize_marker_text(source)
     marker: dict[str, Any] = {
@@ -994,6 +1005,8 @@ async def _retain_raw_output_marker(
         node_id=node_id,
         attempt_key=attempt_key,
         marker=marker,
+        index=index,
+        payload=payload,
     )
 
 
@@ -1005,6 +1018,8 @@ async def _persist_raw_output_marker(
     node_id: str,
     attempt_key: str | None,
     marker: dict[str, Any],
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
 ) -> None:
     """Best-effort persist of a raw-output retention marker onto ``runs.raw_output_markers``.
 
@@ -1028,6 +1043,17 @@ async def _persist_raw_output_marker(
 
     NEVER raises (except cancellation): a persistence failure must not block the
     node's retryable raise — run terminalization depends on it.
+
+    DURABILITY GAP (known, documented, FAR-438): because the persist is
+    best-effort and swallows failures (a timeout or an exception is logged via
+    ``sandbox_agent.raw_output_marker_persist_timeout_or_error`` and the run
+    proceeds), the read-before-write dedupe's evidence (the ``delivery_done``
+    sentinel + the stamped ``idempotency_key``) can be LOST on a DB hiccup. If a
+    delivery genuinely happened but its marker was not persisted, the next
+    transient retry will NOT see ``delivery_done`` and will re-fire — a
+    potential double-write. This is a deliberate trade (failing open to preserve
+    the retryable raise beats blocking terminalization), but it means the
+    idempotency gate is best-effort, not exactly-once, under DB failure.
     """
     if session_factory is None:
         _log.warning(
@@ -1059,6 +1085,8 @@ async def _persist_raw_output_marker(
                 node_id=node_id,
                 attempt_key=attempt_key,
                 marker=marker,
+                index=index,
+                payload=payload,
             ),
             timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
         )
@@ -1079,6 +1107,8 @@ async def _write_raw_output_marker(
     node_id: str,
     attempt_key: str | None,
     marker: dict[str, Any],
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
 ) -> None:
     """Bounded persist of a single raw-output retention marker row.
 
@@ -1109,6 +1139,23 @@ async def _write_raw_output_marker(
                 return
             markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
+            # FAR-438 read-before-write: stamp the derived per-node idempotency key
+            # (from the run's PERSISTED run-level key) so a re-run that reuses the
+            # same key can suppress a duplicate write. Fail-open — a missing or
+            # malformed persisted key simply stamps nothing. Monotone: setdefault
+            # never downgrades an already-applied marker's key. ``index`` and
+            # ``payload`` are threaded into the derivation so fan-out cardinality
+            # and content-version keys are computed consistently with the
+            # suppression read (executor ``_idempotency_gate_ok``) — the same
+            # node_id at a different `index`, or the same node_id with an edited
+            # `payload`, must derive a DIFFERENT key.
+            run_ref = run.idempotency_key if hasattr(run, "idempotency_key") else None
+            if run_ref:
+                with suppress(TypeError, ValueError):
+                    marker.setdefault(
+                        "idempotency_key",
+                        node_idempotency_key(run_ref, node_id, index=index, payload=payload),
+                    )
             persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
             markers[key] = persisted_marker
             run.raw_output_markers = markers
@@ -1146,8 +1193,8 @@ def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any) -> 
         preserved["pr_url"] = existing["pr_url"]
     if existing.get("delivery_done") or marker.get("delivery_done"):
         preserved["delivery_done"] = True
-    if not preserved:
-        return marker
+    if existing.get("idempotency_key"):
+        preserved["idempotency_key"] = existing["idempotency_key"]
     merged = dict(marker)
     merged.update(preserved)
     return merged

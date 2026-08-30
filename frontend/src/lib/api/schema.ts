@@ -16574,6 +16574,11 @@ export interface components {
              * @default false
              */
             is_system_admin: boolean;
+            /**
+             * Must Change Password
+             * @default false
+             */
+            must_change_password: boolean;
         };
         /** PublishRequest */
         modulo__api__routes__composite_templates__PublishRequest: {
@@ -16946,6 +16951,11 @@ export interface components {
              * @default false
              */
             is_system_admin: boolean;
+            /**
+             * Must Change Password
+             * @default false
+             */
+            must_change_password: boolean;
         };
     };
     responses: never;

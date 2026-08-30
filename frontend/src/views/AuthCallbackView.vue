@@ -23,10 +23,11 @@
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
+import { syncFromMe } from '../lib/mustChangePassword'
 
 const router = useRouter()
 
-onMounted(() => {
+onMounted(async () => {
   const { access_token: accessToken, refresh_token: refreshToken } = parseFragmentTokens(window.location.hash)
   if (!accessToken) {
     router.replace('/login')
@@ -37,6 +38,10 @@ onMounted(() => {
   // Strip the tokens from the URL so they are not left in the address bar /
   // browser history after the handoff is consumed.
   history.replaceState(null, '', window.location.pathname + window.location.search)
+  // Sync the gate before navigating: stored state may belong to a previously
+  // logged-in account, and an SSO-only account could never satisfy a
+  // current-password form. Fails open on error.
+  await syncFromMe()
   router.replace('/')
 })
 

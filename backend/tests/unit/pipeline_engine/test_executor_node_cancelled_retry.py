@@ -49,6 +49,7 @@ def _make_run(
     run.claim_count = claim_count
     run.node_attempt_count = node_attempt_count
     run.claim_token = claim_token
+    run.idempotency_key = None
     return run
 
 

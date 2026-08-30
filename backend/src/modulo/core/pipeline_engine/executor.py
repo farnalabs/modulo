@@ -22,6 +22,7 @@ Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook trigger
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -70,6 +71,7 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.notifier import EVENT_HITL_AWAITING
+from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_audit_hook,
@@ -89,6 +91,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
+from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     OutputSchemaValidationError,
@@ -101,6 +104,7 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.pipeline import get_pipeline
@@ -574,6 +578,28 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
         if node.get("idempotent") is False:
             return False
     return True
+
+
+def compute_retry_aware_topology_hash(
+    graph_json: dict[str, Any] | None,
+    pipeline_retry_policy: dict[str, Any] | None,
+) -> str:
+    """Structural compile-cache hash that folds the pipeline retry policy in.
+
+    FAR-402 P5 wires a per-node retry/compensation wrapper into the compiled
+    graph that reads the pipeline ``retry_policy`` as the node default. The
+    graph_cache key is ``(pipeline_id, snapshot_id, node_timeout, struct_hash)``;
+    folding the policy into ``struct_hash`` means a PATCH to ``retry_policy``
+    recompiles the wrapped nodes instead of serving a stale graph (the same
+    reason ``pipeline_node_timeout_seconds`` is part of the key). The per-node
+    ``retry`` blocks live in ``graph_json`` (already part of the topology hash),
+    so only the pipeline-level default needs folding here.
+    """
+    base = compute_port_topology_hash(graph_json if isinstance(graph_json, dict) else {})
+    if not isinstance(pipeline_retry_policy, dict) or not pipeline_retry_policy:
+        return base
+    policy_payload = json.dumps(pipeline_retry_policy, sort_keys=True, default=str).encode("utf-8")
+    return base + ":" + hashlib.sha256(policy_payload).hexdigest()[:16]
 
 
 def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
@@ -2813,6 +2839,17 @@ class PipelineExecutor:
         snapshot_id = scalars["snapshot_id"]
         thread_id = scalars["thread_id"]
         is_correction_run = scalars["is_correction_run"]
+        run_number = scalars["run_number"]
+        # FAR-402 P5 / FAR-410: the runtime node-scoped idempotency-key provider.
+        # The compiled graph is cached across runs, so the key must be derived at
+        # RUNTIME from the run's stable logical identity (``<pipeline_id>:<run_number>``)
+        # plus the node id — NOT baked at compile time. A fresh per-replay
+        # ``run_id`` is never part of the derivation (a re-run recomputes the
+        # same key, so a retry of a side-effecting node dedupes its write).
+        run_ref = rc.build_run_ref(str(pipeline_id), run_number)
+
+        def _node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
+            return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
@@ -2900,6 +2937,8 @@ class PipelineExecutor:
                 node_type_map=node_type_map,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
                 broker=broker,
+                pipeline_retry_policy=pipeline_retry_policy,
+                idempotency_key=_node_idempotency_key,
             )
         except asyncio.CancelledError:
             raise
@@ -3077,9 +3116,13 @@ class PipelineExecutor:
         from modulo.settings import get_settings
 
         retries = int(get_settings().saq_run_retries)
-        node_attempt_count, current_token, run_markers, cancellation_requested = await self._load_transient_state(
-            run_id=run_id, org_id=org_id
-        )
+        (
+            node_attempt_count,
+            current_token,
+            run_markers,
+            cancellation_requested,
+            idempotency_key,
+        ) = await self._load_transient_state(run_id=run_id, org_id=org_id)
 
         superseded = self._claim_token is not None and current_token is not None and current_token != self._claim_token
         stalled = bool(stall_requested is not None and stall_requested.is_set())
@@ -3098,10 +3141,17 @@ class PipelineExecutor:
             exc=exc,
             run_markers=run_markers,
             run_id=run_id,
+            idempotency_key=idempotency_key,
             superseded=superseded,
             stalled=stalled,
             cancellation_requested=cancellation_requested,
             single_sandbox_node=single_sandbox_node,
+            # FAR-438: the transient path has no separate fan-out / content-edit
+            # context (exc.node_id already encodes parent+index for fan-out
+            # children; there is no connector payload to fold), so index/payload
+            # are None here — consistent with the marker-write side's defaults.
+            index=None,
+            payload=None,
         )
         # Only SandboxNodeFailedError carries a node_id — the gate is
         # keyed on it, so a None node_id (plain NodeCancelledError) can
@@ -3308,6 +3358,7 @@ class PipelineExecutor:
             "snapshot_id": snapshot_id,
             "thread_id": thread_id,
             "is_correction_run": is_correction_run,
+            "run_number": int(getattr(run, "run_number", 0) or 0),
         }
 
     async def _init_run_environment(
@@ -3385,6 +3436,8 @@ class PipelineExecutor:
         node_type_map: dict[str, str],
         pipeline_node_timeout_seconds: int,
         broker: RunEventBroker,
+        pipeline_retry_policy: dict[str, Any] | None = None,
+        idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Compile (or retrieve) the StateGraph and stream it to completion.
 
@@ -3393,7 +3446,10 @@ class PipelineExecutor:
         finalization path sees the same ids the original inline rebinding
         produced.
         """
-        # Compile (or retrieve from cache) the StateGraph.
+        # Compile (or retrieve from cache) the StateGraph. ``pipeline_retry_policy``
+        # and ``idempotency_key`` are threaded into the per-node retry/compensation
+        # wrapper (FAR-402 P5) — the latter is runtime-derived so a cached graph
+        # still dedupes against the run's stable identity.
         compiled = get_or_compile(
             scope.pipeline_id,
             scope.snapshot_id,
@@ -3403,9 +3459,11 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 org_id=scope.org_id,
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
+                pipeline_retry_policy=pipeline_retry_policy,
+                node_idempotency_key=idempotency_key,
             ),
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
-            graph_struct_hash=compute_port_topology_hash(graph_json),
+            graph_struct_hash=compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
         )
 
         initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
@@ -3519,15 +3577,20 @@ class PipelineExecutor:
 
     async def _load_transient_state(
         self, *, run_id: uuid.UUID, org_id: uuid.UUID
-    ) -> tuple[int, str | None, dict[str, Any] | None, bool]:
+    ) -> tuple[int, str | None, dict[str, Any] | None, bool, str | None]:
         """Reload the run's attempt markers + claim + cancellation state.
 
-        Returns ``(node_attempt_count, current_token, run_markers, cancellation_requested)``.
+        Returns ``(node_attempt_count, current_token, run_markers,
+        cancellation_requested, idempotency_key)``. ``idempotency_key`` is the
+        run's persisted FAR-438 idempotency identity (``<pipeline_id>:<run_number>``)
+        written at create — a re-run reads it back to recompute the SAME per-node
+        keys for the read-before-write dedupe.
         """
         node_attempt_count = 0
         current_token: str | None = None
         run_markers: dict[str, Any] | None = None
         cancellation_requested = False
+        idempotency_key: str | None = None
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -3537,7 +3600,8 @@ class PipelineExecutor:
                 current_token = current_run.claim_token
                 run_markers = current_run.raw_output_markers
                 cancellation_requested = bool(current_run.cancellation_requested)
-        return node_attempt_count, current_token, run_markers, cancellation_requested
+                idempotency_key = current_run.idempotency_key
+        return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
 
     def _idempotency_gate_ok(
         self,
@@ -3545,18 +3609,64 @@ class PipelineExecutor:
         exc: NodeCancelledError | SandboxNodeFailedError,
         run_markers: dict[str, Any] | None,
         run_id: uuid.UUID,
+        idempotency_key: str | None,
         superseded: bool,
         stalled: bool,
         cancellation_requested: bool,
         single_sandbox_node: bool,
+        index: int | str | None = None,
+        payload: str | bytes | None = None,
     ) -> bool:
-        """FAR-228 guard B — should a transient retry be suppressed by the idempotency gate?"""
+        """FAR-228 guard B + FAR-438 read-before-write — should a transient retry be suppressed?
+
+        Suppresses when EITHER the run's delivery marker already records
+        ``delivery_done`` for the failing node (FAR-228, same-run retry) OR a
+        re-run that reused the run's persisted FAR-438 idempotency key records an
+        already-applied per-node key (``read_before_write_suppression``). The
+        second branch is the UNKNOWN-recovery path: an operator re-run with the
+        SAME persisted key must NOT double-submit the write.
+
+        ``index`` / ``payload`` (FAR-438) are the item-cardinality position and
+        content-version payload handed to ``read_before_write_suppression`` so the
+        derived per-node key matches the key the marker-write side stamped. They
+        must be the SAME arguments the write side used — the transient path has no
+        separate fan-out/content-edit context here (``exc.node_id`` already encodes
+        ``parent+index`` for fan-out children, and there is no connector content
+        payload to fold), so they default to ``None`` and stay consistent with the
+        sandbox marker write.
+
+        TOCTOU note (known, documented): ``run_markers`` is the run's
+        ``raw_output_markers`` read by ``_load_transient_state`` via plain
+        ``get_run`` — NOT under ``SELECT ... FOR UPDATE``. Two executors racing
+        on the same run could both read ``delivery_done`` absent and both decide
+        to suppress/retry. The marker WRITE side (``_write_raw_output_marker``)
+        DOES take ``with_for_update`` on the run row before persisting, so a
+        concurrent writer is serialised there; this read is a bounded, best-effort
+        gate (guarded by ``pipeline.idempotency_gate.check_failed``). If the
+        TOCTOU window becomes a real double-write risk, take ``with_for_update``
+        on this read too.
+        """
         from modulo.settings import get_settings
 
         gate_ok = False
         try:
+            node_id = getattr(exc, "node_id", None)
+            delivered = _should_skip_retry(node_id, run_markers, str(run_id))
+            # read_before_write_suppression is typed ``str`` for both refs and
+            # fail-opens (returns False) on a None/empty run_ref or node_ref —
+            # guard here so a None idempotency_key (no persisted key) never
+            # even attempts the derivation, and to satisfy mypy's arg-types.
+            replay_suppressed = False
+            if idempotency_key and node_id:
+                replay_suppressed = read_before_write_suppression(
+                    run_markers,
+                    run_ref=idempotency_key,
+                    node_ref=node_id,
+                    index=index,
+                    payload=payload,
+                )
             gate_ok = (
-                _should_skip_retry(getattr(exc, "node_id", None), run_markers, str(run_id))
+                (delivered or replay_suppressed)
                 and not superseded
                 and not stalled
                 and not cancellation_requested
@@ -4419,6 +4529,28 @@ class PipelineExecutor:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
             return "cancelled", None, None, node_token_usage
+        if isinstance(exc, CompensationFailedError):
+            # FAR-402 P5 (§E): a watched node's compensation target itself failed.
+            # The node wrapper wrapped the watched-node terminal failure into a
+            # forward compensation execution, which then failed — terminalize the
+            # run as COMPENSATION_FAILED (never retried; the run already left the
+            # batch pipeline's normal failure path via the compensation edge).
+            scrubbed = _sanitize_detail(str(exc), limit=5000)
+            _log.warning(
+                "pipeline.compensation_failed",
+                extra={
+                    "run_id": str(run_id),
+                    "node_id": getattr(exc, "node_id", None),
+                    "compensation_target": getattr(exc, "compensation_target", None),
+                },
+            )
+            return _terminal_failure(
+                broker,
+                "compensation_failed",
+                COMPENSATION_FAILED_CODE,
+                scrubbed,
+                node_token_usage,
+            )
         if isinstance(exc, RunawayRunError):
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(

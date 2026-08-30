@@ -157,15 +157,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
     await newInput.setValue('new-password')
     await confirmInput.setValue('different-password')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
 
     expect(wrapper.text()).toContain('Passwords do not match')
     expect(mockPut).not.toHaveBeenCalled()
@@ -175,15 +175,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
     await newInput.setValue('short')
     await confirmInput.setValue('short')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
 
     expect(wrapper.text()).toContain('at least 8 characters')
     expect(mockPut).not.toHaveBeenCalled()
@@ -193,15 +193,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('same-password')
     await newInput.setValue('same-password')
     await confirmInput.setValue('same-password')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
 
     expect(wrapper.text()).toContain('New password must be different')
     expect(mockPut).not.toHaveBeenCalled()
@@ -211,15 +211,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
     await newInput.setValue('new-strong-password-42')
     await confirmInput.setValue('new-strong-password-42')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
 
     expect(mockPut).toHaveBeenCalledWith('/api/v1/me/password', {
@@ -237,15 +237,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('wrong-password')
     await newInput.setValue('new-strong-password-42')
     await confirmInput.setValue('new-strong-password-42')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
 
     expect(wrapper.text()).toContain('Current password is incorrect')
@@ -257,20 +257,20 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
     await newInput.setValue('new-strong-password-42')
     await confirmInput.setValue('new-strong-password-42')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
 
     expect(wrapper.text()).toContain('Network Error')
     expect(wrapper.text()).not.toContain('Password changed successfully')
-    const button = wrapper.find('[data-testid="my-profile-update-password"]')
+    const button = wrapper.find('[data-testid="change-password-submit"]')
     expect(button.attributes('disabled')).toBeUndefined()
   })
 
@@ -280,15 +280,15 @@ describe('MyProfileView', () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
 
-    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
-    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
-    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
     await newInput.setValue('new-strong-password-42')
     await confirmInput.setValue('new-strong-password-42')
 
-    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
 
     expect(mockPut).toHaveBeenCalled()

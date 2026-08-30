@@ -48,3 +48,9 @@ class PipelineEdge(OrgScoped):
     # depth so a load-then-mutate pattern can never silently bypass a write).
     hitl_gate_config: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON))
     condition_expression: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # FAR-402 P5 (§4F): a transition-edge retry block (re-executes the source
+    # node) and an ``on_failure_target`` (a compensation node). Mutually
+    # exclusive per failure — the GraphValidator emits a typed error if both are
+    # set on the same edge. Generic JSON for cross-backend parity.
+    retry: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    on_failure_target: Mapped[str | None] = mapped_column(String(64), nullable=True)

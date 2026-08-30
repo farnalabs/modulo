@@ -39,6 +39,9 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.port_resolver import (
     synthesize_node_ports,
 )
+from modulo.core.pipeline_engine.runtime_retry import (
+    make_retrying_node_fn,
+)
 from modulo.core.pipeline_engine.scatter_join import (
     run_join_node,
     run_scatter_node,
@@ -559,54 +562,42 @@ def make_join_node_fn(
     return _fn
 
 
-def _add_node_to_graph(
-    graph: StateGraph[Any],
+def _build_raw_node_fn(
     node_def: dict[str, Any],
     *,
     timeout: int,
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
-) -> None:
-    """Add a single node to the graph based on its type and config."""
+) -> Any:
+    """Return the raw (un-retry-wrapped) callable for a node def.
+
+    The same branching used by the node-adding path (join / scatter /
+    agent / connector / manual / sandbox). Returns the callable rather than
+    adding it to the graph so the retry/compensation wrapper can be applied
+    around it (FAR-402 P5 runtime wiring).
+    """
     node_type: str = node_def.get("node_type", "agent")
-    node_id: str = str(node_def["id"])
 
     # FAR-402 P3 / FAR-417: compile-time fail-closed validation of scatter/join
     # configuration (typed error surfaces before any execution).
     validate_scatter_join_node(node_def)
 
     if node_type == "join":
-        # FAR-402 P3 / FAR-417: a join node is a pure convergence node. Its child
-        # branches are executed by the upstream scatter node (or are real graph
-        # nodes); the join simply aggregates their collected outputs from state.
-        graph.add_node(node_id, make_join_node_fn(node_def))
-        return
+        return make_join_node_fn(node_def)
 
     if node_def.get("fan_out") is not None and node_type in ("agent", "sandbox_agent"):
-        # FAR-402 P3 / FAR-417: a scatter node expands its split source into N
-        # child branches at runtime, each with a unique correlation id.
-        # Both agent and sandbox_agent nodes are executable as children, so
-        # fan_out is honored for both (composite is rejected at validation
-        # because it has no runtime child factory).
-        graph.add_node(
-            node_id,
-            make_scatter_node_fn(
-                node_def,
-                timeout=timeout,
-                session_factory=session_factory,
-                single_sandbox_node=single_sandbox_node,
-            ),
-        )
-        return
-
-    graph.add_node(
-        node_id,
-        _make_node_fn(
+        return make_scatter_node_fn(
             node_def,
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
-        ),
+        )
+
+    return _make_node_fn(
+        node_def,
+        timeout=timeout,
+        session_factory=session_factory,
+        single_sandbox_node=single_sandbox_node,
     )
 
 
@@ -838,6 +829,8 @@ def build_graph_from_json(
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
     pipeline_node_timeout_seconds: int = 300,
+    pipeline_retry_policy: dict[str, Any] | None = None,
+    node_idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -900,17 +893,49 @@ def build_graph_from_json(
     # can require it without re-deriving from the node's own def.
     single_sandbox_node = _count_sandbox_nodes(nodes)
 
+    # Build EVERY node's raw callable first, then wrap each with the P5
+    # retry/compensation wrapper. Wrapping after a full pass lets the wrapper
+    # resolve OTHER nodes' raw fns (per-edge retry re-executes the SOURCE; a
+    # compensation edge invokes the on_failure_target), which is impossible in a
+    # single pass (the source/target fn may not exist yet).
+    raw_fns: dict[str, Any] = {}
     for node_def in nodes:
-        timeout: int | None = node_def.get("timeout_seconds")
-        if timeout is None:
-            timeout = pipeline_node_timeout_seconds
-        _add_node_to_graph(
-            graph,
+        node_timeout = node_def.get("timeout_seconds")
+        timeout = pipeline_node_timeout_seconds if node_timeout is None else node_timeout
+        raw_fns[str(node_def["id"])] = _build_raw_node_fn(
             node_def,
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
         )
+
+    # Node-id-to-def lookup for the retry wrapper (source fail-closed + retry config).
+    retry_nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
+    # Per-node incoming/outgoing edge sets for per-edge retry + compensation.
+    incoming_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
+    outgoing_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
+    for edge_def in edges:
+        if _get_edge_type(edge_def) == "reject":
+            continue
+        src = _get_edge_val(edge_def, "source", "source_node_id")
+        tgt = _get_edge_val(edge_def, "target", "target_node_id")
+        outgoing_by_node.setdefault(str(src), []).append(edge_def)
+        incoming_by_node.setdefault(str(tgt), []).append(edge_def)
+
+    for node_def in nodes:
+        node_id = str(node_def["id"])
+        wrapped = make_retrying_node_fn(
+            raw_fns[node_id],
+            node_id=node_id,
+            node_def=node_def,
+            pipeline_retry_policy=pipeline_retry_policy,
+            outgoing_edges=outgoing_by_node.get(node_id, []),
+            incoming_edges=incoming_by_node.get(node_id, []),
+            raw_fn_resolver=lambda nid: raw_fns.get(nid),
+            idempotency_key=node_idempotency_key,
+            node_defs=retry_nodes_by_id,
+        )
+        graph.add_node(node_id, wrapped)
 
     # Build reject-edge lookup for kick-back routing.
     reject_targets_by_source = _build_reject_targets(edges)
