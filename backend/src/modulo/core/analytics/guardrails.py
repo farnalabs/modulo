@@ -23,9 +23,11 @@ FAR-218 (deferred); this module deliberately does not build one — every rate
 is labelled advisory and returned alongside a note stating it is not a gate.
 
 Isolation invariant (same as the rest of ``modulo.core.analytics``):
-``modulo_app`` is BYPASSRLS and the ORM tenant filter is NOT registered on
+``modulo_app`` is NOBYPASSRLS (tenant isolation relies on RLS policies) and the
+ORM tenant filter is NOT registered on
 Postgres, so every statement carries an explicit ``organisation_id`` predicate
-— that predicate is the ONLY isolation control. ``set_rls_org`` is
+— that predicate is the PRIMARY isolation control (RLS also enforces org
+scoping). ``set_rls_org`` is
 defense-in-depth, never the control.
 """
 
@@ -136,7 +138,8 @@ def _json_text(column: Any, key: str, dialect: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Statement builders (explicit org predicate = the ONLY isolation control)
+# Statement builders (explicit org predicate = the PRIMARY isolation control,
+# with RLS also enforcing org scoping)
 # ---------------------------------------------------------------------------
 
 

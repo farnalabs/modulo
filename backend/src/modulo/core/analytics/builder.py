@@ -1,8 +1,10 @@
 """Analytics query builder — plain SQLAlchemy Core over ``run_daily_facts`` (ADR 020).
 
-Isolation invariant (CRITICAL): ``modulo_app`` is BYPASSRLS and the ORM tenant
+Isolation invariant (CRITICAL): ``modulo_app`` is NOBYPASSRLS (tenant isolation
+relies on RLS policies) and the ORM tenant
 filter is NOT registered on Postgres — the explicit ``organisation_id = :org``
-predicate injected here is the ONLY isolation control. EVERY statement carries
+predicate injected here is the PRIMARY isolation control (RLS also enforces org
+scoping). EVERY statement carries
 it; never strip it.
 
 Rules:
@@ -302,7 +304,8 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
 # completed_at) but NO per-instant run state, so "how many runs were running /
 # queued at any instant" cannot be reconstructed with a GROUP BY. The SQL side
 # therefore selects the RAW instants over the range + filters (org predicate
-# intact — the ONLY isolation control) and the overlap math happens in Python
+# intact — the PRIMARY isolation control, with RLS also enforcing org scoping)
+# and the overlap math happens in Python
 # (``bucket_concurrency_rows``), exactly like ``bucket_rows`` does zero-fill.
 # The raw scan is bounded by ``CONCURRENCY_MAX_RAW_ROWS + 1`` (cap + detection
 # sentinel): the service rejects the query when the scan exceeds the cap rather

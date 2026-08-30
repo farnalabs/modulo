@@ -278,9 +278,10 @@ def suite_pass_rate(results: Sequence[EvalResult], excluded_case_count: int = 0)
 # A pure read-model over the now-structured ``SuiteRun``/``eval_results`` data.
 # It is deliberately LIVE aggregation over the existing tables — no parallel
 # materialised view, no new "scores over time" store. The isolation invariant
-# mirrors ``core/analytics``: ``modulo_app`` is BYPASSRLS, so the explicit
-# ``organisation_id = :org`` predicate injected into EVERY statement is the ONLY
-# isolation control (``set_rls_org`` stays defense-in-depth, never the control).
+# mirrors ``core/analytics``: ``modulo_app`` is NOBYPASSRLS (tenant isolation
+# relies on RLS policies), so the explicit ``organisation_id = :org`` predicate
+# injected into EVERY statement is the PRIMARY isolation control (RLS also
+# enforces org scoping; ``set_rls_org`` stays defense-in-depth).
 #
 # Pass-rate discipline (the non-circular rule): pass-rates are computed from
 # the ``passed`` BOOLEAN only, NEVER from the raw ``score`` column. Scores are
@@ -342,7 +343,8 @@ def _common_eval_read_conditions(
 ) -> tuple[list[str], dict[str, Any]]:
     """The org-scoped WHERE fragments + params shared by leaderboard/timeseries.
 
-    The org predicate is unconditional — the ONLY isolation control. Guardrail
+    The org predicate is unconditional — the PRIMARY isolation control (RLS also
+    enforces org scoping). Guardrail
     rows are excluded (``eval_type != 'guardrail'``, matching the suite-run
     consumer contract) and suite-run outcomes are restricted to terminal runs so
     the read-model is deterministic across calls.
