@@ -73,24 +73,22 @@ def _definitions(config_sets: list[GuardrailConfigSet]) -> list[EvalDefinition]:
     ``config_json`` (``to_eval_config``) so a set rebuilt from rows hashes
     identically and drift stays clean.
     """
-    definitions: list[EvalDefinition] = []
-    for config_set in config_sets:
-        for item in config_set.guardrails:
-            definitions.append(
-                EvalDefinition(
-                    id=uuid.uuid4(),
-                    org_id=_ORG_ID,
-                    name=item.id,
-                    eval_type=EvalType.GUARDRAIL,
-                    config=to_eval_config(
-                        item,
-                        max_guardrails_per_node=config_set.max_guardrails_per_node,
-                        guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
-                    ),
-                    failure_behaviour="warn",
-                )
-            )
-    return definitions
+    return [
+        EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            name=item.id,
+            eval_type=EvalType.GUARDRAIL,
+            config=to_eval_config(
+                item,
+                max_guardrails_per_node=config_set.max_guardrails_per_node,
+                guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+            ),
+            failure_behaviour="warn",
+        )
+        for config_set in config_sets
+        for item in config_set.guardrails
+    ]
 
 
 # ---------------------------------------------------------------------------

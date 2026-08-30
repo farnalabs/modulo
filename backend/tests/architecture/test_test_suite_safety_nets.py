@@ -376,14 +376,14 @@ def test_awaiting_implementation_set_is_pinned():
     for rel in sorted(set(actual) | set(PINNED_AWAITING_IMPLEMENTATION)):
         got = actual.get(rel, set())
         pinned = PINNED_AWAITING_IMPLEMENTATION.get(rel, frozenset())
-        for name in sorted(got - pinned):
-            problems.append(
-                f"  {rel}: scenario {name!r} newly tagged @awaiting-implementation — REMOVE the tag or extend the pin"
-            )
-        for name in sorted(pinned - got):
-            problems.append(
-                f"  {rel}: scenario {name!r} no longer tagged @awaiting-implementation — behaviour must now run in CI"
-            )
+        problems.extend(
+            f"  {rel}: scenario {name!r} newly tagged @awaiting-implementation — REMOVE the tag or extend the pin"
+            for name in sorted(got - pinned)
+        )
+        problems.extend(
+            f"  {rel}: scenario {name!r} no longer tagged @awaiting-implementation — behaviour must now run in CI"
+            for name in sorted(pinned - got)
+        )
     assert not problems, "The @awaiting-implementation deselection set drifted from the pin.\n" + "\n".join(problems)
 
 

@@ -640,11 +640,11 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
         template = getattr(request.node, "_mock_template", None)
         parameter_values = composite_node.get("composite_parameter_values") or {}
         if template is not None and getattr(template, "parameter_ports_json", None):
-            for port in template.parameter_ports_json:
-                if port.get("required") and port.get("name") not in parameter_values:
-                    errors.append(
-                        f"Node '{composite_node.get('id')}': required parameter '{port.get('name')}' has no value"
-                    )
+            errors.extend(
+                f"Node '{composite_node.get('id')}': required parameter '{port.get('name')}' has no value"
+                for port in template.parameter_ports_json
+                if port.get("required") and port.get("name") not in parameter_values
+            )
 
     request.node._validation_errors = errors
 

@@ -947,14 +947,13 @@ def test_no_skip_without_reason():
 def test_no_bare_except():
     """``except:`` catches BaseException (KeyboardInterrupt, SystemExit) and
     hides failures; test code should always name ``Exception``."""
-    violations = []
-    for path in _iter_test_modules():
-        tree = _parse(path)
-        if tree is None:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler) and node.type is None:
-                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  bare 'except:'")
+    violations = [
+        f"  {path.relative_to(TESTS)}:{node.lineno}  bare 'except:'"
+        for path in _iter_test_modules()
+        if (tree := _parse(path)) is not None
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ExceptHandler) and node.type is None
+    ]
     assert not violations, (
         f"Found {len(violations)} bare 'except:' handler(s).\n"
         "Use 'except Exception:' so KeyboardInterrupt/SystemExit still propagate.\n" + "\n".join(violations)
@@ -1093,14 +1092,13 @@ def test_no_boolean_literal_equality():
 def test_no_stray_print_in_test_code():
     """``print()`` calls in test modules pollute CI logs and are usually
     leftover debug output. (Load/benchmark harnesses are excluded.)"""
-    violations = []
-    for path in _iter_test_modules():
-        tree = _parse(path)
-        if tree is None:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print":
-                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  print(...)")
+    violations = [
+        f"  {path.relative_to(TESTS)}:{node.lineno}  print(...)"
+        for path in _iter_test_modules()
+        if (tree := _parse(path)) is not None
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
+    ]
     assert not violations, (
         f"Found {len(violations)} stray print() call(s) in test code.\n"
         "Remove debug prints or route diagnostics through logging.\n" + "\n".join(violations)
@@ -1738,17 +1736,15 @@ def test_no_assert_inside_except():
     exception with ``pytest.raises(...) as exc_info`` and assert on
     ``exc_info.value`` after the ``with`` block, or record the error and assert
     in a separate step."""
-    violations = []
-    for path in _iter_test_modules():
-        tree = _parse(path)
-        if tree is None:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ExceptHandler):
-                continue
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Assert):
-                    violations.append(f"  {path.relative_to(TESTS)}:{sub.lineno}  assert inside except handler")
+    violations = [
+        f"  {path.relative_to(TESTS)}:{sub.lineno}  assert inside except handler"
+        for path in _iter_test_modules()
+        if (tree := _parse(path)) is not None
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ExceptHandler)
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Assert)
+    ]
     assert not violations, (
         f"Found {len(violations)} assertion(s) inside except handler(s).\n"
         "Use pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
@@ -3491,23 +3487,18 @@ def _unused_builtin_fixture_param_violations(tree: ast.AST) -> list[tuple[int, s
     requesting one without using the value can only mislead a reader into
     believing the test controls that capability.
     """
-    found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        params = {a.arg for a in node.args.args if a.arg in _UNUSED_BUILTIN_FIXTURE_PARAMS}
-        if not params:
-            continue
-        body_names = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
-        for name in sorted(params - body_names):
-            found.append(
-                (
-                    node.lineno,
-                    f"{name}() built-in fixture parameter never referenced in {node.name}() body — "
-                    "the fixture has no setup side effect, so the request is dead weight",
-                )
-            )
-    return found
+    return [
+        (
+            node.lineno,
+            f"{name}() built-in fixture parameter never referenced in {node.name}() body — "
+            "the fixture has no setup side effect, so the request is dead weight",
+        )
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if (params := {a.arg for a in node.args.args if a.arg in _UNUSED_BUILTIN_FIXTURE_PARAMS})
+        if (body_names := {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)})
+        for name in sorted(params - body_names)
+    ]
 
 
 def test_no_unused_builtin_fixture_params():
@@ -4346,9 +4337,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         has_match = any(kw.arg == "match" for kw in node.keywords)
         exception_args = list(node.args)
-        for kw in node.keywords:
-            if kw.arg == "expected_exception":
-                exception_args.append(kw.value)
+        exception_args.extend(kw.value for kw in node.keywords if kw.arg == "expected_exception")
         for arg in exception_args:
             classes: list[str] = []
             if isinstance(arg, ast.Name):
@@ -6406,26 +6395,23 @@ def _blocking_sleep_in_async_violations(tree: ast.AST) -> list[tuple[int, str]]:
     ``time.sleep`` inside a *nested* plain ``def`` within the async body is
     still flagged: the nested helper is awaited on the same loop, so its
     blocking sleep freezes that loop just like an inline call."""
-    found: list[tuple[int, str]] = []
-    for fn in ast.walk(tree):
-        if not isinstance(fn, ast.AsyncFunctionDef):
-            continue
-        for node in ast.walk(fn):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "sleep"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "time"
-            ):
-                found.append(
-                    (
-                        node.lineno,
-                        f"{ast.unparse(node)} in async def {fn.name} — time.sleep() blocks the event "
-                        "loop; use 'await asyncio.sleep(...)' so the loop can interleave other work",
-                    )
-                )
-    return found
+    return [
+        (
+            node.lineno,
+            f"{ast.unparse(node)} in async def {fn.name} — time.sleep() blocks the event "
+            "loop; use 'await asyncio.sleep(...)' so the loop can interleave other work",
+        )
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.AsyncFunctionDef)
+        for node in ast.walk(fn)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "sleep"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "time"
+        )
+    ]
 
 
 def test_no_blocking_sleep_in_async_body():

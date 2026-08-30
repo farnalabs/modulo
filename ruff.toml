@@ -24,12 +24,17 @@ select = [
     # so enabling them tightens the lint gate against future regressions without
     # touching existing code.
     "G001", "G002", "G003", "G004", "G201",
+    "G010", "G101", "G202",  # complete the flake8-logging family
+    "LOG",      # flake8-logging-format (direct-logger bans, `%`-format hygiene)
     "PERF101", "PERF203", "PERF402", "PERF403",
+    "PERF401",  # prefer list-comprehension/`extend` over loop-`append` (verified: 0 remaining)
     "PT020", "PT021",
-    "Q000", "Q003",
+    "Q000", "Q003", "Q002", "Q004",  # complete flake8-quotes family
     "ICN",
     "FA",
     "NPY",
+    "PGH",      # pygrep-hooks (PGH004 blanket # noqa, PGH003 blanket type: ignore)
+    "TID",      # flake8-tidy-imports (TID251 bans bundled/stdlib shadowing imports)
     "RUF100",
 ]
 ignore = [

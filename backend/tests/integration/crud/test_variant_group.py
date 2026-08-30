@@ -394,25 +394,24 @@ async def test_batch_runs_load_by_batch_id_org_scoped(
     snapshot_id = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
     batch_id = uuid.uuid4()
 
-    run_ids = []
-    for i in range(2):
-        run_ids.append(
-            await _insert_run(
-                rls_session,
-                org_id=test_org,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                batch_id=batch_id,
-                variant_config_snapshot={
-                    "variant_id": f"variant-{i}",
-                    "variant_name": f"variant-{i}",
-                    "snapshot_id": str(snapshot_id),
-                    "run_context_overrides": {"model_backend_id": f"backend-{i}"},
-                    "batch_id": str(batch_id),
-                },
-                run_number=i + 1,
-            )
+    run_ids = [
+        await _insert_run(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            batch_id=batch_id,
+            variant_config_snapshot={
+                "variant_id": f"variant-{i}",
+                "variant_name": f"variant-{i}",
+                "snapshot_id": str(snapshot_id),
+                "run_context_overrides": {"model_backend_id": f"backend-{i}"},
+                "batch_id": str(batch_id),
+            },
+            run_number=i + 1,
         )
+        for i in range(2)
+    ]
 
     runs = await get_batch_runs(rls_session, org_id=test_org, batch_id=batch_id)
     assert {run.id for run in runs} == set(run_ids)

@@ -52,20 +52,17 @@ def _team_flag_names() -> set[str]:
 def _backend_files_text() -> str:
     if not _BACKEND_SRC.is_dir():
         return ""
-    parts: list[str] = []
-    for path in sorted(_BACKEND_SRC.rglob("*.py")):
-        parts.append(path.read_text(encoding="utf-8"))
-    return "\n".join(parts)
+    return "\n".join(path.read_text(encoding="utf-8") for path in sorted(_BACKEND_SRC.rglob("*.py")))
 
 
 def _frontend_files_text() -> str:
     if not _FRONTEND_SRC.is_dir():
         return ""
-    parts: list[str] = []
-    for path in sorted(_FRONTEND_SRC.rglob("*")):
-        if path.is_file() and path.suffix in {".vue", ".ts", ".tsx", ".js"}:
-            parts.append(path.read_text(encoding="utf-8"))
-    return "\n".join(parts)
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(_FRONTEND_SRC.rglob("*"))
+        if path.is_file() and path.suffix in {".vue", ".ts", ".tsx", ".js"}
+    )
 
 
 def _is_enforced_in_backend(name: str, backend_text: str) -> bool:
