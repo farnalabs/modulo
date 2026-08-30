@@ -11,6 +11,7 @@ class SsoProvider(OrgScoped):
 
     provider_type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     client_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     client_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     discovery_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

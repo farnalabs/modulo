@@ -1,8 +1,11 @@
 """CRUD for Trigger records."""
 
+import logging
 import uuid
+from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -10,6 +13,35 @@ from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
+from modulo.util import sanitise_log_value
+
+_log = logging.getLogger(__name__)
+
+
+def apply_trigger_event_cursor(q: Select[Any], cursor: str | None) -> Select[Any]:
+    """Apply the ``<created_at_iso>_<id>`` keyset filter to a TriggerEvent query.
+
+    The admin and operator trigger-event listing endpoints both paginate the
+    event log with this ``{created_at}_{id}`` cursor. Keeping the parse+filter
+    here (rather than duplicated inline in the routes) prevents the two copies
+    drifting apart. A malformed cursor is ignored (logged) so a stale or
+    hostile cursor cannot break the page query; *q* is returned unchanged in
+    that case.
+    """
+    if not cursor:
+        return q
+    try:
+        cursor_ts_str, cursor_id = cursor.split("_", 1)
+        cursor_dt = datetime.fromisoformat(cursor_ts_str)
+        cursor_uuid = uuid.UUID(cursor_id)
+    except (ValueError, AttributeError):
+        _log.warning("Malformed cursor ignored: %s", sanitise_log_value(cursor), exc_info=True)
+        return q
+    return q.where(
+        (TriggerEvent.created_at < cursor_dt)
+        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
+    )
 
 
 async def list_triggers(

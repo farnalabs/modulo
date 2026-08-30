@@ -29,6 +29,7 @@
           </div>
           <div class="flex flex-wrap gap-3">
             <Button
+              type="button"
               data-testid="variant-batch-refire"
               :disabled="refiring"
               @click="handleReFire"
@@ -37,6 +38,7 @@
               {{ refiring ? $t('views.variantBatch.refiring') : $t('views.variantBatch.reFire') }}
             </Button>
             <Button
+              type="button"
               data-testid="variant-batch-back"
               variant="outlined"
               class="border border-input bg-background text-sm font-medium hover:bg-muted/50"
