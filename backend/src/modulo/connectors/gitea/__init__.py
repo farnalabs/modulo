@@ -15,6 +15,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 REQUIRED_SCOPES = frozenset({"read:user", "read:repository", "write:repository"})
 
@@ -56,6 +57,7 @@ class GiteaConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=f"{self._base_url}/api/v1",
             headers=self._headers(),

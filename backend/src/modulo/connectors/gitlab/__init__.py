@@ -33,6 +33,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 _GITLAB_API = "https://gitlab.com/api/v4"
 
@@ -478,6 +479,7 @@ class GitLabConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
     async def _declared_effective_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
@@ -695,6 +697,11 @@ class GitLabConnector(ConnectorBase):
             return HealthResult(ok=True, detail=detail)
         except httpx.RequestError as e:
             return HealthResult(ok=False, detail=str(e))
+        except ValueError as e:
+            # The outbound SSRF guard in ``_client`` rejects a private/internal
+            # base_url by raising. A health check must REPORT that as unhealthy
+            # (with the remediation text the guard produced), never propagate it.
+            return HealthResult(ok=False, detail=str(e)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

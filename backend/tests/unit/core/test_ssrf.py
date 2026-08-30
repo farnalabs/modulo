@@ -364,10 +364,11 @@ def test_tenant_allowlist_does_not_weaken_loopback() -> None:
 async def test_pinned_transport_uses_validated_ip_despite_rebind() -> None:
     """The transport pins the validated IP and never re-resolves.
 
-    loopback is now a NON-NEGOTIABLE floor at the validation layer, so the
-    high-level ``pinned_async_client`` can no longer validate a host that
-    resolves to 127.0.0.1. The transport is therefore built here with the
-    explicit pin map ``pinned_async_transport`` produces for a public origin —
+    loopback is blocked by default at the validation layer (allowlistable only
+    via ``SSRF_ALLOW_PRIVATE_RANGES``), so a high-level call cannot validate a
+    host that resolves to 127.0.0.1 without an explicit allowlist. The
+    transport is therefore built here with the explicit pin map
+    ``pinned_async_transport`` produces for a public origin —
     the mechanism-under-test is the pinning+connect substitution, not the
     validation gate. The key guarantee stays: connect goes to the pinned
     address, never re-resolving to a different one, and any unpinned host is
@@ -456,26 +457,28 @@ async def test_redirect_to_internal_is_blocked_when_revalidated(
 #     trust_env, DNS timeout, empty resolution, and dotted/hex literals ---------
 
 
-def test_allowlist_cannot_override_loopback_or_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tenant/global allowlist that names loopback or cloud metadata must not
-    make those ranges reachable — they are a NON-NEGOTIABLE floor."""
+def test_allowlist_can_allow_loopback_but_not_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A global allowlist naming loopback now makes 127.0.0.0/8 reachable (self-
+    hosted localhost model backends), but cloud metadata remains a NON-NEGOTIABLE
+    floor that no allowlist can override."""
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "127.0.0.0/8,169.254.0.0/16,10.0.0.0/8")
-    with pytest.raises(ValueError, match="private/internal"):
-        ssrf.validate_outbound_url("http://127.0.0.1/")
+    # Loopback is blocked by default but allowlistable.
+    assert ssrf.validate_outbound_url("http://127.0.0.1/") is None
+    # Cloud metadata is still a NON-NEGOTIABLE floor, even when namechecked.
     with pytest.raises(ValueError, match="private/internal"):
         ssrf.validate_outbound_url("http://169.254.169.254/")
     # The floor does not break a legit allowlist for other private ranges.
     assert ssrf.validate_outbound_url("http://10.1.2.3/") is None
 
 
-def test_non_negotiable_floor_applies_to_tenant_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metadata_floor_applies_to_tenant_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "192.168.0.0/16")
-    # Even a tenant-scoped allowlist explicitly naming loopback + metadata is
-    # overridden by the floor.
+    # Cloud metadata (link-local) stays a NON-NEGOTIABLE floor: even a
+    # tenant-scoped allowlist explicitly naming it is overridden.
     with pytest.raises(ValueError, match="private/internal"):
         ssrf.validate_outbound_url("http://169.254.169.254/", allow_networks=["169.254.0.0/16"])
-    with pytest.raises(ValueError, match="private/internal"):
-        ssrf.validate_outbound_url("http://127.0.0.1/", allow_networks=["127.0.0.0/8"])
+    # Loopback is now allowlistable at the tenant scope too.
+    assert ssrf.validate_outbound_url("http://127.0.0.1/", allow_networks=["127.0.0.0/8"]) is None
 
 
 def test_ipv6_site_local_and_multicast_blocked() -> None:
@@ -638,9 +641,10 @@ async def test_pinned_async_client_full_composition(monkeypatch: pytest.MonkeyPa
     ``pinned_async_client`` (the API FAR-408 will consume) is exercised through
     the full wiring — ``pinned_async_client`` -> ``pinned_async_transport`` ->
     ``PinnedAsyncHTTPTransport`` -> actual HTTP request — not just at the
-    transport level. The resolver is stubbed because loopback is now a
-    NON-NEGOTIABLE floor at the validation layer, so ``pinned_async_client``
-    cannot validate a host that maps to 127.0.0.1 on its own; stubbing
+    transport level. The resolver is stubbed because loopback is blocked by
+    default at the validation layer (allowlistable only via
+    ``SSRF_ALLOW_PRIVATE_RANGES``), so ``pinned_async_client`` cannot validate a
+    host that maps to 127.0.0.1 without an explicit allowlist; stubbing
     ``resolve_pinned_ip`` to return a loopback :class:`PinnedTarget` bypasses only
     that DNS-validation gate (validation is covered by its own tests). The key
     composition guarantee holds: the connection goes to the pinned 127.0.0.1 while
