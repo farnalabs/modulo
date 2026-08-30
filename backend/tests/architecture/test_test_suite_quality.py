@@ -609,15 +609,29 @@ TESTS = Path(__file__).resolve().parent.parent
 EXCLUDED_PACKAGES = {"load", "performance"}
 
 
+def _callable_name(node: ast.AST) -> str | None:
+    """Return the bare callable name behind ``node``.
+
+    Accepts either a call (``pytest.raises(...)`` -> ``raises``) or a bare
+    callable expression (``pytest.raises`` -> ``raises``, ``raises`` ->
+    ``raises``), so the ``node`` and ``node.func`` spellings of this lookup
+    collapse onto one implementation. Returns ``None`` for anything that is
+    neither an attribute nor a plain name (e.g. a subscript, or a call whose
+    callee is itself a call)."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+#: Domain-specific alias of :func:`_callable_name` that keeps decorator call
+#: sites readable; the extraction rules are identical.
 def _decorator_name(dec: ast.AST) -> str | None:
     """Return the bare name of a decorator (``pytest.fixture`` -> ``fixture``)."""
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    if isinstance(dec, ast.Attribute):
-        return dec.attr
-    if isinstance(dec, ast.Name):
-        return dec.id
-    return None
+    return _callable_name(dec)
 
 
 def _is_mark_decorator(dec: ast.AST) -> bool:
@@ -929,7 +943,7 @@ def test_no_assert_under_swallowing_except():
                         return True
                     if isinstance(stmt, ast.Call):
                         f = stmt.func
-                        name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+                        name = _callable_name(f)
                         if name in ("fail", "skip", "xfail"):
                             return True
                     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -976,7 +990,7 @@ def test_no_skip_without_reason():
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            name = _callable_name(func)
             if name in ("skip", "skipped") and not node.args and not node.keywords:
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  pytest.skip() without reason")
         for node in ast.walk(tree):
@@ -986,7 +1000,7 @@ def test_no_skip_without_reason():
                 if not isinstance(dec, ast.Call):
                     continue
                 f = dec.func
-                dname = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+                dname = _callable_name(f)
                 if dname not in ("skip", "xfail", "skipif"):
                     continue
                 if not any(k.arg == "reason" and k.value for k in dec.keywords):
@@ -2119,12 +2133,12 @@ def _noop_lens_verifies(node: ast.AST) -> bool:
                 if not isinstance(ctx, ast.Call):
                     continue
                 f = ctx.func
-                name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+                name = _callable_name(f)
                 if name in _RAISES_CONTEXT_NAMES:
                     return True
         if isinstance(sub, ast.Call):
             f = sub.func
-            name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+            name = _callable_name(f)
             if name in _FAIL_CALL_NAMES or name in _SCHEMATISEST_SELF_VALIDATING:
                 return True
             if name and "assert" in name:
@@ -4613,7 +4627,7 @@ def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(marker, ast.Call):
             return None
         func = marker.func
-        name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+        name = _callable_name(func)
         if name not in ("skipif", "xfail"):
             return None
         for kw in marker.keywords:
@@ -4729,11 +4743,15 @@ def test_constant_condition_skip_lens_flags_deterministic_skips():
 
 
 _RAISES_CONTEXT_FUNCS = frozenset({"raises", "warns"})
-"""``with`` context-manager names whose expected-exception argument is checked
-for broad classes. Custom helpers (``assert_raises``, ``rejects``, ...) are
-deliberately not matched: their signature does not necessarily take an
-exception class positionally, and only ``pytest.raises``/``pytest.warns``
-have the ``match=`` keyword that narrows an ``AssertionError`` expectation."""
+"""``pytest.raises``/``pytest.warns`` names, matched on the final name of the
+attribute chain (``pytest.raises`` -> ``raises``) or on a bare imported
+``raises(...)``/``warns(...)``. Custom helpers (``assert_raises``, ``rejects``,
+...) and aliases that rename the context manager are deliberately not matched:
+their signature does not necessarily take an exception class positionally, and
+only ``pytest.raises``/``pytest.warns`` have the ``match=`` keyword that
+narrows an ``AssertionError`` expectation. Shared by the lenses that inspect
+the call's expected-exception argument for broad classes and by the lens that
+checks the ``with``/``async with`` body is not empty."""
 
 _BROAD_EXCEPTION_CLASSES = frozenset({"Exception", "BaseException"})
 """Exception classes that can never be a *specific* expected error: ``Exception``
@@ -4773,7 +4791,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(node, ast.Call):
             continue
         f = node.func
-        name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        name = _callable_name(f)
         if name not in _RAISES_CONTEXT_FUNCS:
             continue
         has_match = any(kw.arg == "match" for kw in node.keywords)
@@ -4814,7 +4832,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
             if not isinstance(dec, ast.Call):
                 continue
             func = dec.func
-            dname = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            dname = _callable_name(func)
             if dname != "xfail":
                 continue
             for kw in dec.keywords:
@@ -4938,7 +4956,7 @@ def _unentered_raises_context_violations(tree: ast.AST) -> list[tuple[int, str]]
         if not isinstance(value, ast.Call):
             continue
         f = value.func
-        name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        name = _callable_name(f)
         if name not in _RAISES_CONTEXT_FUNCS:
             continue
         if len(value.args) > 1:
@@ -7255,7 +7273,7 @@ def _skip_xfail_call(call: ast.Call) -> str | None:
     argument), whereas ``skip``/``xfail`` deselect unconditionally when called
     unconditionally."""
     func = call.func
-    name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+    name = _callable_name(func)
     return name if name in _SKIP_XFAIL_NAMES else None
 
 
@@ -7543,6 +7561,146 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _empty_raises_context_body_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``with pytest.raises(...):`` /
+    ``with pytest.warns(...):`` (or their ``async with`` twins, or a bare
+    imported ``raises``/``warns``) whose body contains no executable
+    statement — only ``pass``, ``...``, a docstring, or nothing at all.
+
+    Such a context is an unfinished test: the expectation is declared but the
+    code that is supposed to trigger it was never written, so the ``with``
+    block exercises nothing.
+
+    This is *not* a false green, and the distinction matters. Unlike the
+    unentered-raises lens — where ``pytest.raises(X)`` stands as a bare
+    statement, the context is never entered, and nothing is ever checked —
+    pytest itself fails an entered-but-empty context loudly with
+    ``Failed: DID NOT RAISE`` / ``Failed: DID NOT WARN`` the moment the test
+    runs. The lens is therefore a dead-code/incompleteness check, not a
+    false-green check.
+
+    It still earns its place because the guaranteed failure only surfaces if
+    the test actually executes. When it does not, the empty body is reported
+    green and no ``DID NOT RAISE`` is ever seen:
+
+    * behind ``@pytest.mark.skip``/``skipif`` — the body never runs (SKIPPED),
+    * behind ``@pytest.mark.xfail`` — the failure is absorbed and reported as
+      XFAIL, which reads as a pass,
+    * inside a branch or helper that is never reached at runtime.
+
+    Statically flagging the body also names the real defect ("the
+    code-under-test is missing") instead of leaving a reader to decode a
+    ``DID NOT RAISE`` at runtime. It complements the no-op-test-body lens,
+    which only governs whole ``test_*`` functions rather than individual
+    ``with`` blocks.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _body_is_empty(body: list[ast.stmt]) -> bool:
+        statements = [
+            s
+            for s in body
+            if not (
+                isinstance(s, ast.Pass)
+                or (
+                    isinstance(s, ast.Expr)
+                    and isinstance(s.value, ast.Constant)
+                    and (isinstance(s.value.value, str) or s.value.value is Ellipsis)
+                )
+            )
+        ]
+        return not statements
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.With, ast.AsyncWith)) or not node.items:
+            continue
+        with_item = node.items[0].context_expr
+        lineno = node.lineno
+        # Only a called context manager counts: a bare ``with pytest.raises:``
+        # (no call) is not a raises context, so it must not be flagged.
+        name = _callable_name(with_item) if isinstance(with_item, ast.Call) else None
+        if name not in _RAISES_CONTEXT_FUNCS:
+            continue
+        if not _body_is_empty(node.body):
+            continue
+        found.append(
+            (
+                lineno,
+                f"{name}(...) with an empty body — no code runs inside the with block, so the "
+                "expected exception/warning is never exercised. pytest fails this with 'DID NOT "
+                "RAISE'/'DID NOT WARN' whenever the test runs, and it is silently green when it "
+                "does not (skip/xfail/unreached code); put the code-under-test inside the "
+                "'with' body",
+            )
+        )
+    return found
+
+
+def test_no_empty_raises_context_bodies():
+    """A ``pytest.raises``/``pytest.warns`` context (``with ...:`` or
+    ``async with ...:``, attribute or bare-imported name) whose body contains
+    no executable statement — only ``pass``, ``...``, a docstring, or nothing —
+    is an unfinished test: the expectation is declared but the code meant to
+    trigger it is missing.
+
+    pytest fails such a context loudly (``DID NOT RAISE``/``DID NOT WARN``)
+    whenever the test runs, so this is dead scaffolding rather than a false
+    green. It is gated statically because that guaranteed failure never
+    surfaces when the body does not execute — behind ``skip``/``skipif``, behind
+    ``xfail`` (absorbed as XFAIL, which reads as a pass), or in unreached code.
+    Put the actual code-under-test inside the ``with`` body."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_raises_context_body_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} pytest.raises/pytest.warns context(s) with an empty body.\n"
+        "A with-block that never runs any statement exercises no exception/warning: pytest fails "
+        "it with 'DID NOT RAISE'/'DID NOT WARN' when the test runs, and it is silently green when "
+        "it does not (skip/xfail/unreached code). Move the code-under-test inside the 'with' "
+        "body.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_raises_context_body_lens_flags_unfinished_bodies():
+    """Synthetic positive/negative control for the empty-raises-context-body
+    lens: it must flag ``with``/``async with`` ``pytest.raises``/``pytest.warns``
+    contexts (attribute and bare-imported name spellings) whose body is only
+    ``pass``/``...``/a docstring/empty, and ignore contexts whose body contains
+    a real executable statement."""
+    positive_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        pass\n",
+        "def test_foo():\n    async with pytest.raises(ValueError):\n        pass\n",
+        "def test_foo():\n    with pytest.raises(ValueError, match='boom'):\n        ...\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        pass\n",
+        "import pytest\ndef test_foo():\n    with raises(ValueError):\n        pass\n",
+        "import pytest\ndef test_foo():\n    with warns(UserWarning):\n        pass\n",
+        ('def test_foo():\n    with pytest.raises(ValueError):\n        """docstring only"""\n'),
+        "def test_foo():\n    with pytest.raises(ValueError):\n        # comment only\n        pass\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_raises_context_body_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        foo()\n"
+        "        assert exc_info.value.args[0] == 'boom'\n",
+        "def test_foo():\n    async with pytest.raises(ValueError):\n        await foo()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        x = 1\n",
+        "def test_foo():\n    pytest.raises(ValueError)\n",
+        "def test_foo():\n    with my_custom_context():\n        pass\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_raises_context_body_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _SELECTION_MARKERS = frozenset({"skip", "skipif", "xfail"})
