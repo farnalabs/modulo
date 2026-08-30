@@ -12,7 +12,7 @@ retry reuses the identical key.
 
 NOTE (persistence): the derived key is meant to be stored on the run record so
 an operator re-run can READ it back. The run-record column
-(``runs.idempotency_key``, migration 0150, FAR-438) now lands it: the run stores
+(``runs.idempotency_key``, migration 0151_run_idempotency_key, FAR-438) now lands it: the run stores
 its stable logical identity ``<pipeline_id>:<run_number>`` (built + validated in
 ``modulo.db.crud.run`` — the DB layer owns the run-record storage contract, per
 the import-linter layering that forbids ``modulo.db`` importing ``modulo.core``),

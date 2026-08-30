@@ -104,7 +104,7 @@ async def _run_gate(
         ),
         patch(
             "modulo.settings.get_settings",
-            return_value=types.SimpleNamespace(modulo_idempotency_gate_enabled=gate_enabled),
+            return_value=types.SimpleNamespace(modulo_connector_write_gate_enabled=gate_enabled),
         ),
     ):
         return await _connector_write_gate(
@@ -302,9 +302,11 @@ class TestConnectorWriteGate:
         assert result is None
 
     async def test_fails_open_when_killswitch_missing(self) -> None:
-        """MAJOR 5: the killswitch FAIL-OPEN default is ``False`` (explicit
-        opt-in). A settings object WITHOUT the attribute must NOT enable the
-        gate — the write proceeds (no suppression)."""
+        """MAJOR 2: the connector gate uses its OWN opt-in flag
+        (``modulo_connector_write_gate_enabled``) which defaults to ``False`` in
+        ``modulo.settings`` — so at runtime the gate is GENUINELY opt-in and a
+        settings object WITHOUT the attribute (or with it ``False``) must NOT
+        enable the gate: the write proceeds (no suppression)."""
         applied = _applied_key({"name": "n1"})
         markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": applied}}
         with (
@@ -324,6 +326,22 @@ class TestConnectorWriteGate:
                 data={"name": "n1"},
             )
         assert result is None
+
+    async def test_gate_active_when_optin_flag_enabled(self) -> None:
+        """MAJOR 2: once the opt-in flag is explicitly enabled, a confirmed
+        delivery IS suppressed (proves the gate actually engages via the new
+        flag, not the FAR-228 sandbox flag)."""
+        applied = _applied_key({"name": "n1"})
+        markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": applied}}
+        result = await _run_gate(
+            markers=markers,
+            persisted_key=_PERSISTED_KEY,
+            data={"name": "n1"},
+            session_factory=lambda: None,
+            gate_enabled=True,
+        )
+        assert isinstance(result, dict)
+        assert result["artifacts"][0]["status"] == "skipped"
 
     async def test_unmatched_marker_key_not_suppressed(self) -> None:
         """A marker keyed for a DIFFERENT node/cardinality never suppresses."""
@@ -546,7 +564,7 @@ class TestConnectorNewestKeyPromotion:
             ),
             patch(
                 "modulo.settings.get_settings",
-                return_value=types.SimpleNamespace(modulo_idempotency_gate_enabled=True),
+                return_value=types.SimpleNamespace(modulo_connector_write_gate_enabled=True),
             ),
         ):
             gate_v2 = await _connector_write_gate(
@@ -571,3 +589,151 @@ class TestConnectorNewestKeyPromotion:
                 data={"name": "v1"},
             )
             assert gate_v1 is None
+
+
+# ── MAJOR 1: shell failed write must not stamp delivery_done ──────────────────
+# ── Round-trip: stamped key must match the gate-derived key ───────────────────
+
+
+class TestConnectorFailedWriteNoStamp:
+    async def test_failed_shell_write_not_stamped(self) -> None:
+        """MAJOR 1: a shell ``command`` write that returns ``exit_code != 0``
+        WITHOUT raising must NOT stamp ``delivery_done`` — otherwise a re-run of
+        the same run would be silently suppressed (the "silent miss")."""
+        fake_run = _FakeConnectorRun(markers={}, idempotency_key=_PERSISTED_KEY)
+
+        def session_factory() -> _FakeConnectorSession:
+            return _FakeConnectorSession(fake_run)
+
+        with (
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+        ):
+            await _stamp_connector_write_delivered(
+                session_factory,
+                run_id="run-123",
+                org_id_raw=_ORG_UUID,
+                node_id=_NODE_ID,
+                resource="command",
+                filters={},
+                data={"command": "exit 1"},
+                result={"stdout": "", "stderr": "boom", "exit_code": 1, "duration_ms": 0, "masked": True},
+            )
+
+        slot = _connector_marker_attempt_key("run-123", _NODE_ID)
+        # No marker at all => the failed write was treated as undelivered.
+        assert slot not in fake_run.raw_output_markers
+
+    async def test_failed_shell_write_rerun_not_suppressed(self) -> None:
+        """Round-trip: a failed attempt (no stamp) followed by a re-run is NOT
+        suppressed by the gate — proving the operator's recover-by-re-run fires
+        rather than being silently dropped."""
+        fake_run = _FakeConnectorRun(markers={}, idempotency_key=_PERSISTED_KEY)
+
+        def session_factory() -> _FakeConnectorSession:
+            return _FakeConnectorSession(fake_run)
+
+        with (
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+            patch(
+                "modulo.settings.get_settings",
+                return_value=types.SimpleNamespace(modulo_connector_write_gate_enabled=True),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._read_connector_idempotency_gate_state",
+                new=AsyncMock(return_value=(fake_run.raw_output_markers, _PERSISTED_KEY)),
+            ),
+        ):
+            # First attempt: failed shell write -> not stamped.
+            await _stamp_connector_write_delivered(
+                session_factory,
+                run_id="run-123",
+                org_id_raw=_ORG_UUID,
+                node_id=_NODE_ID,
+                resource="command",
+                filters={},
+                data={"command": "exit 1"},
+                result={"exit_code": 1},
+            )
+            # Re-run of the same write -> gate must NOT suppress (no delivery_done).
+            gate = await _connector_write_gate(
+                session_factory,
+                run_id="run-123",
+                org_id_raw=_ORG_UUID,
+                node_id=_NODE_ID,
+                resource="command",
+                filters={},
+                data={"command": "exit 1"},
+            )
+        assert gate is None
+
+    async def test_successful_write_stamps_matching_key(self) -> None:
+        """Round-trip: a SUCCESSFUL write's stamped ``idempotency_key`` equals
+        the key the gate derives for the SAME payload, so the gate suppresses the
+        re-run (proves gate-side and stamp-side keys match)."""
+        fake_run = _FakeConnectorRun(markers={}, idempotency_key=_PERSISTED_KEY)
+        data = {"command": "echo hi"}
+
+        def session_factory() -> _FakeConnectorSession:
+            return _FakeConnectorSession(fake_run)
+
+        with (
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+        ):
+            await _stamp_connector_write_delivered(
+                session_factory,
+                run_id="run-123",
+                org_id_raw=_ORG_UUID,
+                node_id=_NODE_ID,
+                resource="command",
+                filters={},
+                data=data,
+                result={"stdout": "hi", "exit_code": 0},
+            )
+
+        slot = _connector_marker_attempt_key("run-123", _NODE_ID)
+        assert slot in fake_run.raw_output_markers
+        persisted = fake_run.raw_output_markers[slot]
+        assert persisted["delivery_done"] is True
+        # The stamped key must be exactly the gate-derived key for this payload.
+        assert persisted["idempotency_key"] == _applied_key(data)
+
+        with (
+            patch(
+                "modulo.settings.get_settings",
+                return_value=types.SimpleNamespace(modulo_connector_write_gate_enabled=True),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._read_connector_idempotency_gate_state",
+                new=AsyncMock(return_value=(fake_run.raw_output_markers, _PERSISTED_KEY)),
+            ),
+        ):
+            gate = await _connector_write_gate(
+                session_factory,
+                run_id="run-123",
+                org_id_raw=_ORG_UUID,
+                node_id=_NODE_ID,
+                resource="command",
+                filters={},
+                data=data,
+            )
+        assert isinstance(gate, dict)
+        assert gate["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "connector_write_suppressed"
+
+    async def test_payload_hash_deterministic_fallback(self) -> None:
+        """Non-blocking: the payload hash fallback is deterministic across
+        processes (it coerces via str + sorted keys, NOT ``repr``)."""
+        from modulo.core.pipeline_engine.node_runner import _connector_write_payload_hash
+
+        class _Weird:
+            def __str__(self) -> str:
+                return "weird"
+
+        odd = _Weird()
+        hash_data = {"cmd": "x", "obj": odd}
+        h1 = _connector_write_payload_hash(resource="command", filters={"provider_ref": None}, data=hash_data)
+        h2 = _connector_write_payload_hash(resource="command", filters={"provider_ref": None}, data=hash_data)
+        assert h1 == h2
+        assert "weird" in h1

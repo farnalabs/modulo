@@ -169,11 +169,20 @@ class Settings(BaseSettings):
     # landing ``complete``. Rollout flag — agent-failure-ux-proposal §15.4.
     modulo_agent_failure_elevation_enabled: bool = Field(True, alias="MODULO_AGENT_FAILURE_ELEVATION_ENABLED")
     # FAR-228 kill-switch for the sandbox idempotency gate (opt-in per node via
-    # PipelineGraphNode.delivery_sentinel). Consumed at BOTH guards: guard A
-    # (node_runner early skip) and guard B (executor retry suppression). When
-    # disabled the gate never fires and transient node failures retry exactly as
-    # before. This flag MUST stay consumed at both call sites.
+    # PipelineGraphNode.delivery_sentinel). Consumed at BOTH sandbox guards: guard
+    # A (node_runner early skip for single sandbox node) and guard B (executor
+    # retry suppression). When disabled the gate never fires and transient node
+    # failures retry exactly as before. NOTE: this flag is consumed at THREE
+    # sites total (the two sandbox guards above plus the FAR-458 connector-write
+    # gate's SHARED predecessor); the connector-write gate now uses its OWN
+    # opt-in flag below.
     modulo_idempotency_gate_enabled: bool = Field(True, alias="MODULO_IDEMPOTENCY_GATE_ENABLED")
+    # FAR-458 connector-write idempotency gate kill-switch. GENUINELY OPT-IN:
+    # defaults to False so a deploy never silently suppresses byte-identical
+    # re-executed connector writes (a behavioural change vs. the pre-FAR-458
+    # contract where every visit fired). Operators enable it explicitly once the
+    # dedup semantics are wanted. Consumed only by ``_connector_write_gate``.
+    modulo_connector_write_gate_enabled: bool = Field(False, alias="MODULO_CONNECTOR_WRITE_GATE_ENABLED")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
     saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")

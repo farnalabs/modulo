@@ -1445,7 +1445,29 @@ def _connector_write_payload_hash(resource: str, filters: dict[str, Any] | None,
     try:
         return _json.dumps(identity, sort_keys=True, default=str)
     except (TypeError, ValueError):
-        return repr(identity)
+        # ``default=str`` handles the common non-JSON scalars (dates, Paths), so
+        # this branch only triggers on a genuinely unserialisable structure. Fall
+        # back to a DETERMINISTIC coercion (every value stringified, keys sorted)
+        # rather than ``repr`` — ``repr`` is NOT canonical across processes, so
+        # two different invocations could derive DIFFERENT keys and silently
+        # defeat the dedup (gate vs stamp side disagree). See
+        # ``canonical_payload_hash`` in trigger_engine/pre_guardrail.py.
+        return _json.dumps(_canonical_coerce(identity), sort_keys=True)
+
+
+def _canonical_coerce(obj: Any) -> Any:
+    """Deterministically coerce *obj* into a JSON-serialisable structure.
+
+    Every scalar becomes ``str`` and every mapping/sequence is rebuilt with
+    sorted/stable ordering so the result is byte-identical across processes —
+    used as the safe fallback in :func:`_connector_write_payload_hash` when the
+    primary ``json.dumps(..., default=str)`` still raises.
+    """
+    if isinstance(obj, dict):
+        return {str(k): _canonical_coerce(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return [_canonical_coerce(v) for v in obj]
+    return str(obj)
 
 
 def _connector_marker_attempt_key(run_id: str, node_id: str) -> str:
@@ -1496,8 +1518,20 @@ async def _stamp_connector_write_delivered(
     resource: str,
     filters: dict[str, Any] | None,
     data: dict[str, Any],
+    result: Any = None,
 ) -> None:
     """Best-effort persist of a ``delivery_done`` marker for a successful connector write.
+
+    FAR-458 MAJOR 1: the stamp fires only when the write GENUINELY succeeded.
+    Some connectors (e.g. ``ShellConnector.write`` for the ``command`` resource)
+    RETURN a failed result ``{"exit_code": <non-zero>}`` WITHOUT raising — so a
+    non-raising ``connector.write()`` is NOT proof of upstream delivery. Stamping
+    ``delivery_done`` on such a failed result would suppress the operator's
+    recover-by-re-run of the SAME run (the exact "silent miss" the code warns
+    about). When *result* carries a non-zero ``exit_code`` we therefore SKIP the
+    stamp entirely: the write is treated as undelivered and a re-run is free to
+    fire again. Connectors that raise on failure (or that do not report an
+    ``exit_code``) are unaffected — their success path still stamps as before.
 
     Mirrors the sandbox marker persist (bounded, never raises) — the evidence
     a connector write genuinely reached upstream. Fail-open: a persistence
@@ -1523,6 +1557,21 @@ async def _stamp_connector_write_delivered(
     underlying failure is already logged by ``_persist_raw_output_marker``.
     """
     if session_factory is None or not run_id:
+        return
+    # MAJOR 1: do not stamp ``delivery_done`` for a write that reported failure
+    # without raising (e.g. shell ``command`` returning exit_code != 0). A failed
+    # write is NOT confirmed delivery, so the gate must not suppress its re-run.
+    if isinstance(result, dict) and "exit_code" in result and result.get("exit_code") != 0:
+        _log.info(
+            "connector.idempotency_marker_skip_failed_write",
+            extra={
+                "run_id": run_id,
+                "node_id": node_id,
+                "resource": resource,
+                "exit_code": result.get("exit_code"),
+                "hint": "write_reported_failure_no_delivery_done_stamp_rerun_allowed",
+            },
+        )
         return
     payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
     attempt_key = _connector_marker_attempt_key(run_id, node_id)
@@ -1605,9 +1654,10 @@ async def _connector_write_gate(
     Fail-open in every direction (missing run id / session factory / persisted
     key, killswitch off, DB error, malformed key) returns ``None`` — the write
     proceeds, never blocked. The killswitch
-    ``modulo_idempotency_gate_enabled`` FAIL-OPEN default is ``False``
-    (explicit opt-in), matching the fail-open contract of every other failure
-    mode here rather than inverting it to opt-out.
+    ``modulo_connector_write_gate_enabled`` is GENUINELY OPT-IN: it defaults to
+    ``False`` (set in ``modulo.settings``), so a deploy never silently suppresses
+    byte-identical re-executed connector writes — a behavioural change vs. the
+    pre-FAR-458 contract where every visit fired. Operators enable it explicitly.
     """
     if session_factory is None or not run_id:
         return None
@@ -1619,7 +1669,7 @@ async def _connector_write_gate(
     try:
         from modulo.settings import get_settings
 
-        if not getattr(get_settings(), "modulo_idempotency_gate_enabled", False):
+        if not getattr(get_settings(), "modulo_connector_write_gate_enabled", False):
             return None
     except Exception:
         # Killswitch read failure must not block a write — proceed (fail-open).
@@ -3146,6 +3196,7 @@ def make_connector_fn(
                 resource=resource,
                 filters=filters,
                 data=data,
+                result=result,
             )
 
         scope_block = _guard_connector_secret_output(result, node_id)
