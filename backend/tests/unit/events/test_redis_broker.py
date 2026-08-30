@@ -534,4 +534,4 @@ def test_module_getattr_unknown_attribute_raises() -> None:
     import modulo.core.events as events
 
     with pytest.raises(AttributeError, match="has no attribute"):
-        assert events.DoesNotExist
+        events.__getattr__("DoesNotExist")

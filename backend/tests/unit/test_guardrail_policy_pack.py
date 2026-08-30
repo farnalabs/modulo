@@ -321,7 +321,10 @@ def test_assert_pack_ci_ready_passes_complete_pack():
             _control(cid="CC7.1", guardrail=_json_schema_guardrail()),
         ]
     )
-    assert_pack_ci_ready(pack)  # must not raise
+    result = assert_pack_ci_ready(pack)
+    # The CI gate is a validator: a complete pack passes without raising AND
+    # keeps its no-return contract (returns None).
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -463,8 +463,8 @@ async def reconcile_facts(session: Any, *, today: date | None = None) -> dict[st
         )
     ).all()
 
-    for org_id, run_date, ledger_total in ledger_rows:
-        ledger_total = ledger_total or Decimal(0)
+    for org_id, run_date, raw_ledger_total in ledger_rows:
+        ledger_total = raw_ledger_total or Decimal(0)
         facts_total = (
             await session.execute(
                 sa.select(func.coalesce(func.sum(RunDailyFact.total_cost_usd), 0)).where(

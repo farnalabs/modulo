@@ -1879,6 +1879,11 @@ async def restore_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            existing = await get_pipeline(
+                session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id
+            )
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await restore_pipeline(session, pipeline_id)
     except ProgrammingError:
         _raise_db_migration_error()
@@ -1897,6 +1902,9 @@ async def archive_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await archive_pipeline(session, pipeline_id)
     except ProgrammingError:
         _raise_db_migration_error()
@@ -1915,6 +1923,9 @@ async def unarchive_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await unarchive_pipeline(session, pipeline_id)
     except ProgrammingError:
         _raise_db_migration_error()

@@ -26,8 +26,8 @@ def _changed_unit_tests() -> list[str]:
     if result.returncode != 0:
         return []
     paths = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
         if line.startswith("backend/tests/unit/") and line.endswith(".py"):
             paths.append(line)
     return paths

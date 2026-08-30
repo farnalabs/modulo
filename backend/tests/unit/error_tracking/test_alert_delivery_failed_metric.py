@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -151,7 +152,7 @@ class TestWebhookFailurePath:
             rule_id=uuid.uuid4(),
             rule_name="Webhook Rule",
             action_type="webhook",
-            webhook_url="https://invalid.url/that/will/fail",
+            webhook_url="https://hooks.example.com/alert",
             error_group_id=_GROUP_ID,
             fingerprint="fp",
             level="error",
@@ -161,11 +162,19 @@ class TestWebhookFailurePath:
         error_group = MagicMock()
         error_group.sample_event = None
 
-        with patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed:
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = httpx.ConnectError("connection refused")
+
+        with (
+            patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
+            patch.object(dispatcher_mod.httpx, "AsyncClient", return_value=client),
+        ):
             from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 
             await dispatch_alert(_ORG_ID, alert, session, error_group)
 
+        client.post.assert_awaited_once()
         failed.assert_called_once_with(str(alert.rule_id), "webhook")
 
     async def test_http_error_fires_metric(self) -> None:
@@ -175,7 +184,7 @@ class TestWebhookFailurePath:
             rule_id=uuid.uuid4(),
             rule_name="Webhook Rule",
             action_type="webhook",
-            webhook_url="https://httpbin.org/status/500",
+            webhook_url="https://hooks.example.com/alert",
             error_group_id=_GROUP_ID,
             fingerprint="fp",
             level="error",
@@ -185,9 +194,21 @@ class TestWebhookFailurePath:
         error_group = MagicMock()
         error_group.sample_event = None
 
-        with patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed:
+        response = MagicMock()
+        response.is_success = False
+        response.status_code = 500
+
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = response
+
+        with (
+            patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
+            patch.object(dispatcher_mod.httpx, "AsyncClient", return_value=client),
+        ):
             from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 
             await dispatch_alert(_ORG_ID, alert, session, error_group)
 
+        client.post.assert_awaited_once()
         failed.assert_called_once_with(str(alert.rule_id), "webhook")

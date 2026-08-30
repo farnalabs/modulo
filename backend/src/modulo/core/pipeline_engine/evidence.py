@@ -376,12 +376,24 @@ async def write_evidence_row(
     node_id: str,
     evidence_state: str,
     evidence_detail: str | None,
-    organisation_id: UUID,
+    organisation_id: UUID | None = None,
 ) -> None:
     """Persist one run_evidence row.
 
-    ``organisation_id`` MUST be supplied: the table is org-scoped (0133) and
-    NOT NULL / RLS-constrained — an insert that omits it is rejected.
+    ``organisation_id`` is the tenant anchor required by the ``run_evidence``
+    NOT NULL FK -> ``organisations`` and its org-scoped RLS policy (migration
+    0133). Callers that already hold the parent run's org (the probe, the sweep)
+    SHOULD pass it; when omitted it is resolved from the parent run.
+
+    When the parent run cannot be resolved (orphaned, or already purged) the
+    write is SKIPPED rather than anchored to a synthesised tenant. A fabricated
+    org can never persist on the deployment target: ``organisation_id`` is a FK
+    to ``organisations(id)`` and ``run_id`` a FK to ``runs(id)``, so the INSERT
+    is rejected by the FK — and the 0133 ``rls_org_isolation`` WITH CHECK
+    rejection is NOT an ``IntegrityError`` subclass, so it would escape the
+    duplicate-key guard below and break the reconciliation sweep. An
+    unresolvable parent is therefore treated as unverifiable and left unwritten
+    (logged), which is the same fail-open direction as a failed probe.
 
     ``UNIQUE(run_id, node_id)`` is handled with a nested-savepoint insert that
     swallows a duplicate-key race (the async probe and the reconciliation sweep
@@ -389,14 +401,24 @@ async def write_evidence_row(
     transaction. Raises on non-duplicate DB failures — callers decide how to
     fail.
     """
+    from modulo.db.models.run import Run
     from modulo.db.models.run_evidence import RunEvidence
+
+    if organisation_id is None:
+        organisation_id = await session.scalar(select(Run.organisation_id).where(Run.id == run_id))
+        if organisation_id is None:
+            _log.warning(
+                "heuristic.evidence_write_skipped_no_tenant",
+                extra={"run_id": str(run_id), "node_id": node_id, "evidence_state": evidence_state},
+            )
+            return
 
     try:
         async with session.begin_nested():
             session.add(
                 RunEvidence(
-                    run_id=run_id,
                     organisation_id=organisation_id,
+                    run_id=run_id,
                     node_id=node_id,
                     evidence_state=evidence_state,
                     evidence_detail=evidence_detail,

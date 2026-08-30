@@ -1,8 +1,6 @@
 """Admin-only trigger event log endpoints."""
 
 import logging
-import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -14,9 +12,9 @@ from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.db.crud.trigger import apply_trigger_event_cursor
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
-from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_ADMIN_TRIGGERS_LIST_TRIGGER = "admin_triggers.list_trigger_events"
 
@@ -66,16 +64,7 @@ async def list_trigger_events(
                 q = q.where(TriggerEvent.validation_result == validation_result)
 
             if cursor:
-                try:
-                    cursor_ts_str, cursor_id = cursor.split("_", 1)
-                    cursor_dt = datetime.fromisoformat(cursor_ts_str)
-                    cursor_uuid = uuid.UUID(cursor_id)
-                    q = q.where(
-                        (TriggerEvent.created_at < cursor_dt)
-                        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
-                    )
-                except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", _sanitise_log_value(cursor), exc_info=True)
+                q = apply_trigger_event_cursor(q, cursor)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()

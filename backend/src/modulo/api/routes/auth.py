@@ -531,14 +531,13 @@ async def accept_invite(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=_MSG_INVITE_NOT_LOCAL_ACCOUNT,
                 )
+            elif account.password_hash is None:
+                # (c) adopt the locally-created-but-passwordless account
+                account.password_hash = pw_hash
             else:
-                if account.password_hash is None:
-                    # (c) adopt the locally-created-but-passwordless account
-                    account.password_hash = pw_hash
-                else:
-                    # (d) leave an existing local password untouched — the UI
-                    # tells them to sign in with their existing credentials.
-                    existing_account = True
+                # (d) leave an existing local password untouched — the UI
+                # tells them to sign in with their existing credentials.
+                existing_account = True
 
             if await get_membership_by_account_and_org(session, account.id, invitation.organisation_id) is None:
                 await create_membership(

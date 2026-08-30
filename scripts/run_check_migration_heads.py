@@ -77,8 +77,8 @@ def _changed_names(diff_range: str | None) -> list[str]:
         )
     prefix = "backend/src/modulo/db/migrations/versions/"
     names = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
         if line.startswith(prefix) and line.endswith(".py"):
             names.append(os.path.basename(line))
     return names
@@ -166,8 +166,8 @@ def _main(argv: list[str] | None = None) -> int:
         m = _RE_PREFIX.match(name)
         if m:
             by_prefix.setdefault(m.group(1), []).append(name)
-    for prefix, names in sorted(by_prefix.items()):
-        names = non_exempt(names)
+    for prefix, raw_names in sorted(by_prefix.items()):
+        names = non_exempt(raw_names)
         involves_changed = any(n in changed_names for n in names)
         if len(names) > 1 and involves_changed:
             print(f"FAIL: duplicate migration number '{prefix}' used by:", file=sys.stderr)
@@ -191,8 +191,8 @@ def _main(argv: list[str] | None = None) -> int:
         if d:
             down_revisions.setdefault(d.group(1), []).append(name)
 
-    for rev, names in sorted(revisions.items()):
-        names = non_exempt(names)
+    for rev, raw_names in sorted(revisions.items()):
+        names = non_exempt(raw_names)
         involves_changed = any(n in changed_names for n in names)
         if len(names) > 1 and involves_changed:
             print(f"FAIL: duplicate revision id '{rev}' declared in:", file=sys.stderr)
@@ -200,8 +200,8 @@ def _main(argv: list[str] | None = None) -> int:
                 print(f"  - {name}", file=sys.stderr)
             failed = True
 
-    for down, names in sorted(down_revisions.items()):
-        names = non_exempt(names)
+    for down, raw_names in sorted(down_revisions.items()):
+        names = non_exempt(raw_names)
         involves_changed = any(n in changed_names for n in names)
         if len(names) > 1 and involves_changed:
             print(

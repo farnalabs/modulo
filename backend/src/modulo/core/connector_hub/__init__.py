@@ -175,7 +175,6 @@ def _handle_settings_read_failure(exc: Exception, org_id: str | None) -> None:
         "Unable to read settings for the shared Redis rate limiter — using the local bucket",
         exc_info=True,
     )
-    return
 
 
 def _shared_redis_unconfigured(settings: Any) -> bool:

@@ -123,7 +123,6 @@
         files: ^backend/tests/.*\.py$
         pass_filenames: false
         stages: [pre-commit]
-
       - id: check-uv-lock
         name: check uv lockfile freshness
         entry: uv run --project backend --no-sync python scripts/run_check_uv_lock.py

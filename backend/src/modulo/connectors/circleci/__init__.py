@@ -125,40 +125,65 @@ class CircleCIConnector(CIRunnerBase):
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         async with self._client() as client:
-            wf_r = await client.get(f"/pipeline/{run_id}/workflow")
-            wf_r.raise_for_status()
-            workflows: list[dict[str, Any]] = _safe_records(wf_r.json(), "items")
-
-            all_lines: list[str] = []
-            for wf in workflows:
-                wf_id = wf.get("id", "")
-                wf_name = wf.get("name", wf_id)
-                all_lines.append(f"--- Workflow: {wf_name} ---")
-
-                job_r = await client.get(f"/workflow/{wf_id}/job")
-                job_r.raise_for_status()
-                jobs: list[dict[str, Any]] = _safe_records(job_r.json(), "items")
-
-                for job in jobs:
-                    job_name = job.get("name", "")
-                    job_number = job.get("job_number")
-                    project_slug = job.get("project_slug", "")
-                    if job_number and project_slug:
-                        out_r = await client.get(
-                            f"/project/{project_slug}/{job_number}/outputs",
-                        )
-                        if out_r.status_code == 200:
-                            outputs = _safe_records(out_r.json(), "items")
-                            all_lines.append(f"  Job: {job_name} (#{job_number})")
-                            for out in outputs:
-                                msg = out.get("message", "") or ""
-                                all_lines.extend(f"    {line}" for line in msg.splitlines())
-
+            all_lines = await self._collect_log_lines(client, run_id)
             return CIRunLog(
                 run_id=run_id,
                 lines=all_lines,
                 next_cursor=str(len(all_lines)) if cursor else None,
             )
+
+    async def _collect_log_lines(
+        self,
+        client: httpx.AsyncClient,
+        run_id: str,
+    ) -> list[str]:
+        all_lines: list[str] = []
+        for wf in await self._fetch_workflows(client, run_id):
+            wf_name = wf.get("name", wf.get("id", ""))
+            all_lines.append(f"--- Workflow: {wf_name} ---")
+            for job in await self._fetch_workflow_jobs(client, wf.get("id", "")):
+                all_lines.extend(await self._job_log_lines(client, job))
+        return all_lines
+
+    async def _fetch_workflows(
+        self,
+        client: httpx.AsyncClient,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        wf_r = await client.get(f"/pipeline/{run_id}/workflow")
+        wf_r.raise_for_status()
+        return _safe_records(wf_r.json(), "items")
+
+    async def _fetch_workflow_jobs(
+        self,
+        client: httpx.AsyncClient,
+        wf_id: str,
+    ) -> list[dict[str, Any]]:
+        job_r = await client.get(f"/workflow/{wf_id}/job")
+        job_r.raise_for_status()
+        return _safe_records(job_r.json(), "items")
+
+    async def _job_log_lines(
+        self,
+        client: httpx.AsyncClient,
+        job: dict[str, Any],
+    ) -> list[str]:
+        job_number = job.get("job_number")
+        project_slug = job.get("project_slug", "")
+        if not job_number or not project_slug:
+            return []
+        out_r = await client.get(
+            f"/project/{project_slug}/{job_number}/outputs",
+        )
+        if out_r.status_code != 200:
+            return []
+        outputs = _safe_records(out_r.json(), "items")
+        job_name = job.get("name", "")
+        lines = [f"  Job: {job_name} (#{job_number})"]
+        for out in outputs:
+            msg = out.get("message", "") or ""
+            lines.extend(f"    {line}" for line in msg.splitlines())
+        return lines
 
     async def list_runs(
         self,

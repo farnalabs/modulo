@@ -90,6 +90,7 @@
               <Button
                 :disabled="variants.length >= MAX_VARIANTS"
                 size="small"
+                type="button"
                 data-testid="variant-builder-add"
                 class="px-3 py-1.5"
                 @click="addVariant"
@@ -222,6 +223,7 @@
             <Button
               :disabled="!canFire || firing"
               data-testid="variant-builder-fire"
+              type="button"
               class="px-5 py-2"
               @click="openFireDialog"
             >
@@ -263,6 +265,7 @@
         <Button
           severity="secondary"
           outlined
+          type="button"
           :disabled="firing"
           data-testid="variant-builder-cancel"
           @click="showFireDialog = false"
@@ -271,6 +274,7 @@
         </Button>
         <Button
           severity="primary"
+          type="button"
           :disabled="firing"
           data-testid="variant-builder-confirm-fire"
           @click="fireBatch"

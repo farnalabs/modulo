@@ -124,8 +124,8 @@ def _get_allowlist() -> tuple[Network, ...]:
     if raw == _allowlist_cache_key:
         return _allowlist_parsed
     parsed: list[Network] = []
-    for cidr in raw.split(","):
-        cidr = cidr.strip()
+    for raw_cidr in raw.split(","):
+        cidr = raw_cidr.strip()
         if cidr:
             try:
                 parsed.append(ipaddress.ip_network(cidr, strict=False))
