@@ -15,6 +15,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 
 class SentryConnector(ConnectorBase):
@@ -28,6 +29,7 @@ class SentryConnector(ConnectorBase):
         return ConnectorType.SENTRY
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base)
         return httpx.AsyncClient(
             base_url=self._base,
             headers={

@@ -288,6 +288,7 @@ markers = [
     "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
     "connector_conformance: connector contract conformance suite ├óÔé¼ÔÇØ every ConnectorType must pass",
     "breakglass_gate: break-glass admin recovery deploy-gate regression (boot allow-list posture + connectivity smoke)",
+    "real_ssrf_dns: opt out of the autouse SSRF DNS shim so the real fail-closed guard runs",
 ]
 
 [tool.coverage.run]

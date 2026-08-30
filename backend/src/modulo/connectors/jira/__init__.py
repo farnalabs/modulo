@@ -31,6 +31,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 # Retry/backoff configuration (canonical values live in _retry_headers)
 _RETRYABLE_STATUSES = RETRYABLE_STATUSES
@@ -205,6 +206,7 @@ class JiraConnector(ConnectorBase):
         return headers
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers=self._headers(),

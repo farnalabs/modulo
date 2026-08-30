@@ -3,7 +3,7 @@
     <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
-        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-plugins-refresh" @click="loadPlugins">
+        <Button type="button" class="border-primary/30 hover:border-primary/60" data-testid="admin-plugins-refresh" @click="loadPlugins">
           Refresh
         </Button>
       </header>
@@ -75,12 +75,12 @@
                   </td>
                   <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
-                      <label for="adminpluginsview-field-1"
+                      <label :for="`adminpluginsview-toggle-${plugin.PLUGIN_ID}`"
                         class="relative inline-flex cursor-pointer items-center"
                         :title="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
                         :aria-label="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
                       >
-                        <input id="adminpluginsview-field-1"
+                        <input :id="`adminpluginsview-toggle-${plugin.PLUGIN_ID}`"
                           type="checkbox"
                           class="sr-only peer"
                           :checked="activeStates[plugin.PLUGIN_ID] !== false"

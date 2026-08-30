@@ -47,7 +47,7 @@
       <SectionCard title="Data Export" description="Export all organisation data including runs, pipelines, schemas, connectors, and settings.">
 
         <div v-if="exportStatus === 'idle'" class="flex items-center gap-3">
-          <Button class="h-8 px-2.5" @click="startExport">
+          <Button type="button" class="h-8 px-2.5" @click="startExport">
             Export All Data
           </Button>
         </div>
@@ -95,7 +95,7 @@
 
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
-        <Button severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
+        <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
           Delete Organisation
         </Button>
       </SectionCard>

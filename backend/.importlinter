@@ -138,3 +138,30 @@ ignore_imports =
     # composition root (connector_hub) and never imports ``modulo.core`` directly;
     # this contract enforces that the connector stays decoupled. Any attempt to
     # pull ``modulo.core`` into ``modulo.connectors.rest`` must fail here.
+    # User/org-supplied base_url SSRF validation: the singleton guard lives in
+    # modulo.core.ssrf. Every base_url-bearing connector imports it directly to
+    # validate the egress target before building the httpx client (FAR-SSRF).
+    # This is a deliberate, narrow exception for a shared security primitive —
+    # the connectors stay decoupled from all other core business logic. The
+    # guard honors SSRF_ALLOW_PRIVATE_RANGES so self-hosted targets remain
+    # reachable when the operator opts in.
+    modulo.connectors.gitea -> modulo.core.ssrf
+    modulo.connectors.gitlab -> modulo.core.ssrf
+    modulo.connectors.jira -> modulo.core.ssrf
+    modulo.connectors.youtrack -> modulo.core.ssrf
+    modulo.connectors.sonarqube -> modulo.core.ssrf
+    modulo.connectors.teamcity -> modulo.core.ssrf
+    modulo.connectors.trivy -> modulo.core.ssrf
+    modulo.connectors.onepassword -> modulo.core.ssrf
+    modulo.connectors.sentry -> modulo.core.ssrf
+    modulo.connectors.azure_key_vault -> modulo.core.ssrf
+    modulo.connectors.azure_pipelines -> modulo.core.ssrf
+    modulo.connectors.azure_repos -> modulo.core.ssrf
+    modulo.connectors.confluence -> modulo.core.ssrf
+    modulo.connectors.grafana -> modulo.core.ssrf
+    modulo.connectors.jenkins -> modulo.core.ssrf
+    modulo.connectors.n8n -> modulo.core.ssrf
+    # The GitLab CI runner takes its base_url from tenant connector config
+    # (connector_hub passes config['base_url'] straight through), so it is on the
+    # same external trust boundary as the connectors above and needs the guard.
+    modulo.connectors.ci_runner.gitlab_ci -> modulo.core.ssrf
