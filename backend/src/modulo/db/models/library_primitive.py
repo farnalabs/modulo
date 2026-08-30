@@ -64,6 +64,14 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "tier IN ('native', 'preview', 'in_dev')",
             name="ck_library_primitives_tier",
         ),
+        CheckConstraint(
+            "download_count IS NULL OR download_count >= 0",
+            name="ck_library_primitives_dl_count",
+        ),
+        CheckConstraint(
+            "review_count IS NULL OR review_count >= 0",
+            name="ck_library_primitives_review_count",
+        ),
         Index(
             "uq_library_primitive_version",
             "organisation_id",
