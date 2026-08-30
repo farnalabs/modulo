@@ -359,6 +359,7 @@ dev = [
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
     "pip-audit>=2.9.0",
+    "types-jsonschema>=4.26.0",
 ]
 
 [tool.uv]
