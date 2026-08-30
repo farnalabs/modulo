@@ -140,9 +140,8 @@ def resolve_shared_rate_limit_redis(org_id: str | None) -> Any | None:
         raise
     except Exception as exc:
         if org_id:
-            logger.error(
+            logger.exception(
                 "Settings could not be read on the tenant path — fail-closed (no local-bucket fallback)",
-                exc_info=True,
             )
             raise SharedBudgetUnavailableError(
                 f"settings could not be read to wire the shared rate-limit budget: {exc}"
@@ -174,9 +173,8 @@ def resolve_shared_rate_limit_redis(org_id: str | None) -> Any | None:
         # malformed/unsupported `redis_url` — a hard config error. Never degrade to
         # the local bucket (that would reconstruct the fleet-wide fail-open FAR-439
         # removed).
-        logger.error(
+        logger.exception(
             "Shared Redis client construction failed — fail-closed (no local-bucket fallback)",
-            exc_info=True,
         )
         raise SharedBudgetUnavailableError(
             f"shared rate-limit Redis client is configured but could not be constructed: {exc}"
