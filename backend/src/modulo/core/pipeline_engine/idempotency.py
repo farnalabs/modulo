@@ -12,7 +12,7 @@ retry reuses the identical key.
 
 NOTE (persistence): the derived key is meant to be stored on the run record so
 an operator re-run can READ it back. The run-record column
-(``runs.idempotency_key``, migration 0150, FAR-438) now lands it: the run stores
+(``runs.idempotency_key``, migration 0156, FAR-438) now lands it: the run stores
 its stable logical identity ``<pipeline_id>:<run_number>`` (built + validated in
 ``modulo.db.crud.run`` — the DB layer owns the run-record storage contract, per
 the import-linter layering that forbids ``modulo.db`` importing ``modulo.core``),
@@ -76,7 +76,7 @@ def stable_idempotency_key(
     (e.g. ``"<pipeline_id>:<run_number>"``), NOT the per-replay ``run_id`` —
     re-running the pipeline forks a fresh ``run_id``, so keying on it would mint
     a new key for the same logical work. A malformed ``run_ref`` (a bare UUID,
-    any string without the ``<id>:<number>`` shape, or a non-positive
+    any string without the ``<id>:<number>`` shape, or a non-numeric
     run_number) raises ``ValueError`` rather than silently minting a fresh key
     every re-run. ``node_ref`` is the node id/name; ``index`` is the item /
     fanout-cardinality position (``None`` for a single-execution node).
