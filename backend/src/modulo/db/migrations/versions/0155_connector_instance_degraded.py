@@ -16,10 +16,12 @@ Two nullable columns record the skip on the ``connector_instances`` row:
   initialisation (TIMESTAMPTZ, no default; only written by
   ``mark_instances_degraded``).
 * ``last_skip_error`` — a short ``"{ExcType}: {message}"`` summary of why
-  initialisation was skipped.
+  initialisation was skipped (NUL-stripped and truncated to 2000 chars by
+  the hub, matching the sibling ``last_health_check_error`` column).
 
-Storing new credentials via the connector update endpoint clears both,
-so the marker reflects the *current* credential state.
+Storing new credentials via the connector update endpoint clears both, and
+the run executor clears them for instances that initialise successfully, so
+the marker reflects the *current* connector state.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ depends_on: tuple[str, ...] | None = None
 
 def upgrade() -> None:
     op.add_column("connector_instances", sa.Column("degraded_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("connector_instances", sa.Column("last_skip_error", sa.Text(), nullable=True))
+    op.add_column("connector_instances", sa.Column("last_skip_error", sa.String(length=2000), nullable=True))
 
 
 def downgrade() -> None:

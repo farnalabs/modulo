@@ -554,6 +554,42 @@ async def test_initialise_programming_bug_logs_error():
         await hub.initialise([ci])
     with pytest.raises(ConnectorNotFoundError):
         hub.get(ci.id)
+    # FAR-495: unexpected failures land in hub.skipped too — every skip class
+    # must reach the degraded-marker persist, not only typed errors.
+    assert hub.skipped == {ci.id: "RuntimeError: boom"}
+
+
+async def test_record_skip_sanitizes_nul_and_truncates():
+    """FAR-495: skip summaries are NUL-stripped and truncated to 2000 chars.
+
+    Postgres rejects NUL bytes in SQL text — an unsanitized summary would fail
+    the whole batch UPDATE so NO instance gets marked. 2000 matches the sibling
+    ``last_health_check_error`` String(2000) column.
+    """
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend)
+    ci = _FakeCI(id=uuid.uuid4(), connector_type_id="github")
+    exc = RuntimeError(f"bad\x00summary{'x' * 3000}")
+    hub._record_skip(ci, exc)
+    summary = hub.skipped[ci.id]
+    assert "\x00" not in summary
+    assert len(summary) == 2000
+    assert summary.startswith("RuntimeError: badsummary")
+
+
+async def test_initialise_records_healthy_instances(tmp_path):
+    """FAR-495: successfully initialised instances are recorded in hub.healthy."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert hub.healthy == {ci.id}
+    assert hub.skipped == {}
 
 
 async def test_initialise_records_skipped_instances(tmp_path):
@@ -576,22 +612,31 @@ async def test_initialise_records_skipped_instances(tmp_path):
     assert hub.skipped[bad.id].startswith("ValueError: Missing credential key 'token'")
     assert healthy.id not in hub.skipped
     assert hub.get(healthy.id) is not None
+    # Symmetric tracking (FAR-495): the successful instance is in hub.healthy.
+    assert hub.healthy == {healthy.id}
 
 
-async def test_close_clears_skipped(tmp_path):
-    """FAR-495: close() clears hub.skipped along with the other hub state."""
-    ci = _FakeCI(
+async def test_close_clears_skipped_and_healthy(tmp_path):
+    """FAR-495: close() clears hub.skipped and hub.healthy along with the other hub state."""
+    bad = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="github",
         credentials_ciphertext=_encrypt({}),  # creds lack the token key -> skipped
     )
+    healthy = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    assert set(hub.skipped) == {ci.id}
+        await hub.initialise([bad, healthy])
+    assert set(hub.skipped) == {bad.id}
+    assert hub.healthy == {healthy.id}
     hub.close()
     assert hub.skipped == {}
+    assert hub.healthy == set()
 
 
 async def test_acl_returns_acl_for_connector(tmp_path):

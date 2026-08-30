@@ -4,6 +4,7 @@ All functions require RLS org context to be set by the caller.
 """
 
 import uuid
+from collections.abc import Collection
 from typing import Any
 
 from sqlalchemy import case, func, select, update
@@ -142,6 +143,29 @@ async def mark_instances_degraded(session: AsyncSession, skipped: dict[uuid.UUID
         update(ConnectorInstance)
         .where(ConnectorInstance.id.in_(skipped))
         .values(degraded_at=func.now(), last_skip_error=summary_by_id)
+    )
+    await session.execute(stmt)
+    await session.flush()
+
+
+async def clear_degraded_markers(session: AsyncSession, instance_ids: Collection[uuid.UUID]) -> None:
+    """Clear degraded_at/last_skip_error for instances that initialised successfully (FAR-495).
+
+    Compensates :func:`mark_instances_degraded`: a connector fixed via a config
+    or plugin change (not a credential update) stops being flagged degraded
+    once the hub successfully initialises it. Issues a single ``UPDATE
+    connector_instances SET degraded_at = NULL, last_skip_error = NULL WHERE id
+    = ANY(<ids>)`` statement. An empty *instance_ids* collection is a no-op.
+    Only instances actually attempted and initialised by the hub are passed in,
+    so out-of-scope instances are never touched. Requires RLS org context to be
+    set by the caller.
+    """
+    if not instance_ids:
+        return
+    stmt = (
+        update(ConnectorInstance)
+        .where(ConnectorInstance.id.in_(instance_ids))
+        .values(degraded_at=None, last_skip_error=None)
     )
     await session.execute(stmt)
     await session.flush()

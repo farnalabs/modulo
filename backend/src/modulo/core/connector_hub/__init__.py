@@ -86,6 +86,7 @@ from modulo.db.models.connector_instance import ConnectorInstance
 logger = logging.getLogger(__name__)
 
 _SAMPLE_LIMIT: int = 200
+_SKIP_SUMMARY_LIMIT: int = 2000
 _OTEL_ATTR_CONNECTOR_RESOURCE = "connector.resource"
 _LOCALHOST_8080: str = "http://localhost:8080"
 _LOCALHOST_3000: str = "http://localhost:3000"
@@ -223,9 +224,17 @@ class ConnectorHub:
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
         self._acls: dict[uuid.UUID, ConnectorACL] = {}
         # Instances that failed to initialise during the last initialise() call
-        # (FAR-495), mapped to a "{ExcType}: {message}" summary. Callers persist
-        # a degraded marker from this so operators can see broken connectors.
+        # (FAR-495), mapped to a "{ExcType}: {message}" summary. EVERY failure
+        # class lands here — typed errors and unexpected exceptions alike —
+        # except the fail-closed propagations (SharedBudgetUnavailableError,
+        # CancelledError), which abort the run instead. Callers persist a
+        # degraded marker from this so operators can see broken connectors.
         self.skipped: dict[uuid.UUID, str] = {}
+        # Instances successfully initialised during the last initialise() call
+        # (FAR-495). The executor clears stale degraded markers for these so a
+        # connector fixed via a config/plugin change stops being flagged
+        # degraded (credential updates clear the marker at the API layer).
+        self.healthy: set[uuid.UUID] = set()
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
         self._runtime_provider = runtime_provider
@@ -336,11 +345,19 @@ class ConnectorHub:
         self._connectors.clear()
         self._acls.clear()
         self.skipped.clear()
+        self.healthy.clear()
         self._initialised = False
 
     def _record_skip(self, instance: ConnectorInstance, exc: Exception) -> None:
-        """Record an instance that failed to initialise (FAR-495) so callers can persist a degraded marker."""
-        self.skipped[instance.id] = f"{type(exc).__name__}: {exc}"
+        """Record an instance that failed to initialise (FAR-495) so callers can persist a degraded marker.
+
+        The summary is NUL-stripped and truncated to 2000 chars: Postgres
+        rejects NUL bytes in SQL text (a NUL in any summary would fail the
+        whole batch UPDATE so NO instance gets marked), and 2000 matches the
+        sibling ``last_health_check_error`` String(2000) column.
+        """
+        summary = f"{type(exc).__name__}: {exc}"
+        self.skipped[instance.id] = summary.replace("\x00", "")[:_SKIP_SUMMARY_LIMIT]
 
     async def initialise(
         self,
@@ -450,6 +467,7 @@ class ConnectorHub:
                     )
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
+                    self.healthy.add(ci.id)
                 except (
                     ConnectorDecryptError,
                     ValueError,
@@ -472,7 +490,11 @@ class ConnectorHub:
                     raise
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    # FAR-495: unexpected failures land in `skipped` too — every
+                    # skipped instance must reach the degraded-marker persist,
+                    # regardless of failure class.
+                    self._record_skip(ci, exc)
                     logger.exception(
                         "Unexpected error skipping connector %s (%s) — programming bug",
                         ci.id,

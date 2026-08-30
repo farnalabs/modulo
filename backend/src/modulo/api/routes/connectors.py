@@ -402,6 +402,14 @@ async def update_connector_endpoint(
     credentials_updated = "credentials" in updates
     if credentials_updated:
         new_credentials = updates.pop("credentials")
+        if new_credentials is None:
+            # ``min_length`` only constrains str values — an explicit
+            # ``"credentials": null`` would otherwise reach _encrypt(None, ...)
+            # and raise AttributeError → unhandled 500 (FAR-495 QA).
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="'credentials' must be a non-empty string",
+            )
         ct = _encrypt(new_credentials, settings.fernet_key)
         updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
         # Fresh credentials clear the degraded marker (FAR-495) — the stored

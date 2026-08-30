@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from modulo.db.crud.connector_instance import (
+    clear_degraded_markers,
     create_connector_instance,
     delete_connector_instance,
     get_connector_instance,
@@ -145,6 +146,36 @@ async def test_mark_instances_degraded_empty_dict_is_noop(
     assert fetched is not None
     assert fetched.degraded_at is None
     assert fetched.last_skip_error is None
+
+
+async def test_clear_degraded_markers_persists_nulls(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: clear_degraded_markers resets degraded_at/last_skip_error to NULL."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-cleared"))
+    await mark_instances_degraded(rls_session, {ci.id: "ValueError: Missing credential key 'token'"})
+    await clear_degraded_markers(rls_session, {ci.id})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is None
+    assert fetched.last_skip_error is None
+
+
+async def test_clear_degraded_markers_empty_collection_is_noop(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: an empty instance-id collection leaves existing markers untouched."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-clear-noop"))
+    await mark_instances_degraded(rls_session, {ci.id: "ValueError: boom"})
+    await clear_degraded_markers(rls_session, set())
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is not None
+    assert fetched.last_skip_error == "ValueError: boom"
 
 
 class TestListConnectorInstancesTierFiltering:
