@@ -9,10 +9,12 @@ and has been renumbered four times as main advanced underneath it. It first coll
 with main's ``0150_add_router_no_match_status`` (FAR-402 P1 / FAR-415) and was
 renumbered to ``0151``; that in turn collided with main's ``0151_fix_constraints``
 (improve-database). Main's chain has since grown
-``0151_fix_constraints`` -> ... -> ``0157_add_numeric_check_constraints`` ->
-``0158_sso_provider_id`` (FAR-457/FAR-464), so this migration is now numbered ``0159``
-and re-parented onto main's real head ``0158_sso_provider_id``, keeping the graph a
-single linear chain with ``0160_run_idempotency_key`` as the sole head.
+``0151_fix_constraints`` -> ``0152_dismissed_by_user_id_index`` ->
+``0153_add_numeric_check_constraints`` -> ``0154_add_web_vital_events_time_index`` ->
+``0155_add_hot_query_indexes`` -> ``0156_add_soft_delete_partial_uniques`` ->
+``0157_add_numeric_check_constraints`` -> ``0158_sso_provider_id``, so this migration is
+now numbered ``0159`` and re-parented onto main's real head ``0158_sso_provider_id``,
+keeping the graph a single linear chain with ``0160_run_idempotency_key`` as the sole head.
 
 Implements the FAR-402 P5 (FAR-419) failure/retry + compensation data-model
 deltas:
@@ -134,7 +136,7 @@ def downgrade() -> None:
     op.drop_column("pipeline_edges", "retry")
     # Idempotent: 0160_run_idempotency_key may already have dropped the column on
     # its own downgrade, so only drop it if it is still present — otherwise the
-    # downgrade chain 0159 -> 0158 fails with "column does not exist".
+    # downgrade chain 0160 -> 0159 fails with "column does not exist".
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_runs = {col["name"] for col in inspector.get_columns("runs")}
