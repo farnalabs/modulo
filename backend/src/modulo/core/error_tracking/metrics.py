@@ -93,16 +93,52 @@ def _runtime_instruments() -> list[tuple[str, str, str]]:
     ]
 
 
-def init_runtime_metrics() -> None:
-    """Register the run-runtime liveness instruments once (idempotent)."""
-    global _runs_running_gauge, _runs_oldest_running_gauge, _runs_stall_reason_total, _runs_claim_count_histogram
+# Maps each run-runtime instrument name to the module global that holds its handle.
+_RUNTIME_INSTRUMENT_GLOBALS: dict[str, str] = {
+    "runs_running_count": "_runs_running_gauge",
+    "runs_oldest_running_age_seconds": "_runs_oldest_running_gauge",
+    "runs_stall_reason_total": "_runs_stall_reason_total",
+    "runs_claim_count_histogram": "_runs_claim_count_histogram",
+    "runs_claim_count_total": "_runs_claim_count_histogram",
+}
 
-    if (
+
+def _runtime_metrics_registered() -> bool:
+    """True once every run-runtime instrument handle has been initialised."""
+    return (
         _runs_running_gauge is not None
         and _runs_oldest_running_gauge is not None
         and _runs_stall_reason_total is not None
         and _runs_claim_count_histogram is not None
-    ):
+    )
+
+
+def _create_runtime_instrument(meter: Any, kind: str, name: str, description: str) -> Any | None:
+    """Create a single run-runtime instrument, swallowing SDK incompatibilities.
+
+    Returns the instrument handle, or ``None`` when the OTel SDK cannot provide
+    it (unsupported API or other failure) so the remaining instruments still
+    register.
+    """
+    try:
+        if kind == "gauge":
+            return meter.create_gauge(name=name, description=description, unit="1")
+        if kind == "counter":
+            return meter.create_counter(name=name, description=description, unit="1")
+        return meter.create_histogram(name=name, description=description, unit="1")
+    except AttributeError:
+        _log.warning("metrics.runtime_instrument_unsupported — %s skipped", name)
+        return None
+    except Exception:
+        _log.warning("metrics.runtime_instrument_failed — %s skipped", name)
+        return None
+
+
+def init_runtime_metrics() -> None:
+    """Register the run-runtime liveness instruments once (idempotent)."""
+    global _runs_running_gauge, _runs_oldest_running_gauge, _runs_stall_reason_total, _runs_claim_count_histogram
+
+    if _runtime_metrics_registered():
         return
 
     meter = _get_meter()
@@ -110,27 +146,10 @@ def init_runtime_metrics() -> None:
         return
 
     for kind, name, description in _runtime_instruments():
-        try:
-            if kind == "gauge":
-                handle = meter.create_gauge(name=name, description=description, unit="1")
-            elif kind == "counter":
-                handle = meter.create_counter(name=name, description=description, unit="1")
-            else:
-                handle = meter.create_histogram(name=name, description=description, unit="1")
-        except AttributeError:
-            _log.warning("metrics.runtime_instrument_unsupported — %s skipped", name)
+        handle = _create_runtime_instrument(meter, kind, name, description)
+        if handle is None:
             continue
-        except Exception:
-            _log.warning("metrics.runtime_instrument_failed — %s skipped", name)
-            continue
-        if name == "runs_running_count":
-            _runs_running_gauge = handle
-        elif name == "runs_oldest_running_age_seconds":
-            _runs_oldest_running_gauge = handle
-        elif name == "runs_stall_reason_total":
-            _runs_stall_reason_total = handle
-        else:
-            _runs_claim_count_histogram = handle
+        globals()[_RUNTIME_INSTRUMENT_GLOBALS[name]] = handle
 
     _log.info("metrics.runtime_registered")
 
