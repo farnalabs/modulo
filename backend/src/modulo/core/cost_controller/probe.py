@@ -83,6 +83,7 @@ PROBE_TERMINAL_STATUSES = (
     "budget_exceeded",
     "router_no_match",
     "cost_ceiling_exceeded",
+    "compensation_failed",
 )
 
 # Per-org statement/query timeout (one stalled org cannot block the cadence).

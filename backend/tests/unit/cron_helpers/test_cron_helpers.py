@@ -1874,7 +1874,7 @@ class TestCountActiveRuns:
         assert "cancellation_requested" in sql
         # Every active status must be counted, never re-dispatched away.
         statuses = session.executed[0][0].compile().params["status_1"]
-        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed"}
+        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed", "unknown"}
 
 
 class TestLogEvent:

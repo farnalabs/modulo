@@ -84,6 +84,7 @@ def test_active_run_statuses_includes_pending_when_requested():
         "running",
         "awaiting_human",
         "claimed",
+        "unknown",
     }
 
 
@@ -92,6 +93,7 @@ def test_active_run_statuses_excludes_pending_for_capacity():
         "running",
         "awaiting_human",
         "claimed",
+        "unknown",
     }
     assert "pending" not in _active_run_statuses(False)
 
