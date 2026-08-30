@@ -7,13 +7,23 @@
 #
 # SECURITY: MODULO_MONITOR_DOMAINS / VITE_GRAFANA_FARO_URL are untrusted env
 # input on the frontend-only nginx image (which runs no backend validator), so
-# render_csp.sh must sanitise them itself. A semicolon, CR or LF breaks out of
-# the connect-src directive and injects arbitrary CSP directives at the edge
-# (FAR-447 re-review MAJOR — security consistency). We STRIP those chars,
-# mirroring backend/src/modulo/settings.py:_validate_monitor_domains (which
-# rejects them for the backend). We strip (rather than reject) so a malformed
-# value degrades to "telemetry not added" instead of crashing boot on the
-# backend-less image.
+# render_csp.sh must sanitise them itself. The value is interpolated into a
+# DOUBLE-QUOTED add_header string inside an nginx CONFIG FILE, so stripping ';'
+# CR LF (as the backend validator does for a plain HTTP header value) is not
+# sufficient at the edge:
+#   ;        breaks out of the connect-src directive and injects CSP directives
+#   CR / LF  break out of the add_header directive entirely
+#   "        terminates the quoted string and injects raw nginx config
+#   $        is an nginx variable reference; an unknown one is a boot-time
+#            `[emerg] unknown "..." variable`, not a silent no-op
+#   \        is the nginx escape character
+# Rather than blacklist those chars we ALLOWLIST the characters that are valid
+# in a CSP source expression and DROP any token containing anything else
+# (FAR-447 re-review MAJOR — sanitisation misses '"'). This is strictly
+# stronger than backend/src/modulo/settings.py:_validate_monitor_domains.
+# We DROP the offending token (rather than reject and exit non-zero) so a
+# malformed value degrades to "that origin not added" instead of crash-looping
+# boot on the backend-less image.
 #
 # Reads (all optional):
 #   MODULO_MONITOR_DOMAINS  space-separated extra connect-src origins
@@ -22,29 +32,56 @@
 # Output: ${OUT} (default /etc/nginx/security_headers.conf), which each nginx
 # server config `include`s. Placed OUTSIDE the document root so it is not
 # publicly downloadable (FAR-447 re-review MINOR-2).
-set -eu
+# -f (noglob) is required: the allowlist below word-splits the env value, and
+# tokens legitimately contain '*' (e.g. *.datadoghq.com), which would otherwise
+# be pathname-expanded against the CWD.
+set -euf
 
 TEMPLATE="${TEMPLATE:-/etc/nginx/security_headers.conf.in}"
 OUT="${OUT:-/etc/nginx/security_headers.conf}"
 
-# Defaults match the backend middleware's hardcoded allowlist.
+# Defaults mirror the backend middleware's hardcoded allowlist, except that the
+# edge also sends `ws: wss:` unconditionally while the backend middleware adds
+# them only in debug mode. That divergence is deliberate and documented in
+# deploy/nginx/security_headers.conf.in (FAR-447 re-review MINOR).
 CONNECT_SRC="*.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com ws: wss:"
 
-# Strip any char that could break out of a CSP directive: ; CR LF. Mirrors the
-# backend settings validator but strips instead of rejecting (see header).
-sanitize() {
-    printf '%s' "$1" | tr -d ';\r\n'
+# Emit only those space-separated tokens that consist wholly of characters valid
+# in a CSP source expression: alphanumerics . - _ * : /  (enough for
+# `*.example.com`, `https:`, `wss:`, `example.com:8443`, `example.com/path`).
+# Any token containing anything else -- notably ; " \ $ ` ' ( ) or a control
+# char -- is dropped whole. See the SECURITY note in the header.
+#
+# A bare `*` (and any other use of `*` than a leading `*.` host wildcard) is
+# ALSO dropped: `*` is a legal CSP source that silently widens connect-src to
+# every host, so letting it through would turn a hostile value like
+# `evil.com; script-src *` into an open connect-src even though the ';' itself
+# was stripped.
+sanitize_tokens() {
+    _out=""
+    for _tok in $1; do
+        case "$_tok" in
+            "") continue ;;
+            # Character allowlist.
+            *[!a-zA-Z0-9.:/*_-]*) continue ;;
+        esac
+        # Wildcard policy: allow only a leading '*.' and no other '*'.
+        case "${_tok#\*.}" in
+            *\**) continue ;;
+        esac
+        _out="$_out $_tok"
+    done
+    printf '%s' "$_out"
 }
 
 extra=""
 if [ -n "${MODULO_MONITOR_DOMAINS:-}" ]; then
-    extra="$extra $(sanitize "$MODULO_MONITOR_DOMAINS")"
+    extra="$extra$(sanitize_tokens "$MODULO_MONITOR_DOMAINS")"
 fi
 if [ -n "${VITE_GRAFANA_FARO_URL:-}" ]; then
-    faro=$(printf '%s' "$VITE_GRAFANA_FARO_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*##' | tr -d ';\r\n')
-    if [ -n "$faro" ]; then
-        extra="$extra $faro"
-    fi
+    # Reduce the collector URL to its origin (host[:port]) before allowlisting.
+    faro=$(printf '%s' "$VITE_GRAFANA_FARO_URL" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##')
+    extra="$extra$(sanitize_tokens "$faro")"
 fi
 
 # Collapse any runs of spaces left by sanitised-away tokens.

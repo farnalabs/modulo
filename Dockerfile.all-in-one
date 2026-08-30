@@ -45,13 +45,17 @@ ENV PATH="/app/.venv/bin:$PATH"
 # required for non-root binding. Debian nginx keeps proxy/body temp files
 # under /var/lib/nginx (not /var/cache/nginx), so those dirs are pre-created
 # and chowned. supervisord log/pid paths are chowned so both write as
-# www-data.
+# www-data. /etc/nginx/security_headers.conf is chowned because entrypoint.sh
+# runs render_csp.sh under `set -e` as www-data: a root-owned render target
+# makes the `>` redirect fail with EACCES, aborting the entrypoint so
+# supervisord (migrations + backend + nginx) never starts.
 RUN mkdir -p /var/cache/nginx /var/lib/nginx/body /var/lib/nginx/fastcgi /var/lib/nginx/proxy /var/lib/nginx/scgi /var/lib/nginx/uwsgi /var/log/supervisor \
     && chown -R www-data:www-data /var/cache/nginx \
     && chown -R www-data:www-data /var/lib/nginx \
     && chown -R www-data:www-data /var/log/nginx \
     && chown -R www-data:www-data /var/log/supervisor \
     && chown -R www-data:www-data /usr/share/nginx/html \
+    && chown www-data:www-data /etc/nginx/security_headers.conf /etc/nginx/security_headers.conf.in \
     && touch /var/run/nginx.pid \
     && touch /var/run/supervisord.pid \
     && chown www-data:www-data /var/run/nginx.pid /var/run/supervisord.pid \
