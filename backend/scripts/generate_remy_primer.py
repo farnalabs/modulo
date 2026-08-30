@@ -106,8 +106,8 @@ def _load_prd_glossary(prd_path: Path) -> dict[str, str]:
 
     section = m.group(1)
     terms: dict[str, str] = {}
-    for line in section.splitlines():
-        line = line.strip()
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
         if not line.startswith("| **"):
             continue
         parts = [p.strip() for p in line.split("|") if p.strip()]

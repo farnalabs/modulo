@@ -310,8 +310,8 @@ async def test_write_issue_operations(
     keys = assert_key.split(".")
     val = result
     for k in keys:
-        k = int(k.strip("[]")) if k.strip("[]").isdigit() else k
-        val = val[k]
+        key = int(k.strip("[]")) if k.strip("[]").isdigit() else k
+        val = val[key]
     assert val == assert_value
 
 

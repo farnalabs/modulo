@@ -549,26 +549,26 @@ jobs:
             while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
               discovery_attempt=$(( discovery_attempt + 1 ))
               MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
-          import json, os, sys
-          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
-          try:
-              machines = json.load(sys.stdin)
-          except Exception:
-              machines = []
-          pre = set()
-          try:
-              with open("/tmp/premigrate-preexisting.txt") as f:
-                  pre = {line.strip() for line in f if line.strip()}
-          except Exception:
-              pass
-          for m in machines:
-              mid = m.get("id")
-              cfg = m.get("config") or {}
-              mimage = cfg.get("image") or m.get("image") or ""
-              if mid and image and mimage.startswith(image) and mid not in pre:
-                  print(mid)
-                  break
-          ')"
+           import json, os, sys
+           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+           try:
+               machines = json.load(sys.stdin)
+           except Exception:
+               machines = []
+           pre = set()
+           try:
+               with open("/tmp/premigrate-preexisting.txt") as f:
+                   pre = {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
+           for m in machines:
+               mid = m.get("id")
+               cfg = m.get("config") or {}
+               mimage = cfg.get("image") or m.get("image") or ""
+               if mid and image and mimage.startswith(image) and mid not in pre:
+                   print(mid)
+                   break
+           ')"
               if [ -n "$MID" ]; then
                 break
               fi
@@ -1266,26 +1266,26 @@ jobs:
             while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
               discovery_attempt=$(( discovery_attempt + 1 ))
               MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
-          import json, os, sys
-          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
-          try:
-              machines = json.load(sys.stdin)
-          except Exception:
-              machines = []
-          pre = set()
-          try:
-              with open("/tmp/premigrate-preexisting.txt") as f:
-                  pre = {line.strip() for line in f if line.strip()}
-          except Exception:
-              pass
-          for m in machines:
-              mid = m.get("id")
-              cfg = m.get("config") or {}
-              mimage = cfg.get("image") or m.get("image") or ""
-              if mid and image and mimage.startswith(image) and mid not in pre:
-                  print(mid)
-                  break
-          ')"
+           import json, os, sys
+           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+           try:
+               machines = json.load(sys.stdin)
+           except Exception:
+               machines = []
+           pre = set()
+           try:
+               with open("/tmp/premigrate-preexisting.txt") as f:
+                   pre = {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
+           for m in machines:
+               mid = m.get("id")
+               cfg = m.get("config") or {}
+               mimage = cfg.get("image") or m.get("image") or ""
+               if mid and image and mimage.startswith(image) and mid not in pre:
+                   print(mid)
+                   break
+           ')"
               if [ -n "$MID" ]; then
                 break
               fi

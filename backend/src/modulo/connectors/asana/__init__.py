@@ -71,82 +71,92 @@ class AsanaConnector(ConnectorBase):
         async with self._client() as client:
             match q.resource:
                 case "projects":
-                    params: dict[str, str] = {}
-                    if "workspace" in q.filters:
-                        params["workspace"] = q.filters["workspace"]
-                    if "archived" in q.filters:
-                        params["archived"] = str(q.filters["archived"]).lower()
-                    r = await client.get("/projects", params=params)
-                    r.raise_for_status()
-                    body = r.json()
-                    records: list[dict[str, Any]] = _safe_records(body, "data")
-                    return ConnectorResult(records=records, total=len(records))
-
+                    return await self._query_projects(client, q)
                 case "project":
-                    project_id = q.filters.get("project_id")
-                    if not project_id:
-                        raise ValueError("Asana project query requires 'project_id' filter")
-                    r = await client.get(f"/projects/{project_id}")
-                    r.raise_for_status()
-                    body = r.json()
-                    record = body.get("data", {}) if isinstance(body, dict) else {}
-                    return ConnectorResult(records=[record] if record else [])
-
+                    return await self._query_project(client, q)
                 case "tasks":
-                    params = {}
-                    if "workspace" in q.filters:
-                        params["workspace"] = q.filters["workspace"]
-                    project_id = q.filters.get("project_id")
-                    if project_id:
-                        r = await client.get(f"/projects/{project_id}/tasks", params=params)
-                    elif "workspace" in q.filters:
-                        r = await client.get("/tasks", params=params)
-                    else:
-                        raise ValueError("Asana tasks query requires 'project_id' or 'workspace' filter")
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "data")
-                    return ConnectorResult(records=records, total=len(records))
-
+                    return await self._query_tasks(client, q)
                 case "task":
-                    task_id = q.filters.get("task_id")
-                    if not task_id:
-                        raise ValueError("Asana task query requires 'task_id' filter")
-                    r = await client.get(f"/tasks/{task_id}")
-                    r.raise_for_status()
-                    body = r.json()
-                    record = body.get("data", {}) if isinstance(body, dict) else {}
-                    return ConnectorResult(records=[record] if record else [])
-
+                    return await self._query_task(client, q)
                 case "sections":
-                    project_id = q.filters.get("project_id")
-                    if not project_id:
-                        raise ValueError("Asana sections query requires 'project_id' filter")
-                    r = await client.get(f"/projects/{project_id}/sections")
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "data")
-                    return ConnectorResult(records=records, total=len(records))
-
+                    return await self._query_sections(client, q)
                 case "workspaces":
-                    r = await client.get("/workspaces")
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "data")
-                    return ConnectorResult(records=records, total=len(records))
-
+                    return await self._query_workspaces(client)
                 case "users":
-                    params = {}
-                    if "workspace" in q.filters:
-                        params["workspace"] = q.filters["workspace"]
-                    r = await client.get("/users", params=params)
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "data")
-                    return ConnectorResult(records=records, total=len(records))
-
+                    return await self._query_users(client, q)
                 case _:
                     raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    async def _query_projects(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, str] = {}
+        if "workspace" in q.filters:
+            params["workspace"] = q.filters["workspace"]
+        if "archived" in q.filters:
+            params["archived"] = str(q.filters["archived"]).lower()
+        r = await client.get("/projects", params=params)
+        r.raise_for_status()
+        return self._list_result(r.json())
+
+    async def _query_project(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        project_id = q.filters.get("project_id")
+        if not project_id:
+            raise ValueError("Asana project query requires 'project_id' filter")
+        r = await client.get(f"/projects/{project_id}")
+        r.raise_for_status()
+        return self._single_result(r.json())
+
+    async def _query_tasks(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, str] = {}
+        if "workspace" in q.filters:
+            params["workspace"] = q.filters["workspace"]
+        project_id = q.filters.get("project_id")
+        if project_id:
+            r = await client.get(f"/projects/{project_id}/tasks", params=params)
+        elif "workspace" in q.filters:
+            r = await client.get("/tasks", params=params)
+        else:
+            raise ValueError("Asana tasks query requires 'project_id' or 'workspace' filter")
+        r.raise_for_status()
+        return self._list_result(r.json())
+
+    async def _query_task(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        task_id = q.filters.get("task_id")
+        if not task_id:
+            raise ValueError("Asana task query requires 'task_id' filter")
+        r = await client.get(f"/tasks/{task_id}")
+        r.raise_for_status()
+        return self._single_result(r.json())
+
+    async def _query_sections(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        project_id = q.filters.get("project_id")
+        if not project_id:
+            raise ValueError("Asana sections query requires 'project_id' filter")
+        r = await client.get(f"/projects/{project_id}/sections")
+        r.raise_for_status()
+        return self._list_result(r.json())
+
+    async def _query_workspaces(self, client: httpx.AsyncClient) -> ConnectorResult:
+        r = await client.get("/workspaces")
+        r.raise_for_status()
+        return self._list_result(r.json())
+
+    async def _query_users(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, str] = {}
+        if "workspace" in q.filters:
+            params["workspace"] = q.filters["workspace"]
+        r = await client.get("/users", params=params)
+        r.raise_for_status()
+        return self._list_result(r.json())
+
+    @staticmethod
+    def _list_result(body: Any) -> ConnectorResult:
+        records = _safe_records(body, "data")
+        return ConnectorResult(records=records, total=len(records))
+
+    @staticmethod
+    def _single_result(body: Any) -> ConnectorResult:
+        record = body.get("data", {}) if isinstance(body, dict) else {}
+        return ConnectorResult(records=[record] if record else [])
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:

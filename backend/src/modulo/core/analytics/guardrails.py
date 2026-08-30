@@ -37,7 +37,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import sqlalchemy as sa
 from sqlalchemy import func, text
@@ -367,6 +367,106 @@ def _assemble_scorecard(
 # ---------------------------------------------------------------------------
 
 
+async def _maybe_apply_postgres_timeout(session: AsyncSession, settings: Settings) -> None:
+    """Apply the analytics statement timeout + UTC timezone on Postgres only.
+
+    SQLite/MariaDB ignore these (and have no equivalent knobs), so this is a
+    no-op for non-Postgres dialects — callers gate on dialect before calling.
+    """
+    timeout_ms = getattr(settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS)
+    await session.execute(text(_SQL_SET_TIMEZONE_UTC))
+    await session.execute(text(_SQL_SET_STATEMENT_TIMEOUT), {"ms": str(int(timeout_ms))})
+
+
+def _raise_mapped_error(exc: Exception, org_id: uuid.UUID) -> NoReturn:
+    """Map a raw/exception into the route-facing typed ``AnalyticsError`` set.
+
+    Typed ``AnalyticsError`` subclasses and ``asyncio.CancelledError`` are
+    propagated unchanged (the route maps them to HTTP statuses / cancellation).
+    ``ProgrammingError`` becomes a migration-required error; ``DBAPIError`` whose
+    cancellation predicate fires becomes a timeout; any other SQLAlchemy error
+    becomes a generic DB-unavailable error. Anything unexpected is collapsed to
+    a generic DB-unavailable error so no raw exception escapes to the route.
+    """
+    if isinstance(exc, asyncio.CancelledError):
+        raise exc
+    if isinstance(
+        exc,
+        (
+            AnalyticsValidationError,
+            AnalyticsRateLimitedError,
+            AnalyticsQueryTimeoutError,
+            AnalyticsMigrationRequiredError,
+            AnalyticsDatabaseError,
+        ),
+    ):
+        raise exc
+    if isinstance(exc, ProgrammingError):
+        _log.exception("analytics.guardrails.programming_error", extra={"org_id": str(org_id)})
+        raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
+    if isinstance(exc, DBAPIError):
+        if _is_query_canceled(exc):
+            _log.warning("analytics.guardrails.timeout", extra={"org_id": str(org_id)})
+            raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+        _log.exception("analytics.guardrails.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    if isinstance(exc, SQLAlchemyError):
+        _log.exception("analytics.guardrails.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    _log.exception("analytics.guardrails.unexpected_error", extra={"org_id": str(org_id)})
+    raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+async def _run_scorecard_queries(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    baseline_from: datetime,
+    effective_from: datetime,
+    effective_to: datetime,
+    *,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+    settings: Settings,
+) -> tuple[Any, Any, int, Any]:
+    """Open a session and run the four scorecard aggregate queries.
+
+    Returns ``(runs_row, corrections_row, budget_exhausted, baseline_row)``.
+    Any DB-level or unexpected failure is mapped by ``_raise_mapped_error`` into
+    the typed ``AnalyticsError`` the REST route expects — no raw exception ever
+    escapes this helper.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            if account_id is not None:
+                await set_rls_user_context(session, account_id, org_role or "")
+            dialect = (await session.connection()).dialect.name
+            if dialect == "postgresql":
+                await _maybe_apply_postgres_timeout(session, settings)
+
+            runs_row = (
+                await session.execute(_build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to))
+            ).one()
+            corrections_row = (
+                await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to))
+            ).one()
+            budget_exhausted = int(
+                (
+                    await session.execute(_build_budget_exhausted_stmt(dialect, org_id, effective_from, effective_to))
+                ).scalar()
+                or 0
+            )
+            baseline_row = (
+                await session.execute(_build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from))
+            ).one()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _raise_mapped_error(exc, org_id)
+
+    return runs_row, corrections_row, budget_exhausted, baseline_row
+
+
 async def run_guardrail_scorecard(
     *,
     org_id: uuid.UUID,
@@ -397,69 +497,16 @@ async def run_guardrail_scorecard(
     baseline_window_days = min(range_days, _BASELINE_MAX_DAYS)
     baseline_from = effective_from - timedelta(days=baseline_window_days)
 
-    try:
-        async with factory() as session:
-            try:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    if account_id is not None:
-                        await set_rls_user_context(session, account_id, org_role or "")
-                    dialect = (await session.connection()).dialect.name
-                    if dialect == "postgresql":
-                        timeout_ms = getattr(
-                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                        )
-                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
-                        await session.execute(
-                            text(_SQL_SET_STATEMENT_TIMEOUT),
-                            {"ms": str(int(timeout_ms))},
-                        )
-
-                    runs_row = (
-                        await session.execute(_build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to))
-                    ).one()
-                    corrections_row = (
-                        await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to))
-                    ).one()
-                    budget_exhausted = int(
-                        (
-                            await session.execute(
-                                _build_budget_exhausted_stmt(dialect, org_id, effective_from, effective_to)
-                            )
-                        ).scalar()
-                        or 0
-                    )
-                    baseline_row = (
-                        await session.execute(
-                            _build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from)
-                        )
-                    ).one()
-            except asyncio.CancelledError:
-                raise
-            except ProgrammingError:
-                _log.exception("analytics.guardrails.programming_error", extra={"org_id": str(org_id)})
-                raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
-            except DBAPIError as exc:
-                if _is_query_canceled(exc):
-                    _log.warning("analytics.guardrails.timeout", extra={"org_id": str(org_id)})
-                    raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
-                _log.exception("analytics.guardrails.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-            except SQLAlchemyError:
-                _log.exception("analytics.guardrails.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-    except (
-        AnalyticsValidationError,
-        AnalyticsRateLimitedError,
-        AnalyticsQueryTimeoutError,
-        AnalyticsMigrationRequiredError,
-        AnalyticsDatabaseError,
-        asyncio.CancelledError,
-    ):
-        raise
-    except Exception:
-        _log.exception("analytics.guardrails.unexpected_error", extra={"org_id": str(org_id)})
-        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    runs_row, corrections_row, budget_exhausted, baseline_row = await _run_scorecard_queries(
+        factory,
+        org_id,
+        baseline_from,
+        effective_from,
+        effective_to,
+        account_id=account_id,
+        org_role=org_role,
+        settings=settings,
+    )
 
     return _assemble_scorecard(
         runs_row,

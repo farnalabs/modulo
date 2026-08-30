@@ -44,6 +44,8 @@ Supported platforms, minimum resources, and database backends for running Modulo
 | Database | Version | Status | Production Ready | Notes |
 |----------|---------|--------|-----------------|-------|
 | **PostgreSQL** | 16+ | **Supported** | **Yes** | Primary production database |
+| **MySQL** | 8+ | Supported | Conformance | Via `MODULO_DB=mysql` (`aiomysql` driver) |
+| **MariaDB** | 11+ | Supported | Conformance | Via `MODULO_DB=mariadb` (`docker-compose.mariadb.yml`) |
 | **SQLite** | 3.x | Compatible | **No** | Dev-only: no RLS, no advisory locks |
 
 ### PostgreSQL Requirements
@@ -76,7 +78,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | PostgreSQL | 16+ | **Yes** (production) | Primary data store |
 | Redis | 7+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
-| `uv` | Latest | Yes | Python package manager |
+| `uv` | 0.11.x | Yes | Python package manager (pinned in Docker images) |
 | Node.js | 20+ | For frontend dev | Frontend build toolchain |
 | Docker | 24+ | For Docker Compose | Container runtime |
 

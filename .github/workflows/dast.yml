@@ -34,11 +34,20 @@ jobs:
           SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
           mkdir -p zap-report
           chmod 777 zap-report
+          EXIT=0
           if [ "$SCAN_TYPE" = "full" ]; then
-            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a
+            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
           else
-            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json -a
+            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
           fi
+          echo "zap_exit=${EXIT}"
+          echo "zap_exit=${EXIT}" >> "$GITHUB_OUTPUT"
+          # Report-only harness: do NOT fail the workflow on ZAP findings. ZAP baseline
+          # exits 0/1/2/3 (clean/fail-high/warn-medium/info). A non-zero exit only reflects
+          # findings, never a harness failure. The Summarize step reports them and the
+          # report artifact always uploads. The enforcement point is the dast-gate job in
+          # deploy.yml (FAR-449), not this nightly.
+          exit 0
 
       - name: Upload ZAP report
         if: always()
@@ -52,6 +61,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          echo "ZAP scan exit code: ${{ steps.zap.outputs.zap_exit }}"
           python3 - <<'PYEOF'
           import json, os, sys
           path = "zap-report/zap-report.json"

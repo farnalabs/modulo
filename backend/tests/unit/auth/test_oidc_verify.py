@@ -500,6 +500,120 @@ class TestEdgeCases:
         clear_jwks_cache()
         assert not _jwks_cache
 
+    def test_cache_expires_after_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import time
+
+        import modulo.auth.oidc_verify as oidc_verify
+
+        oidc_verify._cache_set("https://example.com/jwks", [{"kty": "RSA"}])
+        future = time.time() + oidc_verify._JWKS_CACHE_TTL + 1
+
+        monkeypatch.setattr(time, "time", lambda: future)
+
+        assert oidc_verify._cache_get("https://example.com/jwks") is None
+        assert "https://example.com/jwks" not in oidc_verify._jwks_cache
+
+    async def test_fails_on_discovery_http_error(self) -> None:
+        mock_client = _make_httpx_mock({_DISCOVERY_URL: _make_resp(500)})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="Failed to fetch discovery document"):
+                await verify_id_token_with_discovery("token", _DISCOVERY_URL, "cid")
+
+    async def test_fails_on_non_dict_discovery(self) -> None:
+        resp = _make_resp(json_data=["not", "a", "dict"])
+        mock_client = _make_httpx_mock({_DISCOVERY_URL: resp})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="not a JSON object"):
+                await verify_id_token_with_discovery("token", _DISCOVERY_URL, "cid")
+
+    async def test_fails_on_jwks_http_error(self) -> None:
+        mock_client = _make_httpx_mock({_JWKS_URI: _make_resp(500)})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="Failed to fetch JWKS"):
+                await verify_id_token(_ID_TOKEN, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+    async def test_fails_on_non_dict_jwks(self) -> None:
+        resp = _make_resp(json_data=["keys"])
+        mock_client = _make_httpx_mock({_JWKS_URI: resp})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="not a JSON object"):
+                await verify_id_token(_ID_TOKEN, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+    async def test_unsupported_alg_rejected(self) -> None:
+        now = int(datetime.now(UTC).timestamp())
+        payload = {"sub": "u", "iss": _ISSUER, "aud": _CLIENT_ID, "iat": now, "exp": now + 3600}
+
+        def _b64(data: bytes) -> str:
+            return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+        header = _b64(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+        body = _b64(json.dumps(payload).encode())
+        token = f"{header}.{body}."
+
+        mock_client = _make_httpx_mock({_JWKS_URI: _make_resp(json_data={"keys": []})})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="Unsupported JWT algorithm"):
+                await verify_id_token(token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+    async def test_fails_on_unparseable_header(self) -> None:
+        # First segment decodes to something that is not a JSON object.
+        malformed_header = base64.urlsafe_b64encode(b"not-json!").rstrip(b"=").decode()
+        token = f"{malformed_header}.cGF5bG9hZA.s2lnbmF0dXJl"
+
+        with pytest.raises(OidcVerifyError, match="Failed to decode JWT header"):
+            await verify_id_token(token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+    async def test_fails_to_build_key_from_malformed_jwk(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+    ) -> None:
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key)
+        # An unknown ``alg`` makes PyJWK key construction fail.
+        bad_jwk = {"kty": "RSA", "kid": "test-key-1", "alg": "NOTREAL"}
+        resp = _make_resp(json_data={"keys": [bad_jwk]})
+        mock_client = _make_httpx_mock({_JWKS_URI: resp})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="Failed to construct key from JWK"):
+                await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+    async def test_kidless_token_falls_back_to_first_key(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+    ) -> None:
+        # Providers may omit `kid`; then the first key in the set must be used.
+        private_key, _ = keypair
+        now = datetime.now(UTC)
+        token = pyjwt.encode(
+            {"sub": "kidless", "iss": _ISSUER, "aud": _CLIENT_ID, "iat": now, "exp": now + timedelta(hours=1)},
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ),
+            algorithm="RS256",
+        )
+        jwks_resp = _make_resp(json_data={"keys": [_pubkey_to_jwk(keypair[1])]})
+        mock_client = _make_httpx_mock({_JWKS_URI: jwks_resp})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            claims = await verify_id_token(token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+        assert claims["sub"] == "kidless"
+
 
 # ---------------------------------------------------------------------------
 # Integration with sso.py callback flow

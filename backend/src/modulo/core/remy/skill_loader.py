@@ -294,8 +294,8 @@ class SkillLoader:
         body = stripped[end_idx + len(_DELIMITER) :].lstrip()
 
         frontmatter: dict[str, Any] = {}
-        for line in frontmatter_text.split("\n"):
-            line = line.strip()
+        for raw_line in frontmatter_text.split("\n"):
+            line = raw_line.strip()
             if not line or ":" not in line:
                 continue
             key, _, value = line.partition(":")

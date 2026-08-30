@@ -70,6 +70,20 @@ def _check_slack_ok(body: Any, context: str) -> None:
         raise SlackAPIError(f"Slack API error in {context}: {body.get('error', 'unknown')}")
 
 
+async def _should_backoff(response: httpx.Response, attempt: int) -> bool:
+    if response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+        await asyncio.sleep(_compute_retry_delay(attempt, response))
+        return True
+    return False
+
+
+async def _backoff_or_raise(message: str, attempt: int, exc: Exception) -> None:
+    if attempt < _MAX_RETRIES:
+        await asyncio.sleep(_compute_retry_delay(attempt))
+        return
+    raise SlackNetworkError(message) from exc
+
+
 class SlackConnector(ConnectorBase):
     def __init__(self, bot_token: str) -> None:
         self._bot_token = bot_token
@@ -84,29 +98,25 @@ class SlackConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=_SLACK_API, headers=self._headers(), timeout=30)
 
+    async def _send_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        async with self._client() as client:
+            return await client.request(method, path, **kwargs)
+
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                async with self._client() as client:
-                    r = await client.request(method, path, **kwargs)
-                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        await asyncio.sleep(_compute_retry_delay(attempt, r))
-                        continue
-                    r.raise_for_status()
-                    return r
+                response = await self._send_request(method, path, **kwargs)
+                if await _should_backoff(response, attempt):
+                    continue
+                response.raise_for_status()
+                return response
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_compute_retry_delay(attempt))
-                    continue
-                raise SlackNetworkError("Slack API timeout") from exc
+                await _backoff_or_raise("Slack API timeout", attempt, exc)
             except httpx.ConnectError as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_compute_retry_delay(attempt))
-                    continue
-                raise SlackNetworkError("Slack API connection error") from exc
+                await _backoff_or_raise("Slack API connection error", attempt, exc)
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 raise self._error_for_status(exc) from exc

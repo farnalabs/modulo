@@ -288,7 +288,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
 | `MODULO_USERS` | Alpha | – | Comma-separated `user:pass` pairs for initial user seed |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
-| `REDIS_URL` | For multi-replica | – | `redis://host:port/db` for SAQ broker |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis URL for SAQ broker, event coordination, rate limiting |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
@@ -307,10 +307,29 @@ Modulo supports three deployment modes depending on your needs.
 
 ### Standalone (single-user, local)
 
-```
-pip install modulo   # or uv tool install modulo
-modulo init          # generates keys, seeds admin user
-modulo start         # starts server, opens browser
+Three environment variables are **required** and have no default — the app
+refuses to start without them:
+
+| Variable | Purpose | How to generate |
+|----------|---------|-----------------|
+| `DATABASE_URL` | SQLAlchemy async DB URL for the application database | `sqlite+aiosqlite:///./modulo.db` for the local SQLite file below |
+| `SECRET_KEY` | 32+ byte random string used to sign JWTs | `$(openssl rand -base64 48)` |
+| `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(openssl rand -base64 32)` (base64-encoded 32-byte key) |
+
+The command below sets all three inline, so it is runnable as written. `MODULO_ADMIN_PASSWORD`
+seeds the initial admin user (optional but recommended for first login); `MODULO_DB=sqlite`
+selects the SQLite backend so no separate database server is needed.
+
+```bash
+git clone https://github.com/farnalabs/modulo   # or install the farnalabs-modulo package
+cd backend
+uv sync
+DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
+  SECRET_KEY=$(openssl rand -base64 48) \
+  FERNET_KEY=$(openssl rand -base64 32) \
+  MODULO_ADMIN_PASSWORD=changeme \
+  MODULO_DB=sqlite \
+  uv run uvicorn modulo.api.main:app --port 8000
 ```
 
 | Component | How it runs |
@@ -318,7 +337,7 @@ modulo start         # starts server, opens browser
 | Database | SQLite file (`./modulo.db`), no server process needed |
 | Task scheduling | In-process asyncio loops – cron and polling triggers work |
 | Task queue | In-process, no durability across crashes |
-| Rate limiting | In-memory no-op (rate limiting disabled) |
+| Rate limiting | No-op, disabled when Redis is unavailable (all requests allowed) |
 | Concurrency | Single process, single worker |
 
 **What you lose vs. full deployment:**
@@ -330,7 +349,7 @@ modulo start         # starts server, opens browser
 - Cron-triggered pipelines ✓
 - Polling triggers ✓
 - All pipeline features, evals, HITL, connectors ✓
-- The SQLite DB file is portable – copy it to another machine and `modulo start` picks it up
+- The SQLite DB file is portable – copy it to another machine and restart `uvicorn` from the new location to pick it up
 
 ### Docker Compose (single-server, multi-user)
 
@@ -347,7 +366,7 @@ curl https://modulo.run/install.sh | bash
 | Rate limiting | In-memory no-op (default) or Redis sliding window (with Redis) |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. `REDIS_URL` is required: if it is set to an empty value, startup aborts with a `RuntimeError` instead of falling back to in-process behavior.
+If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
 
 ### Kubernetes (production, multi-replica)
 
@@ -384,9 +403,10 @@ Adding CPU/RAM to a single replica works without Redis. The asyncio event loop h
 ### Configuration
 
 ```env
-# Single replica – no Redis needed
-REDIS_URL=
+# Single replica – no dedicated multi-replica coordination needed.
+# REDIS_URL defaults to redis://localhost:6379/0; do not set it empty (startup aborts).
+REDIS_URL=redis://localhost:6379/0
 
-# Multiple replicas – Redis required
+# Multiple replicas – Redis required for coordination
 REDIS_URL=redis://redis:6379/0
 ```

@@ -67,10 +67,7 @@ def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
     ``None`` by default; tests may override it to point at a fake provider.
     """
     fake_metrics = types.ModuleType("opentelemetry.metrics")
-    meter = MagicMock()
-    meter.create_counter.return_value = MagicMock()
-    meter.create_gauge.return_value = MagicMock()
-    meter.create_histogram.return_value = MagicMock()
+    meter = _make_meter()
     fake_metrics.get_meter_provider = MagicMock(return_value=None)
     fake_otel = types.ModuleType("opentelemetry")
     fake_otel.metrics = fake_metrics
