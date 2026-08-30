@@ -6058,7 +6058,7 @@ def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, s
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             negated = True
             test = test.operand
-        if not isinstance(test, _CONTAINER_LITERALS):
+        if not isinstance(test, (ast.Set, ast.List, ast.Tuple, ast.Dict)):
             continue
         if isinstance(test, ast.Dict):
             if any(key is None for key in test.keys):
