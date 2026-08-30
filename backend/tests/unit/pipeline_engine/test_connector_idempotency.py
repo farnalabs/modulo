@@ -722,7 +722,7 @@ class TestConnectorFailedWriteNoStamp:
         assert isinstance(gate, dict)
         assert gate["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "connector_write_suppressed"
 
-    async def test_payload_hash_deterministic_fallback(self) -> None:
+    def test_payload_hash_deterministic_fallback(self) -> None:
         """Non-blocking: the payload hash fallback is deterministic across
         processes (it coerces via str + sorted keys, NOT ``repr``)."""
         from modulo.core.pipeline_engine.node_runner import _connector_write_payload_hash
