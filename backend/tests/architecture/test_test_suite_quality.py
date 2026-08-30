@@ -5976,7 +5976,7 @@ def test_unreachable_assert_lens_flags_dead_asserts():
 def _chdir_reference(node: ast.AST) -> bool:
     """Return True for the ``os.chdir`` spelling — ``import os`` + the
     attribute path ``os.chdir(...)`` (and the ``os.fchdir`` twin)."""
-    if not isinstance(node, (ast.Attribute,)) or not isinstance(node.value, ast.Name):
+    if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
         return False
     return node.value.id == "os" and node.attr in ("chdir", "fchdir")
 
