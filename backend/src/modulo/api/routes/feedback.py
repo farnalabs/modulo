@@ -1009,7 +1009,8 @@ async def review_feedback(
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
 
-    assert record is not None
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FEEDBACK_RECORD_NOT_FOUND)
 
     if transitioned_to is not None:
         await append_audit_event_isolated(

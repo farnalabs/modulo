@@ -34,7 +34,6 @@ from modulo.core.cron_helpers import (
     validate_cron_expression,
 )
 from modulo.core.exceptions import OrgDeletedError
-from modulo.core.sanitize_log import sanitise_log_value
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -46,6 +45,7 @@ from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import create_run
+from modulo.db.crud.trigger import apply_trigger_event_cursor
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
@@ -1402,16 +1402,7 @@ async def list_trigger_events(
                 q = q.where(TriggerEvent.validation_result == event_status)
 
             if cursor:
-                try:
-                    cursor_created_at_str, cursor_id = cursor.split("_", 1)
-                    cursor_dt = datetime.datetime.fromisoformat(cursor_created_at_str)
-                    cursor_uuid = uuid.UUID(cursor_id)
-                    q = q.where(
-                        (TriggerEvent.created_at < cursor_dt)
-                        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
-                    )
-                except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", sanitise_log_value(cursor), exc_info=True)
+                q = apply_trigger_event_cursor(q, cursor)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
