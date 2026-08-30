@@ -84,7 +84,7 @@ def _build_app(ctx):
         if org_id is None or org_role is None:
             from modulo.auth.dependencies import OrganisationMembershipRequired
 
-            raise OrganisationMembershipRequired()
+            raise OrganisationMembershipRequired
         return TenantPrincipal(
             username="admin",
             organisation_id=org_id,

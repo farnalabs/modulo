@@ -725,7 +725,7 @@ async def _resolve_live_org_role(
             "permission.membership_not_found",
             extra={"account_id": account_id, "org_id": org_id, "username": username},
         )
-        raise OrganisationMembershipNotFound()
+        raise OrganisationMembershipNotFound
     return live_org_role
 
 

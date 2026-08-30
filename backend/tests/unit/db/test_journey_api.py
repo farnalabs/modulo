@@ -1050,7 +1050,7 @@ class TestSelfReportRoute:
         app.include_router(lifecycle_maps_router)
 
         def deny_auth() -> TenantPrincipal:
-            raise InvalidToken()
+            raise InvalidToken
 
         app.dependency_overrides[get_current_tenant_user_or_api_key] = deny_auth
 

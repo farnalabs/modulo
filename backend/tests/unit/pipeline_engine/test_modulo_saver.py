@@ -563,7 +563,7 @@ class TestAputExtraPaths:
         saver._cursor = MagicMock(side_effect=OperationalError("connection is closed"))
 
         async def _reconnect_timeout():
-            raise TimeoutError()
+            raise TimeoutError
 
         saver._reconnect = _reconnect_timeout
         saver.get_next_version = MagicMock(return_value="ckp-id")

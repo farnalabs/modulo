@@ -901,7 +901,7 @@ async def _authenticate_api_key(
                 ).scalar_one_or_none()
                 org_id = key_record.organisation_id if key_record is not None else None
         if org_id is None:
-            raise ApiKeyInvalidError()
+            raise ApiKeyInvalidError
 
         # Now re-validate within the correct RLS context.
         async with _session(org_id) as s:
@@ -927,7 +927,7 @@ async def _authenticate_api_key(
                     degraded=False,
                     key_id=key.id,
                 )
-                raise ApiKeyInvalidError()
+                raise ApiKeyInvalidError
             if clamped != key.role:
                 _record_api_key_role_cap(
                     minted_role=key.role,

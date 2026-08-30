@@ -384,7 +384,7 @@ class TestRecordFactForTerminalFailedRun:
         session = _session(execute_side_effect=[])
 
         async def _cancel(*args: object, **kwargs: object) -> None:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         monkeypatch.setattr(analytics_mod, "record_run_facts", _cancel)
         with pytest.raises(asyncio.CancelledError):

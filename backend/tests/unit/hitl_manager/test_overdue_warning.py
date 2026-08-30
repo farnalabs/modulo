@@ -369,7 +369,7 @@ async def test_dispatch_cancellation_propagates() -> None:
     notifier = MagicMock()
 
     async def _cancel(*args: object, **kwargs: object) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     notifier.dispatch_event = _cancel
     with pytest.raises(asyncio.CancelledError):
