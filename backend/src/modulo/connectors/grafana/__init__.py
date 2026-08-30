@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 
 class GrafanaConnector(ConnectorBase):
@@ -28,6 +29,7 @@ class GrafanaConnector(ConnectorBase):
         return ConnectorType.GRAFANA
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers={

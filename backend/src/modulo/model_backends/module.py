@@ -5,6 +5,7 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIStatusError
 
+from modulo.core.ssrf import validate_outbound_url
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 
@@ -37,6 +38,8 @@ class OpenAICompatibleBackend(ModelBackendBase):
     ) -> None:
         resolved_api_key = api_key or provider
         self._base_url = base_url.rstrip("/") if base_url else None
+        if self._base_url:
+            validate_outbound_url(self._base_url)
 
         self._model = ChatOpenAI(
             model=model_id,

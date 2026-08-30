@@ -14,7 +14,7 @@ test.describe('Admin My Profile', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/my-profile')
     await expect(page.locator('h1')).toContainText('My Profile')
-    await expect(page.getByTestId('my-profile-current-password')).toBeVisible()
+    await expect(page.getByTestId('change-password-current')).toBeVisible()
   })
 })
 

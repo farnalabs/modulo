@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 _RATE_LIMITED_STATUS = 429
 
@@ -32,6 +33,17 @@ def _next_page_cursor(body: dict[str, Any], limit: int) -> str | None:
 
 
 class SonarQubeConnector(ConnectorBase):
+    """SonarQube code-quality connector.
+
+    NOTE — the default ``base_url`` is loopback, which the outbound SSRF guard
+    blocks unless the operator opts in with
+    ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128`` (both entries: ``localhost``
+    resolves to IPv4 and IPv6 on dual-stack hosts). Without the opt-in, building
+    the client raises ``ValueError`` naming the blocked address, and
+    ``health_check`` reports it as unhealthy. See
+    ``docs/configuration-reference.md`` → "Outbound Egress Guard (SSRF)".
+    """
+
     def __init__(self, token: str, base_url: str = "http://localhost:9000") -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
@@ -45,6 +57,7 @@ class SonarQubeConnector(ConnectorBase):
         return {"Authorization": f"Bearer {self._token}"}
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(base_url=self._api_base, headers=self._headers(), timeout=30)
 
     async def health_check(self) -> HealthResult:

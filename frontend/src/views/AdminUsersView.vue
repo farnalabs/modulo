@@ -17,7 +17,7 @@
     <EmptyState
       v-else-if="users.length === 0"
       :title="$t('views.AdminUsersView.no_users_found')"
-      description="Users will appear here once they are created or sign up."
+      :description="$t('views.AdminUsersView.empty_state_description')"
     />
 
     <div v-else class="table-wrapper overflow-x-auto">
@@ -28,6 +28,7 @@
             <th class="table-header">{{ $t('views.AdminUsersView.role') }}</th>
             <th class="table-header capitalize">{{ $t('views.AdminUsersView.status') }}</th>
             <th class="table-header">{{ $t('views.AdminUsersView.auth') }}</th>
+            <th class="table-header">{{ $t('views.AdminUsersView.last_login') }}</th>
             <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.created') }}</th>
             <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.actions') }}</th>
           </tr>
@@ -74,6 +75,12 @@
               </span>
             </td>
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
+            <td class="table-cell">
+              <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">{{ $t('views.AdminUsersView.never_logged_in') }}</span>
+              <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(new Date(u.last_login))">
+                {{ formatRelativeTime(u.last_login) }}
+              </span>
+            </td>
             <td class="table-cell-numeric text-xs text-muted-foreground">
               {{ u.created_at ? formatDateShort(new Date(u.created_at)) : '—' }}
             </td>
@@ -131,7 +138,12 @@
         </div>
         <div>
           <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">{{ $t('common.password') }}</label>
-          <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+          <div class="flex gap-2">
+            <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+            <Button type="button" severity="secondary" outlined class="shrink-0 border-primary/30" data-testid="admin-users-generate-password" @click="generatePassword">
+              {{ $t('views.AdminUsersView.generate_password') }}
+            </Button>
+          </div>
         </div>
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
@@ -155,23 +167,25 @@
       </form>
     </FormDialog>
 
-    <Dialog :visible="showResetDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" @update:visible="showResetDialog = false">
+    <Dialog :visible="showCredentialDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" @update:visible="showCredentialDialog = false">
       <template #header>
-        <div class="text-lg font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</div>
+        <div class="text-lg font-semibold">{{ credentialTitle }}</div>
       </template>
-      <p class="text-sm text-muted-foreground">
-        A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
-        Share this password with the user - they will be prompted to change it on next login.
+      <p v-if="credentialMode === 'reset'" class="text-sm text-muted-foreground">
+        {{ $t('views.AdminUsersView.credential_body_reset', { email: credentialEmail }) }}
       </p>
-      <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
-        <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
+      <p v-else class="text-sm text-muted-foreground">
+        {{ $t('views.AdminUsersView.credential_body_created', { email: credentialEmail }) }}
+      </p>
+      <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3 mt-2">
+        <code class="flex-1 text-sm font-mono break-all">{{ credentialPassword }}</code>
         <Button class="shrink-0" data-testid="admin-users-copy-password" @click="copyPassword">
           {{ copied ? 'Copied!' : 'Copy' }}
         </Button>
       </div>
       <template #footer>
         <div class="flex justify-end">
-          <Button data-testid="admin-users-reset-done" @click="showResetDialog = false">
+          <Button data-testid="admin-users-reset-done" @click="showCredentialDialog = false">
             Done
           </Button>
         </div>
@@ -184,6 +198,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -193,7 +208,8 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import Dialog from 'primevue/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { formatDateShort } from '../lib/formatDate'
+import { formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
+import { generateStrongPassword } from '../utils/password'
 import Select from 'primevue/select'
 
 interface UserItem {
@@ -214,6 +230,7 @@ interface UserListResponse {
   page_size: number
 }
 
+const { t } = useI18n()
 const { get, put: httpPut, post } = useApi()
 
 const page = ref(1)
@@ -230,9 +247,19 @@ const showCreate = ref(false)
 const createError = ref('')
 const createLoading = ref(false)
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
-const showResetDialog = ref(false)
-const tempPassword = ref('')
-const resetUserEmail = ref('')
+
+// FAR-460: one reusable credential dialog shared by reset-password and
+// create-user so the admin can copy the credential exactly once.
+type CredentialMode = 'reset' | 'created'
+const showCredentialDialog = ref(false)
+const credentialMode = ref<CredentialMode>('reset')
+const credentialEmail = ref('')
+const credentialPassword = ref('')
+const credentialTitle = computed(() =>
+  credentialMode.value === 'reset'
+    ? t('views.AdminUsersView.password_reset')
+    : t('views.AdminUsersView.credentials')
+)
 const copied = ref(false)
 const flashMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 const actionLoading = ref<Record<string, boolean>>({})
@@ -301,15 +328,20 @@ async function resetPassword(u: UserItem) {
   actionLoading.value[u.id] = true
   try {
     const data = await post<{ temporary_password: string }>(`/api/v1/admin/users/${u.id}/reset-password`)
-    tempPassword.value = data.temporary_password
-    resetUserEmail.value = u.email
-    copied.value = false
-    showResetDialog.value = true
+    openCredentialDialog('reset', u.email, data.temporary_password)
   } catch {
     showFlash('error', 'Failed to reset password')
   } finally {
     actionLoading.value[u.id] = false
   }
+}
+
+function openCredentialDialog(mode: CredentialMode, email: string, password: string) {
+  credentialMode.value = mode
+  credentialEmail.value = email
+  credentialPassword.value = password
+  copied.value = false
+  showCredentialDialog.value = true
 }
 
 function rowActions(u: UserItem) {
@@ -341,10 +373,14 @@ function rowActions(u: UserItem) {
 }
 
 function copyPassword() {
-  navigator.clipboard.writeText(tempPassword.value)
+  navigator.clipboard.writeText(credentialPassword.value)
   copied.value = true
   if (copyTimeout) clearTimeout(copyTimeout)
   copyTimeout = setTimeout(() => { copied.value = false }, 2000)
+}
+
+function generatePassword() {
+  newUser.value.password = generateStrongPassword()
 }
 
 async function createUser() {
@@ -370,7 +406,9 @@ async function createUser() {
   try {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
-    newUser.value = { email: '', display_name: '', password: '', org_role: 'runner' }
+    // FAR-460: surface the hand-typed credential once before it is discarded.
+    openCredentialDialog('created', email, password)
+    newUser.value = { ...newUser.value, password: '' }
     showFlash('success', `User ${email} created`)
     loadUsers()
   } catch (e: any) {

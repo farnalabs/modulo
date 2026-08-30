@@ -1,8 +1,42 @@
 """Shared SSRF-safe URL validation for outbound requests.
 
-Blocks private/loopback/link-local/cloud-metadata/CGNAT ranges via DNS
-resolution. Used by notification endpoints, SSO test connections,
-observability test, and error-forwarder test paths.
+Blocks private/link-local/cloud-metadata/CGNAT ranges via DNS resolution.
+Loopback is blocked by default but allowlistable: a self-hosted deployment can
+opt into localhost model backends and localhost-default connectors (Trivy,
+SonarQube, TeamCity, 1Password, Jenkins, n8n, Grafana) by allowlisting the
+loopback ranges. Used by notification endpoints, SSO test connections,
+observability test, error-forwarder test paths, every ``base_url``-bearing
+connector, and the OpenAI-compatible model backends.
+
+Operating ``SSRF_ALLOW_PRIVATE_RANGES``
+--------------------------------------
+* **Dual-stack loopback needs BOTH entries.** ``localhost`` usually resolves to
+  ``127.0.0.1`` *and* ``::1``, and validation fails closed if ANY resolved
+  address is blocked. ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8`` alone therefore
+  leaves ``http://localhost:11434`` unreachable — set
+  ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128``, or point the URL at the
+  literal ``http://127.0.0.1:11434`` (a literal IP skips DNS entirely).
+* **The env allowlist is cluster-wide, not per-call-site.** It is read by every
+  validation call site, so allowlisting loopback for a localhost model backend
+  ALSO lets a tenant-supplied connector ``base_url`` reach loopback on the same
+  cluster. Where a narrower grant is wanted, pass ``allow_networks`` (a
+  tenant-scoped overlay layered on the global floor) instead of widening the env
+  var. Link-local, multicast and cloud-metadata ranges are a non-negotiable
+  floor that no allowlist can open.
+
+Accepted residual risks
+-----------------------
+* **Validate-then-connect (DNS rebinding).** Connectors and model backends call
+  :func:`validate_outbound_url` and then connect with their own client, so a
+  hostname under attacker DNS control can answer public at validation time and
+  internal at connect time. This matches the pre-existing precedent for those
+  call sites; the pinned transport below is the strictly safer option and should
+  be preferred by new call sites that own their client construction.
+* **No resolution cache.** Every validation performs a fresh DNS lookup (bounded
+  by ``SSRF_DNS_TIMEOUT``), which costs one resolver round trip per client
+  construction on connector-heavy paths. This is deliberate: caching resolutions
+  would widen the rebinding window above, and the resolver's own OS-level cache
+  already absorbs the repeat cost.
 
 Beyond *validating* a URL, this module owns the **pinned-IP connection
 transport**: an ``httpx`` transport that resolves and validates a target once,
@@ -56,8 +90,8 @@ _EXCLUDED_NETWORKS = [
 
 # IPv6 ranges that are never valid HTTP egress targets and must never be made
 # reachable by an allowlist: site-local (deprecated but still routed in some
-# stacks) and multicast. These sit alongside loopback / link-local / the
-# metadata ranges above as a NON-NEGOTIABLE blocked floor.
+# stacks) and multicast. These sit alongside link-local / the metadata ranges
+# above as a NON-NEGOTIABLE blocked floor.
 _NON_NEGOTIABLE_BLOCKED = [
     ipaddress.ip_network("fec0::/10"),  # IPv6 site-local
     ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
@@ -178,10 +212,11 @@ def _is_blocked_ip(ip_str: str, extra_allow: tuple[Network, ...] = ()) -> bool:
     """Check if an IP address should be blocked.
 
     Order matters: the NON-NEGOTIABLE floor is checked *before* the allowlist is
-    consulted. Loopback, link-local, multicast, cloud-metadata and the other
+    consulted. Link-local, multicast, cloud-metadata and the other
     ``_EXCLUDED_NETWORKS``/``_NON_NEGOTIABLE_BLOCKED`` ranges can never be made
-    reachable by a tenant or global allowlist. Only after those hard floors does
-    the configurable allowlist get a say over the remaining private ranges.
+    reachable by a tenant or global allowlist. Loopback is blocked by default
+    but allowlistable. Only after those hard floors does the configurable
+    allowlist get a say over the remaining private ranges.
     """
     try:
         addr = ipaddress.ip_address(ip_str)
@@ -189,7 +224,12 @@ def _is_blocked_ip(ip_str: str, extra_allow: tuple[Network, ...] = ()) -> bool:
         return True  # fail-closed on unparseable
 
     # NON-NEGOTIABLE floor — blocked regardless of any allowlist.
-    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+    # Loopback is intentionally NOT here: it is blocked by default (via
+    # ``addr.is_private`` below) but ALLOWLISTABLE, so a self-hosted deployment
+    # can reach a localhost Ollama/vLLM/LM Studio backend by putting the
+    # loopback range in SSRF_ALLOW_PRIVATE_RANGES. Link-local, multicast and
+    # the metadata/CGNAT floors below remain non-negotiable.
+    if addr.is_link_local or addr.is_multicast:
         return True
     for net in _EXCLUDED_NETWORKS:
         if addr in net:
@@ -199,14 +239,37 @@ def _is_blocked_ip(ip_str: str, extra_allow: tuple[Network, ...] = ()) -> bool:
             return True
 
     # Configurable allowlist (global + tenant-scoped overlay) may permit other
-    # private ranges. Loopback / link-local / metadata already returned True
-    # above, so this can never weaken the floor.
+    # private ranges. Link-local / multicast / metadata already returned True
+    # above, so this can never weaken the floor; loopback falls through here,
+    # so an allowlist covering it (e.g. 127.0.0.0/8) makes it reachable.
     for net in _get_effective_allowlist(extra_allow):
         if addr in net:
             return False
 
     # Standard private/reserved/unspecified.
     return addr.is_private or addr.is_reserved or addr.is_unspecified
+
+
+def _remediation_hint(ip_str: str) -> str:
+    """Return the actionable operator guidance for a blocked address.
+
+    Loopback gets its own hint because the naive remediation does NOT work: on a
+    dual-stack host ``localhost`` resolves to BOTH ``127.0.0.1`` and ``::1``, and
+    :func:`_check_resolved` fails closed if *any* resolved address is blocked. An
+    allowlist of only ``127.0.0.0/8`` therefore leaves ``http://localhost:11434``
+    unreachable because ``::1`` is still blocked — both entries are required (or
+    use a literal ``http://127.0.0.1:11434`` URL, which skips DNS entirely).
+
+    Kept short on purpose: connector ``health_check`` implementations truncate
+    the detail to 200 characters, so the fix must be in the first line.
+    """
+    with contextlib.suppress(ValueError):
+        if ipaddress.ip_address(ip_str).is_loopback:
+            return (
+                "Set SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128 to allow loopback "
+                "(BOTH entries; dual-stack), or use a public URL."
+            )
+    return "Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL."
 
 
 def _normalize_host(host: str) -> str:
@@ -393,10 +456,7 @@ def _validate_literal_ip(decoded: str, extra_allow: tuple[Network, ...] = ()) ->
     except ValueError:
         return False
     if _is_blocked_ip(str(ip), extra_allow):
-        raise ValueError(
-            f"URL targets a private/internal network address: {decoded}. "
-            "Use a public URL or add the address to SSRF_ALLOW_PRIVATE_RANGES."
-        )
+        raise ValueError(f"URL targets a private/internal network address: {decoded}. {_remediation_hint(str(ip))}")
     return True
 
 
@@ -413,7 +473,7 @@ def _check_resolved(decoded: str, ip_strings: Sequence[str], extra_allow: tuple[
     for ip_str in ip_strings:
         if _is_blocked_ip(ip_str, extra_allow):
             raise ValueError(
-                f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). Use a public URL."
+                f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). {_remediation_hint(ip_str)}"
             )
 
 
@@ -540,7 +600,7 @@ async def resolve_pinned_ip(url: str, *, allow_networks: Sequence[str] | None = 
         if _is_blocked_ip(target.literal_ip, extra):
             raise ValueError(
                 f"URL targets a private/internal network address: {target.literal_ip}. "
-                "Use a public URL or add the address to SSRF_ALLOW_PRIVATE_RANGES."
+                f"{_remediation_hint(target.literal_ip)}"
             )
         return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=target.literal_ip)
     ips = await _resolve_all_async(target.host)

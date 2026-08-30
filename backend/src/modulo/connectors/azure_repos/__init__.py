@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 
 class AzureReposConnector(ConnectorBase):
@@ -62,6 +63,7 @@ class AzureReposConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers=self._headers(),
@@ -71,6 +73,9 @@ class AzureReposConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         """Verify API access by fetching the authenticated user's profile."""
         try:
+            # Inside the try: a blocked base_url must be REPORTED as unhealthy by
+            # the ValueError handler below, never raised out of a health check.
+            validate_outbound_url(self._base_url)
             async with httpx.AsyncClient(headers=self._headers(), timeout=30) as client:
                 r = await client.get(
                     "https://app.vssps.visualstudio.com/_apis/profile/profiles/me",

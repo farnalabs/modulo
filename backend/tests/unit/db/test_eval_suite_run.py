@@ -673,12 +673,15 @@ def test_single_migration_head() -> None:
     # 0159_pipeline_retry_compensation (FAR-402 P5) chains off 0158_sso_provider_id.
     chaining_off_0158 = [p for p in revisions if parents[p] == "0158_sso_provider_id"]
     assert [_basename(p) for p in chaining_off_0158] == ["0159_pipeline_retry_compensation.py"]
-    # 0160_run_idempotency_key (FAR-438) chains off 0159 and is the head.
+    # 0160_run_idempotency_key (FAR-438) chains off 0159.
     chaining_off_0159 = [p for p in revisions if parents[p] == "0159_pipeline_retry_compensation"]
     assert [_basename(p) for p in chaining_off_0159] == ["0160_run_idempotency_key.py"]
-    # Nothing chains off 0160 -> it is the single head.
+    # 0161_accounts_must_change_password (FAR-460) chains off 0160 and is the single head.
     chaining_off_0160 = [p for p in revisions if parents[p] == "0160_run_idempotency_key"]
-    assert chaining_off_0160 == []
+    assert [_basename(p) for p in chaining_off_0160] == ["0161_accounts_must_change_password.py"]
+    # Nothing chains off 0161 -> it is the single head.
+    chaining_off_0161 = [p for p in revisions if parents[p] == "0161_accounts_must_change_password"]
+    assert chaining_off_0161 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
