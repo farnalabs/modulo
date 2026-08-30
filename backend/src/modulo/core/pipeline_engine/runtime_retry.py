@@ -98,6 +98,37 @@ def _is_never_retryable(exc: BaseException) -> bool:
     return isinstance(exc, asyncio.CancelledError) or type(exc).__name__ in _NEVER_RETRYABLE_NAMES
 
 
+# Control-flow terminal faults that MUST reach the run-level terminal path and
+# must NEVER be absorbed by a compensation edge (which would continue the run).
+# These are run-lifecycle signals — operator cancel, HITL interrupt, eval-block,
+# superseded, output-rejected, runaway — not node-body execution faults. The
+# script-execution terminal faults (``Script*Error``) are deliberately excluded:
+# a script that failed exactly-once is a genuine TERMINAL node failure a
+# compensation edge may continue from, so they stay compensable (FAR-438 review
+# MAJOR — a control-flow fault must re-raise instead of running compensation).
+_CONTROL_FLOW_NO_COMPENSATION_NAMES: frozenset[str] = frozenset(
+    {
+        "EvalBlockedError",
+        "SupersededNodeError",
+        "OutputRejectedError",
+        "RunawayRunError",
+        "RunCancelledError",
+        "NodeCancelledError",
+        "GraphInterrupt",
+    }
+)
+
+
+def _is_control_flow_fault(exc: BaseException) -> bool:
+    """True for a run-lifecycle fault that must bypass compensation and re-raise.
+
+    Mirrors the edge-retry guard (``failure_event`` returns None for these) so a
+    watched node that was cancelled / interrupted / eval-blocked / superseded /
+    output-rejected / runaway is NOT silently continued by a compensation edge.
+    """
+    return isinstance(exc, asyncio.CancelledError) or type(exc).__name__ in _CONTROL_FLOW_NO_COMPENSATION_NAMES
+
+
 # Transient error classes whose node body is SAFE to re-execute inline (a retry
 # can dedupe / re-attempt without causing a double side effect). A programming
 # bug (``IndexError`` / ``ValueError`` / generic ``RuntimeError``) is NOT in this
@@ -370,6 +401,22 @@ def make_retrying_node_fn(
                 if edge_result is not None:
                     return edge_result
                 # Compensation edge: terminal failure with an on_failure_target.
+                # Control-flow terminal faults (RunCancelledError / GraphInterrupt /
+                # EvalBlockedError / SupersededNodeError / OutputRejectedError /
+                # RunawayRunError) MUST reach the run-level terminal path, NOT be
+                # swallowed by a compensation edge that would continue the run. The
+                # edge-retry branch above is guarded by the same invariant
+                # (failure_event returns None for these), but the compensation branch
+                # was not — so a watched node cancelled / interrupted / eval-blocked /
+                # superseded / output-rejected / runaway would have its control-flow
+                # exception absorbed and the run wrongly CONTINUED. Re-raise so the
+                # executor can cancel / interrupt / eval-fail / supersede as designed.
+                # NOTE: the script-execution terminal faults (Script*Error) are
+                # intentionally NOT in this set — a script that failed exactly-once is
+                # a genuine TERMINAL node failure a compensation edge may continue from
+                # (see test_per_edge_retry_does_not_reexecute_source_for_never_retryable_major2).
+                if _is_control_flow_fault(exc):
+                    raise
                 comp_target = resolve_compensation_target(node_id, outgoing_edges)
                 if comp_target and raw_fn_resolver is not None:
                     comp_fn = raw_fn_resolver(comp_target)

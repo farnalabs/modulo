@@ -637,6 +637,65 @@ async def test_programming_bug_not_retried_major4() -> None:
     assert calls == 1  # never retried inline
 
 
+async def test_never_retryable_control_flow_not_swallowed_by_compensation() -> None:
+    # Regression for the FAR-438 review MAJOR: a watched node whose TERMINAL
+    # failure is a never-retryable control-flow fault (operator cancel /
+    # HITL interrupt / eval-block / superseded / output-rejected / runaway)
+    # MUST NOT be swallowed by an outgoing compensation edge — the compensation
+    # node must NOT run and the control-flow exception must re-raise so the
+    # executor can cancel / interrupt / eval-fail the run as designed. Before the
+    # fix the compensation branch ran unconditionally after node + edge retry
+    # were exhausted, silently continuing the run.
+    from langgraph.errors import GraphInterrupt, NodeCancelledError
+
+    comp_calls: dict[str, int] = {"n": 0}
+
+    async def comp(state: dict[str, Any]) -> dict[str, Any]:
+        comp_calls["n"] += 1
+        return {"compensated": True}
+
+    edge = {"source": "n1", "target": "n2", "on_failure_target": "n-comp"}
+    node_defs = {"n1": {"id": "n1"}, "n2": {"id": "n2"}, "n-comp": {"id": "n-comp"}}
+
+    def _make_watched(raise_exc: BaseException) -> Any:
+        async def watched(state: dict[str, Any]) -> dict[str, Any]:
+            raise raise_exc
+
+        return watched
+
+    def _resolver(nid: str) -> Any:
+        watched_excs = {"n1": NodeCancelledError(node="n1"), "n2": GraphInterrupt()}
+        return {"n1": _make_watched(watched_excs["n1"]), "n2": _make_watched(watched_excs["n2"]), "n-comp": comp}[nid]
+
+    # Case 1: operator cancel (RunCancelledError) on the watched node.
+    wrapped = make_retrying_node_fn(
+        _make_watched(NodeCancelledError(node="n1")),
+        node_id="n1",
+        node_def=node_defs["n1"],
+        pipeline_retry_policy={},
+        outgoing_edges=[edge],
+        raw_fn_resolver=_resolver,
+        node_defs=node_defs,
+    )
+    with pytest.raises(NodeCancelledError):
+        await wrapped({"run_context": {}})
+    assert comp_calls["n"] == 0  # compensation never ran
+
+    # Case 2: HITL interrupt (GraphInterrupt) on the watched node.
+    wrapped2 = make_retrying_node_fn(
+        _make_watched(GraphInterrupt()),
+        node_id="n2",
+        node_def=node_defs["n2"],
+        pipeline_retry_policy={},
+        outgoing_edges=[edge],
+        raw_fn_resolver=_resolver,
+        node_defs=node_defs,
+    )
+    with pytest.raises(GraphInterrupt):
+        await wrapped2({"run_context": {}})
+    assert comp_calls["n"] == 0  # still never ran
+
+
 # --------------------------------------------------------------------------- #
 # Sync node callables (join / convergence) are wrapped correctly
 # --------------------------------------------------------------------------- #
