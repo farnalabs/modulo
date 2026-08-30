@@ -1965,6 +1965,105 @@ def test_no_assert_inside_except():
     )
 
 
+def _assert_inside_finally(tree: ast.AST) -> list[ast.Assert]:
+    """Return the ``ast.Assert`` nodes reachable from any ``finally`` body.
+
+    Mirrors the except-handler lens: a ``finally`` body runs on *every* exit
+    path — success, ``return``/``break``/``continue``, and exceptions alike —
+    so an assertion placed there also runs when the ``try`` body already
+    failed. When both the body and the cleanup assertion fail, the
+    ``AssertionError`` from the ``finally`` block silently replaces the
+    original exception (a ``finally`` body's exception always takes precedence
+    over the one being propagated), discarding the traceback that explains why
+    the code under test broke."""
+    found: list[ast.Assert] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try) or not node.finalbody:
+            continue
+        for stmt in node.finalbody:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Assert):
+                    found.append(sub)
+    return found
+
+
+def test_no_assert_inside_finally():
+    """An ``assert`` nested in a ``finally`` block is the masking hazard twin of
+    the except-handler lens (``test_no_assert_inside_except``): the block runs
+    on every exit path, so its assertions execute even when the ``try`` body
+    already failed, and if such an assertion fires while an exception is
+    propagating, the ``AssertionError`` silently replaces the original
+    exception — losing the traceback that explains why the code under test
+    raised. Assert cleanup invariants in the ``try``/``with`` body *before* the
+    ``finally`` handles teardown, or assert on the specific path the check
+    verifies."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for assert_node in _assert_inside_finally(tree):
+            violations.append(f"  {rel}:{assert_node.lineno}  assert inside finally block")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) inside finally block(s).\n"
+        "A finally block runs on every exit path; an assert there can mask the\n"
+        "original exception when both the body and the cleanup check fail.\n"
+        "Assert cleanup invariants in the try/with body, before the finally teardown.\n" + "\n".join(violations)
+    )
+
+
+def test_assert_inside_finally_lens_flags_masking_hazard():
+    """Synthetic positive/negative control for the assert-in-finally lens: it
+    must flag an assert reachable from a ``finally`` body (however deeply
+    nested) and ignore asserts in the ``try`` body, an ``except`` handler, a
+    ``finally`` that only runs cleanup, or a plain ``pytest.raises`` context."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleaned\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    finally:\n"
+            "        with ctx:\n"
+            "            bar()\n"
+            "            assert bar.done\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "    finally:\n"
+            "        assert cleanup()\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    finally:\n"
+            "        def helper():\n"
+            "            assert finished()\n"
+            "        helper()\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _assert_inside_finally(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        assert foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    try:\n        foo()\n    except ValueError:\n        assert err\n",
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        pass\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _assert_inside_finally(tree), f"lens should NOT flag:\n{source}"
+
+
 _RAISES_CONTEXT_NAMES = frozenset(
     {
         "raises",
