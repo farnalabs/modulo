@@ -43,6 +43,15 @@ regression that silently weakens the suite:
   tuple twin of the empty-container lens; an empty tuple is falsy, so these
   should read ``assert not x`` / ``assert x`` (``is``/``is not`` against ``()``
   is deliberately left alone because ``()`` is interned)
+- ``assert x == b""`` / ``assert x != b""`` against an empty bytes literal —
+  the bytes twin of the empty-string lens; an empty ``b""`` is falsy, so these
+  should read ``assert not x`` / ``assert x``. The membership forms
+  ``assert x in b""`` / ``assert x not in b""`` are dead too — an empty bytes
+  can never contain anything, so ``in`` always FAILS and ``not in`` always
+  PASSES no matter what ``x`` evaluates to. The sibling ``bytes()``
+  call-form lens and the ``b""`` constant truthiness lens cannot see the
+  ``b""`` literal because it parses as a plain ``ast.Constant`` (not a call or
+  a standalone constant assertion)
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -1481,6 +1490,173 @@ def test_empty_tuple_lens_flags_empty_tuple():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _empty_tuple_comparisons(tree), f"lens should NOT flag:\n{source}"
+
+
+def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose outcome is
+    fixed by an empty ``bytes`` literal (``b""``).
+
+    Two shapes are owned:
+
+    - equality/inequality against ``b""`` — an empty bytes is falsy, so
+      ``assert x == b""`` should read ``assert not x`` and ``assert x != b""``
+      should read ``assert x`` (the literal twin of the ``bytes()`` call-form
+      lens, which cannot see ``b""`` because it parses as an ``ast.Constant``
+      rather than a call)
+    - membership against ``b""`` — an empty bytes can never contain anything,
+      so ``x in b""`` always FAILS and ``x not in b""`` always PASSES; but the
+      check is *asymmetric*: ``b"" in x`` is always True (the empty sequence is a
+      subsequence of every ``bytes`` value), so ``b"" in x`` always PASSES and
+      ``b"" not in x`` always FAILS. The verdict therefore depends on which side
+      the empty literal sits on (element vs container), and must not be derived
+      from the operator alone.
+
+    Equality uses the same exclusions as the empty-string/tuple lenses: a bare
+    name is left alone (it may bind ``None``), and a ``.get(...)`` lookup is
+    left alone (``None`` vs ``b""`` is a meaningful distinction). Membership
+    flags all operands except a literal constant — literal-vs-literal
+    membership (``b"" in b""``) is owned by the literal-comparison lens."""
+    found: list[tuple[int, str]] = []
+
+    def _is_empty_bytes(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, bytes) and node.value == b""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        op = test.ops[0]
+        sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+        if isinstance(op, (ast.Eq, ast.NotEq)):
+            for operand, literal in sides:
+                if not _is_empty_bytes(literal):
+                    continue
+                if isinstance(operand, ast.Name):
+                    continue
+                if (
+                    isinstance(operand, ast.Call)
+                    and isinstance(operand.func, ast.Attribute)
+                    and operand.func.attr == "get"
+                ):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                    continue
+                op_name = "==" if isinstance(op, ast.Eq) else "!="
+                prefer = "assert not ..." if isinstance(op, ast.Eq) else "assert ..."
+                found.append((node.lineno, f"asserts value {op_name} b'' — prefer '{prefer}'"))
+                break
+        elif isinstance(op, (ast.In, ast.NotIn)):
+            # `in`/`not in` are asymmetric: `A in B` asks whether A is a member of
+            # B. The left operand is the *element* and the comparator is the
+            # *container*. The empty literal flips the verdict depending on which
+            # side it occupies, so we must not derive the verdict from `op` alone.
+            element_is_empty = _is_empty_bytes(test.left)
+            container_is_empty = _is_empty_bytes(test.comparators[0])
+            if not (element_is_empty or container_is_empty):
+                continue
+            # The other operand must not itself be a literal constant — literal-vs-
+            # literal membership is owned by the literal-comparison lens.
+            other = test.comparators[0] if element_is_empty else test.left
+            if isinstance(other, ast.Constant):
+                continue
+            op_name = "in" if isinstance(op, ast.In) else "not in"
+            if element_is_empty:
+                # b"" in x is always True; b"" not in x is always False.
+                verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
+            else:
+                # x in b"" is always False; x not in b"" is always True.
+                verdict = "always FAILS" if isinstance(op, ast.In) else "always PASSES"
+            found.append(
+                (
+                    node.lineno,
+                    f"asserts value {op_name} b'' — {verdict} (an empty bytes can never contain anything)",
+                )
+            )
+    return found
+
+
+def test_no_empty_bytes_tautologies():
+    """``assert x == b""`` / ``assert x != b""`` compare a value against an empty
+    bytes literal — the bytes twin of the empty-string lens. An empty ``b""`` is
+    falsy, so ``assert x == b""`` should read ``assert not x`` and ``assert x !=
+    b""`` should read ``assert x``. The membership forms ``assert x in b""`` /
+    ``assert x not in b""`` are already dead as written: an empty bytes can never
+    contain an element, so ``in`` always FAILS (an unconditionally red test) and
+    ``not in`` always PASSES (a silent false green). The sibling lenses miss
+    ``b""`` entirely — the empty-container lens matches ``list``/``dict``/
+    ``set``/``tuple`` literal nodes, the empty-string lens matches ``str``
+    constants, the ``bytes()`` call-form lens matches a zero-argument ``ast.Call``,
+    the constant-literal lens only fires when ``b""`` is the *entire* assert test
+    expression, and literal-vs-literal membership is owned by the
+    literal-comparison lens."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_bytes_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-bytes assertion(s).\n"
+        "An empty b'' is falsy and can never contain anything; write "
+        "'assert not <expr>' / 'assert <expr>' instead of '== b\"\"' / '!= b\"\"'\n"
+        "and drop the dead membership check.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_bytes_tautology_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the empty-bytes lens: must flag
+    ``== b""``/``!= b""`` on attribute/subscript/call/await operands (either
+    operand order) and ``in b""``/``not in b""`` on any non-literal operand;
+    ignore bare names, ``.get(...)``, non-empty bytes, empty str/tuple/etc
+    literals owned by sibling lenses, and literal-vs-literal membership."""
+    positive_sources = [
+        "def test_foo():\n    assert result.blob == b''\n",
+        "def test_foo():\n    assert result['blob'] != b''\n",
+        "def test_foo():\n    assert fetch_blob() == b''\n",
+        "def test_foo():\n    assert await fetch_blob() == b''\n",
+        "def test_foo():\n    assert b'' != result['blob']\n",
+        "def test_foo():\n    assert needle in b''\n",
+        "def test_foo():\n    assert needle not in b''\n",
+        "def test_foo():\n    assert b'' not in haystack\n",
+        "def test_foo():\n    assert result.blob[:1] == b''\n",
+    ]
+    # Membership sources mapped to their *correct* verdict (element-side empty
+    # literal flips the In/NotIn outcome relative to container-side empty).
+    positive_verdicts = {
+        "def test_foo():\n    assert needle in b''\n": "always FAILS",
+        "def test_foo():\n    assert needle not in b''\n": "always PASSES",
+        "def test_foo():\n    assert b'' not in haystack\n": "always FAILS",
+    }
+    for source in positive_sources:
+        tree = ast.parse(source)
+        findings = _empty_bytes_tautologies(tree)
+        assert findings, f"lens should flag:\n{source}"
+        if source in positive_verdicts:
+            expected = positive_verdicts[source]
+            assert any(expected in detail for _, detail in findings), (
+                f"lens should report '{expected}' for:\n{source}\n got: {findings}"
+            )
+
+    negative_sources = [
+        "def test_foo():\n    assert x == b''\n",
+        "def test_foo():\n    assert load_config().get('blob') == b''\n",
+        "def test_foo():\n    assert result.blob == b'\\x00\\x01'\n",
+        "def test_foo():\n    assert result.blob == b''.join(parts)\n",
+        "def test_foo():\n    assert b'' in b''\n",
+        "def test_foo():\n    assert needle in b'abc'\n",
+        "def test_foo():\n    assert result.blob == ''\n",
+        "def test_foo():\n    assert result.blob == ()\n",
+        "def test_foo():\n    assert result.blob == bytes()\n",
+        "def test_foo():\n    assert b''\n",
+        "def test_foo():\n    assert not b''\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_bytes_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
 _EMPTY_BUILTIN_CALLS = frozenset({"list", "dict", "set", "tuple", "bytes", "bytearray", "frozenset"})

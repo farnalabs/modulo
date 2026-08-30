@@ -259,7 +259,7 @@ class TestCreateModelBackendSuccess(AuthContext):
 
         # The API key is never sent through the tool — only a handoff is created.
         mock_create.assert_awaited_once()
-        assert mock_create.call_args.kwargs["credentials_ciphertext"] == b""
+        assert not mock_create.call_args.kwargs["credentials_ciphertext"]
         mock_handoff.assert_awaited_once()
 
 
