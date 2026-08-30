@@ -939,6 +939,12 @@ async def _run_boot_guards_and_seeds(settings: Settings) -> None:
     # context org enumeration, per-org set_rls_org on the inserts).
     await _boot_seed("cost_components", _seed_cost_components(settings))
 
+    # Gated demo-org seed framework (FAR-450). Disabled unless
+    # MODULO_SEED_DEMO_ORGS is set; DEMO_ORGS is empty by default so nothing
+    # seeds until follow-up tickets populate it. Non-fatal like the rest.
+    if settings.modulo_seed_demo_orgs:
+        await _boot_seed("demo_orgs", _seed_demo_orgs(settings))
+
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:
         await _init_checkpointer(
@@ -1071,6 +1077,15 @@ async def _seed_cost_components(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
     await seed_cost_components(factory)
+
+
+async def _seed_demo_orgs(settings: Settings) -> None:
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.demo_data import seed_demo_orgs
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    await seed_demo_orgs(factory)
 
 
 async def _seed_tier_catalog() -> None:

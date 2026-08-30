@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     modulo_admin_password: str = Field("")
     # Multi-user format: "user1:$2b$12$hash,user2:$2b$12$hash"
     modulo_users: str = Field("")
+    # Gated demo-org seed framework (FAR-450). When True, the FastAPI boot
+    # lifespan seeds the organisations listed in
+    # ``modulo.core.seed_data.demo_data.DEMO_ORGS`` with per-org signed licenses.
+    # False by default — nothing seeds unless an operator opts in.
+    modulo_seed_demo_orgs: bool = Field(False)
 
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_license_key: str = Field("")
