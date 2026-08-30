@@ -1,20 +1,20 @@
 """Register ``compensation_failed``/``unknown`` run statuses + P5 columns (FAR-402 P5).
 
-Revision ID: 0158_pipeline_retry_compensation
-Revises: 0157_add_numeric_check_constraints
+Revision ID: 0159_pipeline_retry_compensation
+Revises: 0158_sso_provider_id
 Create Date: 2026-08-26
 
 Renumber note: this migration was authored as ``0150_pipeline_retry_compensation``
-and has been renumbered three times as main advanced underneath it. It first collided
+and has been renumbered four times as main advanced underneath it. It first collided
 with main's ``0150_add_router_no_match_status`` (FAR-402 P1 / FAR-415) and was
 renumbered to ``0151``; that in turn collided with main's ``0151_fix_constraints``
 (improve-database). Main's chain has since grown
 ``0151_fix_constraints`` -> ``0152_dismissed_by_user_id_index`` ->
 ``0153_add_numeric_check_constraints`` -> ``0154_add_web_vital_events_time_index`` ->
 ``0155_add_hot_query_indexes`` -> ``0156_add_soft_delete_partial_uniques`` ->
-``0157_add_numeric_check_constraints``, so this migration is now numbered ``0158``
-and re-parented onto main's real head ``0157_add_numeric_check_constraints``, keeping
-the graph a single linear chain with ``0159_run_idempotency_key`` as the sole head.
+``0157_add_numeric_check_constraints`` -> ``0158_sso_provider_id``, so this migration is
+now numbered ``0159`` and re-parented onto main's real head ``0158_sso_provider_id``,
+keeping the graph a single linear chain with ``0160_run_idempotency_key`` as the sole head.
 
 Implements the FAR-402 P5 (FAR-419) failure/retry + compensation data-model
 deltas:
@@ -48,8 +48,8 @@ deltas:
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0158_pipeline_retry_compensation"
-down_revision = "0157_add_numeric_check_constraints"
+revision = "0159_pipeline_retry_compensation"
+down_revision = "0158_sso_provider_id"
 branch_labels = None
 depends_on = None
 
@@ -115,7 +115,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     existing_runs = {col["name"] for col in inspector.get_columns("runs")}
     # 1. run-level idempotency key (FAR-410 deferred column, landed by P5).
-    # Idempotent: the parallel ``0159_run_idempotency_key`` migration (FAR-438)
+    # Idempotent: the parallel ``0160_run_idempotency_key`` migration (FAR-438)
     # also adds this column, so only add if it is not already present — otherwise
     # an upgrade applying 0159 before 0158 fails with "column already exists".
     if "idempotency_key" not in existing_runs:
@@ -134,9 +134,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("pipeline_edges", "on_failure_target")
     op.drop_column("pipeline_edges", "retry")
-    # Idempotent: 0159_run_idempotency_key may already have dropped the column on
+    # Idempotent: 0160_run_idempotency_key may already have dropped the column on
     # its own downgrade, so only drop it if it is still present — otherwise the
-    # downgrade chain 0159 -> 0158 fails with "column does not exist".
+    # downgrade chain 0160 -> 0159 fails with "column does not exist".
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_runs = {col["name"] for col in inspector.get_columns("runs")}

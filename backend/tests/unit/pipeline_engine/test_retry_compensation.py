@@ -257,7 +257,7 @@ _UNKNOWN = "unknown"
 
 
 def _migration_0158():
-    return importlib.import_module("modulo.db.migrations.versions.0158_pipeline_retry_compensation")
+    return importlib.import_module("modulo.db.migrations.versions.0159_pipeline_retry_compensation")
 
 
 def test_compensation_failed_registered_in_vocabularies() -> None:
