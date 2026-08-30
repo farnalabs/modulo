@@ -537,6 +537,21 @@ regression that silently weakens the suite:
    import sleep`` bare-name spelling is deliberately not matched because a local
    ``sleep`` helper (e.g. an asyncio-driven retry) cannot be distinguished
    statically
+- ``asyncio.wait_for(...)`` / ``asyncio.wait(...)`` without a timeout bound —
+  ``asyncio.wait_for(coro)`` with no ``timeout`` argument, or an explicit
+  ``timeout=None`` (the API default, meaning "wait forever"), suspends until
+  the awaited coroutine finishes with no bound, so a coroutine that never
+  completes hangs the test — and every test after it on the same event loop —
+  indefinitely, and the failure is opaque (the runner just stops). The same
+  applies to ``asyncio.wait(tasks)``, whose ``timeout`` also defaults to
+  ``None``. This is the asyncio sibling of the unbounded-subprocess and
+  unbounded-thread-``join`` lenses, which guard the child-process and
+  in-process versions of the identical hazard. Always pass an explicit
+  numeric ``timeout=<secs>`` (``wait_for(coro, 5)`` or the keyword form);
+  ``asyncio.wait_for(coro, 0)`` is bounded-by-construction and allowed.
+  Only the ``asyncio.*`` attribute spelling is matched — a local helper named
+  ``wait_for``/``wait`` (e.g. a retry wrapper) cannot be distinguished
+  statically and is deliberately left alone
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2847,6 +2862,119 @@ def test_unbounded_thread_join_lens_flags_hang_risks():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unbounded_thread_join_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``asyncio.wait_for`` /
+    ``asyncio.wait`` call without a timeout bound.
+
+    ``asyncio.wait_for(coro)`` with no ``timeout`` argument — or an explicit
+    ``timeout=None``, the API default meaning "wait forever" — suspends until
+    the awaited coroutine finishes with no upper bound, so a coroutine that
+    never completes hangs the test, and every test after it on the same event
+    loop, indefinitely. ``asyncio.wait(tasks)`` has the same contract and the
+    same ``None`` default. This is the asyncio twin of the unbounded-subprocess
+    and unbounded-thread-``join`` safety nets: bound the wait so a hang fails
+    loudly as a ``TimeoutError`` with a named bound instead of stalling the
+    whole run. ``wait_for(coro, 0)`` and any non-``None`` ``timeout`` (literal,
+    name, call) are bounded and left alone. Only the ``asyncio.*`` attribute
+    spelling is matched; a local helper named ``wait_for``/``wait`` cannot be
+    distinguished statically and is deliberately not flagged."""
+    found: list[tuple[int, str]] = []
+
+    def _timeout_is_bounded(call: ast.Call) -> bool:
+        if call.keywords:
+            for kw in call.keywords:
+                if kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                    return True
+        if len(call.args) >= 2:
+            second = call.args[1]
+            if not (isinstance(second, ast.Constant) and second.value is None):
+                return True
+        return False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("wait_for", "wait"):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "asyncio":
+            continue
+        if not node.args:
+            continue
+        if _timeout_is_bounded(node):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} — unbounded asyncio {'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
+                "with no timeout; pass timeout=<secs> so a hung coroutine fails loudly "
+                "instead of stalling the whole test run",
+            )
+        )
+    return found
+
+
+def test_no_unbounded_async_wait():
+    """An ``asyncio.wait_for``/``asyncio.wait`` called without a timeout bound
+    can hang the whole test run: a coroutine or task that never completes makes
+    the await wait forever, the runner simply stops, and every test after it on
+    the same event loop is lost without a trace. This is the asyncio sibling of
+    the unbounded-subprocess and unbounded-thread-``join`` lenses, which guard
+    the child-process and in-process versions of the same hazard. Always pass
+    an explicit numeric ``timeout=<secs>`` so a hang surfaces as a bounded
+    ``TimeoutError`` instead of stalling CI."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unbounded_async_wait_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unbounded asyncio wait call(s).\n"
+        "Give every asyncio.wait_for / asyncio.wait an explicit timeout bound: "
+        "pass timeout=<secs> (a None or omitted timeout means 'wait forever' "
+        "and can hang the whole test run).\n" + "\n".join(violations)
+    )
+
+
+def test_unbounded_async_wait_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the unbounded-async-wait lens:
+    it must flag ``asyncio.wait_for``/``asyncio.wait`` calls with an omitted or
+    ``None`` timeout (positional or keyword, awaited or not), and ignore
+    bounded calls (numeric literal or bound name), ``wait_for(coro, 0)``,
+    non-``asyncio`` callers, and local helpers that merely share the name."""
+    positive_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), None)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=None)\n",
+        "async def test_foo():\n    await asyncio.wait(futures)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=None)\n",
+        "async def test_foo():\n    asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    task = asyncio.create_task(coro())\n    await asyncio.wait_for(task)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unbounded_async_wait_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=TIMEOUT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 0)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=10)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=SHORT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(proc.communicate(), 10)\n",
+        "def test_foo():\n    wait_for(a)\n",
+        "def test_foo():\n    wait(a)\n",
+        "async def test_foo():\n    await socket.wait()\n",
+        "async def test_foo():\n    await asyncio.gather(coro())\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unbounded_async_wait_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_compound_boolean_assertions():
