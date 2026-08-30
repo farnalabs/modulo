@@ -565,6 +565,16 @@ regression that silently weakens the suite:
   drive the loop with a real (non-constant) guard. Loops whose condition is a
   name, call, or comparison are left alone — those can change through side
   effects
+- ``@pytest.mark.skip``/``@pytest.mark.skipif``/``@pytest.mark.xfail`` (and the
+  bare imported ``@skip``/``@skipif``/``@xfail`` twins) applied to a
+  ``@pytest.fixture`` function — pytest only honours selection markers on
+  *collected test items*, and a fixture is not one, so the marker is silently
+  ignored: a ``skipif`` that was meant to gate the tests built from the
+  fixture never triggers, and the coverage loss is invisible because nothing
+  reports the marker as dead. This is the fixture twin of the
+  ``unconditional-skip-marker`` lens, which deliberately leaves fixtures
+  alone. Hoist the gate into the fixture body (``pytest.skip(...)`` inside an
+  ``if``), where it takes effect when the fixture is requested
 - ``asyncio.wait_for(...)`` / ``asyncio.wait(...)`` without a timeout bound —
   ``asyncio.wait_for(coro)`` with no ``timeout`` argument, or an explicit
   ``timeout=None`` (the API default, meaning "wait forever"), suspends until
@@ -7535,6 +7545,99 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
         assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+_SELECTION_MARKERS = frozenset({"skip", "skipif", "xfail"})
+"""Selection/outcome marker names that are silently ignored when applied to a
+fixture. ``@pytest.mark.parametrize`` is deliberately NOT in the set: pytest
+honours parametrize on a fixture (that is how parametrized fixtures work), and
+``@pytest.mark.asyncio``/``@pytest.mark.anyio`` are behaviour markers, not
+selection markers, so they are left to the async-decorator lenses."""
+
+
+def _selection_marker_on_fixture_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@pytest.fixture``-decorated
+    function that also carries a selection marker — ``@pytest.mark.skip``,
+    ``@pytest.mark.skipif``, ``@pytest.mark.xfail``, or the bare imported
+    ``@skip``/``@skipif``/``@xfail`` spellings.
+
+    pytest only honours selection markers on *collected test items*; a fixture
+    is not collected as an item, so the marker is silently ignored: the tests
+    that request the fixture run unconditionally no matter what condition the
+    ``skipif`` was meant to gate, and nothing in the run reports the marker as
+    dead. Both spellings are covered — the ``@pytest.mark.*`` chain (via
+    ``_is_mark_decorator``) and the bare imported decorator — because a custom
+    ``@skip``/``@xfail`` decorator stacked on a fixture is the same silent
+    no-op either way. ``@pytest.mark.parametrize`` is deliberately left alone
+    (legitimate on fixtures, see ``_SELECTION_MARKERS``), as is a module-level
+    ``pytestmark = pytest.mark.skip`` deselecting the whole module.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _selection_name(dec: ast.AST) -> str | None:
+        name = _decorator_name(dec)
+        if name in _SELECTION_MARKERS:
+            return name
+        if _is_mark_decorator(dec):
+            if isinstance(dec, ast.Call):
+                dec = dec.func
+            if isinstance(dec, ast.Attribute) and dec.attr in _SELECTION_MARKERS:
+                return dec.attr
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        is_fixture = any(_decorator_name(dec) == "fixture" for dec in node.decorator_list)
+        if not is_fixture:
+            continue
+        for dec in node.decorator_list:
+            name = _selection_name(dec)
+            if name is None:
+                continue
+            marker_repr = ast.unparse(dec)
+            found.append(
+                (
+                    dec.lineno,
+                    f"@pytest.mark.{name} on a @pytest.fixture function {node.name!r} — "
+                    "pytest only honours selection markers on collected test items, so this "
+                    "marker is silently ignored: the tests using the fixture run regardless of "
+                    f"the {name} condition. Hoist the gate into the fixture body with "
+                    f"pytest.skip(...) instead ({marker_repr})",
+                )
+            )
+    return found
+
+
+def test_no_selection_markers_on_fixtures():
+    """A ``@pytest.mark.skip``/``skipif``/``xfail`` (or bare ``@skip``/``@skipif``/
+    ``@xfail``) stacked on a ``@pytest.fixture`` function is silently ignored:
+    pytest only honours selection markers on *collected test items*, and a
+    fixture is never collected as one. A ``skipif`` that was meant to gate the
+    tests built from the fixture therefore never triggers — a true condition
+    still runs the tests, and nothing in the run reports the marker as dead —
+    while a reader believes the conditional skip is in force. It is the fixture
+    twin of the ``unconditional-skip-marker`` lens, which deliberately leaves
+    fixtures alone, and the ``skip-without-reason``/``constant-condition-skip``
+    siblings check *reason*/*condition*, not whether the marker is even on a
+    test. Move the gate into the fixture body (``pytest.skip(...)`` behind the
+    real ``if``), where it fires when the fixture is requested."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _selection_marker_on_fixture_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} selection marker(s) on a @pytest.fixture function.\n"
+        "pytest only honours skip/skipif/xfail on collected test items — a fixture is never one,\n"
+        "so the marker is silently ignored and a skipif that was meant to gate the tests built\n"
+        "from the fixture never fires. Hoist the gate into the fixture body with\n"
+        "pytest.skip(...) behind the real if, where it takes effect when the fixture is\n"
+        "requested.\n" + "\n".join(violations)
+    )
+
+
 def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` for every ``assert obj.attr`` /
     ``assert not obj.attr`` whose attribute is a *method* — evidenced by the
@@ -7595,6 +7698,85 @@ def test_no_bound_method_truthiness_asserts():
         "reference is a silent false-green (or, under 'not', always fails). Add the calling ()\n"
         "so the assertion actually exercises the method's return value." + "\n".join(violations)
     )
+
+
+def test_selection_marker_on_fixture_lens_flags_silent_noops():
+    """Synthetic positive/negative control for the selection-marker-on-fixture
+    lens: it must flag ``@pytest.mark.skip``/``skipif``/``xfail`` (called and
+    bare, ``@pytest.fixture`` and ``@pytest_asyncio.fixture``, module-level
+    fixture too, bare ``@skipif``/``@xfail`` imported spellings) stacked on a
+    fixture, and ignore the same markers on tests/classes, ``@pytest.mark.
+    parametrize`` on a fixture (legitimate), behaviour markers such as
+    ``@pytest.mark.asyncio`` on a fixture, and a module-level
+    ``pytestmark = pytest.mark.skip``."""
+    positive_sources = [
+        "@pytest.fixture\n@pytest.mark.skip\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@pytest.mark.skip(reason='why')\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@pytest.mark.skipif(not pkg, reason='no pkg')\ndef fx():\n    return 1\n",
+        (
+            "@pytest.fixture(scope='session')\n"
+            "@pytest.mark.skipif(sys.platform == 'win32', reason='win')\n"
+            "def fx():\n"
+            "    return 1\n"
+        ),
+        "@pytest_asyncio.fixture\n@pytest.mark.xfail(reason='known bug')\ndef afx():\n    return 1\n",
+        "@pytest.fixture\n@skipif(not openssl_available, reason='no ssl')\ndef fx():\n    return 1\n",
+        "@pytest.fixture\n@xfail(reason='flaky')\nasync def afx():\n    return 1\n",
+        (
+            "import pytest\n"
+            "\n"
+            "class TestFoo:\n"
+            "    @pytest.fixture\n"
+            "    @pytest.mark.skip(reason='legacy')\n"
+            "    def fx(self):\n"
+            "        return 1\n"
+        ),
+        (
+            "import pytest\n"
+            "\n"
+            "fx_value = None\n"
+            "\n"
+            "@pytest.fixture\n"
+            "@pytest.mark.skipif(True, reason='temp')\n"
+            "def fx():\n"
+            "    global fx_value\n"
+            "    return fx_value\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _selection_marker_on_fixture_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.fixture\n@pytest.mark.parametrize('x', [1, 2])\ndef fx(x):\n    return x\n",
+        "@pytest.fixture\n@pytest.mark.asyncio\nasync def afx():\n    return 1\n",
+        "@pytest.fixture\ndef fx():\n    return 1\n",
+        "@pytest.mark.skip(reason='legacy')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not pkg, reason='no pkg')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
+        "pytestmark = pytest.mark.skip(reason='whole module dormant')\ndef test_foo():\n    assert x\n",
+        (
+            "import pytest\n"
+            "\n"
+            "@pytest.mark.skip(reason='legacy')\n"
+            "class TestFoo:\n"
+            "    def test_bar(self):\n"
+            "        assert x\n"
+        ),
+        (
+            "import pytest\n"
+            "\n"
+            "def make_fx():\n"
+            "    @pytest.mark.skipif(True, reason='x')\n"
+            "    def inner():\n"
+            "        return 1\n"
+            "    return inner\n"
+        ),
+        "@pytest.fixture\n@something_else\ndef fx():\n    return 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _selection_marker_on_fixture_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_bound_method_lens_flags_missing_call_parens():

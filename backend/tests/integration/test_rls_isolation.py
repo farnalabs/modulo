@@ -353,8 +353,9 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
 
     Regression guard for the cross-team leak: a team-scoped table must carry
     ONLY the team-visibility policy (which includes the org check), never the
-    org-only policy that ORs in every org row. lifecycle_maps is org-only by
-    design and must keep its org policy.
+    org-only policy that ORs in every org row. Conversely, the org-only tables
+    (``lifecycle_maps`` and its ``lifecycle_map_stages`` projection) must keep
+    their org policy and must NOT gain a team/account policy.
 
     The ``rls_team_isolation`` policy body (``pg_policies.qual``) must ALSO
     contain the execution-context escape hatch (``app.execution_context``) so
@@ -374,7 +375,17 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         "environment_profiles",
         "library_primitives",
     }
-    org_only_tables = {"lifecycle_maps"}
+    # Org-only by design: these tables carry ONLY rls_org_isolation and must
+    # NOT gain a team/account policy. ``lifecycle_maps`` enforces its
+    # visibility/owner_team_id rules at the app layer, and
+    # ``lifecycle_map_stages`` is a derived read projection of
+    # ``lifecycle_maps.content_json`` whose ``account_id`` records which
+    # account last saved the map -- it is provenance, NOT an authorisation
+    # boundary. Gating reads on ``account_id`` would hide an org-visible map's
+    # stages from every other member of the organisation, and adding a policy
+    # that ORs with rls_org_isolation would be dead weight (Postgres ORs
+    # permissive policies). See the PR #2125 discussion.
+    org_only_tables = {"lifecycle_maps", "lifecycle_map_stages"}
 
     async with db_engine.connect() as conn:
         rows = (await conn.execute(text("SELECT tablename, policyname, qual FROM pg_policies"))).fetchall()
@@ -399,6 +410,11 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
 
     for table in org_only_tables:
         assert "rls_org_isolation" in policies.get(table, set()), f"{table} missing org policy"
+        assert "rls_team_isolation" not in policies.get(table, set()), (
+            f"{table} is org-only by design but gained a team/account policy. Because PostgreSQL ORs "
+            "permissive policies, such a policy is either dead weight (if rls_org_isolation is kept) or "
+            "a read regression (if it is dropped, since org colleagues would lose access)."
+        )
 
 
 # ---------------------------------------------------------------------------

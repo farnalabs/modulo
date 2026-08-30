@@ -299,6 +299,7 @@ async def dismiss_notification(
         raise ValueError("Notification already dismissed by this user")
 
     dismissal = Dismissal(
+        organisation_id=org_id,
         notification_id=notification_id,
         dismissed_by_user_id=user_id,
         dismiss_scope=dismiss_scope,

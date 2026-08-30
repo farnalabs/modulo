@@ -99,6 +99,12 @@ class Dismissal(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("organisations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     notification_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("notifications.id", ondelete="CASCADE"),

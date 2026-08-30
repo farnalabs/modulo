@@ -376,8 +376,12 @@ async def write_evidence_row(
     node_id: str,
     evidence_state: str,
     evidence_detail: str | None,
+    organisation_id: UUID,
 ) -> None:
     """Persist one run_evidence row.
+
+    ``organisation_id`` MUST be supplied: the table is org-scoped (0133) and
+    NOT NULL / RLS-constrained — an insert that omits it is rejected.
 
     ``UNIQUE(run_id, node_id)`` is handled with a nested-savepoint insert that
     swallows a duplicate-key race (the async probe and the reconciliation sweep
@@ -392,6 +396,7 @@ async def write_evidence_row(
             session.add(
                 RunEvidence(
                     run_id=run_id,
+                    organisation_id=organisation_id,
                     node_id=node_id,
                     evidence_state=evidence_state,
                     evidence_detail=evidence_detail,
@@ -619,9 +624,14 @@ async def run_evidence_probe(
     session_factory: Callable[[], AsyncSession],
     run_id: UUID,
     node_id: str,
+    organisation_id: UUID,
 ) -> EvidenceResult:
     """Run the bounded (≤3s) async evidence probe for one node and persist the
     run_evidence row. Runs POST-commit, off the run's critical path (§15.3).
+
+    ``organisation_id`` is the parent run's org — the run_evidence table is
+    org-scoped (0133), so the write sets RLS to that org and threads it onto
+    the row.
 
     Fail-open: any probe/write error records the §15.14 metrics and degrades to
     an 'unverifiable' row — the run's terminalization is never affected. The
@@ -630,6 +640,8 @@ async def run_evidence_probe(
     """
     if not evidence_enabled():
         return EvidenceResult.unverifiable
+    from modulo.db.rls import set_rls_org
+
     started = time.monotonic()
     state: EvidenceResult = EvidenceResult.unverifiable
     detail: str = "evidence could not be verified"
@@ -660,12 +672,14 @@ async def run_evidence_probe(
         record_heuristic_unverifiable(detail)
     try:
         async with session_factory() as session, session.begin():
+            await set_rls_org(session, organisation_id)
             await write_evidence_row(
                 session,
                 run_id=run_id,
                 node_id=node_id,
                 evidence_state=str(state.value),
                 evidence_detail=detail,
+                organisation_id=organisation_id,
             )
     except asyncio.CancelledError:
         raise
@@ -743,6 +757,7 @@ async def reconcile_noop_evidence(
                     session_factory=session_factory,
                     run_id=run.id,
                     node_id=node_id,
+                    organisation_id=run.organisation_id,
                 )
                 summary[str(state.value)] += 1
             except asyncio.CancelledError:

@@ -114,3 +114,10 @@ may decide.
   Behaviours verified against `api/routes/hitl.py`, `core/hitl_manager/*`,
   `core/run_context/autonomy.py`, and the HITL unit/BDD suites. Status:
   covered.
+- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+  had added a second `feat-hitl` tracker at `configure/hitl.md`, breaking the
+  one-entry-per-feature invariant. This entry is the superset and is retained.
+  The duplicate's only unique citation (`hitl/approval_gate.feature`) was *not*
+  folded into `bdd:` here: that feature file ships but no step module registers
+  it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
+  that never execute. Status: covered.
