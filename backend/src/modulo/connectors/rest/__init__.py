@@ -582,7 +582,7 @@ class RestConnector(ConnectorBase):
         _normalise_on_unknown(self._config.get("on_unknown"))
         _ops = self._config.get("operations")
         if isinstance(_ops, dict):
-            for _res, _spec in _ops.items():
+            for _spec in _ops.values():
                 if isinstance(_spec, dict) and "on_unknown" in _spec:
                     _normalise_on_unknown(_spec["on_unknown"])
 
