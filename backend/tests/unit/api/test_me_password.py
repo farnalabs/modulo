@@ -117,6 +117,37 @@ class TestChangePassword:
         assert resp.json()["detail"] == "Password changed successfully"
         mock_get.assert_called_once()
 
+    def test_successful_password_change_clears_must_change_flag(self, client: TestClient) -> None:
+        """FAR-460: changing the password clears the admin-reset flag in the
+        same transaction as the hash swap, satisfying the forced-change gate."""
+        user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
+        user.must_change_password = True
+        old_hash = user.password_hash
+
+        with (
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user) as mock_get,
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
+            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new_callable=AsyncMock,
+            ),
+        ):
+            resp = client.put(
+                "/api/v1/me/password",
+                json={
+                    "current_password": _STRONG_PW,
+                    "new_password": _NEW_PW,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert user.password_hash is not None
+        assert user.password_hash != old_hash
+        assert user.must_change_password is False
+        mock_get.assert_called_once()
+
     def test_same_new_password_rejected(self, client: TestClient) -> None:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 

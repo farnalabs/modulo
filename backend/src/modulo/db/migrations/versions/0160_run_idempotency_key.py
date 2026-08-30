@@ -23,13 +23,13 @@ rejects it.
 
 Additive + nullable: an existing run row simply carries ``NULL`` and is never
 deduped by this path — no shipped migration is modified. This migration was
-originally ``0151_run_idempotency_key`` (then ``0155_run_idempotency_key``) but
+originally ``0151_run_idempotency_key`` (then ``0156_run_idempotency_key``) but
 was renumbered to ``0160_run_idempotency_key`` and re-parented onto
 ``0159_pipeline_retry_compensation`` to avoid a two-head Alembic collision with
-main's ``0155_add_hot_query_indexes`` / ``0156_add_soft_delete_partial_uniques``
-/ ``0157_add_numeric_check_constraints`` chain that merged ahead of this PR. The
-single head is now ``0160_run_idempotency_key`` (chain: 0157 ->
-0158_sso_provider_id -> 0159_pipeline_retry_compensation -> 0160_run_idempotency_key).
+main's ``0158_sso_provider_id`` migration that landed ahead of this PR on
+main. The single head is now ``0160_run_idempotency_key`` (chain: 0157 ->
+0158_sso_provider_id -> 0159_pipeline_retry_compensation ->
+0160_run_idempotency_key).
 
 Reversible: downgrade drops the column. RLS is unchanged (the ``runs`` table
 already has the org-scope policy; adding a column does not alter the row-level

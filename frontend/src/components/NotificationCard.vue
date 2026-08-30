@@ -58,7 +58,7 @@ import { ref, computed } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
-import { formatDistanceToNow } from "date-fns";
+import { formatRelativeTime } from "../lib/formatDate";
 
 const props = defineProps<{
   notification: NotificationResponse;
@@ -91,13 +91,7 @@ const levelAbbreviation = computed(() => {
 
 const scopeLabel = computed(() => props.notification.scope_label);
 
-const relativeTime = computed(() => {
-  const raw = props.notification.created_at;
-  if (!raw) return "";
-  const created = new Date(raw);
-  if (Number.isNaN(created.getTime())) return "";
-  return formatDistanceToNow(created, { addSuffix: true });
-});
+const relativeTime = computed(() => formatRelativeTime(props.notification.created_at));
 
 async function onDismiss(scope: "self" | "scope") {
   dismissError.value = "";

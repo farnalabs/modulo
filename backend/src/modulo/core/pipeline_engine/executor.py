@@ -3637,7 +3637,6 @@ class PipelineExecutor:
         is intentionally NOT extended to cover connectors here — leaving it
         sandbox-only avoids falsely gating a connector recovery that never passes
         through ``_decide_transient_failure``.
-
         ``index`` / ``payload`` (FAR-438) are the item-cardinality position and
         content-version payload handed to ``read_before_write_suppression`` so the
         derived per-node key matches the key the marker-write side stamped. They

@@ -92,6 +92,7 @@ import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
+import { setMustChangePassword } from '../lib/mustChangePassword'
 
 interface SsoProviderInfo {
   provider_id: string
@@ -144,6 +145,10 @@ const { loading, error, mutate: login } = useMutation(async () => {
   const data = await res.json()
   setAccessToken(data.access_token)
   if (data.refresh_token) setRefreshToken(data.refresh_token)
+  // FAR-460: sync the must-change-password gate from every manual login
+  // response — true forces the full-screen change-password view; false clears
+  // any stale flag so a different account is never trapped behind the gate.
+  setMustChangePassword(data.must_change_password === true)
   router.push('/')
   return data
 })
