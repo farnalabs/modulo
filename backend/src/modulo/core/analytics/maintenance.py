@@ -193,17 +193,16 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
-    # Graph-derived fields from the snapshot's ``graph_json`` (the serialised
-    # pipeline graph: a dict with a ``nodes`` list). ``graph_json`` is ``jsonb``
-    # on Postgres (promoted from ``json`` by migration 0147) and the generic
-    # ``json`` type on SQLite/MariaDB, so the matching ``jsonb_*`` / ``json_*``
-    # functions must be selected per dialect; all three degrade to defaults when
-    # the graph is malformed/absent — backfilled rows must NEVER carry NULL here
-    # (NULL facts on backfilled rows are a bug).
-    graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
-    _is_pg = (await _dialect_name(session)) == "postgresql"
-    _json_array_length = sa.func.jsonb_array_length if _is_pg else sa.func.json_array_length
-    _json_array_elements = sa.func.jsonb_array_elements if _is_pg else sa.func.json_array_elements
+    # ``graph_json`` is ``json`` on SQLite/MariaDB and promoted to ``jsonb`` on
+    # Postgres by migration 0147 — but the promotion is non-blocking and the ORM
+    # model keeps the generic ``JSON`` type, so the column type is not guaranteed
+    # to be ``jsonb`` in every environment. ``json_array_length`` / ``json_array_elements``
+    # only accept ``json``, not ``jsonb`` (and ``jsonb_array_length`` only accepts
+    # ``jsonb``), so cast the extracted ``nodes`` array to ``json`` explicitly to
+    # stay type-agnostic across both column types.
+    graph_nodes_json = sa.cast(PipelineSnapshot.graph_json.op("->")("nodes"), sa.JSON)
+    _json_array_length = sa.func.json_array_length
+    _json_array_elements = sa.func.json_array_elements
     node_count_expr = sa.case(
         (graph_nodes_json.is_not(None), sa.func.coalesce(_json_array_length(graph_nodes_json), 0)),
         else_=0,
