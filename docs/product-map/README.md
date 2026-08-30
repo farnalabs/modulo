@@ -193,9 +193,9 @@ Registered manifest features with no `docs/product-map/` behaviour-tracker yet
 (the graph stays honest about what remains untracked; each improve-architecture
 product-map walk closes a batch): `feat-auth`, `feat-analytics`,
 `feat-connectors` (behaviours inlined in the manifest registry),
-`feat-dashboard`, `feat-environments`, `feat-feedback`, `feat-guardrails`,
-`feat-library`, `feat-license`, `feat-lifecycle-maps`, `feat-mcp`,
+`feat-dashboard`, `feat-environments`, `feat-feedback`,
+`feat-library`, `feat-license`, `feat-lifecycle-maps`,
 `feat-notifications`, `feat-onboarding`, `feat-org`, `feat-pipelines`,
 `feat-plugins`, `feat-product-analytics`, `feat-remy`, `feat-runtime`,
 `feat-sso`, `feat-system-config`, `feat-system-orgs`, `feat-teams`,
-`feat-variants` — 24 registered features remain untracked after this walk.
+`feat-variants` — 22 registered features remain untracked after this walk.
