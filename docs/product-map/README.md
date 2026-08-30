@@ -173,6 +173,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-variants](improve/variants.md) => PRD N/A
 - [feat-feedback](improve/feedback.md) => PRD 8.20
 
+### Improve
+- [feat-evals](improve/evals.md) => PRD N/A
+
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
 

@@ -472,6 +472,24 @@ regression that silently weakens the suite:
    (``clock.now()``/``ticker.time()``), and calls bound to a variable earlier in
    the test (the deliberate "place under test then assert on its captured value"
    pattern) are left alone
+- a fresh *random-value draw* in the assert's checked position —
+  ``random.randint(...)``/``random.choice(...)``/``random.sample(...)``/``random()``
+  (and siblings, in the ``random.<fn>`` spelling) standing as the assertion
+  operand (bare, under ``not``, or as a side of a ``==``/``!=`` comparison), or
+  the bare ``from random import <fn>`` twin for the drawing names that are
+  never plausible local helpers. Every draw returns a *fresh* value on each
+  evaluation, so the outcome is decided at source time: ``assert random.random()``
+  is a silent false green, ``assert not random.choice(lst)`` can never pass,
+  and ``assert result == random.randint(0, 9)`` compares code output against a
+  value the test itself draws at assert time — the flaky expected-value case.
+  This is the randomness twin of the fresh-value (UUID/token/time) lens: the
+  fix is to capture the drawn value in a variable first, feed it into the code
+  under test, then assert against that bound name. Ordering comparisons
+  (``assert t < random.random()``), draws passed *into* a function being tested
+  (property-style random-input checks like ``median(random.sample(items, 5))``),
+  injected ``rng`` instances, ``random.seed`` reseeds (owned by the reseed
+  lens), and the ``random.<shuffle/choice/sample>`` bare-name spellings
+  (plausible local-helper names) are deliberately left alone
 - an *unconditional* ``pytest.skip(reason)``/``pytest.xfail(reason)``
    (or the bare imported ``skip(...)``/``xfail(...)``) placed as a direct
    statement of the test body. The call always executes, so whatever follows
@@ -8832,3 +8850,183 @@ def test_infinite_loop_lens_flags_hang_risks():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _infinite_exit_less_loop_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: fresh random-value draw in an assert (the random twin of fresh-value)
+# ---------------------------------------------------------------------------
+#: rather than drawing a value, so it is owned by the
+#: ``random.reseed-without-monkeypatch`` lens.
+_RANDOM_DRAW_FUNCS: frozenset[str] = frozenset(
+    {
+        "randint",
+        "randrange",
+        "randbytes",
+        "getrandbits",
+        "random",
+        "uniform",
+        "triangular",
+        "gauss",
+        "betavariate",
+        "expovariate",
+        "gammavariate",
+        "normalvariate",
+        "lognormvariate",
+        "vonmisesvariate",
+        "paretovariate",
+        "weibullvariate",
+    }
+)
+
+#: ``random.<fn>`` drawing functions matched ONLY in the module-qualified
+#: spelling (see :data:`_RANDOM_DRAW_FUNCS` — excluded from the bare-name form).
+_RANDOM_DRAW_QUALIFIED_ONLY = frozenset({"choice", "choices", "sample", "shuffle"})
+
+_ALL_RANDOM_DRAW_FUNCS: frozenset[str] = _RANDOM_DRAW_FUNCS | _RANDOM_DRAW_QUALIFIED_ONLY
+
+
+def _is_random_draw_call(node: ast.AST) -> bool:
+    """Return True when ``node`` is a call that *draws a fresh random value*.
+
+    Two spellings are recognised: the module-qualified ``random.<fn>(...)``
+    call (all drawing functions) and the bare ``from random import <fn>`` twin
+    for the subset of drawing names that are never plausible local helpers.
+    ``random.seed`` is left alone (global-state mutation, owned by the reseed
+    lens), and subsystem-qualified receivers (``rng.randint(...)`` where
+    ``rng`` is an injected ``random.Random``/``secrets.SystemRandom``) are left
+    alone too — a dedicated instance is the deliberate deterministic form, not
+    a fresh-draw hazard.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr in _ALL_RANDOM_DRAW_FUNCS and isinstance(func.value, ast.Name) and func.value.id == "random"
+    if isinstance(func, ast.Name):
+        return func.id in _RANDOM_DRAW_FUNCS
+    return False
+
+
+def _random_draw_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression — or a single equality-comparison operand — draws a fresh random
+    value directly.
+
+    A draw call is the restart-of-the-generator twin of the fresh-value lens:
+    ``random.randint(...)``/``random.choice(...)``/``random.sample(...)`` (and
+    siblings) return a *new* value on every evaluation, so the assertion's
+    outcome is decided at source time, never by the code under test —
+    ``assert random.random()`` (a float is always truthy) is a silent false
+    green, ``assert not random.choice(lst)`` can never pass,
+    ``assert result == random.randint(0, 9)`` ALWAYS FAILS unless the code
+    under test happened to draw the same value, and the ``!=`` twin ALWAYS
+    PASSES. The expected-value case is the flaky one: a test that should
+    compare code output against a *captured* draw instead re-draws at assert
+    time, so the result depends on the generator's next value. The fix is the
+    same as the fresh-value lens — capture the drawn value in a variable
+    first, feed it into the code under test (or the mock), then assert against
+    that same bound name. Ordering comparisons (``assert t < random.random()``)
+    are deliberate probabilistic bounds and are not flagged, and a draw passed
+    *into* a function under test (property-style ``assert median(random.sample(
+    items, 5)) in items``) is a legitimate random-input usage, not an expected
+    value — only the draw sitting in the assertion's checked position is
+    flagged.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append(
+            (
+                lineno,
+                f"assert {detail} — a fresh random value is drawn on every evaluation, "
+                "so the outcome is decided at source time (capture the draw in a variable first)",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if _is_random_draw_call(test):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and _is_random_draw_call(test.operand):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+            for operand in (test.left, test.comparators[0]):
+                if _is_random_draw_call(operand):
+                    _report(node.lineno, ast.unparse(test))
+                    break
+    return found
+
+
+def test_no_random_draw_in_asserts():
+    """An ``assert`` that draws a fresh random value directly in its test
+    expression is dead code with an outcome fixed at source time (the
+    randomness twin of the fresh-value lens): ``assert random.random()`` is a
+    silent false green, ``assert not random.choice(lst)`` can never pass,
+    and ``assert result == random.randint(0, 9)`` compares code output against
+    a value the test itself draws at assert time — it ALWAYS FAILS unless the
+    code under test happens to draw the same value, while the ``!=`` twin
+    ALWAYS PASSES. The expected-value case is the flaky one: the assertion
+    depends on the generator's next value instead of a captured input. Capture
+    the drawn value in a variable first, feed it into the code under test (or
+    the mock), then assert against that same bound name. Ordering comparisons
+    and draws passed into a function under test (property-style checks) are
+    deliberately left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _random_draw_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a freshly drawn random value.\n"
+        "A random draw (randint/random/choice/sample/...) returns a fresh value on every\n"
+        "evaluation, so the outcome is fixed at source time, never by the code under test.\n"
+        "Capture the drawn value in a variable first, feed it into the code under test, and\n"
+        "assert against that same bound name.\n" + "\n".join(violations)
+    )
+
+
+def test_random_draw_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the random-draw lens: it must
+    flag an ``assert`` that draws a random value directly in the test
+    expression (bare, ``not``-wrapped, or as an equality-comparison operand, in
+    the module-qualified and bare-name spellings) and ignore ordering bounds
+    checks, draws fed *into* a call argument (property-style random-test
+    inputs), injected ``rng`` instances, ``random.seed`` reseeds, and asserts
+    over ordinary values."""
+    positive_sources = [
+        "import random\ndef test_foo():\n    assert random.random()\n",
+        "import random\ndef test_foo():\n    assert not random.choice(lst)\n",
+        "import random\ndef test_foo():\n    assert random.randint(0, 9)\n",
+        "import random\ndef test_foo():\n    assert result == random.randint(0, 9)\n",
+        "import random\ndef test_foo():\n    assert result != random.choice(lst)\n",
+        "import random\ndef test_foo():\n    assert random.uniform(0, 1) == other\n",
+        "import random\ndef test_foo():\n    assert random.sample(items, 2) != expected\n",
+        "from random import randint\ndef test_foo():\n    assert chosen == randint(0, 9)\n",
+        "from random import random\ndef test_foo():\n    assert random()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _random_draw_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "import random\ndef test_foo():\n    assert t < random.random()\n",
+        "import random\ndef test_foo():\n    assert random.random() < 0.5\n",
+        "import random\ndef test_foo():\n    assert len(random.sample(items, 2)) == 2\n",
+        "import random\ndef test_foo():\n    roll = random.randint(1, 6)\n    assert result == roll\n",
+        "import random\ndef test_foo():\n    rng = random.Random(42)\n    assert rng.randint(0, 9) == 3\n",
+        "import random\ndef test_foo():\n    random.seed(7)\n    assert x == 1\n",
+        "def test_foo():\n    assert shuffle(deck) == deck\n",
+        "def test_foo():\n    assert median(random.sample(items, 5)) in items\n",
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    assert items is not None\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _random_draw_assert_violations(tree), f"lens should NOT flag:\n{source}"
