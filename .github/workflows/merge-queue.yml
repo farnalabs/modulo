@@ -15,8 +15,45 @@ env:
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
 
 jobs:
+  freeze-gate:
+    name: Release freeze gate
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      frozen: ${{ steps.check.outputs.frozen }}
+    steps:
+      - name: Check for release-freeze tag
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Alpha release process: while the 'release-freeze' tag exists,
+          # main is frozen and the merge queue must not merge anything.
+          # Manual escape: delete the 'release-freeze' tag. Do NOT use Release ->
+          # release as an escape - that promotes GA prematurely.
+          COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
+          if [ -z "$COUNT" ]; then
+            # Fail CLOSED: an API error must never be read as "not frozen", or a
+            # transient gh failure would silently lift the freeze mid-release.
+            # Skipping this 15-min tick costs nothing; a wrongly-open gate costs the RC.
+            echo "::error::gh api failed querying release-freeze tag - failing CLOSED, skipping this merge-queue tick."
+            echo "frozen=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$COUNT" -gt 0 ]; then
+            echo "frozen=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release freeze ACTIVE ('release-freeze' tag present) - merge queue paused."
+          else
+            echo "frozen=false" >> "$GITHUB_OUTPUT"
+          fi
+
   queue:
     name: Merge queue -> main
+    needs: freeze-gate
+    if: needs.freeze-gate.outputs.frozen == 'false'
     timeout-minutes: 30
     permissions:
       contents: write
@@ -516,9 +553,35 @@ jobs:
         run: |
           echo "Frontend checks failed" >> /tmp/failure_description.txt
 
+      # Skips the merge (job stays GREEN) instead of failing: a failure here
+      # would trip this job's failure() plumbing - false "frontend failed"
+      # notes and a phantom ci-failure dispatch to the Branch Fixer during
+      # the exact window the freeze protects. The ::error:: annotations
+      # surface the abort in the run summary for the human overseer.
+      - name: Re-verify freeze before merging (TOCTOU guard)
+        id: toctou
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # A queue tick can pass freeze-gate minutes before the RC is cut;
+          # re-check here so a just-started freeze stops this tick from merging.
+          COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
+          if [ -z "$COUNT" ]; then
+            echo "::error::Could not query release-freeze tag - failing CLOSED, aborting this merge tick."
+            echo "aborted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::error::Release freeze became ACTIVE after this tick passed the gate - aborting merge."
+            echo "aborted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Freeze re-check clean - proceeding to merge."
+
       # If CI passed -- merge source PRs
       - name: Merge source PRs via gh pr merge
-        if: success() && steps.merge.outputs.merged_count != '0'
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -621,7 +684,7 @@ jobs:
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
 
       - name: Self-report merged PRs to Modulo (fail-open, best-effort)
-        if: success() && steps.merge.outputs.merged_count != '0'
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
           MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
@@ -673,7 +736,7 @@ jobs:
             || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
 
       - name: Close Linear tickets for merged PRs
-        if: success() && steps.merge.outputs.merged_count != '0'
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -771,7 +834,7 @@ jobs:
           echo "Merged-branch sweep complete."
 
       - name: Trigger main CI and deploy after merge
-        if: success() && steps.merge.outputs.merged_count != '0'
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
