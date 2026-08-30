@@ -38,6 +38,36 @@ class RegressionAlert:
     affected_run_ids: list[UUID] = field(default_factory=list)
 
 
+def _classify_trend(drop: float, threshold: float) -> str:
+    """Classify a pass-rate delta as ``declining``, ``improving`` or ``stable``."""
+    if drop > threshold:
+        return "declining"
+    if drop < -threshold:
+        return "improving"
+    return "stable"
+
+
+def _build_alert(
+    *,
+    eval_id: UUID,
+    eval_name: str,
+    prev_pass_rate: float,
+    current_pass_rate: float,
+    trend: str,
+    affected_run_ids: list[UUID],
+) -> RegressionAlert:
+    """Build a ``RegressionAlert``, rounding rates and the drop to 4 decimals."""
+    return RegressionAlert(
+        eval_id=eval_id,
+        eval_name=eval_name,
+        prev_pass_rate=round(prev_pass_rate, 4),
+        current_pass_rate=round(current_pass_rate, 4),
+        drop_pct=round(prev_pass_rate - current_pass_rate, 4),
+        trend=trend,
+        affected_run_ids=affected_run_ids,
+    )
+
+
 async def detect_regressions(
     session: AsyncSession,
     org_id: UUID,
@@ -190,21 +220,15 @@ async def detect_regressions(
         prev_pass_rate = baseline_passed / baseline_total
         drop = prev_pass_rate - current_pass_rate
 
-        if drop > threshold:
-            trend_label = "declining"
-        elif drop < -threshold:
-            trend_label = "improving"
-        else:
-            trend_label = "stable"
+        trend_label = _classify_trend(drop, threshold)
         if trend is not None and trend_label != trend:
             continue
         alerts.append(
-            RegressionAlert(
+            _build_alert(
                 eval_id=row.eval_id,
                 eval_name=row.eval_name,
-                prev_pass_rate=round(prev_pass_rate, 4),
-                current_pass_rate=round(current_pass_rate, 4),
-                drop_pct=round(drop, 4),
+                prev_pass_rate=prev_pass_rate,
+                current_pass_rate=current_pass_rate,
                 trend=trend_label,
                 affected_run_ids=list(row.affected_run_ids or []),
             ),
@@ -309,12 +333,11 @@ async def _detect_regressions_grouped(
         if trend is not None and trend != "declining":
             continue
         alerts.append(
-            RegressionAlert(
+            _build_alert(
                 eval_id=row.eval_id,
                 eval_name=row.eval_name,
-                prev_pass_rate=round(prev_pass_rate, 4),
-                current_pass_rate=round(current_pass_rate, 4),
-                drop_pct=round(drop, 4),
+                prev_pass_rate=prev_pass_rate,
+                current_pass_rate=current_pass_rate,
                 trend="declining",
                 affected_run_ids=[UUID(x) for x in current_ids],
             ),
