@@ -559,7 +559,7 @@ async def test_initialise_programming_bug_logs_error():
     assert hub.skipped == {ci.id: "RuntimeError: boom"}
 
 
-async def test_record_skip_sanitizes_nul_and_truncates():
+def test_record_skip_sanitizes_nul_and_truncates():
     """FAR-495: skip summaries are NUL-stripped and truncated to 2000 chars.
 
     Postgres rejects NUL bytes in SQL text — an unsanitized summary would fail
@@ -589,7 +589,7 @@ async def test_initialise_records_healthy_instances(tmp_path):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     assert hub.healthy == {ci.id}
-    assert hub.skipped == {}
+    assert not hub.skipped
 
 
 async def test_initialise_records_skipped_instances(tmp_path):
@@ -635,8 +635,8 @@ async def test_close_clears_skipped_and_healthy(tmp_path):
     assert set(hub.skipped) == {bad.id}
     assert hub.healthy == {healthy.id}
     hub.close()
-    assert hub.skipped == {}
-    assert hub.healthy == set()
+    assert not hub.skipped
+    assert not hub.healthy
 
 
 async def test_acl_returns_acl_for_connector(tmp_path):
