@@ -134,6 +134,9 @@ Fresh entries for these features are added to the graph below as behaviour track
 Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
+### Audit
+- [feat-audit](audit/audit-trail.md) => PRD N/A
+
 ### Auth and Security
 - [feat-core-oidc-integration](auth/oidc-integration.md) => PRD 9.4
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
@@ -141,6 +144,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
 
 ### Core Platform
+- [feat-hitl](hitl/hitl-gates.md) => PRD N/A
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
@@ -155,3 +159,6 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Teams
 - [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
+
+### Triggers
+- [feat-triggers](triggers/trigger-engine.md) => PRD N/A
