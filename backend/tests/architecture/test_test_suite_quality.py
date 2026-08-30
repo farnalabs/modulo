@@ -604,10 +604,27 @@ regression that silently weakens the suite:
   unbounded-thread-``join`` lenses, which guard the child-process and
   in-process versions of the identical hazard. Always pass an explicit
   numeric ``timeout=<secs>`` (``wait_for(coro, 5)`` or the keyword form);
-  ``asyncio.wait_for(coro, 0)`` is bounded-by-construction and allowed.
-  Only the ``asyncio.*`` attribute spelling is matched — a local helper named
-  ``wait_for``/``wait`` (e.g. a retry wrapper) cannot be distinguished
-  statically and is deliberately left alone
+``asyncio.wait_for(coro, 0)`` is bounded-by-construction and allowed.
+   Only the ``asyncio.*`` attribute spelling is matched — a local helper named
+   ``wait_for``/``wait`` (e.g. a retry wrapper) cannot be distinguished
+   statically and is deliberately left alone
+- an ``assert`` statement that is a direct statement of a ``with
+  pytest.raises(...)`` body whose expected exception is *not* ``AssertionError``
+  — the assertion sits inside the region that ``pytest.raises`` owns. When the
+  assert appears *after* the call expected to raise, it is unreachable: the
+  expected exception fires first and the assert never executes, so the check is
+  dead no matter how broken it is; when it appears *before* (or instead of)
+  the raising call, a failure raises ``AssertionError`` — almost never the
+  exception ``pytest.raises`` expects — producing a confusing mismatch instead
+  of pointing at the broken condition. An assert whose only role is to force an
+  attribute evaluation (``assert module.lazy_name`` driving a module
+  ``__getattr__``) is the same hazard with a side-effect vehicle. Blocks that
+  expect ``AssertionError`` are left alone: there the assert *is* the intended
+  trigger (the blessed validator-trip idiom). ``pytest.warns(...)`` bodies are
+  left alone too — warnings don't raise, so the body runs to completion and an
+  assert inside is reachable and meaningful. Move the assertion after the
+  ``with`` block (asserting on the recorded ``exc_info.value`` is the canonical
+  form), or make it the intentional trigger with ``pytest.raises(AssertionError)``
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -8548,6 +8565,186 @@ def test_single_element_isinstance_lens_flags_redundant_tuples():
         assert not _single_element_isinstance_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+# ---------------------------------------------------------------------------
+# LENS: assert statements inside a pytest.raises(...) body
+# ---------------------------------------------------------------------------
+def _is_raises_context_only(node: ast.AST) -> ast.Call | None:
+    """Return the ``pytest.raises(...)``/``raises(...)`` call backing a ``with``
+    context item, or ``None`` when the context expression is not a raises call.
+
+    Unlike ``_RAISES_CONTEXT_FUNCS`` (which also admits ``warns``), this lens
+    scopes its match to ``raises`` only — a ``with pytest.warns(...)`` body runs
+    to completion (warnings don't raise), so an assert inside it is reachable
+    and meaningful. The ``pytest.`` attribute spelling and the bare imported
+    ``raises`` name are both matched; an unrelated ``obj.raises(...)`` attribute
+    is deliberately not (a custom helper's body semantics are unknown)."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        if func.attr != "raises":
+            return None
+        if not (isinstance(func.value, ast.Name) and func.value.id == "pytest"):
+            return None
+    elif isinstance(func, ast.Name):
+        if func.id != "raises":
+            return None
+    else:
+        return None
+    return node
+
+
+def _expected_exception_operand(call: ast.Call) -> ast.AST | None:
+    """Return the expression passed as ``pytest.raises``'s expected-exception
+    argument (first positional or ``expected_exception=``), or ``None`` when
+    there is none."""
+    if call.args:
+        return call.args[0]
+    for kw in call.keywords:
+        if kw.arg == "expected_exception":
+            return kw.value
+    return None
+
+
+def _raises_body_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that is a direct
+    statement of a ``with pytest.raises(...)`` body whose expected exception is
+    not ``AssertionError``.
+
+    An assert inside the ``pytest.raises`` region is either unreachable (when it
+    follows the call that raises the expected exception, the assert never runs)
+    or a failure-mode mismatch (when it precedes it, a broken condition raises
+    ``AssertionError`` — almost never the exception `pytest.raises` expects — so
+    the failure reads as a wrong-exception mismatch instead of naming the broken
+    condition). Both are silent signal loss: a reader — and a mutation-testing
+    run — believes the assert verifies behaviour it provably never checks.
+    Blocks expecting ``AssertionError`` are left alone: there the assert *is*
+    the intended trigger. Descent into nested function/class definitions inside
+    the body is skipped — those are definitions, not statements that execute in
+    the raises region."""
+    found: list[tuple[int, str]] = []
+
+    def _collect_body_asserts(body: list[ast.stmt], exc_repr: str) -> None:
+        for stmt in body:
+            if isinstance(stmt, ast.Assert):
+                verdict = (
+                    "unreachable when the expected exception is raised (anything after the "
+                    "raising call never runs), and raises a mismatched AssertionError (not the "
+                    "expected exception) when it fails"
+                )
+                found.append(
+                    (
+                        stmt.lineno,
+                        f"assert {ast.unparse(stmt.test)} is a direct statement of the "
+                        f"pytest.raises({exc_repr}) body — the assertion is {verdict}; move it "
+                        "after the with-block (assert on exc_info.value) or make it the intended "
+                        "trigger with pytest.raises(AssertionError)",
+                    )
+                )
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            elif isinstance(stmt, ast.If):
+                _collect_body_asserts(stmt.body, exc_repr)
+                _collect_body_asserts(stmt.orelse, exc_repr)
+            elif isinstance(stmt, ast.Try):
+                _collect_body_asserts(stmt.body, exc_repr)
+                _collect_body_asserts(stmt.orelse, exc_repr)
+                for handler in stmt.handlers:
+                    _collect_body_asserts(handler.body, exc_repr)
+            elif isinstance(stmt, (ast.For, ast.While)):
+                _collect_body_asserts(stmt.body, exc_repr)
+                _collect_body_asserts(stmt.orelse, exc_repr)
+            elif isinstance(stmt, ast.With):
+                inner_is_raises = any(_is_raises_context_only(item.context_expr) is not None for item in stmt.items)
+                if not inner_is_raises:
+                    _collect_body_asserts(stmt.body, exc_repr)
+            elif isinstance(stmt, ast.Match):
+                for case in stmt.cases:
+                    _collect_body_asserts(case.body, exc_repr)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        raises_call = None
+        for item in node.items:
+            call = _is_raises_context_only(item.context_expr)
+            if call is not None:
+                raises_call = call
+                break
+        if raises_call is None:
+            continue
+        expected = _expected_exception_operand(raises_call)
+        if isinstance(expected, ast.Name) and expected.id == "AssertionError":
+            continue
+        exc_repr = ast.unparse(expected) if expected is not None else "..."
+        _collect_body_asserts(node.body, exc_repr)
+    return found
+
+
+def test_no_assert_inside_raises_body():
+    """An ``assert`` that is a direct statement of a ``with pytest.raises(...)``
+    body whose expected exception is not ``AssertionError`` is either dead or
+    misleading: after the raising call the assert never executes, and before it
+    a failure raises ``AssertionError`` instead of the expected error, so the
+    test fails with a wrong-exception mismatch that names neither the broken
+    condition nor the assertion. Blocks expecting ``AssertionError`` are the
+    intentional validator-trip idiom and are left alone, as are
+    ``pytest.warns`` bodies (their body runs to completion)."""
+
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _raises_body_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assert statement(s) inside a pytest.raises(...) body.\n"
+        "An assert in the expected-exception region is unreachable (after the raising call) or\n"
+        "raises a mismatched AssertionError (before it); move the assertion after the with-block\n"
+        "or make it the intended trigger with pytest.raises(AssertionError).\n" + "\n".join(violations)
+    )
+
+
+def test_raises_body_assert_lens_flags_hazardous_asserts():
+    """Synthetic positive/negative control for the raises-body-assert lens: it
+    must flag an assert that is a direct statement of a ``pytest.raises`` body
+    (positional or ``expected_exception=`` exception, with or without ``as
+    exc_info``, before or after the raising call, bare or ``pytest.``-qualified,
+    and nested under an ``if``), and ignore asserts outside the block, in
+    ``pytest.warns`` bodies, in ``AssertionError``-expecting blocks, in nested
+    helper definitions, and under unrelated context managers."""
+    positive_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        step()\n        assert ready\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        assert events.DoesNotExist\n",
+        "def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        assert ready\n",
+        "def test_foo():\n    with pytest.raises(expected_exception=ValueError):\n        assert ready\n",
+        "from pytest import raises\n\ndef test_foo():\n    with raises(ValueError):\n        assert ready\n",
+        "def test_foo():\n    with pytest.raises(AttributeError, match='no attribute'):\n"
+        "        assert events.DoesNotExist\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        if flag:\n            assert ready\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        for x in items:\n            assert x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _raises_body_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    with pytest.raises(AssertionError, match='x invalid'):\n        assert validate(x)\n",
+        "def test_foo():\n    with pytest.raises(AssertionError):\n        assert validate(x)\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        step()\n    assert ready\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        def helper():\n"
+        "            assert ready\n        step()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        assert flag\n",
+        "def test_foo():\n    with some_manager():\n        assert ready\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        step()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _raises_body_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 def _assert_in_finally_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``assert`` placed in a
     ``finally:`` clause, where it runs only during unwinding.
@@ -8581,6 +8778,7 @@ def test_no_assert_in_finally():
     regression) or verifies nothing that a check on the normal path could not
     express more clearly. Move the check to the normal path or into the
     ``except`` handler that owns the failure."""
+
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
