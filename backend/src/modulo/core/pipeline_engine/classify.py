@@ -85,6 +85,7 @@ REASON_PARSE_ERROR = "parse_error"
 REASON_NO_DELIVERY = "no_delivery"
 REASON_CANCELLED = "operator_or_hitl_cancelled"
 REASON_BUDGET_EXCEEDED = "budget_exceeded"
+REASON_COMPENSATION_FAILED = "compensation_failed"
 REASON_ROUTER_NO_MATCH = "router_no_match"
 REASON_DELIVERED = "pr_delivered"
 REASON_DELIVERED_EMAIL = "email_delivered"
@@ -123,7 +124,7 @@ _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
 #: ``raw-status-complete`` semgrep rule routes status checks through the shared
 #: status sets until the FAR-146 success-predicate lands).
 _EXCLUDED_STATUSES: frozenset[str] = frozenset({"cancelled", "budget_exceeded", "router_no_match"})
-_COUNTABLE_NO_DELIVERY_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled"})
+_COUNTABLE_NO_DELIVERY_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled", "compensation_failed"})
 #: The deliverable verdict bucket — the ONLY status that may produce
 #: ``delivered``. Named (not a raw ``status == "complete"`` literal) so the
 #: decision table routes through a shared status set, matching the
@@ -418,13 +419,20 @@ def classify_run(
             declared_success_nodes=declared_success_nodes,
         )
 
-    # failed / eval_failed / stalled -> COUNTABLE no_delivery. An infra/sandbox
-    # crash elevated to failed (e.g. error_code=node_cancelled) COUNTS (PO
-    # decision).
+    # failed / eval_failed / stalled / compensation_failed -> COUNTABLE
+    # no_delivery. An infra/sandbox crash elevated to failed (e.g.
+    # error_code=node_cancelled) COUNTS (PO decision). compensation_failed is a
+    # genuine delivery failure (the watched node AND its compensation path both
+    # failed) — explicit reason, counted as no_delivery (never fail-safe).
     if status in _COUNTABLE_NO_DELIVERY_STATUSES:
+        reason = (
+            REASON_COMPENSATION_FAILED
+            if status == "compensation_failed"
+            else _derive_no_delivery_reason(error_code, raw_output_markers)
+        )
         return ClassificationResult(
             RunClassificationValue.no_delivery,
-            _derive_no_delivery_reason(error_code, raw_output_markers),
+            reason,
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,

@@ -525,7 +525,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0159."""
+    """Exactly one migration chains off each predecessor, and the head is 0162."""
     import glob
     import re
 
@@ -573,7 +573,13 @@ def test_single_migration_head() -> None:
     # -> 0147_json_to_jsonb_standardize (db-jsonb-standardize renumber from 0145
     #    to avoid colliding with main's 0145_spend_ceiling, chains off 0146).
     # -> 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147_json_to_jsonb_standardize.
-    # -> 0149_suite_run_trigger_kind (FAR-377) chains off 0148_pipeline_snapshot_versioning_far420 and is the head.
+    # -> 0149_suite_run_trigger_kind (FAR-377) chains off 0148_pipeline_snapshot_versioning_far420;
+    #    main's chain continues 0150_add_router_no_match_status -> 0151_fix_constraints ->
+    #    0152_dismissed_by_user_id_index -> 0153_add_numeric_check_constraints ->
+    #    0154_add_web_vital_events_time_index; main continues to 0157_add_numeric_check_constraints,
+    #    then 0158_sso_provider_id (main) chains off 0157, 0159_pipeline_retry_compensation
+    #    (FAR-402 P5) chains off 0158_sso_provider_id, and 0160_run_idempotency_key
+    #    (FAR-438) chains off 0159 and is the head.
     chaining_off_0131 = [p for p in revisions if parents[p] == "0131_eval_dataset_corpus"]
     assert [_basename(p) for p in chaining_off_0131] == ["0132_agent_connector_report_soft_delete_audit.py"]
     chaining_off_0132 = [p for p in revisions if parents[p] == "0132_agent_connector_report_soft_delete_audit"]
@@ -606,7 +612,13 @@ def test_single_migration_head() -> None:
     # 0145_spend_ceiling (FAR-391) chains off 0144, 0146_extend_runs_status_cost_ceiling
     # chains off 0145, 0147_json_to_jsonb_standardize chains off 0146,
     # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147,
-    # and 0149_suite_run_trigger_kind (FAR-377) chains off 0148 and is the head.
+    # and 0149_suite_run_trigger_kind (FAR-377) chains off 0148; 0150_add_router_no_match_status
+    # (FAR-378) chains off 0149; main then continues 0151_fix_constraints ->
+    # 0152_dismissed_by_user_id_index -> 0153_add_numeric_check_constraints ->
+    # 0154_add_web_vital_events_time_index; 0158_sso_provider_id (main) chains off
+    # 0157_add_numeric_check_constraints, 0159_pipeline_retry_compensation (FAR-402 P5)
+    # chains off 0158_sso_provider_id, and 0160_run_idempotency_key (FAR-438) chains off
+    # 0159 and is the head.
     chaining_off_0143 = [p for p in revisions if parents[p] == "0143_rest_connector_profile"]
     assert [_basename(p) for p in chaining_off_0143] == ["0144_broaden_notification_status_in_app.py"]
     # What chains off 0144 (broaden notification status) -> 0145_spend_ceiling (FAR-391).
@@ -619,7 +631,13 @@ def test_single_migration_head() -> None:
     # 0148 -> 0149_suite_run_trigger_kind (FAR-377).
     chaining_off_0146 = [p for p in revisions if parents[p] == "0146_extend_runs_status_cost_ceiling"]
     assert [_basename(p) for p in chaining_off_0146] == ["0147_json_to_jsonb_standardize.py"]
-    # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147.
+    # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147;
+    # 0149_suite_run_trigger_kind (FAR-377) chains off 0148;
+    # 0150_add_router_no_match_status (FAR-378) chains off 0149; main continues through
+    # 0154_add_web_vital_events_time_index, and 0158_sso_provider_id (main) chains off
+    # 0157_add_numeric_check_constraints; 0159_pipeline_retry_compensation (FAR-402 P5)
+    # chains off 0158_sso_provider_id; 0160_run_idempotency_key (FAR-438) chains off 0159
+    # and is the head.
     chaining_off_0147 = [p for p in revisions if parents[p] == "0147_json_to_jsonb_standardize"]
     assert [_basename(p) for p in chaining_off_0147] == ["0148_pipeline_snapshot_versioning_far420.py"]
     # 0149_suite_run_trigger_kind (FAR-377, main) chains off 0148.
@@ -640,24 +658,33 @@ def test_single_migration_head() -> None:
     # 0154_add_web_vital_events_time_index (this PR) chains off 0153.
     chaining_off_0153 = [p for p in revisions if parents[p] == "0153_add_numeric_check_constraints"]
     assert [_basename(p) for p in chaining_off_0153] == ["0154_add_web_vital_events_time_index.py"]
-    # 0155_add_hot_query_indexes chains off 0154.
+    # 0155_add_hot_query_indexes (main) chains off 0154.
     chaining_off_0154 = [p for p in revisions if parents[p] == "0154_add_web_vital_events_time_index"]
     assert [_basename(p) for p in chaining_off_0154] == ["0155_add_hot_query_indexes.py"]
-    # 0156_add_soft_delete_partial_uniques chains off 0155.
+    # 0156_add_soft_delete_partial_uniques (main) chains off 0155.
     chaining_off_0155 = [p for p in revisions if parents[p] == "0155_add_hot_query_indexes"]
     assert [_basename(p) for p in chaining_off_0155] == ["0156_add_soft_delete_partial_uniques.py"]
-    # 0157_add_numeric_check_constraints chains off 0156.
+    # 0157_add_numeric_check_constraints (main) chains off 0156.
     chaining_off_0156 = [p for p in revisions if parents[p] == "0156_add_soft_delete_partial_uniques"]
     assert [_basename(p) for p in chaining_off_0156] == ["0157_add_numeric_check_constraints.py"]
-    # 0158_sso_provider_id (FAR-457/FAR-464, main) chains off 0157.
+    # 0158_sso_provider_id (main) chains off 0157.
     chaining_off_0157 = [p for p in revisions if parents[p] == "0157_add_numeric_check_constraints"]
     assert [_basename(p) for p in chaining_off_0157] == ["0158_sso_provider_id.py"]
-    # 0159_connector_instance_degraded (FAR-495, this PR) chains off 0158.
+    # 0159_pipeline_retry_compensation (FAR-402 P5) chains off 0158_sso_provider_id.
     chaining_off_0158 = [p for p in revisions if parents[p] == "0158_sso_provider_id"]
-    assert [_basename(p) for p in chaining_off_0158] == ["0159_connector_instance_degraded.py"]
-    # Nothing chains off 0159 -> it is the single head.
-    chaining_off_0159 = [p for p in revisions if parents[p] == "0159_connector_instance_degraded"]
-    assert chaining_off_0159 == []
+    assert [_basename(p) for p in chaining_off_0158] == ["0159_pipeline_retry_compensation.py"]
+    # 0160_run_idempotency_key (FAR-438) chains off 0159.
+    chaining_off_0159 = [p for p in revisions if parents[p] == "0159_pipeline_retry_compensation"]
+    assert [_basename(p) for p in chaining_off_0159] == ["0160_run_idempotency_key.py"]
+    # 0161_accounts_must_change_password (FAR-460) chains off 0160.
+    chaining_off_0160 = [p for p in revisions if parents[p] == "0160_run_idempotency_key"]
+    assert [_basename(p) for p in chaining_off_0160] == ["0161_accounts_must_change_password.py"]
+    # 0162_connector_instance_degraded (FAR-495, this PR) chains off 0161.
+    chaining_off_0161 = [p for p in revisions if parents[p] == "0161_accounts_must_change_password"]
+    assert [_basename(p) for p in chaining_off_0161] == ["0162_connector_instance_degraded.py"]
+    # Nothing chains off 0162 -> it is the single head.
+    chaining_off_0162 = [p for p in revisions if parents[p] == "0162_connector_instance_degraded"]
+    assert chaining_off_0162 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

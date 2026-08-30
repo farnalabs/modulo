@@ -206,6 +206,18 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert body["plan"]["tier"] == "community"
 
 
+def test_me_includes_must_change_password(client: TestClient) -> None:
+    for flag, expected in ((True, True), (False, False)):
+        user = _make_user()
+        user.must_change_password = flag
+        with patch("modulo.api.routes.viewmodel.get_account_by_id", new=AsyncMock(return_value=user)):
+            resp = client.get("/api/v1/me")
+
+        assert resp.status_code == 200
+        # FAR-460: the forced-password-change gate must be surfaced to the UI.
+        assert resp.json()["must_change_password"] is expected
+
+
 def test_viewmodel_current_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/viewmodel/current")
     assert resp.status_code in (401, 403)

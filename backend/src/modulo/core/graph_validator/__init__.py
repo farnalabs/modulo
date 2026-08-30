@@ -1119,6 +1119,7 @@ class GraphValidator:
         self._check_ports(graph_json, result)
         self._check_sandbox_agent_config(graph_json, result)
         self._check_node_idempotent(graph_json, result)
+        self._check_failure_and_retry(graph_json, result)
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
         self._check_parallel_run_context_writes(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
@@ -1206,6 +1207,9 @@ class GraphValidator:
 
         # Node idempotency flag check (FAR-295).
         self._check_node_idempotent(snapshot.graph_json, result)
+
+        # Failure & retry + compensation rules (FAR-402 P5 §4F).
+        self._check_failure_and_retry(snapshot.graph_json, result)
 
         await self._check_node_send_budget_bindings(
             snapshot.graph_json, snapshot.connector_bindings_json, session, result
@@ -2421,6 +2425,51 @@ class GraphValidator:
                     f"false = never auto-retry), got {node.get('idempotent')!r}",
                     node_id=nid,
                 )
+
+    # ------------------------------------------------------------------
+    # Failure & retry (FAR-402 P5 / §4F)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_failure_and_retry(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Compile-time failure/retry + compensation rules (FAR-402 P5 §4F).
+
+        1. Per-node ``retry`` config must be well-formed.
+        2. Per-edge transition ``retry`` config must be well-formed.
+        3. An edge may not declare BOTH a transition ``retry`` and an
+           ``on_failure_target`` (mutually exclusive per failure).
+        4. An edge's ``on_failure_target`` must reference an existing node.
+        5. The compensation graph must be ACYCLIC (a cycle is a typed error,
+           rejected at compile time, not at run time).
+
+        All checks are additive over the existing graph — a graph with no
+        ``retry``/``on_failure_target`` config compiles exactly as before.
+        """
+        # Lazy import: the shim modules (pipeline_engine) import the executor
+        # which imports this package at module-load time; importing
+        # retry_compensation eagerly would re-enter that deadlock. At call time
+        # the package is already initialised.
+        from modulo.core.pipeline_engine import retry_compensation as _rc
+
+        nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
+        edges = graph_json.get("edges", []) if isinstance(graph_json, dict) else []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nid = _string_or_default(node.get("id"))
+            _rc.validate_node_retry_config(node, nid, result)
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_id = _string_or_default(edge.get("source", edge.get("source_node_id")))
+            _rc.validate_edge_retry_config(edge, edge_id, result)
+            _rc.validate_edge_mutual_exclusion(edge, result)
+        _rc.validate_compensation_target_exists(
+            [e for e in edges if isinstance(e, dict)],
+            [n for n in nodes if isinstance(n, dict)],
+            result,
+        )
+        _rc.validate_compensation_acyclic(graph_json, result)
 
     # ------------------------------------------------------------------
 

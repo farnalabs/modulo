@@ -1028,3 +1028,174 @@ class TestOrgSlugImmutability:
 
         assert "slug" not in UpdateOrgRequest.model_fields
         assert set(UpdateOrgRequest.model_fields) <= {"name", "logo_url", "plan_id"}
+
+
+def _fake_lifecycle_account(active: bool = True) -> MagicMock:
+    """Account mock for create-user / reset-password lifecycle tests."""
+    account = MagicMock()
+    account.id = uuid.uuid4()
+    account.email = "lifecycle@test.com"
+    account.display_name = "Lifecycle User"
+    account.auth_provider = "local"
+    account.created_at = _NOW
+    account.last_login = None
+    account.is_break_glass = False
+    account.active = active
+    account.password_hash = None
+    account.must_change_password = False
+    return account
+
+
+class TestAdminCreateUserAudit:
+    """POST /api/v1/admin/users emits ``user_created_by_admin`` audit events."""
+
+    URL = "/api/v1/admin/users"
+
+    def test_create_user_emits_user_created_by_admin(self, client: TestClient) -> None:
+        account = _fake_lifecycle_account()
+        membership = MagicMock()
+        membership.role = "runner"
+        mock_audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.db.crud.account.create_account",
+                new=AsyncMock(return_value=account),
+            ),
+            patch("modulo.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
+            patch("modulo.api.routes.admin.validate_password_strength", return_value=None),
+            patch("modulo.api.routes.admin.hash_password", return_value="hashed"),
+            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+        ):
+            resp = client.post(
+                self.URL,
+                json={
+                    "email": account.email,
+                    "display_name": account.display_name,
+                    "password": "Str0ngPassw0rd",
+                    "org_role": "runner",
+                },
+            )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["email"] == account.email
+        assert body["org_role"] == "runner"
+        mock_audit.assert_awaited_once()
+        kwargs = mock_audit.await_args.kwargs
+        assert kwargs["event_type"] == "user_created_by_admin"
+        assert kwargs["resource_id"] == account.id
+        assert kwargs["payload_json"]["target_user_id"] == str(account.id)
+        assert kwargs["payload_json"]["org_role"] == "runner"
+        # FAR-460: an admin-minted credential must be replaced by its owner on
+        # first sign-in. Mirror the reset path — the create path must set the flag.
+        assert account.must_change_password is True
+
+    def test_create_user_audit_write_is_fail_open(self, client: TestClient) -> None:
+        account = _fake_lifecycle_account()
+        membership = MagicMock()
+        membership.role = "viewer"
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("audit chain write failed")
+
+        with (
+            patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.db.crud.account.create_account",
+                new=AsyncMock(return_value=account),
+            ),
+            patch("modulo.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
+            patch("modulo.api.routes.admin.validate_password_strength", return_value=None),
+            patch("modulo.api.routes.admin.hash_password", return_value="hashed"),
+            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.admin.append_audit_event", side_effect=_boom),
+        ):
+            resp = client.post(
+                self.URL,
+                json={
+                    "email": account.email,
+                    "display_name": account.display_name,
+                    "password": "Str0ngPassw0rd",
+                    "org_role": "viewer",
+                },
+            )
+
+        # The user creation ALWAYS commits; a failed audit write never fails it.
+        assert resp.status_code == 201
+        assert resp.json()["org_role"] == "viewer"
+
+
+class TestAdminResetPasswordLifecycle:
+    """POST /api/v1/admin/users/{id}/reset-password forces a password change
+    on next login (FAR-460) and emits ``user_password_reset_by_admin``."""
+
+    URL = f"/api/v1/admin/users/{_OTHER_USER_ID}/reset-password"
+
+    def test_reset_sets_must_change_password_and_emits_audit(self, admin_rls_client: TestClient) -> None:
+        account = _fake_lifecycle_account()
+        mock_audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+        ):
+            resp = admin_rls_client.post(self.URL)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["temporary_password"]) >= 8
+        # FAR-460: the temporary credential must be replaced by its owner.
+        assert account.must_change_password is True
+        mock_audit.assert_awaited_once()
+        kwargs = mock_audit.await_args.kwargs
+        assert kwargs["event_type"] == "user_password_reset_by_admin"
+        assert kwargs["resource_id"] == _OTHER_USER_ID
+        assert kwargs["payload_json"]["target_user_id"] == str(_OTHER_USER_ID)
+
+    def test_reset_audit_write_is_fail_open(self, admin_rls_client: TestClient) -> None:
+        account = _fake_lifecycle_account()
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("audit chain write failed")
+
+        with (
+            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("modulo.api.routes.admin.append_audit_event", side_effect=_boom),
+        ):
+            resp = admin_rls_client.post(self.URL)
+
+        assert resp.status_code == 200
+        assert "temporary_password" in resp.json()
+
+    def test_reset_break_glass_rejected_keeps_flag_untouched(self, admin_rls_client: TestClient) -> None:
+        account = _fake_lifecycle_account()
+        account.is_break_glass = True
+        mock_audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+        ):
+            resp = admin_rls_client.post(self.URL)
+
+        assert resp.status_code == 422
+        assert account.must_change_password is False
+        mock_audit.assert_not_awaited()

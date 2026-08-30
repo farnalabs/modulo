@@ -674,12 +674,37 @@ async def admin_create_user(
                     password_hash=pw_hash,
                 )
 
+            # FAR-460: an admin-minted credential must be replaced by the user
+            # on first sign-in — this mirrors admin_reset_password and matches the
+            # migration docstring. The forced-change gate (login response + /me +
+            # frontend) enforces the rotation.
+            account.must_change_password = True
+
             membership = await create_membership(
                 session,
                 account_id=account.id,
                 org_id=current_user.organisation_id,
                 role=req.org_role,
             )
+
+            # Audit is fail-open-with-alert (mirrors me.change_password): the
+            # user creation ALWAYS commits; a failed audit write is loudly
+            # logged and never rolls back the change.
+            try:
+                await set_rls_org(session, current_user.organisation_id)
+                await append_audit_event(
+                    session,
+                    org_id=current_user.organisation_id,
+                    event_type="user_created_by_admin",
+                    actor_user_id=current_user.account_id,
+                    resource_type="user",
+                    resource_id=account.id,
+                    payload_json={"target_user_id": str(account.id), "org_role": req.org_role},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("admin_create_user audit write failed")
 
         return CreateUserResponse(
             id=str(account.id),
@@ -1418,12 +1443,35 @@ async def admin_reset_password(
 
             temporary_password = secrets.token_urlsafe(18)[:24]
             account.password_hash = hash_password(temporary_password)
+            # FAR-460: the temporary credential must be replaced by the user —
+            # this is what makes the reset dialog's "prompted to change it on
+            # next login" promise real (enforced by login response + /me +
+            # frontend forced-change gate).
+            account.must_change_password = True
 
             families = await list_families_for_account(session, user_id)
             for family in families:
                 await blacklist_family(session, family.family_id, user_id)
 
             await session.flush()
+
+            # Audit is fail-open-with-alert (mirrors me.change_password): the
+            # password reset ALWAYS commits; a failed audit write is loudly
+            # logged and never rolls back the change.
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=current_user.organisation_id,
+                    event_type="user_password_reset_by_admin",
+                    actor_user_id=current_user.account_id,
+                    resource_type="user",
+                    resource_id=user_id,
+                    payload_json={"target_user_id": str(user_id)},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("admin_reset_password audit write failed")
 
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)

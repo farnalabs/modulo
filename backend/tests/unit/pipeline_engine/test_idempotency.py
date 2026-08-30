@@ -1,8 +1,20 @@
-"""Unit tests for the FAR-410 stable idempotency-key derivation."""
+"""Unit tests for the FAR-410 stable idempotency-key derivation + FAR-438 persistence.
+
+Covers both the derivation primitive (:func:`stable_idempotency_key`) and the
+FAR-438 run-record persistence contract (run-level key persist + read-back,
+per-node derivation from a persisted key, and the read-before-write dedupe).
+"""
+
+import uuid
 
 import pytest
 
-from modulo.core.pipeline_engine.idempotency import stable_idempotency_key
+from modulo.core.pipeline_engine.idempotency import (
+    node_idempotency_key,
+    read_before_write_suppression,
+    stable_idempotency_key,
+)
+from modulo.db.crud.run import run_idempotency_key, run_idempotency_ref
 
 
 def test_stable_idempotency_key_is_deterministic() -> None:
@@ -80,3 +92,190 @@ def test_stable_idempotency_key_payload_bytes_match_str() -> None:
     k_str = stable_idempotency_key(run_ref="pipeline:42", node_ref="node-a", index=0, payload="hello")
     k_bytes = stable_idempotency_key(run_ref="pipeline:42", node_ref="node-a", index=0, payload=b"hello")
     assert k_str == k_bytes
+
+
+# ---------------------------------------------------------------------------
+# FAR-438 — run-record idempotency-key persistence
+# ---------------------------------------------------------------------------
+
+
+def test_run_idempotency_ref_is_reusable_stable_identity() -> None:
+    """The persisted run key is ``<pipeline_id>:<run_number>``, reusable as a run_ref.
+
+    A re-run that restores the same run recomputes the SAME reference (the
+    run_number is allocated once per org), so a per-node key derived from it is
+    stable across the re-run.
+    """
+    pipeline_id = uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f")
+    run_ref = run_idempotency_ref(pipeline_id, 42)
+    assert run_ref == "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:42"
+    assert run_idempotency_ref(pipeline_id, 42) == run_ref
+    # The persisted value is a valid run_ref for the derivation primitive.
+    assert stable_idempotency_key(run_ref=run_ref, node_ref="node-a") == stable_idempotency_key(
+        run_ref=run_ref, node_ref="node-a"
+    )
+
+
+def test_run_idempotency_key_persist_and_readback() -> None:
+    """A run persists its idempotency key and a re-run reads back the same value."""
+    run_ref = run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 7)
+    persisted = run_idempotency_key(run_ref)
+    assert persisted == "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7"
+    # Read-back: a re-run passes the persisted key straight into the derivation.
+    assert run_idempotency_key(persisted) == persisted
+    assert stable_idempotency_key(run_ref=persisted, node_ref="node-a", index=0) == stable_idempotency_key(
+        run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7", node_ref="node-a", index=0
+    )
+
+
+def test_run_idempotency_key_excludes_per_replay_run_id() -> None:
+    """A naive per-replay run_id is rejected at the persist boundary (FAR-438).
+
+    The value persisted on the run record MUST be ``<pipeline_id>:<run_number>``.
+    A bare run_id (a fresh UUID fork per re-run) would mint a NEW key on every
+    re-run and silently defeat dedupe, so it must fail loudly here.
+    """
+    with pytest.raises(ValueError):
+        run_idempotency_key("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f")
+    with pytest.raises(ValueError):
+        run_idempotency_key("pipeline:not-a-number")
+    with pytest.raises(ValueError):
+        run_idempotency_key("")
+
+
+def test_node_key_recomputed_from_persisted_run_key_is_stable() -> None:
+    """The same persisted run key + node + index recomputes the identical node key.
+
+    This is the read-before-write premise: a re-run that reuses the persisted key
+    derives the SAME per-node key as the original, so a duplicate write can be
+    detected.
+    """
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    original = node_idempotency_key(persisted, "node-a", index=0)
+    replay = node_idempotency_key(run_idempotency_key(persisted), "node-a", index=0)
+    assert original == replay
+    # A different node / cardinality index yields a different node key.
+    assert original != node_idempotency_key(persisted, "node-b", index=0)
+    assert original != node_idempotency_key(persisted, "node-a", index=1)
+
+
+def test_read_before_write_suppresses_same_persisted_key() -> None:
+    """A re-run reading back the SAME persisted key suppresses a duplicate write."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    applied_key = node_idempotency_key(persisted, "node-a", index=0)
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": applied_key}}
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is True
+
+
+def test_read_before_write_no_marker_not_suppressed() -> None:
+    """No recorded applied key for the node => the write proceeds (no false dedupe)."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    assert read_before_write_suppression(None, run_ref=persisted, node_ref="node-a", index=0) is False
+    assert read_before_write_suppression({}, run_ref=persisted, node_ref="node-a", index=0) is False
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": "other"}}
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_different_node_or_index_not_suppressed() -> None:
+    """A key recorded for a different node/cardinality must NOT suppress this write."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    other_node_key = node_idempotency_key(persisted, "node-b", index=0)
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": other_node_key}}
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_fails_open_on_missing_or_malformed_run_ref() -> None:
+    """A missing/malformed persisted run key NEVER suppresses (fail-open)."""
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": "abc"}}
+    assert read_before_write_suppression(markers, run_ref=None, node_ref="node-a", index=0) is False
+    assert (
+        read_before_write_suppression(markers, run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f", node_ref="node-a")
+        is False
+    )
+    assert read_before_write_suppression(markers, run_ref="", node_ref="node-a") is False
+    # Non-dict markers are ignored.
+    assert read_before_write_suppression(["not-a-dict"], run_ref="pipeline:9", node_ref="node-a") is False
+
+
+def test_read_before_write_first_attempt_failure_not_suppressed() -> None:
+    """A first-attempt failure stamp carries the matching key but NO
+    ``delivery_done`` — it must NOT suppress (the write never delivered, so the
+    run must retry rather than be marked COMPLETE).
+
+    This is the FAR-438 regression: the marker is stamped with ``idempotency_key``
+    on EVERY failure (right before the raise), so requiring ONLY the key match
+    would let a legitimate first-attempt transient failure suppress itself.
+    """
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    failed_key = node_idempotency_key(persisted, "node-a", index=0)
+    failed_marker = {"attempt-0": {"_modulo_marker": True, "status": "failed", "idempotency_key": failed_key}}
+    # delivery_done absent => the failure must NOT suppress.
+    assert read_before_write_suppression(failed_marker, run_ref=persisted, node_ref="node-a", index=0) is False
+    # delivery_done explicitly False => still NOT suppressed.
+    failed_marker["attempt-0"]["delivery_done"] = False
+    assert read_before_write_suppression(failed_marker, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_index_payload_item_keys_do_not_collide() -> None:
+    """Two fan-out items (index 0 vs 1) for the SAME node derive DIFFERENT keys:
+    item B's marker never suppresses item A, so a re-run of item A is not hidden
+    by item B's applied key."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    item_a_key = node_idempotency_key(persisted, "node-a", index=0)
+    item_b_key = node_idempotency_key(persisted, "node-a", index=1)
+    assert item_a_key != item_b_key
+    # A marker applied for item B must not suppress the item A probe.
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": item_b_key}}
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=1) is True
+
+
+def test_read_before_write_changed_payload_derives_different_key() -> None:
+    """A genuinely-edited content-edit payload yields a DIFFERENT key: an edited
+    re-run probe is NOT suppressed by the unedited marker (the edit is no longer
+    silently deduped/dropped), while the untouched re-run IS suppressed."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    original_key = node_idempotency_key(persisted, "node-a", index=0, payload="v1")
+    edited_key = node_idempotency_key(persisted, "node-a", index=0, payload="v2")
+    assert original_key != edited_key
+    markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": original_key}}
+    # Edited payload probe => different key => not suppressed.
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v2") is False
+    # Unchanged payload probe => same key + delivery_done => suppressed.
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0, payload="v1") is True
+
+
+def test_run_ref_shape_regex_consistent_with_db_layer() -> None:
+    """The core (``_RUN_REF_RE``) and DB-layer (``_RUN_IDEMPOTENCY_REF_RE``)
+    run-ref shape regexes are mirrored deliberately (import-linter forbids
+    ``modulo.db`` importing ``modulo.core``), so they must accept/reject the
+    SAME samples — a divergent copy would silently break key read-back."""
+    samples = [
+        "pipeline:42",  # valid
+        "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7",  # valid (uuid:number)
+        "some_pipeline-name:1",  # valid (slug:number)
+        "pipeline:0",  # valid (0 is a number)
+        "pipeline:not-a-number",  # invalid (non-numeric)
+        "pipeline",  # invalid (no :number)
+        "pipeline:",  # invalid (empty number)
+        ":42",  # invalid (empty id)
+        "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f",  # invalid (bare uuid)
+        "",  # invalid (empty)
+    ]
+
+    def _accepted_by_core(sample: str) -> bool:
+        try:
+            stable_idempotency_key(run_ref=sample, node_ref="node-a")
+            return True
+        except ValueError:
+            return False
+
+    def _accepted_by_db(sample: str) -> bool:
+        try:
+            run_idempotency_key(sample)
+            return True
+        except ValueError:
+            return False
+
+    for sample in samples:
+        assert _accepted_by_core(sample) == _accepted_by_db(sample), f"regex divergence for {sample!r}"

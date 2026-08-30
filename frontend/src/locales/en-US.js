@@ -475,6 +475,11 @@ export default {
       "my_teams": "My Teams",
       "not_a_member_of_any_team": "You are not a member of any team."
     },
+    "ForceChangePasswordView": {
+      "change_your_password": "Set a new password",
+      "you_must_set_a_new_password_before_continuing": "Your password was reset by an administrator. Set a new password to continue to the app.",
+      "password_changed_sign_in_again": "Password changed. Taking you to the sign-in screen…"
+    },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
       "preview_badge": "Preview",
@@ -2174,10 +2179,17 @@ export default {
       "auth": "Auth",
       "created": "Created",
       "actions": "Actions",
+      "last_login": "Last Login",
+      "never_logged_in": "Never logged in",
       "admin": "Admin",
       "operator": "Operator",
       "runner": "Runner",
-      "viewer": "Viewer"
+      "viewer": "Viewer",
+      "generate_password": "Generate",
+      "credentials": "Credentials",
+      "credential_body_reset": "A temporary password has been generated for {email}. Share it with them - they will be prompted to change it on their next login.",
+      "credential_body_created": "The password for new user {email} is shown below. Copy it now and share it with them - they will be prompted to set their own on first sign-in.",
+      "empty_state_description": "Users will appear here once they are created by an admin."
     },
     "SettingsTeamsView": {
       "failed_to_load_teams": "Failed to load teams:",

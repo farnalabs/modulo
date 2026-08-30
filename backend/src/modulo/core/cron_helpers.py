@@ -4240,6 +4240,16 @@ async def run_classification_reconcile() -> dict[str, int]:
 async def dispatcher_reconcile() -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s).
 
+    Drain note (FAR-402 P5 / design §10 O7): a run in ``unknown`` (adopted from
+    FAR-410, a NON-TERMINAL recovery status) holds a concurrency slot while its
+    outcome is indeterminate. It must be DETECTIBLE here — reconciled to a
+    terminal outcome via an operator re-run that reuses the persisted run-level
+    ``idempotency_key`` (never silently dropped, and never re-dispatched as a
+    fresh unit of work). ``unknown`` is intentionally absent from
+    ``ONGOING_ACTIVE_STATUSES`` so a stuck UNKNOWN does not trigger an ongoing
+    top-up. Retry/compensation runs compose with it by re-executing against the
+    same pinned snapshot and reusing the run-level idempotency key.
+
     Predicate (plan F3c + F6a): ``queue.job(run:{id})`` IS None AND staleness:
 
       * pending + dispatched_at IS NULL: capacity-deferred — matched on the

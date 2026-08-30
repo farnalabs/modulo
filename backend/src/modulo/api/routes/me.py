@@ -142,6 +142,9 @@ async def change_password(
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
             account.password_hash = hash_password(req.new_password)
+            # Clear the admin-reset flag (FAR-460): the user has now set their
+            # own credential, so the post-login forced-change gate is satisfied.
+            account.must_change_password = False
             session.add(account)
 
             families = await list_families_for_account(session, current_user.account_id)

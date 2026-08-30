@@ -7,6 +7,7 @@ export function runStatusBadgeClass(status: string): string {
     failed: 'bg-destructive/10 text-destructive',
     stalled: 'bg-destructive/10 text-destructive',
     budget_exceeded: 'bg-destructive/10 text-destructive',
+    compensation_failed: 'bg-destructive/10 text-destructive',
     router_no_match: 'bg-warning/10 text-warning',
     running: 'bg-primary/10 text-primary',
     pending: 'bg-muted text-muted-foreground',
@@ -14,8 +15,31 @@ export function runStatusBadgeClass(status: string): string {
     cancelled: 'bg-muted text-muted-foreground',
     eval_failed: 'bg-destructive/10 text-destructive',
     claimed: 'bg-warning/10 text-warning',
+    unknown: 'bg-muted text-muted-foreground',
   }
   return map[status] ?? 'bg-muted text-muted-foreground'
+}
+
+/**
+ * Human-readable label for a run status (e.g. `compensation_failed` →
+ * "compensation failed"). Surfaced run statuses were previously rendered as the
+ * raw snake_case value with a CSS `capitalize`, which produced
+ * "Compensation_failed" for multi-word statuses. Pair this with the `capitalize`
+ * class so the first word is capitalized (e.g. "Compensation failed").
+ */
+const RUN_STATUS_LABELS: Record<string, string> = {
+  compensation_failed: 'compensation failed',
+  router_no_match: 'router no match',
+  awaiting_human: 'awaiting human',
+  budget_exceeded: 'budget exceeded',
+  cost_ceiling_exceeded: 'cost ceiling exceeded',
+  eval_failed: 'eval failed',
+}
+
+export function runStatusLabel(status: string | null | undefined): string {
+  if (status == null) return ''
+  if (RUN_STATUS_LABELS[status]) return RUN_STATUS_LABELS[status]
+  return status.replace(/_/g, ' ')
 }
 
 const triggerTypeLabelKeys: Record<string, string> = {

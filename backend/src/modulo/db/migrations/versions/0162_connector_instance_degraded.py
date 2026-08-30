@@ -1,7 +1,7 @@
 """connector_instances — degraded-skip marker columns (FAR-495).
 
-Revision ID: 0159_connector_instance_degraded
-Revises: 0158_sso_provider_id
+Revision ID: 0162_connector_instance_degraded
+Revises: 0161_accounts_must_change_password
 Create Date: 2026-08-30
 
 When a connector instance's stored credentials are missing or malformed,
@@ -29,8 +29,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0159_connector_instance_degraded"
-down_revision: str | None = "0158_sso_provider_id"
+revision: str = "0162_connector_instance_degraded"
+down_revision: str | None = "0161_accounts_must_change_password"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

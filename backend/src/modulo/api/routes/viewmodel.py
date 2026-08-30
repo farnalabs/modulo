@@ -76,6 +76,7 @@ class MeResponse(BaseModel):
     org_role: str
     preferences: dict[str, Any] = Field(default_factory=dict)
     is_system_admin: bool = False
+    must_change_password: bool = False
 
 
 class PipelineSummary(BaseModel):
@@ -247,6 +248,7 @@ async def me(
         org_role=current_user.org_role,
         preferences=account.preferences if account is not None else {},
         is_system_admin=current_user.is_system_admin,
+        must_change_password=bool(account.must_change_password) if account is not None else False,
     )
 
 
