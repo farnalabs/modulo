@@ -455,7 +455,8 @@ routes:
         sidebar_group: admin
         sidebar_order: 1
         type: list_page
-        <<: *team
+        <<: *community
+        required_roles: [admin]
         deprecated: false
 
     /admin/org:

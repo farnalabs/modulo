@@ -131,13 +131,43 @@ class TestManifestLoad:
             assert "required_roles" in route, f"Route {path} missing required_roles"
 
     def test_community_routes_have_null_roles(self):
+        """Community-tier routes default to null required_roles.
+
+        Exception (FAR-462): a community route MAY declare an EXPLICIT role
+        list when the nav item must be role-gated independently of tier — the
+        frontend router enforces required_roles as a separate gate from
+        required_tier (see frontend/src/router/index.ts route guard and
+        frontend/src/config/navigation.ts canSeeItem), so the explicit list
+        preserves admin-only navigation while the tier stays community.
+        Any explicit list is constrained to exactly ["admin"] by
+        test_community_routes_roles_are_admin_only.
+        """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
 
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if route["required_tier"] == "community":
-                assert route["required_roles"] is None, f"Route {path} should have null roles"
+                roles = route["required_roles"]
+                assert roles is None or isinstance(roles, list), (
+                    f"Route {path} should have null roles or an explicit role list"
+                )
+
+    def test_community_routes_roles_are_admin_only(self):
+        """A community-tier route declaring explicit roles must use exactly ["admin"].
+
+        Pins the FAR-462 escape hatch (/admin/users is community-tier but
+        admin-role-gated for nav) so it cannot widen silently to other roles.
+        """
+        _reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        manifest = load_manifest()
+        for path, route in manifest["routes"].items():
+            if route["required_tier"] == "community" and route["required_roles"] is not None:
+                assert route["required_roles"] == ["admin"], (
+                    f"Community route {path} with explicit roles must require exactly ['admin']"
+                )
 
     def test_admin_routes_require_admin_role(self):
         _reset_manifest()
