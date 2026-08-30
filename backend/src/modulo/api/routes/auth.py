@@ -316,6 +316,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
         account_id=str(ctx.account.id),
         org_role=ctx.org_role or "",
         is_system_admin=ctx.account.is_system_admin,
+        ttl_minutes=settings.modulo_access_token_minutes,
     )
     refresh_token = create_refresh_token(
         ctx.account.email,
@@ -543,6 +544,7 @@ def _mint_refresh_response(
         organisation_id=claims.org_id,
         account_id=claims.account_id,
         org_role=str(minted_org_role),
+        ttl_minutes=settings.modulo_access_token_minutes,
     )
     new_refresh = create_refresh_token(
         claims.sub,
@@ -873,7 +875,7 @@ def _set_auth_cookies(response: Response, access_token: str, settings: Settings)
         httponly=True,
         samesite="strict",
         secure=secure,
-        max_age=900,
+        max_age=settings.modulo_access_token_minutes * 60,
         path="/",
     )
     csrf_token_value = secrets.token_hex(32)
@@ -887,7 +889,7 @@ def _set_csrf_cookie(response: Response, token: str, settings: Settings) -> None
         httponly=False,  # NOSONAR S3330 — JS-readable CSRF token; SameSite=strict + secure mitigate.
         samesite="strict",
         secure=not settings.debug,
-        max_age=900,
+        max_age=settings.modulo_access_token_minutes * 60,
         path="/",
     )
 

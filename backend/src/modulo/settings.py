@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     fernet_key_old: str = Field(default="")
     redis_url: str = Field("redis://localhost:6379/0")
     modulo_ws_token_ttl_seconds: int = Field(60)
+    modulo_access_token_minutes: int = Field(default=15, ge=5, le=1440)
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.
