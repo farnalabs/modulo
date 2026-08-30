@@ -525,7 +525,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0152."""
+    """Exactly one migration chains off each predecessor, and the head is 0154."""
     import glob
     import re
 
@@ -634,10 +634,10 @@ def test_single_migration_head() -> None:
     # 0152_dismissed_by_user_id_index (improve-database FK index) chains off 0151.
     chaining_off_0151 = [p for p in revisions if parents[p] == "0151_fix_constraints"]
     assert [_basename(p) for p in chaining_off_0151] == ["0152_add_indexes.py"]
-    # 0153_add_numeric_check_constraints (this PR) chains off 0152.
+    # 0153_add_numeric_check_constraints chains off 0152.
     chaining_off_0152 = [p for p in revisions if parents[p] == "0152_dismissed_by_user_id_index"]
     assert [_basename(p) for p in chaining_off_0152] == ["0153_add_numeric_check_constraints.py"]
-    # 0154_add_web_vital_events_time_index (this PR) chains off 0153 and is the head.
+    # 0154_add_web_vital_events_time_index chains off 0153.
     chaining_off_0153 = [p for p in revisions if parents[p] == "0153_add_numeric_check_constraints"]
     assert [_basename(p) for p in chaining_off_0153] == ["0154_add_web_vital_events_time_index.py"]
     # Nothing chains off 0154 -> it is the single head.

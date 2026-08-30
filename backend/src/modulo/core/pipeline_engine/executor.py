@@ -2359,6 +2359,7 @@ class PipelineExecutor:
                     session_factory=self._session_factory,
                     run_id=run_id,
                     node_id=node_id,
+                    organisation_id=org_id,
                 )
                 for node_id in evidence_nodes
             ],
