@@ -684,6 +684,8 @@ export default {
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
       "failed_to_load_system_config": "Failed to load system config:",
+      "no_configuration_entries_found": "No configuration entries found.",
+      "refresh": "Refresh",
       "system_admin_config": "System Admin — Config",
       "key": "Key",
       "value": "Value",
