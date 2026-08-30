@@ -813,13 +813,18 @@ jobs:
         run: |
           mkdir -p zap-gate
           EXIT=0
-          docker run --rm -v "$PWD/zap-gate:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "${TARGET}" -r zap-gate/zap-gate-report.html -J zap-gate/zap-gate-report.json -a || EXIT=$?
+          docker run --rm -v "$PWD/zap-gate:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "${TARGET}" -r zap-gate-report.html -J zap-gate-report.json -a || EXIT=$?
           echo "zap_exit=$EXIT"
-          # ZAP baseline exit codes: 0=no FAIL, 1=FAIL (High/Critical), 2=WARN (Medium), 3=INFO.
-          # Block the deploy ONLY on High/Critical (exit 1). Medium/Low findings are advisory and
-          # must not stall production promotions (the current header cluster is WARN/Medium).
+          # ZAP baseline exit codes: 0=success (no FAIL), 1=FAIL (High/Critical),
+          # 2=WARN (Medium/Low, no FAIL), 3=any other failure (ZAP failed to start, target
+          # unreachable / 0 pages scanned, missing summary file, or any exception).
+          # The gate is fail-closed: only exit 0 or 2 may pass; every other code blocks the
+          # production promotion. Exit 3 is the realistic infra-failure path and must NOT pass.
           if [ "$EXIT" -eq 1 ]; then
-            echo "::error::DAST gate BLOCKED: high/critical finding(s) detected on staging. Review zap-gate/zap-gate-report.html."
+            echo "::error::DAST gate BLOCKED: high/critical finding(s) detected on staging. Review zap-gate-report.html."
+            exit 1
+          elif [ "$EXIT" -eq 3 ]; then
+            echo "::error::DAST gate BLOCKED: scan could not run (zap exit 3) - promotion blocked (fail closed)."
             exit 1
           elif [ "$EXIT" -gt 3 ]; then
             echo "::error::DAST gate BLOCKED: scan could not run (zap exit ${EXIT}) - promotion blocked (fail closed)."
