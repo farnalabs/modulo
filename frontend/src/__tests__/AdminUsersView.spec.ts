@@ -302,3 +302,5 @@ describe('generateStrongPassword', () => {
       expect(pw).toMatch(/[A-Z]/)
       expect(pw).toMatch(/\d/)
     }
+  })
+})
