@@ -41,11 +41,21 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 1. Generate a new key:
    - `SECRET_KEY`: any 32+ byte random value (`openssl rand -base64 32`)
    - `FERNET_KEY`: 32 base64-encoded bytes (`python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
-2. Update the environment variable in your deployment configuration.
-3. Restart Modulo services (rolling restart recommended).
-4. Verify: check application logs for successful startup and JWT validation.
+2. For `FERNET_KEY`, set the new key as `FERNET_KEY` and keep the old key in
+   `FERNET_KEY_OLD` during the rotation window so existing values remain
+   decryptable.
+3. Restart Modulo services (a rolling restart is recommended).
+4. As an administrator, call `POST /api/v1/admin/rotation/rotate-key` with the
+   new key and, when needed, the previous key. This re-encrypts stored secrets
+   and checkpoint data. Keep `FERNET_KEY_OLD` available until the operation
+   completes successfully, then remove it and restart the services.
+5. Verify successful startup and a successful rotation result in the logs.
 
-**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Rotating `FERNET_KEY` does not re-encrypt existing secrets: use `modulo restore <backup-dir> --previous-fernet-key <old-key>` to re-encrypt stored credentials under the new key.
+**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Setting
+`FERNET_KEY` alone does not rewrite existing ciphertext. The rotation endpoint
+accepts the new key and an optional previous key; provide the previous key when
+it differs from the current key so the service can decrypt and re-encrypt
+stored values.
 
 ### Vault Secrets
 
