@@ -6,7 +6,7 @@ All functions require RLS org context to be set by the caller.
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -124,6 +124,27 @@ async def update_connector_instance(
     apply_updates(ci, updates)
     await session.flush()
     return ci
+
+
+async def mark_instances_degraded(session: AsyncSession, skipped: dict[uuid.UUID, str]) -> None:
+    """Persist degraded_at/last_skip_error for instances that failed hub initialisation (FAR-495).
+
+    Issues a single ``UPDATE connector_instances SET degraded_at = now(),
+    last_skip_error = <summary> WHERE id = ANY(<ids>)`` statement. An empty
+    *skipped* dict is a no-op. Requires RLS org context to be set by the caller.
+    """
+    if not skipped:
+        return
+    summary_by_id = case(
+        *[(ConnectorInstance.id == instance_id, summary) for instance_id, summary in skipped.items()],
+    )
+    stmt = (
+        update(ConnectorInstance)
+        .where(ConnectorInstance.id.in_(skipped))
+        .values(degraded_at=func.now(), last_skip_error=summary_by_id)
+    )
+    await session.execute(stmt)
+    await session.flush()
 
 
 async def delete_connector_instance(session: AsyncSession, connector_id: uuid.UUID) -> bool:

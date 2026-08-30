@@ -2024,6 +2024,7 @@ class PipelineExecutor:
                     from modulo.core.pipeline_engine.decorator import set_connector_hub
                     from modulo.core.runtime_provider import create_default_hub
                     from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.db.crud.connector_instance import mark_instances_degraded
                     from modulo.settings import get_settings
 
                     _settings = get_settings()
@@ -2039,6 +2040,16 @@ class PipelineExecutor:
                     )
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
+                    if hub.skipped:
+                        # FAR-495: persist a degraded marker for the skipped
+                        # instances, best-effort inside its own savepoint so a
+                        # failure here can NEVER fail or roll back the run-start
+                        # transaction (the hub itself already logged the skips).
+                        try:
+                            async with session.begin_nested():
+                                await mark_instances_degraded(session, hub.skipped)
+                        except Exception:
+                            _log.warning("pipeline.connector_degraded_marker_failed", exc_info=True)
                     set_connector_hub(hub)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no

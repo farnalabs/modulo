@@ -404,6 +404,10 @@ async def update_connector_endpoint(
         new_credentials = updates.pop("credentials")
         ct = _encrypt(new_credentials, settings.fernet_key)
         updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
+        # Fresh credentials clear the degraded marker (FAR-495) — the stored
+        # skip error described the OLD credentials, not the new ones.
+        updates["degraded_at"] = None
+        updates["last_skip_error"] = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

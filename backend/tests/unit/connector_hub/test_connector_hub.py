@@ -556,9 +556,42 @@ async def test_initialise_programming_bug_logs_error():
         hub.get(ci.id)
 
 
-# ---------------------------------------------------------------------------
-# ConnectorHub API surface
-# ---------------------------------------------------------------------------
+async def test_initialise_records_skipped_instances(tmp_path):
+    """FAR-495: instances that fail to initialise are recorded in hub.skipped with an error summary."""
+    bad = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",  # requires a 'token' credential key
+        credentials_ciphertext=_encrypt({}),  # creds lack the token key
+    )
+    healthy = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([bad, healthy])
+    assert set(hub.skipped) == {bad.id}
+    assert hub.skipped[bad.id].startswith("ValueError: Missing credential key 'token'")
+    assert healthy.id not in hub.skipped
+    assert hub.get(healthy.id) is not None
+
+
+async def test_close_clears_skipped(tmp_path):
+    """FAR-495: close() clears hub.skipped along with the other hub state."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt({}),  # creds lack the token key -> skipped
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert set(hub.skipped) == {ci.id}
+    hub.close()
+    assert hub.skipped == {}
 
 
 async def test_acl_returns_acl_for_connector(tmp_path):

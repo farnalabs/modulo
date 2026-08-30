@@ -222,6 +222,10 @@ class ConnectorHub:
         self._secrets_backend = secrets_backend
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
         self._acls: dict[uuid.UUID, ConnectorACL] = {}
+        # Instances that failed to initialise during the last initialise() call
+        # (FAR-495), mapped to a "{ExcType}: {message}" summary. Callers persist
+        # a degraded marker from this so operators can see broken connectors.
+        self.skipped: dict[uuid.UUID, str] = {}
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
         self._runtime_provider = runtime_provider
@@ -331,7 +335,12 @@ class ConnectorHub:
         """
         self._connectors.clear()
         self._acls.clear()
+        self.skipped.clear()
         self._initialised = False
+
+    def _record_skip(self, instance: ConnectorInstance, exc: Exception) -> None:
+        """Record an instance that failed to initialise (FAR-495) so callers can persist a degraded marker."""
+        self.skipped[instance.id] = f"{type(exc).__name__}: {exc}"
 
     async def initialise(
         self,
@@ -447,7 +456,8 @@ class ConnectorHub:
                     TypeError,
                     KeyError,
                     OSError,
-                ):
+                ) as exc:
+                    self._record_skip(ci, exc)
                     logger.warning(
                         "Skipping connector %s (%s)",
                         ci.id,
