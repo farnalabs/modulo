@@ -79,6 +79,13 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   in-flight browser consent sessions.
 - **SSE is the only transport exposed** — the streamable-HTTP transport is not
   published as a distinct surface here.
+- **No executing BDD surface for MCP onboarding** — `mcp/onboarding.feature`
+  ships under `tests/bdd/features/mcp/` but no step module registers it via
+  `scenarios(...)`, so it never executes and is no longer cited as coverage
+  here. The setup-handoff and key-management behaviours are unit-tested
+  (`test_api_key_mgmt_tools`, `test_mcp_structural_coverage`,
+  `SettingsMcpView.spec.ts`); wiring the feature file up needs its missing step
+  definitions written.
 
 ## QA History
 
@@ -87,4 +94,4 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   previously absent from the feature graph). Behaviours verified against
   `api/mcp_server.py`, `api/mcp_tool_registry.py`, `core/mcp/scope_validator.py`,
   the OAuth + setup-handoff routes, the `tests/unit/mcp/*` scope/tenant/team
-  suites, and the `mcp/` BDD features. Status: covered.
+  suites, and the registered `mcp/` BDD features. Status: covered.
