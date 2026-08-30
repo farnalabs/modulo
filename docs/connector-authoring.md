@@ -147,5 +147,5 @@ registry.register_connector_type(
 ## Generic REST connector
 
 For pointing Modulo at an arbitrary HTTP endpoint (no vendor client), see
-[`docs/rest-connector.md`](rest-connector.md) — config shape, auth modes, the
-egress allowlist, UNKNOWN semantics, and the determinism/ordering caveats.
+[`docs/rest-connector.md`](rest-connector.md) – config shape, auth modes, the
+verb-agnostic read/write mapping, retry, and security guards.
