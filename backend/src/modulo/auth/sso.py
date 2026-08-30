@@ -191,6 +191,7 @@ async def issue_sso_tokens(
         organisation_id=str(org_id),
         account_id=str(account.id),
         org_role=org_role,
+        ttl_minutes=settings.modulo_access_token_minutes,
     )
     refresh_token = create_refresh_token(
         account.email,

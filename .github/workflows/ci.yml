@@ -108,7 +108,10 @@ jobs:
         # suite. Without this, the "8/8 email BDD scenarios pass" claim in
         # Repos/devtools/dogfood/improve-history/architecture-tracker.md was never verified by CI.
         shell: bash
-        run: uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py -q --tb=short --timeout=120 -p no:warnings
+        run: >
+          uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py
+          tests/bdd/features/infra/test_health_steps.py
+          -q --tb=short --timeout=120 -p no:warnings
       - name: Run repaired step-rot BDD modules
         # The step-definition repairs for auth/eval/hitl (FAR-246) live in
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are

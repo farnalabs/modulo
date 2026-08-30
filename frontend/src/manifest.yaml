@@ -455,7 +455,8 @@ routes:
         sidebar_group: admin
         sidebar_order: 1
         type: list_page
-        <<: *team
+        <<: *community
+        required_roles: [admin]
         deprecated: false
 
     /admin/org:
@@ -3073,6 +3074,46 @@ features:
 
     feat-costs:
         description: Cost tracking, spend limits, cost controls, and cost components
+        status: covered
+        behaviours:
+            # Cost report + run-cost aggregation (GET /api/v1/admin/costs)
+            - "[x] The cost report aggregates org spend for the selected period (day/week/month/year) and groups by team or org; each item carries total_spend_usd, total_runs, a summed per-component breakdown (cost components resolved per environment) and per-org annotations, and the response surfaces org_total / org_run_count / legacy_total / has_more plus org_unassigned_components"
+            - "[x] An invalid group_by or period query param is rejected with 422 (pattern-constrained, no silent fallback)"
+            - "[x] The cost endpoints are admin-only: operators/viewers are refused 403 and an unauthenticated caller 401 (require_permission cost.manage)"
+
+            # CSV export
+            - "[x] GET /api/v1/admin/costs/export streams a CSV attachment (entity_id, entity_name, total_spend_usd, total_runs) with a Content-Disposition attachment; only CSV is supported and the period aliases (this_month / last_month / 7d / 30d / 90d) map onto the month/week/year report periods"
+
+            # Spend limits
+            - "[x] GET /api/v1/admin/costs/limits returns the org daily spend limit plus one entry per team with its own daily limit (None when unset)"
+            - "[x] PUT /api/v1/admin/costs/limits/org sets or clears (explicit null = unlimited) the org daily spend limit; a negative limit is rejected 422"
+            - "[x] PUT /api/v1/admin/costs/limits/teams/{team_id} sets or clears a team daily spend limit strictly scoped to the caller's org — a team id from another org is 404 with no mutation, a missing team is 404, and an invalid id or negative limit is 422"
+
+            # Spend-limit / token-budget / circuit-breaker enforcement at run finalize
+            - "[x] Org and team daily spend limits are enforced at run finalization: an over-budget run is permanently refused with reason daily_limit_exceeded:organisation / daily_limit_exceeded:team and the run count is not incremented (BDD cost_controls.feature)"
+            - "[x] A per-agent token budget is a hard stop: exceeding an agent's budget terminalizes the run as 'budget_exceeded' with the message 'This run exceeded its token budget.'; within budget no override applies and a budget-check failure is fail-open (test_cost_token_budget.py)"
+            - "[x] A pipeline circuit breaker trips when the pipeline's rolling monthly spend crosses its threshold, permanently pausing the pipeline trigger until an admin re-enables it; an already-tripped pipeline fails closed (test_circuit_breaker.py)"
+
+            # Cost controls + hard spend ceilings (FAR-391)
+            - "[x] GET /api/v1/admin/costs/controls returns teams with daily limits, the org budget, max_run_cost / spend_ceiling (USD at the API boundary, stored as integer cents), org_cumulative_spend_usd, alert thresholds, the circuit-breaker toggle, currency (USD/EUR/GBP) and billing period (monthly/quarterly/annual)"
+            - "[x] PUT /api/v1/admin/costs/controls updates cost-control fields; alert_thresholds must be a non-empty list of integers in 1..100 (422 otherwise) and omitted fields are preserved"
+            - "[x] The dedicated /ceiling surface manages max_run_cost (per-run) and spend_ceiling (per-org) independently: explicit null clears one ceiling back to unlimited, omitting a field leaves it unchanged, and 0 is a kill-switch; remaining_budget_usd is derived from the org ceiling (test_spend_ceiling_endpoints.py)"
+            - "[x] Ceiling enforcement runs before the daily-ledger write: a run exceeding its per-run ceiling or the org cumulative ceiling has its ledger refused (never billed beyond the ceiling) and terminalizes as 'cost_ceiling_exceeded' — except an explicit cancelled status, which is preserved; within ceilings the org cumulative spend is incremented (test_cost_finalize_ceiling.py)"
+            - "[x] POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset re-enables a tripped pipeline and re-activates its non-deleted triggers; a missing pipeline is 404"
+
+            # Cost components + formula engine (ADR 019)
+            - "[x] Cost-component CRUD lives under /api/v1/admin/costs/components (list / create / update / delete) with an org-level component cap and 409 on a duplicate name"
+            - "[x] Component authoring is cross-field validated: self_reported components require a null formula, calculated components require a formula, a rate component requires a source or a registered rate fallback (only e2b_rate), and reserved component names / report keys are rejected (test_cost_components_crud.py)"
+            - "[x] The cost formula engine is a hand-rolled tokenizer + recursive-descent parser supporting only + - * /, unary minus and parentheses over a whitelisted identifier registry — no eval; unknown identifiers, division by zero, nesting-depth / length cap breaches and attack strings are rejected (ADR 019, test_cost_formula.py)"
+
+            # Scheduled cost reports
+            - "[x] Scheduled cost reports (/reports) are create/list/delete: a report is created (201) with period daily|weekly|monthly, group_by team|org, format csv|json, at least one recipient and a one_time/recurring schedule; missing recipients or an unsupported grouping is 422; delete is 204 and a missing report is 404"
+
+            # Spend anomaly detection
+            - "[x] Cost anomalies are surfaced from the org daily-spend ledger: a day whose spend exceeds 2x the rolling 7-day average is reported (fresh detections merge with stored rows so dismissals survive), and dismissing an anomaly is a 204 POST with 404 for a missing one"
+        deferrals:
+            - "No pre-flight / predictive run-cost ESTIMATE — spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost ≈X' projection before dispatch"
+            - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
     feat-environments:
@@ -3129,6 +3170,65 @@ features:
         description: Users, teams, and role-based access
     feat-triggers:
         description: Manual, webhook, and scheduled triggers
+        status: covered
+        behaviours:
+            # Trigger types + CRUD surface
+            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
+            - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
+            - "[x] Trigger list/streak state is serialized INSIDE the RLS transaction so the transaction-scoped SET LOCAL org context is never lost to a post-commit read"
+            - "[x] A pipeline-scoped listing exists (GET /api/v1/pipelines/{id}/triggers) with optional trigger_type filter"
+            - "[x] General update (PUT /api/v1/triggers/{id}) MERGES config_json (a masked secret placeholder never clobbers the stored secret; an explicit null clears the key; a missing key leaves it intact), then re-encrypts secret fields"
+            - "[x] Triggers soft-delete (DELETE, 204) and restore (POST /triggers/{id}/restore); a restored active ongoing trigger re-anchors its streak epoch and fires on the next tick (next_fire_at = now)"
+            - "[x] Active state toggles (POST /triggers/{id}/toggle) re-anchor the no-delivery streak epoch on any active=True transition, and clear the config-failure Redis counter only AFTER commit (under-clearing safe, over-clearing not)"
+            - "[x] Type-specific config endpoints (cron / polling / ongoing) reject the wrong trigger type with 400 and a named 'Only X triggers can have ...' message"
+            - "[x] Trigger test (POST /triggers/{id}/test) records a `test` TriggerEvent and creates a real run for manual triggers; deleted-org conflicts surface 409 and storage exhaustion 503"
+            - "[x] Missing or soft-deleted triggers resolve 404 on every read/update/delete/toggle/test/events path; invalid cron resolves 422; DB ProgrammingError -> 501 and SQLAlchemyError -> 503 on the trigger route handlers"
+
+            # Secret handling
+            - "[x] Secret config keys (hmac_secret, signing_secret) are encrypted at rest with Fernet (idempotent — never double-wrapped; masked/empty values untouched), and sensitive config keys are masked in every API response (mask_config_json)"
+            - "[x] An update that round-trips the masked placeholder preserves the stored secret; supplying a new value replaces it; an explicit null clears the key"
+
+            # Cron
+            - "[x] Cron update validates the expression + timezone (422 on an invalid expression/missing expression) and recomputes next_fire_at; only cron triggers accept cron config (400 otherwise)"
+            - "[x] Cron schedule preview (GET /triggers/{id}/cron/preview) returns the next N fire times (max 50; 404 missing trigger, 400 when no cron expression is configured)"
+            - "[x] The cron scheduler fires an active due trigger, creating a run with trigger_type 'cron' that references the trigger, updates last_fired_at, and advances next_fire_at"
+            - "[x] A cron trigger whose org/pipeline exceeds its daily spend limit is skipped with reason 'spend_limit' and records a spend_limit_reached TriggerEvent"
+            - "[x] A cron trigger's input_template populates the run input payload on fire; snapshot_id pins the fired graph"
+
+            # Webhook
+            - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the ±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
+            - "[x] HMAC-less triggers accept unauthenticated deliveries by design, with a log warning"
+            - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
+            - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock acks 202 'queued for retry' instead of failing"
+            - "[x] Every webhook delivery outcome is recorded as a TriggerEvent row (accepted, paused, guardrail_blocked, ...), and the stored raw payload supports replay"
+            - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload"
+            - "[x] Guardrail-blocked webhook deliveries are ack'd with a non-success 422 (never a false 'accepted'); the run + TriggerEvent rows stay committed for visibility"
+            - "[x] cleanup-expired sweeps stale dedup hashes and expired WebhookPayload rows under a Postgres advisory lock (safe to call from cron with a runner credential)"
+
+            # Kill-switch (org-wide pause)
+            - "[x] An org-wide trigger pause kill-switch exists (PUT /api/v1/admin/orgs/{org_id}/triggers/pause, admin-only -> 403 otherwise); toggling to the current state is an idempotent no-op, changes write an audit event"
+            - "[x] A webhook delivered to a paused org is accepted (202) but dropped with a 'paused' response and no run/dedup/snapshot work; unpausing restores acceptance; a hard-deleted org fails closed with no event write and no crash"
+
+            # Ongoing
+            - "[x] An ongoing trigger tops-up the pipeline to its target when below it, and fires no run at/above target; pending runs count toward the target; the daily spend limit and org pause both stop the top-up"
+            - "[x] Ongoing triggers REQUIRE daily_spend_limit — clearing it via update is rejected 422; creation and updates re-run the shared validator against the merged values and the pipeline max_concurrent_runs cap"
+            - "[x] Ongoing config updates (scan_interval_seconds >= 60, target_runs 1-20) bump next_fire_at to now when the pool/cadence/active state actually changes so the new config fires on the next scheduler tick"
+
+            # Polling
+            - "[x] Polling config update (connector_instance_id, poll_query, condition_expression, poll_interval_seconds >= 60, snapshot_id, daily_spend_limit) recomputes next_fire_at when the interval/connector/query changes"
+            - "[x] Polling test (POST /triggers/{id}/polling/test) evaluates the connector query + JMESPath condition without creating a run or TriggerEvent"
+            - "[x] The polling scheduler fires only when the condition matches (TriggerEvent condition_met) and records no_match otherwise; a poll respects max_concurrent_runs (concurrency_limit_reached) and the daily spend limit (spend_limit_reached); with no limit it always fires; invalid JMESPath or connector failure records poll_error; inactive triggers are skipped"
+
+            # Agent signal
+            - "[x] An agent_signal trigger fires a child pipeline run when its watched node completes, passing node_output and source_run_id into the child input payload, and records a TriggerEvent for every attempt"
+            - "[x] agent_signal respects max_concurrent_runs (skip + concurrency_limit_reached event), ignores inactive triggers and invalid snapshot_id configs (skip), and is org-isolated (a watched node in one org never fires another org)"
+
+            # Trigger event log
+            - "[x] Per-trigger event logs (GET /triggers/{id}/events) are cursor-paginated, filterable by validation_result, and 404 on a missing trigger; an admin org-wide log surface (GET /api/v1/admin/trigger-events) is cursor-paginated by trigger_type / validation_result"
+            - "[x] The frontend SettingsTriggersView covers create for every trigger type (incl. webhook URL/method/headers, cron expression/timezone/input, polling connector/query/condition, agent-signal source, ongoing target/interval/spend) plus the pause-all kill-switch, streak/outcomes UI, and the trigger event-log view"
+        deferrals:
+            - Slack app-mention triggers register as a trigger type and are endpoint-tested, but are an alpha/community surface without a BDD feature file
+            - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models
 sidebar_groups:

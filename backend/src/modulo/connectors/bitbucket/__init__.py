@@ -1,7 +1,7 @@
 """BitbucketConnector — async Bitbucket Cloud API connector."""
 
 import base64
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -101,75 +101,80 @@ class BitbucketConnector(ConnectorBase):
         async with self._client() as client:
             match q.resource:
                 case "repos":
-                    workspace = q.filters.get("workspace", "")
-                    r = await client.get(
-                        f"/repositories/{workspace}",
-                        params={"pagelen": q.limit},
-                    )
-                    r.raise_for_status()
-                    body = r.json()
-                    return ConnectorResult(
-                        records=_safe_records(body, "values"),
-                        total=_safe_paging_total(body, "size"),
-                    )
+                    return await self._query_repos(client, q)
                 case "file":
-                    workspace = q.filters.get("workspace")
-                    if not workspace:
-                        raise ValueError("Bitbucket file query requires 'workspace' filter")
-                    repo = q.filters.get("repo")
-                    if not repo:
-                        raise ValueError("Bitbucket file query requires 'repo' filter")
-                    path = q.filters.get("path")
-                    if not path:
-                        raise ValueError("Bitbucket file query requires 'path' filter")
-                    ref = q.filters.get("ref", "main")
-                    r = await client.get(
-                        f"/repositories/{workspace}/{repo}/src/{ref}/{path}",
-                        headers={**self._headers(), "Accept": "*/*"},
-                    )
-                    r.raise_for_status()
-                    return ConnectorResult(records=[{"content": r.text, "path": path, "ref": ref}])
+                    return await self._query_file(client, q)
                 case "pulls":
-                    workspace = q.filters.get("workspace")
-                    if not workspace:
-                        raise ValueError("Bitbucket pulls query requires 'workspace' filter")
-                    repo = q.filters.get("repo")
-                    if not repo:
-                        raise ValueError("Bitbucket pulls query requires 'repo' filter")
-                    state = q.filters.get("state", "OPEN")
-                    params: dict[str, Any] = {"pagelen": q.limit, "state": state}
-                    r = await client.get(
-                        f"/repositories/{workspace}/{repo}/pullrequests",
-                        params=params,
-                    )
-                    r.raise_for_status()
-                    body = r.json()
-                    return ConnectorResult(
-                        records=_safe_records(body, "values"),
-                        total=_safe_paging_total(body, "size"),
-                    )
+                    return await self._query_pulls(client, q)
                 case "issues":
-                    workspace = q.filters.get("workspace")
-                    if not workspace:
-                        raise ValueError("Bitbucket issues query requires 'workspace' filter")
-                    repo = q.filters.get("repo")
-                    if not repo:
-                        raise ValueError("Bitbucket issues query requires 'repo' filter")
-                    params = {"pagelen": q.limit}
-                    if "state" in q.filters:
-                        params["state"] = q.filters["state"]
-                    r = await client.get(
-                        f"/repositories/{workspace}/{repo}/issues",
-                        params=params,
-                    )
-                    r.raise_for_status()
-                    body = r.json()
-                    return ConnectorResult(
-                        records=_safe_records(body, "values"),
-                        total=_safe_paging_total(body, "size"),
-                    )
+                    return await self._query_issues(client, q)
                 case _:
                     raise ValueError(f"Unsupported Bitbucket resource: {q.resource!r}")
+
+    @staticmethod
+    def _require_filter(q: ConnectorQuery, key: str, resource: str) -> str:
+        value = q.filters.get(key)
+        if not value:
+            raise ValueError(f"Bitbucket {resource} query requires '{key}' filter")
+        return cast(str, value)
+
+    async def _query_repos(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        workspace = q.filters.get("workspace", "")
+        r = await client.get(
+            f"/repositories/{workspace}",
+            params={"pagelen": q.limit},
+        )
+        r.raise_for_status()
+        body = r.json()
+        return ConnectorResult(
+            records=_safe_records(body, "values"),
+            total=_safe_paging_total(body, "size"),
+        )
+
+    async def _query_file(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        workspace = self._require_filter(q, "workspace", "file")
+        repo = self._require_filter(q, "repo", "file")
+        path = self._require_filter(q, "path", "file")
+        ref = q.filters.get("ref", "main")
+        r = await client.get(
+            f"/repositories/{workspace}/{repo}/src/{ref}/{path}",
+            headers={**self._headers(), "Accept": "*/*"},
+        )
+        r.raise_for_status()
+        return ConnectorResult(records=[{"content": r.text, "path": path, "ref": ref}])
+
+    async def _query_pulls(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        workspace = self._require_filter(q, "workspace", "pulls")
+        repo = self._require_filter(q, "repo", "pulls")
+        state = q.filters.get("state", "OPEN")
+        params: dict[str, Any] = {"pagelen": q.limit, "state": state}
+        r = await client.get(
+            f"/repositories/{workspace}/{repo}/pullrequests",
+            params=params,
+        )
+        r.raise_for_status()
+        body = r.json()
+        return ConnectorResult(
+            records=_safe_records(body, "values"),
+            total=_safe_paging_total(body, "size"),
+        )
+
+    async def _query_issues(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        workspace = self._require_filter(q, "workspace", "issues")
+        repo = self._require_filter(q, "repo", "issues")
+        params: dict[str, Any] = {"pagelen": q.limit}
+        if "state" in q.filters:
+            params["state"] = q.filters["state"]
+        r = await client.get(
+            f"/repositories/{workspace}/{repo}/issues",
+            params=params,
+        )
+        r.raise_for_status()
+        body = r.json()
+        return ConnectorResult(
+            records=_safe_records(body, "values"),
+            total=_safe_paging_total(body, "size"),
+        )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:

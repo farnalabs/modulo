@@ -257,7 +257,13 @@ async def rotate_all_encrypted_data(
     falling back to *old_key* for decryption of existing data.
 
     Args:
-        session: An active SQLAlchemy async session.
+        session: An active SQLAlchemy async session. Must be CROSS-ORG: pass a
+            session on the ``modulo_system`` (BYPASSRLS) role. On the app role
+            (``modulo_app``, NOBYPASSRLS) the org-scoped ``rls_org_isolation``
+            policies on ``secrets``/``connector_instances``/``model_backends``/
+            ``notification_endpoints`` have no ``app.organisation_id`` context,
+            so those tables fail-closed to zero rows and the rotation silently
+            no-ops. See ``admin_rotation._run_rotation_background``.
         new_key: The new Fernet key (32+ bytes).
         old_key: The previous Fernet key (32+ bytes), or empty string if none.
 

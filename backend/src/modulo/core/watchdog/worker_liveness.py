@@ -220,7 +220,7 @@ def _recovery_text(state: dict[str, Any]) -> str:
     duration = f" for {(time.time() - float(started_at)):.0f}s" if started_at else ""
     return (
         "\u2705 *Modulo watchdog: worker-liveness recovered*\n"
-        + "The following conditions have cleared"
+        "The following conditions have cleared"
         + duration
         + ":\n"
         + "\n".join(f"\u2022 {condition}" for condition in prior_conditions)

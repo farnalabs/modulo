@@ -60,6 +60,7 @@ async def _migrate(args: argparse.Namespace) -> int:
     _print(f"Found {len(rows)} composite template(s) to migrate.")
 
     migrated = 0
+    would_migrate = 0
     errors = 0
 
     for row in rows:
@@ -82,7 +83,7 @@ async def _migrate(args: argparse.Namespace) -> int:
                 _print(f"      - {p.get('name', '?')}: {p.get('type', '?')}")
 
         if args.dry_run:
-            migrated += 1
+            would_migrate += 1
             continue
 
         try:
@@ -134,7 +135,10 @@ async def _migrate(args: argparse.Namespace) -> int:
 
     await engine.dispose()
 
-    _print(f"\nDone. {migrated} migrated, {errors} errors.")
+    if args.dry_run:
+        _print(f"\nDRY RUN complete. {would_migrate} would be migrated, {errors} errors.")
+    else:
+        _print(f"\nDone. {migrated} migrated, {errors} errors.")
     return 0 if errors == 0 else 1
 
 

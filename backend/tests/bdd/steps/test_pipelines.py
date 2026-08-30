@@ -1,7 +1,7 @@
 """Step definitions for pipeline feature files.
 
-Covers: crud, snapshot_versioning, run_lifecycle, pipeline_config_validation,
-checkpoint_resume, run_variants, scheduling, webhook_trigger.
+Covers the feature files registered below: crud, snapshot_versioning,
+error_recovery, run_variants, scheduling, webhook_trigger.
 """
 
 import contextlib

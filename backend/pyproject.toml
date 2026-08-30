@@ -180,8 +180,10 @@ select = [
     "T20",      # flake8-print (T201 bare print in production code)
     "RET",      # flake8-return (RET503 missing explicit return)
     "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
-    "FURB",     # refurb (FURB125 `while` ├óÔÇáÔÇÖ `for` loop, FURB163 unnecessary `None` check)
-    "PIE",      # flake8-pie (PIE810 single startswith/endswith tuple, PIE807 useless lambda)
+     "FURB",     # refurb (FURB125 `while` ├óÔÇáÔÇÖ `for` loop, FURB163 unnecessary `None` check)
+     "PERF",     # perflint (PERF401 manual list-building loop ├óÔÇÜÔÇô use comprehension/extend)
+     "ISC",      # flake8-implicit-str-concat (ISC003/ISC004 inconsistent string concatenation)
+     "PIE",      # flake8-pie (PIE810 single startswith/endswith tuple, PIE807 useless lambda)
     # Defensive gate-strengthening: every rule below was verified to have zero
     # current violations (run `ruff check . --extend-select <codes> --statistics`),
     # so enabling them tightens the lint gate against future regressions without
@@ -205,12 +207,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "src/modulo/api/mcp_server.py" = ["RET503"]
-"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008", "PERF", "ISC"]
 
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
 
-"scripts/*" = ["T20"]
+"scripts/**" = ["T20", "PERF", "ISC"]
 "scripts/gen_seed_sql.py" = ["S608"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20"]
@@ -337,7 +339,10 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "pytest-bdd>=7.2.0",
+    # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
+    # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).
+    # Replace with a >=8.1.1 PyPI pin once the fix is released.
+    "pytest-bdd @ git+https://github.com/pytest-dev/pytest-bdd@60f6625b71b5552af02a4830e3d520f5ab6838e4",
     "pytest-cov>=7.1.0",
     "pytest-playwright>=0.8.0",
     "pytest-timeout>=2.4.0",
@@ -359,6 +364,7 @@ dev = [
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
     "pip-audit>=2.9.0",
+    "types-jsonschema>=4.26.0",
 ]
 
 [tool.uv]

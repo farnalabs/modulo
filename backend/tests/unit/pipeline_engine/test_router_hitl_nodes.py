@@ -47,6 +47,53 @@ def test_evaluate_jmespath_condition_list_bool():
     assert evaluate_jmespath_condition({"x": []}, "x") is False
 
 
+def test_evaluate_jmespath_condition_bool_truthiness_across_types():
+    # The shared evaluator's single truthiness rule is bool(result): any
+    # non-empty/non-zero result is a pass, an empty/zero one is a fail —
+    # regardless of the result's container/number/string shape.
+    assert evaluate_jmespath_condition({"x": {"k": 1}}, "x") is True
+    assert evaluate_jmespath_condition({"x": {}}, "x") is False
+    assert evaluate_jmespath_condition({"x": "hi"}, "x") is True
+    assert evaluate_jmespath_condition({"x": ""}, "x") is False
+    assert evaluate_jmespath_condition({"x": 5}, "x") is True
+    assert evaluate_jmespath_condition({"x": 0}, "x") is False
+    assert evaluate_jmespath_condition({"x": 0.0}, "x") is False
+
+
+def test_evaluate_jmespath_condition_function_and_nested_paths():
+    # length(...) returns an int and is folded through the same bool() rule.
+    assert evaluate_jmespath_condition({"items": [1, 2, 3]}, "length(items)") is True
+    assert evaluate_jmespath_condition({"items": []}, "length(items)") is False
+    # A deeply-nested path resolves through intermediate dicts.
+    assert evaluate_jmespath_condition({"a": {"b": {"c": True}}}, "a.b.c") is True
+    # A missing field yields None -> falsy -> no match.
+    assert evaluate_jmespath_condition({}, "a.b") is False
+
+
+def test_compile_jmespath_none_and_empty_compile_to_none():
+    # "no guard" compiles to None so callers treat it as falsy without
+    # special-casing; an empty expr is falsy from the start.
+    assert compile_jmespath(None) is None
+    assert compile_jmespath("") is None
+
+
+def test_compile_jmespath_caches_compiled_expressions():
+    # Compiled expressions are cached process-wide by source string, so callers
+    # that evaluate the same guard repeatedly reuse one compiled expression.
+    first = compile_jmespath("foo.bar == `1`")
+    assert first is not None
+    assert compile_jmespath("foo.bar == `1`") is first
+    # A different source string produces a distinct compiled expression.
+    assert compile_jmespath("foo.bar == `2`") is not first
+
+
+def test_compile_jmespath_invalid_raises_with_expression():
+    # The raised ValueError names the offending expression so the caller can
+    # surface which guard is misconfigured.
+    with pytest.raises(ValueError, match=r"Invalid JMESPath expression: foo\.\+\+invalid"):
+        compile_jmespath("foo.++invalid")
+
+
 # ---------------------------------------------------------------------------
 # make_router_node_fn
 # ---------------------------------------------------------------------------

@@ -9,20 +9,19 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
-    get_or_create_engine,
-    get_or_create_session_factory,
     require_system_permission,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.fernet_rotation import rotate_all_encrypted_data
+from modulo.core.saq_worker import _make_system_session_factory
 from modulo.settings import Settings, get_settings
 
 _CODE_ADMIN_ROTATION_ROTATE_KEY = "admin_rotation.rotate_key"
@@ -99,6 +98,20 @@ async def rotate_key(
 
         old_key = req.old_fernet_key or settings.fernet_key
 
+        # Rotation runs cross-org on the modulo_system (BYPASSRLS) role. If that
+        # role is not provisioned (MODULO_SYSTEM_DATABASE_URL empty) the system
+        # session factory silently falls back to the NOBYPASSRLS app role, which
+        # makes the rotation a zero-row no-op. Refuse loudly rather than
+        # re-introduce the exact silent failure this fix addresses.
+        if not settings.modulo_system_database_url:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Fernet key rotation is unavailable: the modulo_system role is "
+                    "not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."
+                ),
+            )
+
         global _rotation_in_progress
         if _rotation_in_progress:
             raise HTTPException(
@@ -128,16 +141,11 @@ async def rotate_key(
 
         _rotation_in_progress = True
 
-        # Launch background rotation task.
-        # We use the global engine/session factory to avoid re-creating connections.
-        engine = get_or_create_engine(settings)
-        factory = get_or_create_session_factory(engine)
-
         import asyncio
 
+        # Launch background rotation task.
         task = asyncio.create_task(
             _run_rotation_background(
-                factory=factory,
                 new_key=req.new_fernet_key,
                 old_key=old_key,
                 org_id=current_user.organisation_id,
@@ -205,17 +213,51 @@ async def rotation_status(
 
 
 async def _run_rotation_background(
-    factory: async_sessionmaker[AsyncSession],
     new_key: str,
     old_key: str,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
 ) -> None:
-    """Run the full rotation in the background and store the result."""
+    """Run the full rotation in the background and store the result.
+
+    Rotation is inherently cross-org ("rotate all encrypted data"), so it runs on
+    the ``modulo_system`` cross-org session factory (BYPASSRLS). The app role
+    ``modulo_app`` is NOBYPASSRLS: on the org-scoped tables (``secrets``,
+    ``connector_instances``, ``model_backends``, ``notification_endpoints``) the
+    ``rls_org_isolation`` policy compares ``organisation_id`` against
+    ``app.organisation_id``, which is empty here — so the UPDATEs fail-closed to
+    ZERO rows and the rotation would silently no-op. The system factory bypasses
+    RLS and is the same cross-org mechanism used by the retention/system crons.
+    """
     global _rotation_in_progress, _last_rotation_result
 
+    # Defensive guard: if the modulo_system role is unprovisioned, the system
+    # factory silently falls back to the NOBYPASSRLS app role and the rotation
+    # becomes a zero-row no-op (the exact bug this fix prevents). Refuse loudly
+    # instead of reporting a hollow "completed" with 0 rows.
+    settings = get_settings()
+    if not settings.modulo_system_database_url:
+        _log.error(
+            "rotation.system_role_unprovisioned",
+            extra={
+                "reason": (
+                    "MODULO_SYSTEM_DATABASE_URL unset — refusing to rotate on the "
+                    "NOBYPASSRLS app role (would silently no-op on RLS-scoped tables)"
+                )
+            },
+        )
+        _last_rotation_result = {
+            "status": "failed",
+            "error": (
+                "modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); "
+                "rotation refused to avoid a silent no-op."
+            ),
+        }
+        _rotation_in_progress = False
+        return
+
     try:
-        async with factory() as session, session.begin():
+        async with _make_system_session_factory()() as session, session.begin():
             result = await rotate_all_encrypted_data(session, new_key, old_key)
 
             # Log completion inside the transaction so it gets committed

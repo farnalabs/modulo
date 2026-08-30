@@ -151,8 +151,9 @@ async def _facts_window(
     ``run_date`` falls in the target window.
 
     Isolation invariant: the explicit ``organisation_id = :org`` predicate is
-    the control (modulo_app is BYPASSRLS; RLS is defense-in-depth only) — same
-    invariant the analytics foundation uses.
+    the primary control (modulo_app is NOBYPASSRLS so RLS also enforces org
+    scoping; the predicate is defence-in-depth-reinforced) — same invariant the
+    analytics foundation uses.
     """
     row = (
         await session.execute(

@@ -816,10 +816,7 @@ _TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
 # access keys, shared from the sensitive_mask canonical list.
 _TOKEN_VALUE_PATTERN = _re.compile(
     r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+"
-    + r"|"
-    + GITHUB_PAT_PATTERN.pattern
-    + r"|"
-    + AWS_ACCESS_KEY_PATTERN.pattern
+    r"|" + GITHUB_PAT_PATTERN.pattern + r"|" + AWS_ACCESS_KEY_PATTERN.pattern
 )
 
 

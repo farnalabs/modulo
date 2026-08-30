@@ -97,6 +97,14 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   deterministic gating is `human_set` / regex / json_schema.
 - **No long-horizon eval-run scheduler in this surface** — suite execution is
   triggered/run via the suite machinery, not a standalone cron in the eval API.
+- **No executing BDD surface for the `llm_judge` / `regex` scorer types** —
+  `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` ship under
+  `tests/bdd/features/evals/` but no step module registers them via
+  `scenarios(...)`, so they never execute and are no longer cited as coverage
+  here. Both scorer types are unit-tested (`test_eval_engine`,
+  `test_evals_endpoint`) and exercised through the registered
+  `eval/eval_scorer.feature`; wiring the feature files up needs their missing
+  step definitions written.
 
 ## QA History
 
