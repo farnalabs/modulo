@@ -9228,3 +9228,417 @@ def test_random_draw_lens_flags_dead_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _random_draw_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _stable_dump(node: ast.AST) -> str | None:
+    """Return a syntax fingerprint for *pure* expressions — constants, names,
+    attribute paths, subscripts, comparisons, and containers of pure elements
+    — or ``None`` for expressions the lenses must not judge statically: calls
+    (may carry side effects or non-determinism), lambdas, comprehensions, and
+    ``await``. Sharing this helper keeps the self-membership / duplicate-membership
+    / redundant-boolean-operand / point-range lenses consistent about what an
+    "identical expression" means: the same AST shape, limited to operands that
+    are safe to assume re-evaluate to the same value."""
+    if isinstance(
+        node,
+        (
+            ast.Call,
+            ast.Lambda,
+            ast.ListComp,
+            ast.SetComp,
+            ast.DictComp,
+            ast.GeneratorExp,
+            ast.Await,
+        ),
+    ):
+        return None
+    return ast.dump(node, include_attributes=False)
+
+
+def _self_referential_membership_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose membership
+    container literal embeds the (pure) operand itself — ``assert x in [x]``,
+    ``assert key not in (key,)``, ``assert item in {item}``, ``assert tag in
+    {tag: 'v'}``. A list/tuple/set literal element (or a dict literal *key*,
+    which is what ``in`` consults) that is the same expression as the left
+    operand matches it under ordinary ``==`` semantics, so ``in`` ALWAYS
+    PASSES and ``not in`` ALWAYS FAILS regardless of what the operand
+    evaluates to: a silent false green (or unconditionally-red) assertion that
+    never exercises a distinct value. This is the membership twin of the
+    self-comparison lens, which only owns two-operand comparisons whose
+    operands are the same expression — an ``in`` against a container literal
+    is a different AST shape it provably misses."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        op = test.ops[0]
+        if not isinstance(op, (ast.In, ast.NotIn)):
+            continue
+        container = test.comparators[0]
+        if isinstance(container, (ast.List, ast.Tuple, ast.Set)):
+            candidates = container.elts
+        elif isinstance(container, ast.Dict):
+            candidates = container.keys
+        else:
+            continue
+        left_dump = _stable_dump(test.left)
+        if left_dump is None:
+            continue
+        for el in candidates:
+            if el is None:
+                continue  # ``{**other}`` unpacking — dynamic keys
+            el_dump = _stable_dump(el)
+            if el_dump is None or el_dump != left_dump:
+                continue
+            verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
+            found.append(
+                (
+                    node.lineno,
+                    f"assert {ast.unparse(test)} — the container literal embeds the operand "
+                    f"itself, so the membership verdict is fixed at source time ({verdict}); "
+                    "test a genuinely distinct value (or drop the assertion)",
+                )
+            )
+            break
+    return found
+
+
+def test_no_self_referential_membership():
+    """A membership check whose container literal contains the same operand it
+    is testing — ``assert x in [x]``, ``assert k not in (k,)``,
+    ``assert item in {item}``, ``assert tag in {tag: 'v'}`` — is decided at
+    source time in ordinary Python semantics: the embedded element equals
+    itself, so ``in`` always passes and ``not in`` always fails, never
+    exercising the behaviour under test. These are almost always a leftover
+    from inlining a value back into a membership literal or from a copy-paste
+    that duplicated the left operand into the container. Only the pure
+    expressions the self-comparison lens already trusts are judged; a call or
+    comprehension operand (``assert f() in [f()]``) is left alone because the
+    call may carry side effects or non-determinism."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _self_referential_membership_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} self-referential membership assertion(s).\n"
+        "A membership container literal that embeds its own operand has a fixed outcome\n"
+        "that can never depend on the value checked. Test a genuinely distinct value\n"
+        "(or drop the assertion).\n" + "\n".join(violations)
+    )
+
+
+def test_self_referential_membership_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the self-referential-membership
+    lens: it must flag every spelling where the (pure) operand re-appears as an
+    element of a list/tuple/set literal or a key of a dict literal, and ignore
+    distinct elements, empty containers, dynamic containers, ``**``-unpacked
+    dicts, call operands, and membership tests against a non-literal."""
+    positive_sources = [
+        "def test_foo():\n    assert x in [x]\n",
+        "def test_foo():\n    assert key not in (key,)\n",
+        "def test_foo():\n    assert item in {item}\n",
+        "def test_foo():\n    assert tag in {tag: 'v'}\n",
+        "def test_foo():\n    assert x in [x, y]\n",
+        "def test_foo():\n    assert obj.attr in (obj.attr,)\n",
+        "def test_foo():\n    assert row['k'] not in [row['k']]\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _self_referential_membership_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x in [y]\n",
+        "def test_foo():\n    assert x not in [y, z]\n",
+        "def test_foo():\n    assert 'k' in {'a': 1}\n",
+        "def test_foo():\n    assert x in {**d}\n",
+        "def test_foo():\n    assert x in [compute()]\n",
+        "def test_foo():\n    assert x in y\n",
+        "def test_foo():\n    assert f() in [f()]\n",
+        "def test_foo():\n    assert x in []\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _self_referential_membership_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _duplicate_membership_literal_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose list/tuple/set
+    membership container holds the same (pure) expression more than once —
+    ``assert x in (A, A)``, ``assert x not in [1, 1]``. Membership against the
+    container behaves identically to the container with that occurrence removed
+    (a duplicate element can never be the *first* match where the single one
+    was not), so the duplicated element advertises an alternative that does not
+    exist — the copy-paste trap the duplicate-parametrize lens guards against
+    at the parametrize level, here in a literal membership container. Calls and
+    comprehensions are excluded: an identical *call* element may legitimately
+    produce distinct values on each evaluation."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], (ast.In, ast.NotIn)):
+            continue
+        container = test.comparators[0]
+        if not isinstance(container, (ast.List, ast.Tuple, ast.Set)):
+            continue
+        seen: dict[str, ast.AST] = {}
+        for el in container.elts:
+            el_dump = _stable_dump(el)
+            if el_dump is None:
+                continue  # dynamic element cannot be judged or compared
+            if el_dump in seen:
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(test)} — the container literal repeats "
+                        f"{ast.unparse(el)}; membership behaves identically to the single "
+                        "occurrence (drop the duplicate case)",
+                    )
+                )
+                break
+            seen[el_dump] = el
+    return found
+
+
+def test_no_duplicate_membership_literal_elements():
+    """A list/tuple/set literal used as a membership container that repeats the
+    same element — ``assert x in (A, A)``, ``assert x not in [1, 1]`` — behaves
+    exactly like the container with the duplicate removed, so the duplication is
+    pure dead weight: a reader (and a mutation-testing run) believes the check
+    considers N alternatives when only N-1 exist. Almost always copy-paste from
+    growing the case list. Byte-identical pure expressions are flagged; calls
+    and comprehensions are left alone because repeated evaluation may differ."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _duplicate_membership_literal_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} membership container(s) with a duplicate element.\n"
+        "Repeating an element inside a membership literal adds no alternative to the check;\n"
+        "drop the duplicate case.\n" + "\n".join(violations)
+    )
+
+
+def test_duplicate_membership_literal_lens_flags_repeated_cases():
+    """Synthetic positive/negative control for the duplicate-membership-literal
+    lens: it must flag every repeat of a pure element inside a list/tuple/set
+    membership container (values, names, mixed shapes), and ignore distinct
+    elements, empty containers, and repeated *call* elements."""
+    positive_sources = [
+        "def test_foo():\n    assert x in (A, A)\n",
+        "def test_foo():\n    assert x not in [1, 1]\n",
+        "def test_foo():\n    assert x in (1, 2, 1)\n",
+        "def test_foo():\n    assert x in {'a', 'a'}\n",
+        "def test_foo():\n    assert x in (FLAG, FLAG)\n",
+        "def test_foo():\n    assert x in [1, 1, 2]\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_membership_literal_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x in (1, 2, 3)\n",
+        "def test_foo():\n    assert x in ()\n",
+        "def test_foo():\n    assert x not in {1, 2}\n",
+        "def test_foo():\n    assert x in [f(), f()]\n",
+        "def test_foo():\n    assert x in (1, len(y), 1 + 1)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_membership_literal_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _redundant_boolean_operand_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose ``and``/``or``
+    expression repeats the same (pure) operand — ``assert x and x``,
+    ``assert x or x``, ``assert a == b or a == b``. ``x or x`` collapses to
+    ``x`` by idempotence and ``x and x`` collapses to ``x`` by absorption, so
+    the repeated operand never changes the verdict: the compound is dead weight
+    that reports the same outcome a single ``assert x`` would. Calls and
+    comprehensions are excluded, and complementary pairs (``x and not x``) are
+    owned by the complementary-boolean lens, which this deliberately avoids."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.BoolOp):
+            continue
+        op_name = "and" if isinstance(test.op, ast.And) else "or"
+        seen: dict[str, ast.AST] = {}
+        for value in test.values:
+            value_dump = _stable_dump(value)
+            if value_dump is None:
+                continue  # call/comprehension operand cannot be judged statically
+            if value_dump in seen:
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(test)} — operand {ast.unparse(value)} repeats earlier "
+                        f"in the same {op_name.upper()} conjunction and the compound collapses to "
+                        f"a single {op_name} of that operand (drop the duplicate)",
+                    )
+                )
+                break
+            seen[value_dump] = value
+    return found
+
+
+def test_no_redundant_boolean_operands():
+    """A boolean assertion that repeats the same (pure) operand twice —
+    ``assert x and x``, ``assert x or x``, ``assert a == b or a == b`` —
+    is absorbed by ``and``/``or`` idempotence into a single ``assert x``, so
+    the repeated spelling is dead weight that can never change the verdict.
+    It is almost always a copy-paste leftover from composing conditions.
+    Identical pure operands are flagged; calls/comprehensions (non-determinism,
+    side effects) and the complementary ``x and not x`` shape (owned by the
+    complementary-boolean lens) are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _redundant_boolean_operand_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} boolean assertion(s) with a repeated operand.\n"
+        "An and/or expression that repeats the same operand collapses to the single operand;\n"
+        "drop the duplicate.\n" + "\n".join(violations)
+    )
+
+
+def test_redundant_boolean_operand_lens_flags_absorbent_pairs():
+    """Synthetic positive/negative control for the redundant-boolean-operand
+    lens: it must flag every ``and``/``or`` that repeats a pure operand (names,
+    attributes, comparisons, negations) and ignore distinct operands,
+    complementary pairs, and repeated calls."""
+    positive_sources = [
+        "def test_foo():\n    assert x and x\n",
+        "def test_foo():\n    assert x or x\n",
+        "def test_foo():\n    assert a == b or a == b\n",
+        "def test_foo():\n    assert obj.a and obj.a\n",
+        "def test_foo():\n    assert (a == b) and (a == b)\n",
+        "def test_foo():\n    assert not x or not x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _redundant_boolean_operand_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x and y\n",
+        "def test_foo():\n    assert x or y\n",
+        "def test_foo():\n    assert f() or f()\n",
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert a == b or a != b\n",
+        "def test_foo():\n    assert x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _redundant_boolean_operand_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _point_collapsed_range_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose ordering chain
+    (two or more ``<``/``<=``/``>``/``>=`` comparisons) has the same (pure)
+    expression as its first and last operands — ``assert lo <= x <= lo``,
+    ``assert depth >= n >= depth``. A chain whose endpoints are the same value
+    forces every interior operand to equal that endpoint (``lo <= x <= lo``
+    only holds when ``x == lo``), so what reads as a range/bounds check is
+    degenerate: it cannot span an interval, and the assertion is either a
+    needle-eye equality (``lo <= x <= lo``) or unconditionally impossible
+    when an interior bound is strict (``lo < x < lo``). Almost always a typo
+    for two distinct bounds."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) < 2:
+            continue
+        if not all(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for op in test.ops):
+            continue
+        left_dump = _stable_dump(test.left)
+        right_dump = _stable_dump(test.comparators[-1])
+        if left_dump is None or left_dump != right_dump:
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"assert {ast.unparse(test)} — an ordering chain whose first and last operands "
+                "are the same expression collapses to a point (every interior value is forced "
+                "equal to it) and never spans a range; use two distinct bounds",
+            )
+        )
+    return found
+
+
+def test_no_point_collapsed_range_chains():
+    """An ordering chain whose endpoints are the same expression —
+    ``assert lo <= x <= lo`` — collapses to a point: every interior operand is
+    forced equal to that endpoint and the "range" never spans an interval, so
+    the assertion either can only pass on an exact equality or (with a strict
+    interior bound, ``assert lo < x < lo``) can never pass at all — both dead
+    at source time. Almost always a typo for two distinct bounds. Only chains
+    of ordering operators are judged (the equality-chain lens owns ``==``
+    chains), and calls/comprehensions are excluded."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _point_collapsed_range_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} point-collapsed range chain(s).\n"
+        "An ordering chain whose first and last operands are the same expression never spans\n"
+        "an interval; use two distinct bounds (or assert the equality directly).\n" + "\n".join(violations)
+    )
+
+
+def test_point_collapsed_range_lens_flags_degenerate_bounds():
+    """Synthetic positive/negative control for the point-collapsed-range lens:
+    it must flag every ordering chain whose endpoints are identical and ignore
+    distinct endpoints, single comparisons, ``==``/mixed-operator chains, and
+    repeated call operands."""
+    positive_sources = [
+        "def test_foo():\n    assert lo <= x <= lo\n",
+        "def test_foo():\n    assert depth >= row.n >= depth\n",
+        "def test_foo():\n    assert a < x < a\n",
+        "def test_foo():\n    assert a <= b >= a\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _point_collapsed_range_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert lo <= x <= hi\n",
+        "def test_foo():\n    assert a < x < b\n",
+        "def test_foo():\n    assert 0 <= x <= 1\n",
+        "def test_foo():\n    assert x <= hi\n",
+        "def test_foo():\n    assert a <= b == a\n",
+        "def test_foo():\n    assert f(a) <= x <= f(a)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _point_collapsed_range_violations(tree), f"lens should NOT flag:\n{source}"
