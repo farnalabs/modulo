@@ -89,8 +89,12 @@ def make_mock_session() -> AsyncMock:
     # Account-shaped attributes the auth routes read when a query returns this
     # row: JWT issuance serialises email/is_system_admin into the token claims,
     # so they must be real values — a bare MagicMock breaks json.dumps.
+    # `active` must be a real True for the same reason: the refresh endpoint's
+    # account-status re-check (FAR-463) is fail-closed and denies every refresh
+    # when the row cannot report its active flag.
     team_mock.email = "testuser@example.com"
     team_mock.is_system_admin = True
+    team_mock.active = True
     hitl_result = AsyncMock()
     hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
     hitl_result.scalar_one = MagicMock(return_value=0)
