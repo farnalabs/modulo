@@ -513,6 +513,42 @@ class TestRunEvidenceProbe:
         assert row.evidence_detail == "timeout"
         assert row.evidence_written_at is not None
 
+    async def test_write_evidence_row_omitted_org_resolves_from_parent_run(self, sqlite_factory) -> None:
+        """With ``organisation_id`` omitted the tenant anchor is resolved from
+        the parent run, so the row lands under the run's real org."""
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        async with sqlite_factory() as session, session.begin():
+            session.add(_complete_run(run_id, org_id, outputs_json={}, telemetry={}))
+            await session.flush()
+            await write_evidence_row(
+                session, run_id=run_id, node_id="node-a", evidence_state="verified_empty", evidence_detail=None
+            )
+        async with sqlite_factory() as session, session.begin():
+            row = (await session.execute(select(RunEvidence))).scalars().one()
+        assert row.run_id == run_id
+        assert row.organisation_id == org_id
+
+    async def test_write_evidence_row_missing_run_skips_write(self, sqlite_factory) -> None:
+        """An unresolvable parent run (orphaned / purged) must NOT raise and must
+        NOT fabricate a placeholder tenant.
+
+        ``run_evidence.organisation_id`` is a NOT NULL FK -> ``organisations``
+        under FORCE RLS (migration 0133), so a synthesised org could never
+        persist on Postgres — the row is skipped instead of being written under a
+        tenant that does not exist. See the Postgres-backed companion test in
+        tests/integration/test_run_evidence_tenant_anchor.py, which pins this
+        against the real FK + RLS constraints.
+        """
+        run_id = uuid.uuid4()
+        async with sqlite_factory() as session, session.begin():
+            await write_evidence_row(
+                session, run_id=run_id, node_id="node-a", evidence_state="verified_empty", evidence_detail=None
+            )
+        async with sqlite_factory() as session, session.begin():
+            rows = (await session.execute(select(RunEvidence))).scalars().all()
+        assert not rows
+
 
 # ---------------------------------------------------------------------------
 # §15.14 metric fires-when (fake meter pattern from test_cost_metrics.py)

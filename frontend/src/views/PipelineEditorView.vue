@@ -16,7 +16,7 @@
             <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
-            <Button size="small" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
+            <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
@@ -28,7 +28,7 @@
               class="w-36 text-xs"
               aria-label="New node type"
             />
-            <Button severity="secondary" outlined size="small" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
         <!-- Toolbar -->
@@ -60,15 +60,15 @@
             </template>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
-          <Button size="small" class="text-xs" :disabled="savingGraph" @click="saveGraph" data-testid="pipeline-editor-save">
+          <Button size="small" type="button" class="text-xs" :disabled="savingGraph" @click="saveGraph" data-testid="pipeline-editor-save">
             <svg v-if="savingGraph" class="mr-1 h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
             {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
           </Button>
           <span v-if="saveGraphError" class="ml-2 text-xs text-destructive" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
-          <Button v-if="planStore.featureEnabled('pipeline_diff_rollback')" size="small" class="text-xs" @click="showVersionTimeline = !showVersionTimeline" data-testid="pipeline-editor-version-timeline">
+          <Button v-if="planStore.featureEnabled('pipeline_diff_rollback')" size="small" type="button" class="text-xs" @click="showVersionTimeline = !showVersionTimeline" data-testid="pipeline-editor-version-timeline">
             {{ $t('views.PipelineEditorView.versions') }}
           </Button>
-          <Button size="small" class="text-xs border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" @click="openRunDialog" data-testid="pipeline-editor-run">
+          <Button size="small" type="button" class="text-xs border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" @click="openRunDialog" data-testid="pipeline-editor-run">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="mr-1"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
           </Button>
@@ -291,7 +291,7 @@
               >
                 {{ $t('views.PipelineEditorView.cancel') }}
               </button>
-              <Button v-if="!isWebhookTriggered" class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running" @click="triggerRun" data-testid="pipeline-editor-run-submit">
+              <Button v-if="!isWebhookTriggered" type="button" class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running" @click="triggerRun" data-testid="pipeline-editor-run-submit">
                 <svg
                   v-if="running"
                   class="animate-spin h-4 w-4 mr-1"
@@ -718,7 +718,7 @@
           </div>
         </dl>
         <div class="mt-6 space-y-2">
-          <Button v-if="selectedNodeData.node_type === 'manual'" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
+          <Button v-if="selectedNodeData.node_type === 'manual'" type="button" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
             Convert to Agent
           </Button>
           <button
@@ -920,7 +920,7 @@
             </p>
           </div>
           <div class="flex gap-2 pt-2">
-            <Button data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
+            <Button type="button" data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
               {{ savingEdge ? 'Saving...' : 'Save Edge' }}
             </Button>
             <button
@@ -1859,7 +1859,7 @@ async function saveEdgeConfig() {
           stdout_percentage_delta: n.stdout_percentage_delta ?? null,
           watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
           position: n.position || null,
-          read_only: n.read_only === true,
+          read_only: !!n.read_only,
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
@@ -2158,7 +2158,7 @@ async function saveGraph() {
           stdout_percentage_delta: n.stdout_percentage_delta ?? null,
           watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
           position: n.position || null,
-          read_only: n.read_only === true,
+          read_only: !!n.read_only,
           git_credentials: n.git_credentials ?? null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
@@ -2254,13 +2254,12 @@ async function loadLifecycleMaps() {
   }
 }
 
-const { loading, error: pageErrorRef } = useDataFetch(
+const { loading, error: pageErrorRef } = useDataFetch<void>(
   async () => {
     pageErrorRef.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
-    return { data: {} }
+    return { data: undefined }
   },
-  { initialValue: {} },
 )
 
 const pageError = pageErrorRef as any as ReturnType<typeof ref<string | null>>

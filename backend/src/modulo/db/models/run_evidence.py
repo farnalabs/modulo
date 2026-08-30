@@ -34,11 +34,15 @@ class RunEvidence(Base):
         ),
     )
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Tenant anchor (matches migration 0133_run_evidence_rls which added this
+    # NOT NULL FK + RLS). The ORM previously omitted it, so every INSERT failed
+    # the NOT NULL / RLS FORCE guard on Postgres.
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
