@@ -1156,15 +1156,12 @@ async def _retry_one_pending_member(
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("pending member is not an object")
-        retry_count = int(data.get("retry_count") or 0)
-        last_retry_at = data.get("last_retry_at")
-        if isinstance(last_retry_at, (int, float)) and time.time() - float(last_retry_at) < (
-            _STREAK_RETRY_COOLDOWN_SECONDS
-        ):
+        if _streak_member_in_cooldown(data):
             return "skip", attempted  # per-member cooldown — retry at most once per 15 min
         trigger_id = uuid.UUID(data["trigger_id"])
         pipeline_id = uuid.UUID(data["pipeline_id"]) if data.get("pipeline_id") else None
         threshold = int(data.get("threshold") or 0)
+        retry_count = int(data.get("retry_count") or 0)
         # Re-check the trigger's active state before dispatching. A pending
         # member exists precisely because the trigger was JUST auto-
         # deactivated (active=False), so dispatch while it stays deactivated;
@@ -1174,7 +1171,7 @@ async def _retry_one_pending_member(
         active = await _trigger_active_state(org_id, trigger_id)
         if active is None:
             return "skip", attempted  # read failure — skip, don't drop
-        if active is True:
+        if active:
             await _srem_streak_member(redis_client, key, raw)
             _log.warning(
                 "streak.notify_pending_dropped org=%s trigger=%s (re-enabled)",
@@ -1202,29 +1199,36 @@ async def _retry_one_pending_member(
             redis_client=None,
             retry_count=retry_count,
         )
-        if not ok:
-            # Re-enqueue with a bumped retry_count + cooldown stamp (the SET's
-            # TTL is refreshed by the write) so the member is retried at most
-            # once per 15 min and never floods the audit chain.
-            next_count = retry_count + 1
+        if ok:
             await _srem_streak_member(redis_client, key, raw)
-            await _write_streak_notify_pending(
-                redis_client,
-                org_id,
-                data=deactivation,
-                threshold=threshold,
-                pipeline_name=data.get("pipeline_name") or "",
-                retry_count=next_count,
-                last_retry_at=int(time.time()),
-            )
-            return "failed", attempted
+            return "ok", attempted
+        # Re-enqueue with a bumped retry_count + cooldown stamp (the SET's
+        # TTL is refreshed by the write) so the member is retried at most
+        # once per 15 min and never floods the audit chain.
         await _srem_streak_member(redis_client, key, raw)
-        return "ok", attempted
+        await _write_streak_notify_pending(
+            redis_client,
+            org_id,
+            data=deactivation,
+            threshold=threshold,
+            pipeline_name=data.get("pipeline_name") or "",
+            retry_count=retry_count + 1,
+            last_retry_at=int(time.time()),
+        )
+        return "failed", attempted
     except Exception:
         # corrupt / unparseable member — srem'd, never retried forever.
         _log.warning("streak.notify_pending_retry_failed org=%s", org_id)
         await _srem_streak_member(redis_client, key, raw)
         return "failed", attempted
+
+
+def _streak_member_in_cooldown(data: dict[str, Any]) -> bool:
+    """True when this pending member is inside its retry cooldown window."""
+    last_retry_at = data.get("last_retry_at")
+    if not isinstance(last_retry_at, (int, float)):
+        return False
+    return time.time() - float(last_retry_at) < _STREAK_RETRY_COOLDOWN_SECONDS
 
 
 async def _retry_pending_streak_notifications(
