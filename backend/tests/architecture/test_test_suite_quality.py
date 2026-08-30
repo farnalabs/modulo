@@ -7100,6 +7100,93 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
         assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` for every ``assert obj.attr`` /
+    ``assert not obj.attr`` whose attribute is a *method* — evidenced by the
+    same attribute being called (``obj.attr(...)``) elsewhere in the file —
+    but is asserted without trailing parentheses.
+
+    A bare attribute access on a bound method returns the method object
+    itself, which is always truthy; the ``assert`` is therefore a silent
+    false-green (``assert obj.method`` always passes) or a permanent failure
+    (``assert not obj.method`` always fails, since a method object is never
+    falsy). Either way the assertion says nothing about the behaviour under
+    test. The call-site evidence keeps this lens precise: an attribute that
+    is *never* called (a plain boolean/property attribute, e.g.
+    ``assert response.ok``) is a legitimate truthiness check and is left
+    alone; only a demonstrably-invocable method trips it."""
+    called = {
+        ast.dump(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    violations: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            test = test.operand
+        if not isinstance(test, ast.Attribute):
+            continue
+        if ast.dump(test) not in called:
+            continue
+        name = test.attr
+        violations.append((node.lineno, f"assert {name} — bare bound-method reference is always truthy; call {name}()"))
+    return violations
+
+
+def test_no_bound_method_truthiness_asserts():
+    """An ``assert obj.method`` / ``assert not obj.method`` against a bound
+    method (verified to be a method by its use as a call elsewhere in the same
+    file) asserts the method object itself, which is always truthy. The
+    positive spelling is a silent false-green — the test passes regardless of
+    whether ``method()`` would return a truthy value — and the ``not``-wrapped
+    spelling always fails. Both are almost always a missing ``()`` from a
+    forgotten call. The lens only fires when the attribute is demonstrably a
+    method (it is invoked parenthesised elsewhere); a plain truthiness check on
+    a boolean/property attribute (``assert response.ok``) is legitimate."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _bound_method_truthiness_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} truthiness assert(s) against a bare bound method.\n"
+        "assert obj.method() — a bound method object is always truthy, so asserting the bare\n"
+        "reference is a silent false-green (or, under 'not', always fails). Add the calling ()\n"
+        "so the assertion actually exercises the method's return value." + "\n".join(violations)
+    )
+
+
+def test_bound_method_lens_flags_missing_call_parens():
+    """The bound-method lens must flag a bare assert on an attribute that is
+    called parenthesised elsewhere (proving it is a method), and must NOT flag
+    a plain truthiness check on a boolean/property attribute, a comparison, or
+    a method that is genuinely invoked in the assert."""
+    positive_sources = [
+        ("def test_foo():\n    result = service.lookup(1)\n    assert service.lookup\n"),
+        ("def test_foo():\n    started = runner.start()\n    assert not runner.start\n"),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _bound_method_truthiness_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert response.ok\n",
+        "def test_foo():\n    assert not config.enabled\n",
+        "def test_foo():\n    service.lookup(1)\n    assert service.lookup(1) is not None\n",
+        "def test_foo():\n    assert service.lookup(1) == expected\n",
+        "def test_foo():\n    assert obj.method()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _bound_method_truthiness_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 # ---------------------------------------------------------------------------
 # LENS: empty-string membership / str-method tautologies
 # ---------------------------------------------------------------------------
