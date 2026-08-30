@@ -13,7 +13,7 @@
         <div>
           <div class="flex items-center gap-3">
             <PageHeader :title="$t('views.RunDetailView.run_detail')" />
-            <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
+            <span :class="statusBadgeClass" class="capitalize">{{ runStatusLabel(run.status) }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
@@ -746,7 +746,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'

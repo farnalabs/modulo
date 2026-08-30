@@ -110,11 +110,21 @@ _ADD_OLD = (
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_runs = {col["name"] for col in inspector.get_columns("runs")}
     # 1. run-level idempotency key (FAR-410 deferred column, landed by P5).
-    op.add_column("runs", sa.Column("idempotency_key", sa.String(length=128), nullable=True))
+    # Idempotent: the parallel ``0156_run_idempotency_key`` migration (FAR-438)
+    # also adds this column, so only add if it is not already present — otherwise
+    # an upgrade applying 0156 before 0155 fails with "column already exists".
+    if "idempotency_key" not in existing_runs:
+        op.add_column("runs", sa.Column("idempotency_key", sa.String(length=128), nullable=True))
     # 2. edge retry + compensation columns (design §5).
-    op.add_column("pipeline_edges", sa.Column("retry", sa.JSON(), nullable=True))
-    op.add_column("pipeline_edges", sa.Column("on_failure_target", sa.String(length=64), nullable=True))
+    existing_edges = {col["name"] for col in inspector.get_columns("pipeline_edges")}
+    if "retry" not in existing_edges:
+        op.add_column("pipeline_edges", sa.Column("retry", sa.JSON(), nullable=True))
+    if "on_failure_target" not in existing_edges:
+        op.add_column("pipeline_edges", sa.Column("on_failure_target", sa.String(length=64), nullable=True))
     # 3. extend ck_runs_status to the new superset.
     op.execute(_DROP_NEW)
     op.execute(_ADD_NEW)
@@ -123,6 +133,13 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("pipeline_edges", "on_failure_target")
     op.drop_column("pipeline_edges", "retry")
-    op.drop_column("runs", "idempotency_key")
+    # Idempotent: 0156_run_idempotency_key may already have dropped the column on
+    # its own downgrade, so only drop it if it is still present — otherwise the
+    # downgrade chain 0156 -> 0155 fails with "column does not exist".
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_runs = {col["name"] for col in inspector.get_columns("runs")}
+    if "idempotency_key" in existing_runs:
+        op.drop_column("runs", "idempotency_key")
     op.execute(_DROP_OLD)
     op.execute(_ADD_OLD)
