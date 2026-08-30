@@ -366,6 +366,10 @@ regression that silently weakens the suite:
   ``monkeypatch.setenv()``/``delenv()`` restore the value at teardown
   automatically and are the pytest-blessed form; a function that requests
   ``monkeypatch`` is left alone even when it mutates ``os.environ`` directly
+  (reads — ``os.getenv``/``os.environ.get``/subscript loads — and the
+  module-level ``os.environ.setdefault(...)`` bootstrap that pins
+  ``DATABASE_URL`` once at import time are deliberately left alone, since
+  those are idempotent configuration rather than between-test leakage)
 - an ``assert`` that is *unreachable* because an earlier top-level statement
   in the same function body unconditionally ``return``s or ``raise``s before
   it — the verification can never execute, so the test reports green no
@@ -397,37 +401,6 @@ regression that silently weakens the suite:
   ``def``/``class``/``@pytest.fixture`` helpers are left alone — those are the
    legitimate local-helper spellings
 
-- a freshly-constructed Mock nested *inside* a container literal in an
-  ``assert`` — ``assert result == {'status': MagicMock()}``,
-  ``assert result != [AsyncMock()]``, ``assert {'k': Mock()} in x``. A fresh
-  Mock compares by identity (``__eq__`` defaults to ``is``), so ``==`` against
-  a container it can never equal ALWAYS FAILS and ``!=`` ALWAYS PASSES, and
-  ``assert [Mock()]`` / ``assert (Mock(),)`` (a non-empty container is always
-  truthy) ALWAYS PASS — every one decided at source time, never by the code
-  under test. This is the nested-or-direct-container twin of the Mock-
-  constructor lens, which owns only the *direct* positions (the assert's test
-  expression, a ``not``-wrap, or a single comparison operand): a fresh
-  constructor buried in a list/dict/tuple/set literal is a different AST shape
-  that the direct lens provably misses. The configure-then-assert fix is the
-  same — configure the double (``return_value``/``side_effect``) and verify
-  through ``assert_called*``/attribute checks instead of comparing to a
-  constructor call
-- a direct mutation of the process environment made without the ``monkeypatch``
-  fixture in scope — subscript set/delete on the ``os.environ`` mapping
-  (``os.environ[key] = ...`` / ``del os.environ[key]`` and the
-  ``from os import environ`` twin), the mutating ``environ`` methods
-  (``pop``/``update``/``setdefault``/``clear`` and their ``__*__`` / pydantic
-  twins), and ``os.putenv()``/``os.unsetenv()``. A test that mutates
-  ``os.environ`` and never restores it leaks state into every test that runs
-  afterwards, so the suite becomes order-dependent: a test can pass alone and
-  silently corrupt a sibling (or be corrupted by one) in the full run.
-  ``monkeypatch.setenv()``/``monkeypatch.delenv()`` restore the value at
-  teardown automatically and are the pytest-blessed form — a function that
-  requests ``monkeypatch`` is left alone even when it mutates ``os.environ``
-  directly. Reads (``os.getenv``, ``os.environ.get``, subscript loads) and the
-  module-level ``os.environ.setdefault(...)`` bootstrap (the   ``conftest.py``
-  pattern that pins ``DATABASE_URL`` once at import time, which is idempotent
-  configuration rather than between-test leakage) are deliberately left alone
 - a reseed of the process-global random generator made without the
   ``monkeypatch`` fixture in scope — ``random.seed(...)`` (the ``import random``
   attribute form and its ``from random import seed`` twin). Seeding resets the
