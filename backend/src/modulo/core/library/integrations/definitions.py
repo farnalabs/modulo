@@ -835,6 +835,7 @@ REST_INTEGRATION: dict[str, Any] = {
         "passthrough": False,
         "max_response_size": 10485760,
         "idempotency_header": "",
+        "on_unknown": "fail_open",
         "allowed_hosts": [],
         "timeout_seconds": 30,
         "verify_tls": True,

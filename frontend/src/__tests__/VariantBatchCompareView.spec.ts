@@ -61,8 +61,8 @@ vi.mock('../lib/api/variantBatches', () => ({
   fetchVariantBatches: batchMocks.fetchVariantBatches,
   softDeleteVariantBatch: batchMocks.softDeleteVariantBatch,
   reFireVariantBatch: batchMocks.reFireVariantBatch,
-  TERMINAL_STATUSES: ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match'],
-  NON_TERMINAL_STATUSES: ['pending', 'running', 'awaiting_human', 'claimed'],
+  TERMINAL_STATUSES: ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed'],
+  NON_TERMINAL_STATUSES: ['pending', 'running', 'awaiting_human', 'claimed', 'unknown'],
 }))
 
 import VariantBatchCompareView from '../views/VariantBatchCompareView.vue'
