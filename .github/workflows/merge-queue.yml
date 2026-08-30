@@ -539,6 +539,59 @@ jobs:
               continue
             fi
 
+            # SHA-pin guard (FAR-455): the approving review must cover the CURRENT PR
+            # head. A review approved against an OLDER head must never grant merge for
+            # newer unreviewed code — otherwise a force-push/merge after the approval
+            # silently auto-merges unreviewed code (a TOCTOU on the approval itself).
+            #
+            # We use a TIMESTAMP-based staleness check rather than strict commit_id
+            # equality, for two reasons (see PR #2089 review):
+            #   (1) GitHub's reviews API can report a review's commit_id as the
+            #       head-at-read-time rather than head-at-review-time (observed on
+            #       #1386), so an equality check can falsely pass the very TOCTOU it
+            #       exists to block.
+            #   (2) Strict equality wrongly voids the approval on MERGE-ONLY head moves
+            #       (merging origin/main in), which the repo's review policy does NOT
+            #       treat as invalidating approval.
+            # We therefore block when ANY NON-MERGE commit (single parent) in the PR was
+            # committed AFTER the approval's submitted_at — i.e. real code landed after
+            # the approval. We walk the FULL commit list (not just HEAD): a post-approval
+            # fix commit hidden behind a later merge (HEAD becomes a 2-parent merge) must
+            # still be flagged. Merge-only pushes (every commit >=2 parents) keep the
+            # approval valid, and any API failure fails CLOSED (skip, never merge).
+             HEAD_OID=$(gh pr view "$NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+             if [ -z "$HEAD_OID" ]; then
+               echo "  PR #$NUM could not resolve head oid -- skipping merge (fail closed)"
+               continue
+             fi
+             # SHA-pin TOCTOU guard. The decision is delegated to a versioned, unit-tested
+             # Python script (.github/scripts/merge-queue-approve-guard.py) instead of inline
+             # bash because (a) the reviews/commits lists are paginated via `gh api --paginate`
+             # and arrive as MULTIPLE concatenated JSON documents -- naive `jq` only sees the
+             # first page, which previously made STALE_COUNT multi-line and the guard FAIL OPEN
+             # on the >100-item large-PR path -- and (b) the timestamp walk is non-trivial and
+             # needs coverage (backend/tests/unit/scripts/test_merge_queue_approve_guard.py).
+             # The script merges ALL pages first, then blocks when ANY non-merge (single-parent)
+             # commit was committed AFTER the latest APPROVED review's submitted_at. Merge-only
+             # head moves keep the approval valid; any error fails CLOSED (stale -> skip), never
+             # fails open.
+             REVIEWS_FILE=$(mktemp)
+             COMMITS_FILE=$(mktemp)
+             gh api --paginate "repos/${{ github.repository }}/pulls/$NUM/reviews?per_page=100" > "$REVIEWS_FILE" 2>/dev/null || true
+             gh api --paginate "repos/${{ github.repository }}/pulls/$NUM/commits?per_page=100" > "$COMMITS_FILE" 2>/dev/null || true
+             GUARD_OUT=$(python3 .github/scripts/merge-queue-approve-guard.py "$REVIEWS_FILE" "$COMMITS_FILE" "$HEAD_OID" 2>/dev/null) || true
+             rm -f "$REVIEWS_FILE" "$COMMITS_FILE"
+             if [ -z "$GUARD_OUT" ]; then
+               GUARD_OUT="stale|guard script produced no output - fail closed"
+             fi
+             GUARD_VERDICT="${GUARD_OUT%%|*}"
+             if [ "$GUARD_VERDICT" != "ok" ]; then
+               echo "  PR #$NUM SHA-pin guard: ${GUARD_OUT#*|} -- skipping merge (fail closed)"
+               continue
+             fi
+             # No post-approval non-merge code (merge-only head moves keep approval valid).
+             echo "  PR #$NUM ${GUARD_OUT#*|}"
+
             if gh pr merge --squash "$NUM" 2>&1; then
               echo "    PR #$NUM merged --"
               # Delete the PR's source branch right after a successful merge
