@@ -169,7 +169,7 @@ def _graph_validator_valid(node: dict[str, Any]) -> bool:
 
 
 @pytest.mark.parametrize(
-    "mode,prompt,command,output_schema",
+    ("mode", "prompt", "command", "output_schema"),
     _MATRIX_CELLS,
     ids=lambda v: str(v),
 )

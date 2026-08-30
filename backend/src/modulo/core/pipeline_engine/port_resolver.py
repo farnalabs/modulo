@@ -47,8 +47,12 @@ def is_port_declared(node: dict[str, Any]) -> bool:
     This is the discriminator between a first-class port-modeled node and a
     legacy port-less node. Legacy nodes fall back to raw flat-state keys and are
     NOT subject to strict port rules (zero-break migration guarantee).
+
+    Nodes whose inputs/outputs are None (the API serializer emits the keys with
+    null values on round-trip) are legacy port-less nodes — key presence alone
+    must not flip a legacy graph into strict port mode (zero-break guarantee).
     """
-    return "inputs" in node or "outputs" in node
+    return bool(node.get("inputs") or node.get("outputs"))
 
 
 def node_type_of(node: dict[str, Any]) -> str:

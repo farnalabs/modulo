@@ -302,7 +302,7 @@ def test_per_attempt_timeout_tiny_budget_returns_none() -> None:
 
 
 def test_per_attempt_timeout_negative_max_retries_raises() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="max_retries must be >= 0"):
         per_attempt_timeout_seconds(60.0, max_retries=-1)
 
 

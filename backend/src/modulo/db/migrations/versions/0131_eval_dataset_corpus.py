@@ -193,7 +193,6 @@ def downgrade() -> None:
     op.drop_index(
         "uq_eval_cases_dataset_hash_active",
         table_name="eval_cases",
-        postgresql_drop_where=sa.text("deleted_at IS NULL"),
     )
     op.drop_index("ix_eval_cases_input_hash", table_name="eval_cases")
     op.drop_index("ix_eval_cases_dataset_id", table_name="eval_cases")
@@ -201,7 +200,6 @@ def downgrade() -> None:
     op.drop_index(
         "uq_eval_datasets_org_name_active",
         table_name="eval_datasets",
-        postgresql_drop_where=sa.text("deleted_at IS NULL"),
     )
     op.drop_index("ix_eval_datasets_owner_team_id", table_name="eval_datasets")
     op.drop_index("ix_eval_datasets_organisation_id", table_name="eval_datasets")

@@ -99,7 +99,7 @@ class TestHumanEvalSetRegistry:
     def test_duplicate_registration_raises(self) -> None:
         from dataclasses import replace
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="already registered"):
             register_human_eval_set(replace(DEMO_CLASSIFICATION_V1, version="v2"))
 
     def test_run_human_eval_set_missing_set(self) -> None:

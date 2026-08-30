@@ -118,7 +118,7 @@ def _call(client: TestClient, method: str, path: str):
     return getattr(client, method)(path)
 
 
-@pytest.mark.parametrize("feature,method,path", TEAM_ROUTES)
+@pytest.mark.parametrize(("feature", "method", "path"), TEAM_ROUTES)
 def test_community_plan_returns_402(community_client: TestClient, feature: str, method: str, path: str) -> None:
     resp = _call(community_client, method, path)
     assert resp.status_code == 402, (
@@ -128,7 +128,7 @@ def test_community_plan_returns_402(community_client: TestClient, feature: str, 
     assert feature in resp.text
 
 
-@pytest.mark.parametrize("feature,method,path", TEAM_ROUTES)
+@pytest.mark.parametrize(("feature", "method", "path"), TEAM_ROUTES)
 def test_team_plan_does_not_402(team_client: TestClient, feature: str, method: str, path: str) -> None:
     resp = _call(team_client, method, path)
     assert resp.status_code != 402, (

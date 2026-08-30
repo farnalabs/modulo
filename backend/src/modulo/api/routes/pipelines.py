@@ -1468,6 +1468,71 @@ async def _validate_graph_save(
     ]
 
 
+def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, str]:
+    """FAR-488a: first-carried ``agent_command`` per distinct bound agent.
+
+    A node WITHOUT an ``agent_id`` needs no sync (its node-level command always
+    stands at snapshot time — ``_apply_agent_fields`` only materializes bound
+    agents). A node carrying no usable ``agent_command`` value has nothing to
+    sync. When several nodes bind the SAME agent, the FIRST node's command wins
+    (deterministic; snapshot materialization applies one row value to every
+    node bound to that agent, so per-node divergence is not representable).
+    """
+    updates: dict[uuid.UUID, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        raw_agent_id = node.get("agent_id")
+        command = node.get("agent_command")
+        if raw_agent_id is None or not isinstance(command, str) or not command:
+            continue
+        try:
+            agent_id = uuid.UUID(str(raw_agent_id))
+        except (TypeError, ValueError):
+            continue
+        updates.setdefault(agent_id, command)
+    return updates
+
+
+async def _sync_agent_row_commands(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    nodes: list[dict[str, Any]],
+) -> int:
+    """FAR-488a: sync a PATCHed node ``agent_command`` into the bound Agent row.
+
+    At snapshot time ``_apply_agent_fields`` overwrites a bound node's
+    ``agent_command`` with the Agent row's non-NULL value, while the graph PATCH
+    used to persist node-level commands to ``graph_nodes_json`` only — so an
+    operator's PATCH read back correctly but every run silently executed the
+    stale Agent-row command (FAR-488 incident, 2026-08-29). Syncing the row
+    inside the SAME transaction as the graph write makes "what you PATCH is
+    what runs" hold.
+
+    Deliberate skip cases: a node without ``agent_id`` (nothing bound — the
+    node value already stands); an Agent row with a NULL ``agent_command``
+    (the node value already stands at snapshot time); an incoming command
+    equal to the row value (no-op). Returns the number of Agent rows updated.
+    """
+    updates = _extract_agent_command_sync_updates(nodes)
+    if not updates:
+        return 0
+    result = await session.execute(select(Agent).where(Agent.id.in_(list(updates)), Agent.organisation_id == org_id))
+    changed = 0
+    for agent in result.scalars():
+        incoming = updates.get(agent.id)
+        if incoming is None or agent.agent_command is None or agent.agent_command == incoming:
+            continue
+        logger.info(
+            "pipeline.graph.agent_command_synced",
+            extra={"agent_id": str(agent.id), "organisation_id": str(org_id)},
+        )
+        agent.agent_command = incoming
+        changed += 1
+    return changed
+
+
 @router.patch("/{pipeline_id}/graph")
 @handle_db_errors("pipelines.replace_graph")
 async def replace_pipeline_graph_endpoint(
@@ -1522,6 +1587,10 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
             )
             if graph is not None:
+                # FAR-488a: keep the bound Agent rows in step with node-level
+                # agent_command PATCHes INSIDE the same transaction, so the
+                # next snapshot materializes the command the operator saved.
+                await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
                 issues = await _validate_graph_save(
                     session,
                     org_id=principal.organisation_id,
@@ -1701,6 +1770,9 @@ async def _apply_graph_update(
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+    # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
+    # replacement shipped inside a PATCH update payload must also run.
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
 
 
 def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
@@ -2896,7 +2968,7 @@ async def _save_graph(
     hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
-    return await replace_pipeline_graph(
+    graph = await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
         org_id=org_id,
@@ -2907,3 +2979,9 @@ async def _save_graph(
         account_id=account_id,
         is_guardrail_admin=is_guardrail_admin,
     )
+    if graph is not None:
+        # FAR-488a: node-conversion saves go through here too — keep the same
+        # "what you save is what runs" Agent-row sync (a no-op when the node
+        # commands already mirror the bound Agent rows).
+        await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
+    return graph

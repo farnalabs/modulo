@@ -54,8 +54,14 @@ async def get_organisation_by_slug(
     session: AsyncSession,
     slug: str,
 ) -> Organisation | None:
-    result = await session.execute(select(Organisation).where(Organisation.slug == slug))
-    return result.scalar_one_or_none()
+    # ``organisations.slug`` is a partial UNIQUE index (``WHERE deleted_at IS
+    # NULL``) so a soft-deleted org's slug may be reused. A live lookup must
+    # ignore soft-deleted rows; otherwise a create would 409 against a slug that
+    # is free to reuse, and a duplicate slug materialising would make
+    # ``scalar_one_or_none`` raise ``MultipleResultsFound`` -> 500.
+    stmt = select(Organisation).where(Organisation.slug == slug).where(Organisation.deleted_at.is_(None)).limit(1)
+    result = await session.execute(stmt)
+    return result.scalars().first()
 
 
 async def list_organisations(

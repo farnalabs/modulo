@@ -459,7 +459,8 @@ async def test_claim_recovery_getdel_returns_state_only_to_winner() -> None:
     first = await wl._claim_recovery(redis)
     second = await wl._claim_recovery(redis)
 
-    assert first is not None and first["conditions"]
+    assert first is not None
+    assert first["conditions"]
     assert second is None
     assert redis.getdel.await_count == 2
 
@@ -776,7 +777,8 @@ class TestWebhookErrorPaths:
 
         client.post.assert_awaited_once()
         call = client.post.await_args
-        assert call.args and call.args[0] == settings.alert_webhook_url
+        assert call.args
+        assert call.args[0] == settings.alert_webhook_url
         body = json.loads(call.kwargs["content"])
         assert body == {"text": alert_text}
         assert call.kwargs["headers"]["Content-Type"] == "application/json"

@@ -95,7 +95,7 @@ class TestDecisionTable:
     """Spec §6 — keyed on (status, error_code), never prose."""
 
     @pytest.mark.parametrize(
-        "status,pr_urls,expected,expected_reason",
+        ("status", "pr_urls", "expected", "expected_reason"),
         [
             ("complete", (), RunClassificationValue.no_delivery, REASON_NO_WORK),
             ("complete", (_PR,), RunClassificationValue.delivered, REASON_DELIVERED),
@@ -183,7 +183,7 @@ class TestPrUrlValidity:
     """Spec §2 — urlsplit with scheme http/https + non-empty netloc."""
 
     @pytest.mark.parametrize(
-        "url,valid",
+        ("url", "valid"),
         [
             ("https://github.com/farnalabs/modulo/pull/1", True),
             ("https://github.com/farnalabs/modulo", True),
@@ -469,7 +469,8 @@ class TestReasons:
 
         with patch("modulo.core.pipeline_engine.error_codes.class_for", side_effect=_capturing_class_for):
             result = classify_run("failed", "RateLimitError")
-        assert seen and seen[-1] == "RateLimitError"
+        assert seen
+        assert seen[-1] == "RateLimitError"
         assert real_class_for("RateLimitError") == "provider"
         assert result.reason == REASON_SOURCE_ERROR
 

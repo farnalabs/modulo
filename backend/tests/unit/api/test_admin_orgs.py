@@ -479,7 +479,8 @@ async def test_org_member_read_is_org_scoped(client_tenant_member, mock_session)
         resp = await client_tenant_member.get("/api/v1/org/settings/guardrails/kill-switch")
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         # Every DB read is scoped to the authenticated caller's organisation.
-        assert captured and all(oid == ORG_ID for oid in captured), f"Not org-scoped: {captured}"
+        assert captured, f"Not org-scoped: {captured}"
+        assert all(oid == ORG_ID for oid in captured), f"Not org-scoped: {captured}"
     finally:
         org_settings.set_rls_org = original_set_rls
         org_settings.get_organisation = original_get_org

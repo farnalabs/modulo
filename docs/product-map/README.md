@@ -84,6 +84,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 ### Build
 - **feat-dashboard** - Home dashboard, metrics overview, and saved views - routes: `/`, `/admin/views`
 - **feat-pipelines** - Visual pipeline editor, composite editor, and node categories - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`, `/admin/node-categories`
+- **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
 - **feat-library** - Reusable pipeline templates and the template library - routes: `/library/:id/create-pipeline`, `/library`
 - **feat-runs** - Run execution, history, detail, and output diffs - routes: `/runs`, `/runs/diff`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
@@ -133,23 +134,69 @@ Fresh entries for these features are added to the graph below as behaviour track
 Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
+> **Known gap (2026-08-27 product-map walk):** the following registered manifest
+> features still lack a behaviour-tracker entry here and are therefore absent from the
+> feature graph's human-readable layer: `feat-analytics`, `feat-auth`,
+> `feat-connectors` (behaviours are tracked inline in `manifest.yaml`), `feat-costs`,
+> `feat-dashboard`, `feat-environments`, `feat-evals`, `feat-feedback`, `feat-guardrails`,
+> `feat-lifecycle-maps`, `feat-observability`, `feat-onboarding`, `feat-org`,
+> `feat-plugins`, `feat-product-analytics`, `feat-remy`, `feat-runs`,
+> `feat-runtime`, `feat-sso`, `feat-system-config`, `feat-system-orgs`,
+> `feat-variants`.
+
+### Audit
+- [feat-audit](audit/audit-trail.md) => PRD N/A
+
 ### Auth and Security
 - [feat-core-oidc-integration](auth/oidc-integration.md) => PRD 9.4
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
 
+### Configure
+- [feat-guardrails](configure/guardrails.md) => PRD N/A
+- [feat-mcp](configure/mcp.md) => PRD N/A
+
 ### Core Platform
+- [feat-hitl](hitl/hitl-gates.md) => PRD N/A
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
 
+### Improve
+- [feat-evals](improve/evals.md) => PRD N/A
+
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
 
-### Pipelines
+### Schema & Data
+- [feat-schemas](schemas/schemas.md) => PRD N/A
+
+### Build & Pipelines
+- [feat-pipelines](pipelines/pipelines.md) => PRD N/A
 - [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
+- [feat-router (Router & HITL nodes)](pipelines/router-hitl-nodes.md) => PRD N/A
+
+### Configure
+- [feat-model-backends](configure/model-backends.md) => PRD N/A
+- [feat-mcp](configure/mcp.md) => PRD N/A
+
+### Notifications
+- [feat-notifications](notifications/notifications.md) => PRD N/A
+
+### Library
+- [feat-library](library/library.md) => PRD N/A
+
+### Licensing
+- [feat-license](licensing/license.md) => PRD N/A
+
+### Observability
+- [feat-observability](observability/observability.md) => PRD N/A
 
 ### Teams
+- [feat-teams](teams/teams.md) => PRD N/A
 - [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
+
+### Triggers
+- [feat-triggers](triggers/trigger-engine.md) => PRD N/A

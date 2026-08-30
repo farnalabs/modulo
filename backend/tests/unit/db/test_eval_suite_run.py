@@ -525,7 +525,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0138."""
+    """Exactly one migration chains off each predecessor, and the head is 0152."""
     import glob
     import re
 
@@ -625,15 +625,27 @@ def test_single_migration_head() -> None:
     # 0149_suite_run_trigger_kind (FAR-377, main) chains off 0148.
     chaining_off_0148 = [p for p in revisions if parents[p] == "0148_pipeline_snapshot_versioning_far420"]
     assert [_basename(p) for p in chaining_off_0148] == ["0149_suite_run_trigger_kind.py"]
-    # 0150_add_router_no_match_status (main) chains off 0149.
+    # 0150_add_router_no_match_status (FAR-378) chains off 0149.
     chaining_off_0149 = [p for p in revisions if parents[p] == "0149_suite_run_trigger_kind"]
     assert [_basename(p) for p in chaining_off_0149] == ["0150_add_router_no_match_status.py"]
-    # 0151_accounts_must_change_password (this PR, FAR-460) chains off 0150 and is the single head.
+    # 0151_fix_constraints (improve-database CHECKs + partial slug) chains off 0150.
     chaining_off_0150 = [p for p in revisions if parents[p] == "0150_add_router_no_match_status"]
-    assert [_basename(p) for p in chaining_off_0150] == ["0151_accounts_must_change_password.py"]
-    # Nothing chains off 0151 -> it is the single head.
-    chaining_off_0151 = [p for p in revisions if parents[p] == "0151_accounts_must_change_password"]
-    assert chaining_off_0151 == []
+    assert [_basename(p) for p in chaining_off_0150] == ["0151_fix_constraints.py"]
+    # 0152_dismissed_by_user_id_index (improve-database FK index) chains off 0151.
+    chaining_off_0151 = [p for p in revisions if parents[p] == "0151_fix_constraints"]
+    assert [_basename(p) for p in chaining_off_0151] == ["0152_add_indexes.py"]
+    # 0153_add_numeric_check_constraints (main) chains off 0152.
+    chaining_off_0152 = [p for p in revisions if parents[p] == "0152_dismissed_by_user_id_index"]
+    assert [_basename(p) for p in chaining_off_0152] == ["0153_add_numeric_check_constraints.py"]
+    # 0154_add_web_vital_events_time_index (main) chains off 0153.
+    chaining_off_0153 = [p for p in revisions if parents[p] == "0153_add_numeric_check_constraints"]
+    assert [_basename(p) for p in chaining_off_0153] == ["0154_add_web_vital_events_time_index.py"]
+    # 0155_accounts_must_change_password (this PR, FAR-460) chains off 0154 and is the single head.
+    chaining_off_0154 = [p for p in revisions if parents[p] == "0154_add_web_vital_events_time_index"]
+    assert [_basename(p) for p in chaining_off_0154] == ["0155_accounts_must_change_password.py"]
+    # Nothing chains off 0155 -> it is the single head.
+    chaining_off_0155 = [p for p in revisions if parents[p] == "0155_accounts_must_change_password"]
+    assert chaining_off_0155 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

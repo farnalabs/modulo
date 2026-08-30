@@ -142,7 +142,7 @@ The request returns immediately; the run executes in the background via the SAQ 
 1. Go to **Runs** (`/runs`) to see run history: filter by status or trigger type, or use the **Stop** button to cancel an in-flight run.
 2. Open the run (`/runs/:id`): you'll see the live status, per-node progress chips, and the **Execution Trace** table with per-node input/output (expand the **IO** cell), token counts, cost, logs, and prompt.
 3. If your edge has a HITL gate, the run pauses at `awaiting_human` and the page shows a **HITL Gate** section: **Claim Gate** to take it, then **Approve** or **Reject**.
-4. Every lifecycle event is written to the immutable audit log ? see **Audit Log** (`/admin/audit`) and filter by the `run.started`, `run.completed`, and `run.failed` event types.
+4. Every lifecycle event is written to the immutable audit log. Open **Audit Log** (`/admin/audit`) and filter by the `run.started`, `run.completed`, and `run.failed` event types.
 
 ## Next steps
 

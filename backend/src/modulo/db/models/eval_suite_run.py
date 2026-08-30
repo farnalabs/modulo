@@ -138,6 +138,10 @@ class SuiteRun(OrgScoped):
             "state IN ('pending','running','completed','partial','failed','cancelled')",
             name="ck_suite_runs_state",
         ),
+        CheckConstraint(
+            "total_cases >= 0 AND passed_cases >= 0 AND failed_cases >= 0 AND excluded_case_count >= 0",
+            name="ck_suite_runs_case_counts",
+        ),
         # The pair (suite, dataset) + version is the repeatable comparison key.
         Index("ix_suite_runs_suite_dataset", "suite_id", "dataset_id"),
         # Baseline resolution: recent completed runs of a tuple.

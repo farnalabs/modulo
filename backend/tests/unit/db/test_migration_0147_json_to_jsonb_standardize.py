@@ -160,18 +160,23 @@ def test_upgrade_uses_non_blocking_temp_column_and_batch_backfill() -> None:
     assert "table_name" in code, "helpers must be generalised to accept a per-table argument"
 
 
-def test_helpers_use_dedicated_autocommit_connection() -> None:
-    """The migration must run SQL on a dedicated autocommit connection.
+def test_helpers_run_on_alembics_own_connection() -> None:
+    """The migration must run SQL on alembic's own connection, NOT a side one.
 
-    Alembic wraps each migration in ``context.begin_transaction()``. Calling an
-    explicit ``.commit()`` on ``op.get_bind()`` closes that transaction and
-    breaks every subsequent statement — the root cause of the CI migration break
-    (``Can't operate on closed transaction inside context manager``) this fix
-    addresses. The migration must instead obtain its own autocommit connection
-    from the engine so per-statement commits don't fight alembic's transaction.
+    An earlier design opened a dedicated ``isolation_level=AUTOCOMMIT``
+    side-connection from the engine. Under this project's ``env.py`` that wraps
+    the whole ``upgrade`` chain in a single transaction, a fresh database's
+    tables exist only inside that uncommitted transaction — the side connection
+    cannot see them, so ``information_schema`` lookups return nothing and every
+    conversion silently no-ops while alembic still records the revision as
+    applied. The migration therefore uses ``op.get_bind()`` (alembic's own
+    connection/transaction) for every statement. It must NOT call an explicit
+    ``.commit()`` on that connection, which would close alembic's transaction and
+    break the next statement (``Can't operate on closed transaction``).
     """
     code = _source_code()
     assert ".commit(" not in code, "no explicit .commit() on alembic's connection"
-    assert "AUTOCOMMIT" in code, "must use an isolation_level=AUTOCOMMIT connection"
-    assert "isolation_level=" in code, "must set isolation_level on the connection"
-    assert "engine.connect(" in code, "must connect via the engine, independent of alembic"
+    assert "AUTOCOMMIT" not in code, "must NOT use a dedicated autocommit side-connection"
+    assert "isolation_level=" not in code, "must NOT open a separate isolation_level connection"
+    assert "engine.connect(" not in code, "must NOT open a separate engine connection"
+    assert "op.get_bind(" in code, "must run on alembic's own connection"
