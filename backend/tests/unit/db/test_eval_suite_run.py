@@ -619,7 +619,8 @@ def test_single_migration_head() -> None:
     chaining_off_0145 = [p for p in revisions if parents[p] == "0145_spend_ceiling"]
     assert [_basename(p) for p in chaining_off_0145] == ["0146_extend_runs_status_cost_ceiling.py"]
     # 0146 -> 0147_json_to_jsonb_standardize; 0147 -> 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6);
-    # 0148 -> 0149_suite_run_trigger_kind (FAR-377) -> 0150_add_router_no_match_status (main) -> 0151_improve_db_constraints_indexes (this PR).
+    # 0148 -> 0149_suite_run_trigger_kind (FAR-377) -> 0150_add_router_no_match_status (main)
+    # -> 0151_improve_db_constraints_indexes (this PR).
     chaining_off_0146 = [p for p in revisions if parents[p] == "0146_extend_runs_status_cost_ceiling"]
     assert [_basename(p) for p in chaining_off_0146] == ["0147_json_to_jsonb_standardize.py"]
     # 0148_pipeline_snapshot_versioning_far420 (FAR-402 P6) chains off 0147.
