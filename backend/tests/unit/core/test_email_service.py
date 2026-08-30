@@ -646,9 +646,9 @@ class TestEmailSendLimiter:
         assert await limiter.acquire(2) == 0
 
     def test_invalid_constructor_args_rejected(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="limit must be >= 1"):
             EmailSendLimiter(limit=0)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="window_seconds must be >= 1"):
             EmailSendLimiter(window_seconds=0)
 
 

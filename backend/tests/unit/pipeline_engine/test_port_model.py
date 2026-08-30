@@ -54,7 +54,7 @@ def test_synthesize_keeps_custom_ports():
 
 def test_synthesize_rejects_duplicate_port_names():
     node = _node("a", outputs=[{"port": "x"}, {"port": "x"}])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="duplicate output port name 'x'"):
         synthesize_node_ports(node)
 
 

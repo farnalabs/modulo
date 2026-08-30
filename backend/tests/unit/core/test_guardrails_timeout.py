@@ -479,7 +479,7 @@ def test_serialize_and_rebuild_pin_round_trip():
 def test_malformed_pin_entry_is_skippable_not_crashy():
     pin = serialize_guardrail_pin(_FakeRow())
     pin["id"] = "not-a-uuid"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="badly formed hexadecimal UUID string"):
         to_engine_definition_from_pin(pin)
 
 

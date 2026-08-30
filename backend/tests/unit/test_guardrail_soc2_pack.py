@@ -223,7 +223,7 @@ def test_soc2_pack_detection_patterns_are_linear(pattern):
 
 
 @pytest.mark.parametrize(
-    "pattern,should_match,should_not_match",
+    ("pattern", "should_match", "should_not_match"),
     [
         (
             AWS_ACCESS_KEY_PATTERN,

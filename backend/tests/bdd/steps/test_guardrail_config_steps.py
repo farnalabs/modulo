@@ -291,7 +291,8 @@ def _bdd_proposal_accepted(request) -> None:
 def _bdd_proposal_hash(request) -> None:
     data = request.node._resp.json()
     h = data["hash"]
-    assert isinstance(h, str) and len(h) == 64, f"Expected 64-char hex hash, got {h!r}"
+    assert isinstance(h, str), f"Expected 64-char hex hash, got {h!r}"
+    assert len(h) == 64, f"Expected 64-char hex hash, got {h!r}"
     int(h, 16)
 
 
