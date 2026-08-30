@@ -93,7 +93,6 @@ __all__ = [
     "mark_unhealthy",
     "register_connector_type",
     "register_model_backend",
-    "update_config",
     "check_access",
     "get_and_clear_permission_decision",
     "clear_all_overrides",
@@ -117,7 +116,6 @@ __all__ = [
     "list_migrations",
     # --- Auth / feature helpers referenced only by tests ---
     "get_effective_team_role",
-    "team_role_level",
     "refresh_access_token",
     "rotate_oauth_token_family",
     "blacklist_oauth_token_family",
@@ -188,11 +186,9 @@ __all__ = [
     "_aggregate_sandbox_cost",
     "_compute_token_costs",
     # --- Observability / read-model properties referenced only by tests ---
-    "active_run_count",
     "buffered_count",
     "subscriber_count",
     "is_shutting_down",
-    "connector_types",
     "backend_providers",
     "entry_point_errors",
     "locks",
@@ -223,8 +219,6 @@ __all__ = [
     "_tier",
     "_max_concurrency",
     "_model_id",
-    "_config",
-    "_creds",
     "_jobs",
     "_nodes",
     "_projects",
@@ -272,7 +266,7 @@ __all__ = [
     #     exercised by tests/unit/connectors/test_rest_observability.py. The
     #     rollback evaluator is detection+notification only (mirrors
     #     rollback_thresholds) and is wired to a producer when an outcome
-    #     sampler / run-stats store is added. ---
+    #     sampler / run-stats store is added.
     "evaluate_rest_rollback",
     "is_unknown_like",
 ]
