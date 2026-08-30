@@ -2959,38 +2959,37 @@ class TestGetSystemEngine:
         finally:
             ch._SYSTEM_ENGINE = None
 
-    def test_falls_back_to_regular_engine_when_url_empty(self) -> None:
-        regular_engine = MagicMock()
+    def test_fails_closed_when_url_empty(self) -> None:
         mock_settings = _settings(modulo_system_database_url="")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
                 patch.object(ch, "get_settings", return_value=mock_settings),
-                patch.object(ch, "_get_engine", return_value=regular_engine),
+                patch.object(ch, "_get_engine"),
+                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
             ):
-                result = ch._get_system_engine()
+                ch._get_system_engine()
 
-            assert result is regular_engine
+            # Fail-closed leaves no engine cached — the next invocation raises again.
+            assert ch._SYSTEM_ENGINE is None
         finally:
             ch._SYSTEM_ENGINE = None
 
-    def test_logs_warning_and_uses_app_engine_when_unset(self) -> None:
-        regular_engine = MagicMock()
+    def test_logs_error_when_unset(self) -> None:
         mock_settings = _settings(modulo_system_database_url="")
         ch._SYSTEM_ENGINE = None  # reset singleton
-        warnings: list[tuple[object, object]] = []
+        errors: list[tuple[object, object]] = []
         try:
             with (
                 patch.object(ch, "get_settings", return_value=mock_settings),
-                patch.object(ch, "_get_engine", return_value=regular_engine),
-                patch.object(ch._log, "warning", lambda msg, extra=None: warnings.append((msg, extra))),
+                patch.object(ch._log, "error", lambda msg, extra=None: errors.append((msg, extra))),
+                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
             ):
-                result = ch._get_system_engine()
+                ch._get_system_engine()
 
-            assert result is regular_engine
-            assert len(warnings) == 1
-            msg, extra = warnings[0]
-            assert msg == "cron_helpers.system_engine_fallback"
+            assert len(errors) == 1
+            msg, extra = errors[0]
+            assert msg == "cron_helpers.system_engine_misconfigured"
             assert "MODULO_SYSTEM_DATABASE_URL not set" in extra["reason"]
         finally:
             ch._SYSTEM_ENGINE = None
