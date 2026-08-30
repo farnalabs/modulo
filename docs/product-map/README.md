@@ -162,6 +162,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
+- [feat-core-ssrf](core/ssrf.md) => PRD N/A
+- [feat-core-secrets-backend](core/secrets-backend.md) => PRD N/A
 
 ### Improve
 - [feat-evals](improve/evals.md) => PRD N/A

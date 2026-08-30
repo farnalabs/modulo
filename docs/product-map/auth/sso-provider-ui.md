@@ -27,6 +27,7 @@ bdd:
 depends-on:
   - feat-core-oidc-integration
   - feat-core-saml-integration
+  - feat-core-ssrf
   - feat-teams-org-entity
 status: covered
 ---
