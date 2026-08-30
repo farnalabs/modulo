@@ -12,6 +12,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 _SHORTCUT_API = "https://api.app.shortcut.com/api/v3"
@@ -72,7 +73,7 @@ class ShortcutConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def _get_by_resource(
         self,

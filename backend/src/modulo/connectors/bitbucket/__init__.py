@@ -14,6 +14,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
@@ -94,7 +95,7 @@ class BitbucketConnector(ConnectorBase):
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Bitbucket API connection error")
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
