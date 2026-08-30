@@ -149,7 +149,8 @@ def test_git_scoped_script_executes_and_installs_helper(tmp_path) -> None:
     assert gitconfig.exists(), "agent gitconfig not written"
     assert "cred-helper.sh" in gitconfig.read_text()
     helper = tmp_path / ".git-policy" / "cred-helper.sh"
-    assert helper.exists() and os.access(helper, os.X_OK)
+    assert helper.exists()
+    assert os.access(helper, os.X_OK)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="script writes to /tmp which is unreliable on Windows Git Bash")
@@ -356,7 +357,7 @@ def test_validate_read_only_accepts_bool_and_none() -> None:
 
 
 def test_validate_read_only_rejects_non_bool() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read_only must be a boolean"):
         _validate_sandbox_read_only_config({"id": "n1", "read_only": "yes"})
 
 
@@ -367,7 +368,7 @@ def test_validate_git_credentials_accepts_scopes() -> None:
 
 
 def test_validate_git_credentials_rejects_unknown() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid git_credentials"):
         _validate_sandbox_git_credentials_config({"id": "n1", "git_credentials": "full"})
 
 

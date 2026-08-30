@@ -279,7 +279,7 @@ def _patch_resolver(monkeypatch: pytest.MonkeyPatch, responses: list[list[str]])
     ],
 )
 def test_validate_outbound_url_rejects_noncanonical_ip_encodings(url: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="IP literal"):
         ssrf.validate_outbound_url(url)
 
 
@@ -295,7 +295,7 @@ def test_validate_outbound_url_rejects_noncanonical_ip_encodings(url: str) -> No
 async def test_validate_outbound_url_async_rejects_noncanonical_ip_encodings(
     url: str,
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="IP literal"):
         await ssrf.validate_outbound_url_async(url)
 
 
@@ -510,7 +510,7 @@ def test_hex_like_hostname_not_spuriously_rejected(monkeypatch: pytest.MonkeyPat
     ],
 )
 def test_dotted_numeric_literals_rejected(url: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="IP literal"):
         ssrf.validate_outbound_url(url)
 
 

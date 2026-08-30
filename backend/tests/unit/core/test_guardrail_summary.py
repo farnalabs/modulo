@@ -179,11 +179,11 @@ def test_summary_to_dict_and_from_mapping_round_trip() -> None:
 
 
 def test_summary_from_mapping_rejects_malformed() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="malformed guardrail summary"):
         GuardrailSummary.from_mapping({"bound": "not-an-int"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must be a mapping"):
         GuardrailSummary.from_mapping(None)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="malformed guardrail summary"):
         GuardrailSummary.from_mapping({"bound": 1})
 
 
@@ -243,7 +243,8 @@ async def test_alert_unexpected_guardrail_skip_fires(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
     await alert_unexpected_guardrail_skip(_ORG, _RUN, GuardrailSkip(name="evaded", reason="cap_evaded"))
 
-    assert notified and notified[0]["event_type"] == "guardrail_unexpected_skip"
+    assert notified
+    assert notified[0]["event_type"] == "guardrail_unexpected_skip"
     assert notified[0]["payload"]["guardrail"] == "evaded"
     assert notified[0]["payload"]["reason"] == "cap_evaded"
 

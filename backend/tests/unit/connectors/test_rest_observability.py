@@ -342,7 +342,7 @@ class TestConnectorMetricWiring:
         with patch.object(rest_metrics, "_get_meter", return_value=meter):
             import asyncio
 
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="private/internal"):
                 asyncio.run(c.query(ConnectorQuery(resource="default")))
         ssrf = counters["modulo_rest_ssrf_blocked_total"]
         assert ssrf.add.call_count == 1

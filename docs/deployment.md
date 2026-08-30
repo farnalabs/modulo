@@ -27,7 +27,7 @@ FERNET_KEY=<random-44-char-base64>
 
 ```bash
 # Apply database migrations first
-uv run alembic upgrade head
+uv run alembic upgrade heads
 
 # Start the API server
 uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000

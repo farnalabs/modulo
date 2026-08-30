@@ -43,7 +43,6 @@ async def _clear_tiers_cache() -> None:
     finally:
         if redis is not None:
             await redis.aclose()
-    yield
 
 
 _STANDARD_TIERS = [

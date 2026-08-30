@@ -227,7 +227,7 @@ class TestEvaluateCoverageGap:
         assert gap.evals[0].recommended_action == "improve_evals"
 
     def test_invalid_min_runs_rejected(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="min_runs must be >= 1"):
             evaluate_coverage_gap([], [], min_runs=0)
 
     def test_prove_the_fix_single_sample_eval_is_no_gap(self) -> None:

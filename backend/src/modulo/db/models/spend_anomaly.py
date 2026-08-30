@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, Uuid
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Numeric, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -10,6 +10,10 @@ from modulo.db.models.base import OrgScoped
 
 class SpendAnomaly(OrgScoped):
     __tablename__ = "spend_anomalies"
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="ck_spend_anomalies_amount"),
+        CheckConstraint("baseline >= 0", name="ck_spend_anomalies_baseline"),
+    )
 
     anomaly_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(

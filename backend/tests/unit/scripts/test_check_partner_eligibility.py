@@ -37,7 +37,7 @@ def _base_evidence(now: _dt.datetime) -> dict:
     }
 
 
-@pytest.fixture()
+@pytest.fixture
 def now() -> _dt.datetime:
     return _dt.datetime(2026, 1, 15, 12, 0, 0, tzinfo=_dt.UTC)
 
@@ -309,7 +309,7 @@ def test_parse_target_variants() -> None:
     assert mod.parse_target("github.com/foo/bar") == "foo/bar"
     assert mod.parse_target("foo/bar") == "foo/bar"
     assert mod.parse_target("foo/bar.git") == "foo/bar"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Could not parse"):
         mod.parse_target("not-a-repo")
 
 

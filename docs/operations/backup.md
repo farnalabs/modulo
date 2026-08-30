@@ -32,9 +32,9 @@ The script will:
 2. Check available disk space
 3. Dump Postgres schema + data via `pg_dump`
 4. Collect `FERNET_KEY`, `SECRET_KEY`, and other env vars
-5. Pack everything into a `.tar.gz`
+5. Pack the dump, configuration, manifest, and checksums into a `.tar.gz`
 6. Encrypt with AES-256-CBC (PBKDF2, 600K iterations)
-7. Write output with filename `modulo-backup-{org_id}-{timestamp}.tar.gz.enc`
+7. Write the encrypted archive. If `--output` is omitted, the filename is `modulo-backup-{org_id}-{timestamp}.tar.gz.enc`.
 
 ### Options
 
@@ -91,6 +91,10 @@ uv run scripts/restore.py --input /backups/daily/backup-20260624.tar.gz.enc --fu
    - **Config-only**: prints secrets.env contents for manual application
    - **Full**: both data and config restore
 5. Cleans up the temporary directory
+
+The `--data-only` and `--full` modes replace the target database. Stop the
+application and any workers before using either mode, and verify the target
+database URL before confirming the restore.
 
 ## Retention Policy
 

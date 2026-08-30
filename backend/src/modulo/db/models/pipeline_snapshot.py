@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -15,7 +15,15 @@ if TYPE_CHECKING:
 
 class PipelineSnapshot(OrgScoped):
     __tablename__ = "pipeline_snapshots"
-    __table_args__ = (UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),)
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),
+        CheckConstraint("version_kind IN ('edit','run','draft')", name="ck_pipeline_snapshots_version_kind"),
+        CheckConstraint(
+            "created_kind IN ('initial','edit','rollback','run')",
+            name="ck_pipeline_snapshots_created_kind",
+        ),
+        CheckConstraint("channel IN ('none','stable','canary')", name="ck_pipeline_snapshots_channel"),
+    )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
