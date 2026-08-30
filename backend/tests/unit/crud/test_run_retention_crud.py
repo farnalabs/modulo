@@ -237,7 +237,9 @@ class TestPurgeTerminalRuns:
         assert delete_checkpoints.call_args.args[1] == thread_ids
         assert delete_checkpoints.call_args.args[2] == _ORG
         session.flush.assert_awaited()
-        session.begin_nested.assert_called()
+        # Exactly one SAVEPOINT for the single purge batch (the sibling
+        # test_batches_at_batch_size proves one begin_nested per batch).
+        session.begin_nested.assert_called_once()
 
     async def test_batches_at_batch_size(self) -> None:
         """A set larger than batch_size is processed in more than one SAVEPOINT."""

@@ -346,12 +346,16 @@ def test_assert_no_secret_objects_allows_plain_result():
     """A ConnectorResult carrying only plain-serializable records is valid."""
     from modulo.connectors.base import ConnectorResult
 
-    assert_no_secret_objects(ConnectorResult(records=[{"ok": True}]), node_id="n1")
+    result = assert_no_secret_objects(ConnectorResult(records=[{"ok": True}]), node_id="n1")
+    # The guard is a validator: a clean payload passes without raising AND
+    # must not (start to) return a value — keep the no-return contract pinned.
+    assert result is None
 
 
 def test_assert_no_secret_objects_allows_plain_data():
     # Opaque connector ID strings + plain dicts/list are valid port payloads.
-    assert_no_secret_objects({"connector_id": str(uuid.uuid4()), "records": [{"ok": True}]}, node_id="n1")
+    result = assert_no_secret_objects({"connector_id": str(uuid.uuid4()), "records": [{"ok": True}]}, node_id="n1")
+    assert result is None
 
 
 # Save-time (route-level) narrow-not-widen control (FAR-418 MINOR-1)
