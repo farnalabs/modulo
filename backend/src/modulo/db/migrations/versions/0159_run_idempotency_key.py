@@ -1,7 +1,7 @@
 """Add the run-record idempotency-key persistence column (FAR-438).
 
-Revision ID: 0156_run_idempotency_key
-Revises: 0155_pipeline_retry_compensation
+Revision ID: 0159_run_idempotency_key
+Revises: 0158_pipeline_retry_compensation
 Create Date: 2026-08-26
 
 FAR-410's ``stable_idempotency_key`` derivation landed WITHOUT a run-record
@@ -23,13 +23,15 @@ rejects it.
 
 Additive + nullable: an existing run row simply carries ``NULL`` and is never
 deduped by this path — no shipped migration is modified. This migration was
-originally ``0151_run_idempotency_key`` (then ``0155_run_idempotency_key``) but
-was renumbered to ``0156_run_idempotency_key`` and re-parented onto
-``0155_pipeline_retry_compensation`` to avoid a two-head Alembic collision with
-the parallel ``0155_pipeline_retry_compensation`` migration (FAR-402 P5) that the
-merge queue merges ahead of this PR. The single head is now
-``0156_run_idempotency_key`` (chain: 0154 -> 0155_pipeline_retry_compensation
--> 0156_run_idempotency_key).
+originally ``0151_run_idempotency_key`` (then ``0156_run_idempotency_key``) but
+was renumbered to ``0159_run_idempotency_key`` and re-parented onto
+``0158_pipeline_retry_compensation`` to avoid a two-head Alembic collision with
+main's ``0155_add_hot_query_indexes`` / ``0156_add_soft_delete_partial_uniques`` /
+``0157_add_numeric_check_constraints`` migrations that landed ahead of this PR on
+main. The single head is now ``0159_run_idempotency_key`` (chain: 0154 ->
+0155_add_hot_query_indexes -> 0156_add_soft_delete_partial_uniques ->
+0157_add_numeric_check_constraints -> 0158_pipeline_retry_compensation ->
+0159_run_idempotency_key).
 
 Reversible: downgrade drops the column. RLS is unchanged (the ``runs`` table
 already has the org-scope policy; adding a column does not alter the row-level
@@ -43,8 +45,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0156_run_idempotency_key"
-down_revision: str | None = "0155_pipeline_retry_compensation"
+revision: str = "0159_run_idempotency_key"
+down_revision: str | None = "0158_pipeline_retry_compensation"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -55,7 +57,7 @@ def upgrade() -> None:
         op.execute("SET search_path TO public")
 
     # Idempotent: the ``runs.idempotency_key`` column is also added by the
-    # parallel ``0155_pipeline_retry_compensation`` migration (FAR-402 P5) that the
+    # parallel ``0158_pipeline_retry_compensation`` migration (FAR-402 P5) that the
     # merge queue lands ahead of this PR. Only add it if it is not already present,
     # so the two migrations can be applied in either order without a "column already
     # exists" failure. The model field is defined once (in run.py).
