@@ -165,7 +165,6 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Monitor
 - [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
-- [feat-hitl](monitor/hitl.md) => PRD N/A
 - [feat-observability](observability/observability.md) => PRD N/A
 
 ### Improve
@@ -177,9 +176,6 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Triggers
 - [feat-triggers](triggers/trigger-engine.md) => PRD N/A
-
-### Admin
-- [feat-audit](admin/audit.md) => PRD N/A
 
 ## Known graph gaps
 
