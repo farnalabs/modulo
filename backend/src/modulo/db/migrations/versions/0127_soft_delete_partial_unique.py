@@ -74,7 +74,11 @@ def upgrade():
 def downgrade():
     bind = op.get_bind()
     for table, old_name, new_name, columns in _PARTIAL_UNIQUES:
-        op.drop_index(new_name, table_name=table, postgresql_drop_where=text("deleted_at IS NULL"))
+        # PostgreSQL ``DROP INDEX`` carries no WHERE clause - the partial
+        # predicate lives in the index definition, so dropping by name is
+        # sufficient (and ``postgresql_drop_where`` was never a valid dialect
+        # kwarg: it raised ArgumentError, breaking every downgrade past 0126).
+        op.drop_index(new_name, table_name=table)
         # De-duplicate rows that share a business key before restoring the full
         # unique constraint. After upgrade, the partial unique index permits an
         # active row and one or more soft-deleted rows to coexist on the same key

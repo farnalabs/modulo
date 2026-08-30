@@ -732,7 +732,7 @@ class TestBackfillLedger:
         assert "'2026-08-06'" in agg_sql
 
     async def test_returns_zero_when_no_terminal_runs_for_the_day(self) -> None:
-        session = _session(execute_side_effect=[SimpleNamespace(all=lambda: [])])
+        session = _session(execute_side_effect=[SimpleNamespace(all=list)])
         result = await maintenance_mod.backfill_ledger(session, date(2026, 8, 6))
         assert result == 0
         # No orgs to upsert -> the insert statement is never built/executed.

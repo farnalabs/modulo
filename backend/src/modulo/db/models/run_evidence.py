@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, PrimaryKeyConstraint, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, PrimaryKeyConstraint, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -26,7 +26,13 @@ from modulo.db.models.base import Base
 
 class RunEvidence(Base):
     __tablename__ = "run_evidence"
-    __table_args__ = (PrimaryKeyConstraint("run_id", "node_id", name="pk_run_evidence_run_node"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("run_id", "node_id", name="pk_run_evidence_run_node"),
+        CheckConstraint(
+            "evidence_state IN ('has_work','verified_empty','unverifiable')",
+            name="ck_run_evidence_state",
+        ),
+    )
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True

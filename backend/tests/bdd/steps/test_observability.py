@@ -470,14 +470,16 @@ def run_detail_includes_capacity(request):
 def run_detail_includes_work_item_refs(request):
     data = request.node._resp.json()
     refs = data.get("work_item_refs")
-    assert isinstance(refs, list) and len(refs) > 0, "work_item_refs missing"
+    assert isinstance(refs, list), "work_item_refs missing"
+    assert len(refs) > 0, "work_item_refs missing"
 
 
 @then("the run detail response includes child_runs")
 def run_detail_includes_child_runs(request):
     data = request.node._resp.json()
     children = data.get("child_runs")
-    assert isinstance(children, list) and len(children) > 0, "child_runs missing"
+    assert isinstance(children, list), "child_runs missing"
+    assert len(children) > 0, "child_runs missing"
 
 
 @then("the event stream includes node_started events")

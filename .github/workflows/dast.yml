@@ -33,6 +33,7 @@ jobs:
           TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
           SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
           mkdir -p zap-report
+          chmod 777 zap-report
           if [ "$SCAN_TYPE" = "full" ]; then
             docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a
           else

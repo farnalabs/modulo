@@ -179,10 +179,10 @@ class TestParseAndVerifySigned:
     """Signed-key verification against a configured (non-default) public key."""
 
     @pytest.fixture
-    def kp(self) -> Generator[dict, None, None]:
+    def kp(self) -> dict:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
-        yield kp
+        return kp
 
     def test_valid_signed_key_is_verified(self, kp: dict) -> None:
         result = parse_and_verify(

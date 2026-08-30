@@ -37,7 +37,7 @@ def test_evaluate_jmespath_condition_truthiness():
 
 
 def test_evaluate_jmespath_condition_invalid_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid JMESPath expression"):
         compile_jmespath("foo.++invalid")
 
 

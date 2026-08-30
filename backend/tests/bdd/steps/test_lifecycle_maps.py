@@ -130,7 +130,8 @@ def export_envelope_carries_version_history(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
     versions = data.get("versions")
-    assert isinstance(versions, list) and versions, data
+    assert isinstance(versions, list), data
+    assert versions, data
     first = versions[0]
     assert isinstance(first, dict), data
     assert "stages" in first, data

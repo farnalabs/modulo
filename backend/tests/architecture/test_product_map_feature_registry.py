@@ -82,7 +82,7 @@ def test_behaviours_is_a_non_empty_checked_list():
             bad[feat] = "<behaviours must be a non-empty list>"
             continue
         for index, item in enumerate(behaviours):
-            if not isinstance(item, str) or not (item.startswith(_CHECKED) or item.startswith(_UNCHECKED)):
+            if not isinstance(item, str) or not item.startswith((_CHECKED, _UNCHECKED)):
                 bad[f"{feat}[{index}]"] = f"{item!r}"
     assert not bad, "each behaviour is a checklist item starting with '[x]' or '[ ]':\n" + "\n".join(
         f"  {key} -> {value}" for key, value in sorted(bad.items())

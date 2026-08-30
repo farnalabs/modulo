@@ -65,7 +65,8 @@ def _guardrail(
 def test_resolve_static_path_exact_nested():
     payload = {"config": {"credentials": {"api_key": "abc"}}, "body": "text"}
     found, value = resolve_static_path(payload, "config.credentials.api_key")
-    assert found and value == "abc"
+    assert found
+    assert value == "abc"
 
 
 def test_resolve_static_path_absent_segment_is_not_found():
@@ -103,7 +104,8 @@ def test_apply_redaction_masks_transform_uses_fixed_mask():
     )
     assert redacted["credentials"]["api_key"] == REDACTION_MASK
     assert redacted["body"] == "keep me"
-    assert entries[0].applied and entries[0].reason == "masked"
+    assert entries[0].applied
+    assert entries[0].reason == "masked"
 
 
 def test_apply_redaction_masks_does_not_mutate_original():
@@ -485,7 +487,8 @@ def test_run_guardrail_pass_two_phase_detection_then_redaction():
 
 def test_run_guardrail_pass_zero_guardrail_fast_path():
     outcome = run_guardrail_pass(EvalEngine(), [], {"body": "x"})
-    assert not outcome.results and not outcome.redactions
+    assert not outcome.results
+    assert not outcome.redactions
 
 
 def test_run_guardrail_pass_block_fires_before_any_mask():
@@ -531,7 +534,8 @@ def test_run_interception_pass_multiple_redact_guardrails_accumulate_entries():
 
 def test_conformance_present_when_all_confirmed():
     d = derive_conformance_state(["github.read"], {"github.read": True})
-    assert d.state == "present" and d.claimed
+    assert d.state == "present"
+    assert d.claimed
 
 
 def test_conformance_absent_when_any_confirmed_missing():

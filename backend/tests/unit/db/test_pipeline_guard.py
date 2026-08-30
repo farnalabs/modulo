@@ -21,7 +21,7 @@ from modulo.db.crud.hitl_gate_guard import (
     DiffResult,
     HitlGateWeakeningDenied,
 )
-from modulo.db.crud.pipeline import replace_pipeline_graph
+from modulo.db.crud.pipeline import _edge_to_plain_dict, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -60,6 +60,8 @@ class _EdgeRow:
         self.edge_type = edge_type
         self.hitl_gate_config = copy.deepcopy(cfg)
         self.condition_expression = None
+        self.source_port = None
+        self.target_port = None
 
 
 class _SnapshotRow:
@@ -1061,3 +1063,19 @@ async def test_replace_pipeline_graph_persists_condition_expression(
     _, persisted_edges = result
     assert len(persisted_edges) == 1
     assert persisted_edges[0].condition_expression == expr
+
+
+def test_edge_to_plain_dict_preserves_condition_expression() -> None:
+    """``_edge_to_plain_dict`` (clone snapshot + graph-replace read path) must
+    carry a conditional edge's ``condition_expression`` onto the plain data so
+    clones and snapshot reads don't silently drop it (FAR-455)."""
+    expr = "result.score >= `50`"
+    edge = _EdgeRow(edge_type="conditional")
+    edge.condition_expression = expr
+
+    plain = _edge_to_plain_dict(edge)
+
+    assert plain["condition_expression"] == expr
+    assert plain["edge_type"] == "conditional"
+    assert plain["source_node_id"] == uuid.UUID(_NODE_A)
+    assert plain["target_node_id"] == uuid.UUID(_NODE_B)

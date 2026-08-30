@@ -49,7 +49,7 @@ SQLITE_URL = "sqlite+aiosqlite:///./test.db"
 MARIADB_URL = "mysql+aiomysql://u:p@localhost:3306/db"
 
 
-@pytest.fixture()
+@pytest.fixture
 def session_mod() -> Any:
     """The module under test, with its mutable process state restored after use.
 

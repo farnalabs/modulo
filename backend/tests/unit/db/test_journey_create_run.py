@@ -430,7 +430,7 @@ class TestVariantAndReplayWiring:
                 # FAR-214: the pre-trigger guardrail row query runs before
                 # create_run on replays; the fake session has no guardrail rows
                 # bound, so return an empty scalar result.
-                return SimpleNamespace(all=lambda: [])
+                return SimpleNamespace(all=list)
 
         class _ReplaySession:
             def __init__(self) -> None:

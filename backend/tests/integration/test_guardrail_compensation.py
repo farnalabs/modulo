@@ -275,7 +275,8 @@ class TestCompensateBlockedRunAgainstRealDB:
             await session.flush()
 
         # The connector's close-PR compensation fired with the run's output.
-        assert connector.calls and connector.calls[0][0] == "pr"
+        assert connector.calls
+        assert connector.calls[0][0] == "pr"
         assert connector.calls[0][1].output == {"number": 42}
 
         persisted = await _load_summary(db_engine, run_id)
@@ -403,7 +404,8 @@ class TestExecutorMidRunCompensationWiring:
             )
 
         # The compensating callback fired through the real executor seam.
-        assert connector.calls and connector.calls[0][0] == "pr"
+        assert connector.calls
+        assert connector.calls[0][0] == "pr"
         assert connector.calls[0][1].output == {"number": 42}
 
         # The blocked_partial summary was written with the executed node marked

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, OrgScoped
@@ -95,6 +95,7 @@ class Dismissal(Base):
     __table_args__ = (
         CheckConstraint("dismiss_scope IN ('self', 'scope')", name="ck_dismissals_scope"),
         UniqueConstraint("notification_id", "dismissed_by_user_id", name="uq_dismissal_user_notification"),
+        Index("ix_dismissals_dismissed_by_user_id", "dismissed_by_user_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)

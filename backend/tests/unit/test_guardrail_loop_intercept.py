@@ -119,7 +119,8 @@ def test_config_malformed_raises(raw):
 
 def test_config_error_validation_helper():
     errors = validate_loop_intercept_config_errors({"latency_budget_ms": 0})
-    assert errors and any("latency_budget_ms" in e for e in errors)
+    assert errors
+    assert any("latency_budget_ms" in e for e in errors)
     assert not validate_loop_intercept_config_errors({"latency_budget_ms": 300})
 
 
@@ -171,7 +172,8 @@ async def test_block_before_refuses_call():
     assert outcome.action == "block"
     assert outcome.blocked is True
     assert outcome.guardrail_name == "block-token"
-    assert audit and audit[0].event_type == "guardrail.loop_blocked"
+    assert audit
+    assert audit[0].event_type == "guardrail.loop_blocked"
 
 
 async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
@@ -179,7 +181,8 @@ async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is False
-    assert audit and audit[0].event_type == "guardrail.loop_blocked"
+    assert audit
+    assert audit[0].event_type == "guardrail.loop_blocked"
 
 
 async def test_block_after_records_not_refuses():
@@ -273,7 +276,8 @@ async def test_latency_budget_timeout_allows_call_and_audits(monkeypatch):
     assert outcome.blocked is False
     assert outcome.bridge_failed is True
     assert "latency" in outcome.reason
-    assert audit and audit[0].event_type == "guardrail.loop_bridge_timeout"
+    assert audit
+    assert audit[0].event_type == "guardrail.loop_bridge_timeout"
 
 
 def _exploding_detection(_engine, _payload, _def):
@@ -287,7 +291,8 @@ async def test_detection_mechanism_error_fails_open(monkeypatch):
     assert outcome.action == "pass"
     assert outcome.bridge_failed is True
     assert outcome.reason
-    assert audit and audit[0].event_type == "guardrail.loop_bridge_timeout"
+    assert audit
+    assert audit[0].event_type == "guardrail.loop_bridge_timeout"
 
 
 # ---------------------------------------------------------------------------

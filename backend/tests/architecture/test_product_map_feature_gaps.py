@@ -149,6 +149,45 @@ def test_every_graph_entry_reachable_from_index():
         )
 
 
+#: Section markers of the graph root's two indexes (see README.md).
+_REGISTRY_INDEX_START = "## Index — manifest feature registry"
+_REGISTRY_INDEX_END = "## Index — feature graph entries"
+_REGISTRY_INDEX_TOKEN = "**{feature}**"
+
+
+def test_graph_root_registry_index_enumerates_every_manifest_feature():
+    """The graph root's "manifest feature registry" index lists every registered feature.
+
+    ``docs/product-map/README.md`` is the root of the feature graph. Its first
+    index is the human-readable mirror of the ``frontend/src/manifest.yaml``
+    ``features:`` registry; the README itself promises "Fresh entries for these
+    features are added to the graph below as behaviour trackers". A feature
+    registered in the manifest but missing from that index is invisible to a
+    reader navigating the graph — the product map ships it but its root does not
+    point at it (the ``feat-router`` gap this guard closes). The manifest
+    registry must be a strict subset of the index.
+    """
+    assert GRAPH_INDEX.is_file()
+    index_text = GRAPH_INDEX.read_text(encoding="utf-8")
+    assert _REGISTRY_INDEX_START in index_text, (
+        "graph root must declare the 'Index — manifest feature registry' section"
+    )
+    assert _REGISTRY_INDEX_END in index_text, "graph root must declare the 'Index — feature graph entries' section"
+    index_section = index_text.split(_REGISTRY_INDEX_START, 1)[1].split(_REGISTRY_INDEX_END, 1)[0]
+    missing = sorted(
+        feature
+        for feature in _manifest_features()
+        if _REGISTRY_INDEX_TOKEN.format(feature=feature) not in index_section
+    )
+    assert not missing, (
+        "manifest-registered features missing from the graph-root registry index "
+        "(add each to the 'Index — manifest feature registry' section of "
+        + GRAPH_INDEX.relative_to(REPO_ROOT).as_posix()
+        + " so the graph root enumerates the full product surface):\n"
+        + "\n".join(f"  {feature}" for feature in missing)
+    )
+
+
 def test_graph_entry_feature_ids_are_unique():
     """Product-map entries key on unique ``id`` frontmatter values."""
     seen: dict[str, Path] = {}

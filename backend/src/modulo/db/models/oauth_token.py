@@ -12,7 +12,7 @@ Token families implement rotation detection (reuse pattern from user token_famil
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -23,7 +23,10 @@ _FK_ORGANISATIONS_ID = "organisations.id"
 
 class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
-    __table_args__ = ({"comment": "One-time authorization codes for OAuth 2.0 flow"},)
+    __table_args__ = (
+        CheckConstraint("code_challenge_method = 'S256'", name="ck_oauth_auth_codes_challenge_method"),
+        {"comment": "One-time authorization codes for OAuth 2.0 flow"},
+    )
 
     code: Mapped[str] = mapped_column(String(128), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

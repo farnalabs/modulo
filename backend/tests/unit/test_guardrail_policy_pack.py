@@ -137,14 +137,14 @@ def test_invalid_control_id_rejected():
 
 def test_duplicate_control_id_rejected():
     control = _control(guardrail=_guardrail())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Duplicate control id"):
         PolicyPack(
             id="soc2", name="SOC 2", controls=[control, _control(cid="CC6.1", guardrail=_json_schema_guardrail())]
         )
 
 
 def test_control_marked_mapped_without_guardrail_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="is marked mapped but has no guardrail mapping"):
         PolicyControl(id="CC6.1", title="Encryption", mapped=True)
 
 

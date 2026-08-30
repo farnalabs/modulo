@@ -157,9 +157,9 @@ async def _append_fail_open_audit(
             payload_json=payload,
         )
     except SQLAlchemyError:
-        logger.exception(f"{log_prefix} audit write failed")
+        logger.exception("%s audit write failed", log_prefix)
     except Exception:
-        logger.exception(f"{log_prefix} audit write failed (non-DB)")
+        logger.exception("%s audit write failed (non-DB)", log_prefix)
 
 
 def _timestamp_response(field: Any) -> str | None:

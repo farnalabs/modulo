@@ -17,7 +17,7 @@ on:
         type: boolean
 
 concurrency:
-  group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  group: deploy-pipeline-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +40,14 @@ jobs:
             echo "Force deploy requested — bypassing throttle."
             exit 0
           fi
+          # If a deploy run is already in progress, batch this one - do not cancel/compete.
+          IN_PROGRESS="$(gh api \"repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?status=in_progress&branch=${{ github.ref_name }}\" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id] | .[0] // empty' 2>/dev/null || echo '')"
+          if [ -n "$IN_PROGRESS" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy."
+            exit 0
+          fi
+
           # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
           COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
@@ -87,24 +95,78 @@ jobs:
             fi
           fi
 
-  pre-deploy-tests:
-    name: Pre-deploy tests (fast + expensive)
+  # FAR-459: the former monolithic pre-deploy test job (~75-90 min, strictly
+  # sequential) is split into five parallel atomic jobs plus an aggregate gate
+  # below. Per-suite jobs mean per-job live status and partial logs mid-run via
+  # `gh run view <id>` / the jobs API — you no longer have to wait for one giant
+  # job to conclude before seeing which stage broke — and the independent suites
+  # run concurrently for speed. Commands are copied verbatim from the old job;
+  # timeout-minutes act as per-suite budgets.
+
+  backend-lint:
+    name: "Pre-deploy: Backend lint"
     needs: [deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
-    # Explicit budget: this job runs the full unit + integration suites.
-    # Without a timeout the ephemeral runner can recycle mid-run.
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           python-version: "3.12"
           enable-cache: true
+
+      - name: Backend lint
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run --no-build --no-sync ruff check .
+          uv run --no-build --no-sync mypy src/modulo/
+          uv run --no-build --no-sync bandit -r src/modulo/ -ll
+
+  backend-unit:
+    name: "Pre-deploy: Backend unit tests"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend unit tests
+        working-directory: backend
+        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
+
+  frontend-checks:
+    name: "Pre-deploy: Frontend checks"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.21.0
@@ -113,23 +175,6 @@ jobs:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      # Fast tests (belt-and-braces re-run)
-      - name: Backend lint
-        working-directory: backend
-        run: |
-          uv sync --frozen
-          uv run --no-build --no-sync ruff check .
-          uv run --no-build --no-sync mypy src/modulo/
-          uv run --no-build --no-sync bandit -r src/modulo/ -ll
-          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
-          uv run --no-build --no-sync pip-audit
-
-      - name: Backend unit tests
-        working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
-        env:
-          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
 
       - name: Frontend checks
         working-directory: frontend
@@ -140,6 +185,27 @@ jobs:
           pnpm run test:unit
           pnpm run build
           pnpm audit --audit-level=critical
+
+  integration-tests:
+    name: "Pre-deploy: Integration tests"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
 
       # Expensive tests
       - name: Start Postgres
@@ -167,18 +233,15 @@ jobs:
             sleep 2
           done
 
+      # Per-test timeout: without it a single hung test stalls the whole job
+      # silently until the job-level kill (observed 2026-08-27, run
+      # 33063471418: zero output for 41 min after 93%). 300s matches ci.yml.
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
-
-      - name: Security audit
-        working-directory: backend
-        run: |
-          uv run --no-build --no-sync pip-audit
-          (cd .. && if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi)
 
       - name: Stop containers
         if: always()
@@ -187,20 +250,94 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
+  security-audit:
+    name: "Pre-deploy: Security audit"
+    needs: [deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    steps:
+      # Full history required: semgrep diffs against --baseline-commit HEAD^.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        run: uv sync --project backend --frozen
+
+      - name: Security audit
+        shell: bash
+        run: |
+          uv run --no-build --project backend --no-sync pip-audit
+          if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi
+
+  pre-deploy-gate:
+    name: Pre-deploy gate
+    needs: [backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
+    # The gate only means something when the children actually ran - a throttled
+    # run skips all five pre-deploy jobs, so the gate must stay skipped too.
+    if: always() && needs.backend-lint.result != 'skipped'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate pre-deploy results
+        shell: bash
+        run: |
+          echo "Pre-deploy results:"
+          echo "  backend-lint:      ${{ needs.backend-lint.result }}"
+          echo "  backend-unit:      ${{ needs.backend-unit.result }}"
+          echo "  frontend-checks:   ${{ needs.frontend-checks.result }}"
+          echo "  integration-tests: ${{ needs.integration-tests.result }}"
+          echo "  security-audit:    ${{ needs.security-audit.result }}"
+
+          FAILED=""
+          if [ "${{ needs.backend-lint.result }}" != "success" ]; then
+            FAILED="$FAILED backend-lint"
+          fi
+          if [ "${{ needs.backend-unit.result }}" != "success" ]; then
+            FAILED="$FAILED backend-unit"
+          fi
+          if [ "${{ needs.frontend-checks.result }}" != "success" ]; then
+            FAILED="$FAILED frontend-checks"
+          fi
+          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+            FAILED="$FAILED integration-tests"
+          fi
+          if [ "${{ needs.security-audit.result }}" != "success" ]; then
+            FAILED="$FAILED security-audit"
+          fi
+
+          if [ -n "$FAILED" ]; then
+            for JOB in $FAILED; do
+              echo "::error::${JOB} failed"
+            done
+            exit 1
+          fi
+
+          echo "All pre-deploy jobs succeeded."
+
   notify-deploy-failure:
     name: Trigger Branch Fixer on deploy failure
-    needs: [deploy-throttle, pre-deploy-tests]
-    # Fires ONLY when the pre-deploy tests actually ran AND failed (result ==
-    # 'failure'), and only when the deploy was actually attempted
-    # (should_deploy was true). A throttled run skips pre-deploy-tests entirely
-    # (result == 'skipped'), so it can never look like a failure to fix.
+    needs: [deploy-throttle, pre-deploy-gate]
+    # Fires ONLY when the pre-deploy gate actually ran AND failed (result ==
+    # 'failure') — i.e. any of the five parallel pre-deploy jobs failed, as
+    # aggregated by the gate — and only when the deploy was actually attempted
+    # (should_deploy was true). A throttled run skips every pre-deploy job and
+    # the gate entirely (result == 'skipped'), so it can never look like a
+    # failure to fix.
     # This job only sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer (running on
     # app.modulo.run with the same GITHUB_TOKEN as the improve-* pipelines)
     # creates its own fix branch from main, diagnoses the failure, fixes it,
     # and raises the PR — exactly like the improve-* pipelines do. No checkout,
     # no git, no branch creation happens here.
-    if: always() && needs.pre-deploy-tests.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: always() && needs.pre-deploy-gate.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -254,7 +391,7 @@ jobs:
 
   deploy-staging:
     name: Deploy to staging
-    needs: [pre-deploy-tests]
+    needs: [pre-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -266,7 +403,16 @@ jobs:
         id: git
         uses: ./.github/actions/capture-git-metadata
 
-      - name: Deploy to staging-modulo
+      # Deploy restructure (2026-08-27 incident: migrations ran ~30 min inside
+      # fly deploy's release phase and the post-deploy health gate had to
+      # absorb the residual wait): build-only -> pre-migrate on a one-off
+      # machine -> deploy the pre-built image -> destroy the machine. The
+      # release command inside `fly deploy` remains the AUTHORITATIVE
+      # migrator (it fails the deploy if migrations fail); the pre-migrate
+      # step moves the wait BEFORE the swap so the health gate measures pure
+      # app startup, and pre-migrate failure is fatal (deploy aborted).
+      - name: Build image (no deploy)
+        id: build
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -275,17 +421,251 @@ jobs:
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
+          # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
+          # --push --image-label). The image label carries the deploy SHA so
+          # the pre-migrate machine and the deploy step can both reference it.
+          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_REF="registry.fly.io/staging-modulo:${IMAGE_LABEL}"
+          echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
           MAX_RETRIES=3
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app staging-modulo --config fly.staging.toml \
+            echo "--- Build attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --build-only --push --image-label "$IMAGE_LABEL" --config fly.staging.toml \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
               --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Build + push succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Build failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Pre-deploy migrations (one-off machine)
+        id: pre-migrate
+        shell: bash
+        # Pre-migrate failure is FATAL: run release.sh (bootstrap + alembic
+        # upgrade heads) on a one-off machine from the just-built image so
+        # migrations complete BEFORE `fly deploy` swaps the release. Any
+        # failure here (launch failure, machine not identifiable, machine
+        # vanished, poll timeout) fails the run and the deploy is aborted -
+        # the root cause must be fixed; there is no silent fallback to
+        # release-command migration.
+        #
+        # The release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - and acts as
+        # defence-in-depth for the case where pre-migrate succeeded but
+        # migrations ran long (re-running `alembic upgrade heads` at head is
+        # an instant no-op). It is NOT a fallback for pre-migrate failure: a
+        # pre-migrate failure aborts the deploy before it starts.
+        #
+        # Exit-code gate: when the machine stops, the poll below reads the
+        # machine's exit event (`fly machine list --json` includes each
+        # machine's event log). A non-zero exit code fails the deploy before
+        # the swap. Known gap: the Fly API OMITS exit_code on a clean exit
+        # (code 0, omitempty) and requested stops record none either, so a
+        # missing exit_code is warned about and treated as success - that is
+        # exactly why the authoritative release command in `fly deploy` still
+        # gates the deploy on migration success.
+        #
+        # The machine does NOT auto-destroy when its command exits
+        # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
+        # machine" step below removes it in every outcome.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app staging-modulo --json > /tmp/premigrate-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/premigrate-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/premigrate-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh
+          # (Dockerfile.fly COPYs it to /release.sh, matching the [release]
+          # command in fly.toml).
+          echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          # positional command: --command is ignored without --shell (flyctl) - the machine ran bare bash forever (2026-08-27).
+          # --detach: return right after launch instead of flyctl's blocking
+          # wait. A one-off script machine sits in "starting" until its
+          # process exits, so flyctl's ~60s wait is NOT a success signal -
+          # real migrations routinely exceed it and flyctl errors out while
+          # the migration actually succeeded (FAR-486, run 33249359778).
+          # Genuine launch failures (bad image ref) still exit non-zero and
+          # are caught below; the state poll after discovery is the real
+          # verification.
+          fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
+            --entrypoint /bin/bash \
+            --vm-size shared-cpu-1x --memory 1024 \
+            --detach \
+            "/release.sh"
+          if [ $? -ne 0 ]; then
+            echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
+            exit 1
+          fi
+
+          # fly machine list reports the image WITH its digest suffix
+          # (...:tag@sha256:...), so match on PREFIX. Machine creation takes
+          # ~25s, so poll for the new machine with a bounded retry instead of
+          # a single list call.
+          MID=""
+          DISCOVERY_ATTEMPTS=12
+          DISCOVERY_INTERVAL_SEC=5
+          discovery_attempt=0
+          while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+            discovery_attempt=$(( discovery_attempt + 1 ))
+            MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and image and mimage.startswith(image) and mid not in pre:
+                  print(mid)
+                  break
+          ')"
+            if [ -n "$MID" ]; then
+              break
+            fi
+            if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+              echo "Pre-migrate machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+              sleep "$DISCOVERY_INTERVAL_SEC"
+            fi
+          done
+          if [ -z "$MID" ]; then
+            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            exit 1
+          fi
+          echo "$MID" > /tmp/premigrate-machine-id.txt
+          export MID
+          echo "Pre-migrate machine: ${MID}"
+
+          # Bounded poll until the one-off machine stops (release.sh has
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # swapping onto an unverified database.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means
+              # release.sh failed and migrations did NOT complete - abort
+              # before the swap. The Fly API omits exit_code on a clean exit
+              # (code 0) and requested stops record none, so a missing
+              # exit_code is warned about and treated as success (the
+              # release command in `fly deploy` remains the authoritative
+              # migration gate). Events are newest-first; the first "exit"
+              # event is the latest.
+              EXIT_CODE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
+              echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "::error::Pre-migrate machine ${MID} vanished before migrations completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
+            fi
+            echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          exit 1
+
+      - name: Deploy to staging-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          # Deploy the pre-built image instead of building from source
+          # (precedent: the FAR-403 rollback path already deploys by --image).
+          # The [release] command still runs here as the AUTHORITATIVE
+          # migrator: `alembic upgrade heads` is an instant no-op when the DB
+          # is already at head, and it fails the deploy if migrations failed.
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --image "$IMAGE_REF" --config fly.staging.toml; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
             else
@@ -294,12 +674,67 @@ jobs:
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
-              else
-                echo "Deploy failed after $MAX_RETRIES attempts"
-                exit $EXIT_CODE
               fi
             fi
           done
+          # Exhaustion is fatal: a masked deploy failure must never count as a
+          # fresh successful deploy for the throttle (2026-08-27 incident).
+          echo "::error::Deploy failed after $MAX_RETRIES attempts - failing the run so the throttle does not count it as a fresh deploy (2026-08-27: masked failure poisoned the throttle for 3h)."
+          exit 1
+
+      - name: Destroy pre-migrate machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # The one-off pre-migrate machine does NOT auto-destroy when its
+          # command exits (--restart=no leaves it 'stopped'); remove it in
+          # every outcome (success, failure, cancel) so it cannot accumulate
+          # against the Fly machine limit. This step must never fail the job.
+          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/premigrate-machine-id.txt ]; then
+            MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the pre-migrate step created anything.
+            fly machine list --app staging-modulo --json > /tmp/premigrate-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/premigrate-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app staging-modulo --force || true
+            echo "Pre-migrate machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-migrate machine found to destroy (it may never have been created)."
+          fi
+          exit 0
 
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
@@ -518,7 +953,9 @@ jobs:
           # serving end-to-end. If /healthz/ready never returns 200, roll back to
           # the previous release so prod is never left down (the 2026-08-23 outage
           # left prod in a 'started' but connection-refused state for ~7h - FAR-400).
-          TIMEOUT_MIN=10
+          # 45-min default: long data migrations (e.g. jsonb backfill, 2026-08-27) must not trigger rollback; tune via repo variable HEALTH_GATE_TIMEOUT_MIN.
+          HEALTH_GATE_MIN="${{ vars.HEALTH_GATE_TIMEOUT_MIN || '45' }}"
+          TIMEOUT_MIN="$HEALTH_GATE_MIN"
           INTERVAL_SEC=15
           ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
           attempt=0
@@ -649,10 +1086,9 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
-        continue-on-error: true # nosemgrep: continue-on-error-in-ci
-        # Deliberate: failures are surfaced by the "Fail on test failure"
-        # aggregate step below instead of hard-failing here, so artifacts
-        # always upload even when a suite fails.
+        # No failure masking: a broken deploy must not ship green, so test
+        # failures hard-fail the run. Artifacts still upload (step below is
+        # `if: always()`).
 
       - name: Upload test artifacts
         if: always()
@@ -661,16 +1097,10 @@ jobs:
           name: playwright-traces-${{ github.run_id }}
           path: frontend/test-results/
           if-no-files-found: ignore
-      - name: Fail on test failure
-        if: steps.regression-tests.outcome == 'failure'
-        shell: pwsh
-        run: |
-          Write-Host "::error::One or more staging suites failed."
-          exit 1
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [pre-deploy-tests, staging-e2e]
+    needs: [pre-deploy-gate, staging-e2e]
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
@@ -683,27 +1113,268 @@ jobs:
         id: git
         uses: ./.github/actions/capture-git-metadata
 
-      - name: Deploy to app-modulo
+      # Same restructure as deploy-staging: build-only -> pre-migrate on a
+      # one-off machine -> deploy the pre-built image -> destroy the machine.
+      # The release command remains the AUTHORITATIVE migrator; the
+      # pre-migrate step moves the migration wait BEFORE the deploy swap
+      # (2026-08-27 incident), and pre-migrate failure is fatal (deploy
+      # aborted).
+      - name: Build image (no deploy)
+        id: build
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        continue-on-error: true
         run: |
           curl -fsSL https://fly.io/install.sh | sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
+          # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
+          # --push --image-label). The image label carries the deploy SHA so
+          # the pre-migrate machine and the deploy step can both reference it.
+          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_REF="registry.fly.io/app-modulo:${IMAGE_LABEL}"
+          echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
           MAX_RETRIES=3
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app app-modulo --config fly.toml \
+            echo "--- Build attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --build-only --push --image-label "$IMAGE_LABEL" --config fly.toml \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
               --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Build + push succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Build failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+
+      - name: Pre-deploy migrations (one-off machine)
+        id: pre-migrate
+        shell: bash
+        # Pre-migrate failure is FATAL: run release.sh (bootstrap + alembic
+        # upgrade heads) on a one-off machine from the just-built image so
+        # migrations complete BEFORE `fly deploy` swaps the release. Any
+        # failure here (launch failure, machine not identifiable, machine
+        # vanished, poll timeout) fails the run and the deploy is aborted -
+        # the root cause must be fixed; there is no silent fallback to
+        # release-command migration.
+        #
+        # The release command inside `fly deploy` remains the AUTHORITATIVE
+        # migrator - it fails the deploy if migrations fail - and acts as
+        # defence-in-depth for the case where pre-migrate succeeded but
+        # migrations ran long (re-running `alembic upgrade heads` at head is
+        # an instant no-op). It is NOT a fallback for pre-migrate failure: a
+        # pre-migrate failure aborts the deploy before it starts.
+        #
+        # Exit-code gate: when the machine stops, the poll below reads the
+        # machine's exit event (`fly machine list --json` includes each
+        # machine's event log). A non-zero exit code fails the deploy before
+        # the swap. Known gap: the Fly API OMITS exit_code on a clean exit
+        # (code 0, omitempty) and requested stops record none either, so a
+        # missing exit_code is warned about and treated as success - that is
+        # exactly why the authoritative release command in `fly deploy` still
+        # gates the deploy on migration success.
+        #
+        # The machine does NOT auto-destroy when its command exits
+        # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
+        # machine" step below removes it in every outcome.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app app-modulo --json > /tmp/premigrate-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/premigrate-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/premigrate-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh
+          # (Dockerfile.fly COPYs it to /release.sh, matching the [release]
+          # command in fly.toml).
+          echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          # positional command: --command is ignored without --shell (flyctl) - the machine ran bare bash forever (2026-08-27).
+          # --detach: return right after launch instead of flyctl's blocking
+          # wait. A one-off script machine sits in "starting" until its
+          # process exits, so flyctl's ~60s wait is NOT a success signal -
+          # real migrations routinely exceed it and flyctl errors out while
+          # the migration actually succeeded (FAR-486, run 33249359778).
+          # Genuine launch failures (bad image ref) still exit non-zero and
+          # are caught below; the state poll after discovery is the real
+          # verification.
+          fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
+            --entrypoint /bin/bash \
+            --vm-size shared-cpu-1x --memory 1024 \
+            --detach \
+            "/release.sh"
+          if [ $? -ne 0 ]; then
+            echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
+            exit 1
+          fi
+
+          # fly machine list reports the image WITH its digest suffix
+          # (...:tag@sha256:...), so match on PREFIX. Machine creation takes
+          # ~25s, so poll for the new machine with a bounded retry instead of
+          # a single list call.
+          MID=""
+          DISCOVERY_ATTEMPTS=12
+          DISCOVERY_INTERVAL_SEC=5
+          discovery_attempt=0
+          while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+            discovery_attempt=$(( discovery_attempt + 1 ))
+            MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and image and mimage.startswith(image) and mid not in pre:
+                  print(mid)
+                  break
+          ')"
+            if [ -n "$MID" ]; then
+              break
+            fi
+            if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+              echo "Pre-migrate machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+              sleep "$DISCOVERY_INTERVAL_SEC"
+            fi
+          done
+          if [ -z "$MID" ]; then
+            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            exit 1
+          fi
+          echo "$MID" > /tmp/premigrate-machine-id.txt
+          export MID
+          echo "Pre-migrate machine: ${MID}"
+
+          # Bounded poll until the one-off machine stops (release.sh has
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # swapping onto an unverified database.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means
+              # release.sh failed and migrations did NOT complete - abort
+              # before the swap. The Fly API omits exit_code on a clean exit
+              # (code 0) and requested stops record none, so a missing
+              # exit_code is warned about and treated as success (the
+              # release command in `fly deploy` remains the authoritative
+              # migration gate). Events are newest-first; the first "exit"
+              # event is the latest.
+              EXIT_CODE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
+              echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "::error::Pre-migrate machine ${MID} vanished before migrations completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
+            fi
+            echo "pre-migrate machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          exit 1
+
+      - name: Deploy to app-modulo
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          # Deploy the pre-built image instead of building from source
+          # (precedent: the FAR-403 rollback path below already deploys by
+          # --image). The [release] command still runs here as the
+          # AUTHORITATIVE migrator: `alembic upgrade heads` is an instant
+          # no-op when the DB is already at head, and it fails the deploy if
+          # migrations failed.
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --image "$IMAGE_REF" --config fly.toml; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
             else
@@ -712,12 +1383,67 @@ jobs:
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
-              else
-                echo "Deploy failed after $MAX_RETRIES attempts"
-                exit $EXIT_CODE
               fi
             fi
           done
+          # Exhaustion is fatal: a masked deploy failure must never count as a
+          # fresh successful deploy for the throttle (2026-08-27 incident).
+          echo "::error::Deploy failed after $MAX_RETRIES attempts - failing the run so the throttle does not count it as a fresh deploy (2026-08-27: masked failure poisoned the throttle for 3h)."
+          exit 1
+
+      - name: Destroy pre-migrate machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # The one-off pre-migrate machine does NOT auto-destroy when its
+          # command exits (--restart=no leaves it 'stopped'); remove it in
+          # every outcome (success, failure, cancel) so it cannot accumulate
+          # against the Fly machine limit. This step must never fail the job.
+          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/premigrate-machine-id.txt ]; then
+            MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the pre-migrate step created anything.
+            fly machine list --app app-modulo --json > /tmp/premigrate-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/premigrate-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/premigrate-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app app-modulo --force || true
+            echo "Pre-migrate machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-migrate machine found to destroy (it may never have been created)."
+          fi
+          exit 0
 
       - name: Post-deploy verify + auto-rollback (never leave prod down)
         id: verify
@@ -727,6 +1453,8 @@ jobs:
         run: |
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # 45-min default: long data migrations (e.g. jsonb backfill, 2026-08-27) must not trigger rollback; tune via repo variable HEALTH_GATE_TIMEOUT_MIN.
+          HEALTH_GATE_MIN="${{ vars.HEALTH_GATE_TIMEOUT_MIN || '45' }}"
           # FAR-403: an intermittent Fly control-plane blip can make `fly deploy`
           # exit non-zero and leave the machines in a bad state (prod down). Roll
           # back to the last COMPLETE release so a control-plane blip can NEVER
@@ -742,7 +1470,7 @@ jobs:
             done
             echo "TIMEOUT"; return 1
           }
-          if wait_healthy "https://app.modulo.run" 10; then
+          if wait_healthy "https://app.modulo.run" "$HEALTH_GATE_MIN"; then
             echo "deploy_healthy=true" >> "$GITHUB_OUTPUT"
             echo "rolled_back=false" >> "$GITHUB_OUTPUT"
             echo "app.modulo.run healthy - new release deployed."
@@ -772,6 +1500,8 @@ jobs:
           echo "deploy_healthy=true" >> "$GITHUB_OUTPUT"
           echo "rolled_back=true" >> "$GITHUB_OUTPUT"
           echo "::warning::New release was rolled back; prod restored to $LAST_GOOD (FAR-403)."
+          # A rollback means prod is NOT running main - fail the run so staleness is visible (2026-08-27: prod silently 5 days stale).
+          exit 1
 
       - name: Check deployed SHA
         if: steps.verify.outputs.rolled_back == 'false'
@@ -1017,13 +1747,5 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
-        continue-on-error: true # nosemgrep: continue-on-error-in-ci
-        # Deliberate: failures are surfaced by the "Fail on smoke test failure"
-        # aggregate step below instead of hard-failing here.
-
-      - name: Fail on smoke test failure
-        if: steps.smoke-tests.outcome == 'failure'
-        shell: pwsh
-        run: |
-          Write-Host "::error::Smoke tests against production failed."
-          exit 1
+        # No failure masking: a broken deploy must not ship green, so smoke
+        # failures hard-fail the run.
