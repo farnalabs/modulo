@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 # Repeated REST path (S1192).
 _WORKFLOWS_PATH = "/rest/workflows"
@@ -32,6 +33,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorType.N8N
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers={

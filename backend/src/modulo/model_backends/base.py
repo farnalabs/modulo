@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from modulo.core.ssrf import validate_outbound_url_async
+
 logger = logging.getLogger(__name__)
 
 HEALTH_CHECK_TIMEOUT = 10.0
@@ -32,6 +34,10 @@ async def openai_compatible_health_check(
     key via *extra_headers* and set *api_key* to None.
     """
     url = f"{base_url.rstrip('/')}/models"
+    try:
+        await validate_outbound_url_async(base_url)
+    except ValueError as exc:
+        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"

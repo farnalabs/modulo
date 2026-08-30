@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -68,6 +68,7 @@ def _build_client(settings_fn, sso_enabled: bool = True) -> Generator[TestClient
 
     app.dependency_overrides[get_settings] = settings_fn
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
@@ -105,6 +106,7 @@ class TestAdminSsoGating:
         mock_provider = MagicMock()
         mock_provider.id = _PROVIDER_ID
         mock_provider.provider_type = "oidc"
+        mock_provider.provider_id = "test-oidc"
         mock_provider.name = "Test"
         mock_provider.client_id = "cid"
         mock_provider.client_secret = "secret"

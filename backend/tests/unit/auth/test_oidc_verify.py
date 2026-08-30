@@ -12,6 +12,7 @@ import pytest
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.oidc_verify import (
     OidcVerifyError,
@@ -620,6 +621,21 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 
 
+def _mock_session() -> AsyncMock:
+    """Build an AsyncMock session whose DB lookups return ``None`` (no provider).
+
+    These tests exercise the OIDC verification flow with env-var providers, so
+    the DB provider resolution intentionally returns nothing (system role
+    unprovisioned -> app single-org fallback finds nothing -> env path).
+    """
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+    return session
+
+
 class TestOidcCallbackIntegration:
     async def test_callback_calls_verify(
         self,
@@ -648,7 +664,7 @@ class TestOidcCallbackIntegration:
             ),
         )
 
-        session = AsyncMock()
+        session = _mock_session()
         signed = sign_state("testprovider:test-state", settings.secret_key)
 
         discovery_doc = _discovery_doc()
@@ -674,6 +690,7 @@ class TestOidcCallbackIntegration:
                 "auth-code",
                 signed,
                 settings,
+                None,
                 session,
                 "http://localhost/callback",
             )
@@ -707,7 +724,7 @@ class TestOidcCallbackIntegration:
             ),
         )
 
-        session = AsyncMock()
+        session = _mock_session()
         signed = sign_state("testprovider:state", settings.secret_key)
 
         discovery_doc = _discovery_doc()
@@ -732,6 +749,7 @@ class TestOidcCallbackIntegration:
                     "auth-code",
                     signed,
                     settings,
+                    None,
                     session,
                     "http://localhost/callback",
                 )
@@ -756,7 +774,7 @@ class TestOidcCallbackIntegration:
             ),
         )
 
-        session = AsyncMock()
+        session = _mock_session()
         signed = sign_state("testprovider:test-state", settings.secret_key)
 
         mock_client = AsyncMock()
@@ -771,6 +789,7 @@ class TestOidcCallbackIntegration:
                     "auth-code",
                     signed,
                     settings,
+                    None,
                     session,
                     "http://localhost/callback",
                 )
@@ -795,7 +814,7 @@ class TestOidcCallbackIntegration:
             ),
         )
 
-        session = AsyncMock()
+        session = _mock_session()
         signed = sign_state("testprovider:test-state", settings.secret_key)
 
         disc_resp = _make_resp(json_data=_discovery_doc())
@@ -813,6 +832,7 @@ class TestOidcCallbackIntegration:
                     "auth-code",
                     signed,
                     settings,
+                    None,
                     session,
                     "http://localhost/callback",
                 )
@@ -837,7 +857,7 @@ class TestOidcCallbackIntegration:
             ),
         )
 
-        session = AsyncMock()
+        session = _mock_session()
         signed = sign_state("testprovider:test-state", settings.secret_key)
 
         disc_resp = _make_resp(json_data=_discovery_doc())
@@ -867,6 +887,7 @@ class TestOidcCallbackIntegration:
                     "auth-code",
                     signed,
                     settings,
+                    None,
                     session,
                     "http://localhost/callback",
                 )

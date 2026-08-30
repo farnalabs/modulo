@@ -83,13 +83,27 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
     request = _make_callback_request()
     fake = _AutobeginAwareSession()
 
-    async def fake_process_callback(code: str, state: str, s: Settings, session: object, redirect_uri: str) -> dict:
-        assert isinstance(session, _AutobeginAwareSession)
-        await session.execute(MagicMock())
+    async def fake_process_callback(
+        code: str,
+        state: str,
+        s: Settings,
+        system_session: object,
+        app_session: object,
+        redirect_uri: str,
+    ) -> dict:
+        assert isinstance(app_session, _AutobeginAwareSession)
+        await app_session.execute(MagicMock())
         return {"access_token": "at", "refresh_token": "rt"}
 
     with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
-        resp = await oidc_callback(provider="google", request=request, _=None, settings=settings, session=fake)
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
 
     assert resp.status_code == 307
     assert "access_token=at" in resp.headers["location"]

@@ -29,9 +29,12 @@ bdd:
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
   - backend/tests/bdd/features/evals/eval_block.feature
+  - backend/tests/bdd/features/evals/eval_llm_judge.feature
+  - backend/tests/bdd/features/evals/eval_regex.feature
   - backend/tests/bdd/features/ui/eval_dashboard.feature
   - backend/tests/bdd/steps/test_eval.py
   - backend/tests/bdd/steps/test_eval_block_steps.py
+  - backend/tests/bdd/steps/test_eval_scorer_gates.py
 depends-on: []
 status: covered
 ---
@@ -97,16 +100,21 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   deterministic gating is `human_set` / regex / json_schema.
 - **No long-horizon eval-run scheduler in this surface** — suite execution is
   triggered/run via the suite machinery, not a standalone cron in the eval API.
-- **No executing BDD surface for the `llm_judge` / `regex` scorer types** —
-  `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` ship under
-  `tests/bdd/features/evals/` but no step module registers them via
-  `scenarios(...)`, so they never execute and are no longer cited as coverage
-  here. Both scorer types are unit-tested (`test_eval_engine`,
-  `test_evals_endpoint`) and exercised through the registered
-  `eval/eval_scorer.feature`; wiring the feature files up needs their missing
-  step definitions written.
 
 ## QA History
+
+- 2026-08-30: **improve-architecture (product-map walk)** — closed the
+  "no executing BDD surface for the `llm_judge` / `regex` scorer types" gap:
+  `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` now execute
+  through the new step module `tests/bdd/steps/test_eval_scorer_gates.py`
+  (14 scenarios, registered in CI alongside the repaired step-rot modules).
+  The steps drive the real `EvalEngine` so they lock the scorer contracts:
+  regex scoring against an output field (incl. numeric coercion and nested
+  patterns), `warn` vs `block` `failure_behaviour`
+  (`EvalBlockedError` + `eval_failed` run transition), the llm_judge callable
+  wiring (pass-below-threshold verdicts, no-callable fail path), a dedicated
+  judge `model_backend_id`, and the guarded rubric prompt with the
+  data-not-instructions delimiter wrapping.
 
 - 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
   tracker for the registered `feat-evals` manifest feature (routes `/evals/editor`,
