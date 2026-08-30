@@ -38,6 +38,14 @@ class ConnectorProfile(OrgScoped):
             "auth_in <> 'header' OR auth_query_param_name IS NULL",
             name="ck_connector_profiles_auth_header_inverse",
         ),
+        CheckConstraint(
+            "timeout_seconds IS NULL OR timeout_seconds > 0",
+            name="ck_connector_profiles_timeout_positive",
+        ),
+        CheckConstraint(
+            "response_max_bytes IS NULL OR response_max_bytes > 0",
+            name="ck_connector_profiles_response_max_bytes_positive",
+        ),
     )
 
     connector_instance_id: Mapped[uuid.UUID] = mapped_column(
