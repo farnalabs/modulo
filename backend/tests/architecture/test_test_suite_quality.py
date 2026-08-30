@@ -288,6 +288,19 @@ regression that silently weakens the suite:
   too (``assert row['x'] and not row['x']``); complementary comparisons
   written with mirrored operators (``x == y or x != y``) are left alone
   because they need operator algebra rather than syntax to prove
+- ``assert x or True`` / ``assert x and False`` (their constant-literal
+  cousins, in either operand position, in a chain, and the ``not``-wrapped
+  twins) — a boolean assertion whose test expression couples a value with a
+  *literal constant* that fixes the verdict. A truthy constant under ``or``
+  (``True``, ``1``, ``"y"``, ``2.5``, ...) is an identity element that absorbs
+  the other operand(s), so the assert ALWAYS PASSES whatever the code under
+  test does; a falsy constant under ``and`` (``False``, ``0``, ``None``, ``""``,
+  ...) is an absorbent element that makes the assert ALWAYS FAIL. ``not``
+  wrapped around the compound inverts the verdict. Only a literal
+  ``ast.Constant`` operand counts (complex values excluded, mirroring the
+  literal-constant lens), and a constant in the *wrong* position (falsy under
+  ``or``, truthy under ``and``) does not pin the outcome and is left alone —
+  that is the legitimate default/refinement idiom
 - wall-clock sleeps with a *computed* duration — ``time.sleep(<name>)`` /
   ``asyncio.sleep(<name>)`` where the argument is a bare name rather than a
   literal constant. A duration computed from other values (a refill rate, a
@@ -5348,6 +5361,147 @@ def test_complementary_boolean_lens_flags_fixed_outcomes():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _constant_boolean_absorbent_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression is — or ``not``-wraps — a ``BoolOp`` whose verdict a literal
+    constant operand pins.
+
+    An ``or`` disjunction that contains a truthy literal constant (``assert x or
+    True``, ``assert x or 1``, ``assert x or "y"``) short-circuits to a truthy
+    value for every input, so the assert ALWAYS PASSES no matter what the code
+    under test does; an ``and`` conjunction that contains a falsy literal
+    constant (``assert x and False``, ``assert x and 0``, ``assert x and None``)
+    short-circuits to a falsy value, so the assert ALWAYS FAILS. Such a constant
+    is an identity/absorbent element for the operator: it pins the outcome and
+    absorbs the value's contribution, a fixed result exactly like the
+    ``assert True``/``assert False`` literal forms but spelled through a
+    compound. ``not`` around the compound (``assert not (x or True)``,
+    ``assert not (x and False)``) inverts the verdict. Only *literal*
+    ``ast.Constant`` operands of the top-level ``BoolOp`` are counted;
+    complex-valued constants are deliberately excluded (their truthiness is an
+    edge case the sibling literal-constant lens also skips). A falsy constant
+    under ``or`` (``assert x or None``) and a truthy constant under ``and``
+    (``assert x and True``) do NOT pin the outcome — those are the legitimate
+    default/refinement idioms and are left alone. These are almost always a
+    leftover from stripping a real condition down while debugging, where the
+    operator was pasted in with a throwaway literal."""
+    found: list[tuple[int, str]] = []
+
+    def _absorbing_constant(node: ast.BoolOp) -> ast.Constant | None:
+        is_and = isinstance(node.op, ast.And)
+        for value in node.values:
+            if not isinstance(value, ast.Constant) or isinstance(value.value, complex):
+                continue
+            constant = value.value
+            if (is_and and not constant) or (not is_and and constant):
+                return value
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        negated = False
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            negated = True
+            test = test.operand
+        if not isinstance(test, ast.BoolOp):
+            continue
+        absorbing = _absorbing_constant(test)
+        if absorbing is None:
+            continue
+        is_and = isinstance(test.op, ast.And)
+        # ``or``+truthy and ``and``+falsy pass; the negated twins invert.
+        verdict = "always PASSES" if is_and == negated else "always FAILS"
+        operator = "and" if is_and else "or"
+        found.append(
+            (
+                node.lineno,
+                f"assert {'not ' if negated else ''}{ast.unparse(test)} — the "
+                f"{'falsy ' if is_and else 'truthy '}constant {ast.unparse(absorbing)} under "
+                f"'{operator}' absorbs the other operand(s), so the assert {verdict} "
+                "regardless of the code under test",
+            )
+        )
+    return found
+
+
+def test_no_constant_absorbed_boolean_assertions():
+    """An ``assert`` whose test expression is a ``BoolOp`` coupling a value
+    with a literal constant that pins the verdict is dead code with a fixed
+    outcome. ``or`` with a truthy constant (``assert x or True``,
+    ``assert x or 1``) ALWAYS PASSES and ``and`` with a falsy constant
+    (``assert x and False``, ``assert x and 0``) ALWAYS FAILS, no matter what
+    the code under test does — a constant-absorbed twin of the literal-constant
+    and complementary-boolean lenses that needs its own AST shape (a ``BoolOp``
+    with a ``Constant`` operand, which the literal-constant lens provably
+    misses because it only reads the whole test expression, and the
+    complementary lens misses because it hunts paired operands). These are
+    almost always a leftover from stripping a condition down while debugging;
+    assert the real behaviour instead."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _constant_boolean_absorbent_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) whose verdict a constant boolean operand absorbs.\n"
+        "'or' joined with a truthy constant is always True (ALWAYS PASSES) and 'and' joined with "
+        "a falsy constant is always False (ALWAYS FAILS), so the outcome never depends on the "
+        "code under test.\nAssert the real condition instead.\n" + "\n".join(violations)
+    )
+
+
+def test_constant_absorbed_boolean_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the constant-absorbed-boolean
+    lens: must flag an ``assert`` whose top-level ``BoolOp`` (or a single
+    ``not`` around it) couples a value with a literal constant that pins the
+    result — truthy constants under ``or``, falsy constants under ``and``, in
+    either operand position and inside a longer chain — and ignore constant
+    operands that do NOT pin the verdict (falsy under ``or``, truthy under
+    ``and``), single operands, comparisons/``not``-wrapped comparisons, and the
+    complementary shapes owned by the sibling lens."""
+    positive_sources = [
+        "def test_foo():\n    assert x or True\n",
+        "def test_foo():\n    assert 1 or x\n",
+        "def test_foo():\n    assert x or 2.5\n",
+        "def test_foo():\n    assert x or 'y'\n",
+        "def test_foo():\n    assert x and False\n",
+        "def test_foo():\n    assert 0 and x\n",
+        "def test_foo():\n    assert x and None\n",
+        "def test_foo():\n    assert x and ''\n",
+        "def test_foo():\n    assert not (x or True)\n",
+        "def test_foo():\n    assert not (x and False)\n",
+        "def test_foo():\n    assert x or status or 1\n",
+        "def test_foo():\n    assert x and status and 0\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _constant_boolean_absorbent_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x or None\n",
+        "def test_foo():\n    assert x or False\n",
+        "def test_foo():\n    assert x and True\n",
+        "def test_foo():\n    assert 1 and x\n",
+        "def test_foo():\n    assert x or y\n",
+        "def test_foo():\n    assert x and y\n",
+        "def test_foo():\n    assert x\n",
+        "def test_foo():\n    assert True\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert x == 1 or y == 2\n",
+        "def test_foo():\n    assert result is not None and result.status == 'ok'\n",
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert x or not x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _constant_boolean_absorbent_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]]:
