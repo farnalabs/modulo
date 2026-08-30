@@ -150,7 +150,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Pipelines
 - [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
-- [feat-router](pipelines/router-hitl-nodes.md) => PRD N/A
+
+### Teams
+- [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
 
 ### Build
 - [feat-runs](build/runs.md) => PRD N/A
@@ -170,9 +172,6 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Admin
 - [feat-audit](admin/audit.md) => PRD N/A
-
-### Teams
-- [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
 
 ## Known graph gaps
 
