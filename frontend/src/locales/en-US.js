@@ -585,6 +585,7 @@ export default {
       "summary": "Summary",
       "details": "Details",
       "event_id": "Event ID",
+      "expand_event": "Expand event {id}",
       "previous": "Previous",
       "next": "Next",
       "page_of_total": "Page {page} \u00b7 {count} of {total} events",
