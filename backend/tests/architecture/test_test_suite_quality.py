@@ -523,6 +523,39 @@ regression that silently weakens the suite:
    import sleep`` bare-name spelling is deliberately not matched because a local
    ``sleep`` helper (e.g. an asyncio-driven retry) cannot be distinguished
    statically
+- an ``assert`` placed in a ``finally:`` clause — an assertion that only runs
+  during unwinding either masks the failure that triggered the unwind (an
+  ``AssertionError`` raised from ``finally`` *replaces* the exception
+  propagating out of ``try``/``except``, discarding the original traceback a
+  reader needs to find the real regression) or verifies nothing that a check
+  on the normal path could not express more clearly. This is the unwind-twin
+  of the assert-inside-``except`` lens: there the assert masks the exception
+  that dispatched the handler, here it masks whatever exception the
+  ``finally`` is unwinding past. Move the check to the normal path (after the
+  ``try``/``except``/``else``/``finally`` block) or into the ``except``
+  handler that owns the failure being asserted, so an assertion failure names
+  the real error instead of replacing it
+- a *name-spelled* ``except BaseException:`` handler — the bare ``except:``
+  spelling is already owned by the bare-except lens, but naming
+  ``BaseException`` explicitly is the same swallow wearing a mask:
+  ``BaseException`` is the base of ``KeyboardInterrupt``/``SystemExit``/
+  ``GeneratorExit`` as well as ``Exception``, so a handler that names it
+  catches the control-flow signals a test can never want, silently converting
+  an interrupt during a hang into a false green. The tuple twin
+  (``except (ValueError, BaseException):``) is covered too; ``except
+  Exception:`` and tuples of concrete exceptions are the sanctioned narrow
+  form and are left alone
+- an unbounded ``while`` loop with a statically-foldable constant-true
+  condition (``while True:``, ``while 1:``, ...) in test-support code — a
+  loop whose condition is a language-level constant can never become false on
+  its own and terminates only via a ``break`` targeting it or a
+  ``return``/``raise`` unwinding the enclosing function, so one with none of
+  those reachable is an infinite loop: it hangs CI indefinitely the way an
+  unbounded subprocess or thread join does, and the failure is opaque (the
+  runner just stops). Add an explicit ``break`` on a completion condition, or
+  drive the loop with a real (non-constant) guard. Loops whose condition is a
+  name, call, or comparison are left alone — those can change through side
+  effects
 - ``asyncio.wait_for(...)`` / ``asyncio.wait(...)`` without a timeout bound —
   ``asyncio.wait_for(coro)`` with no ``timeout`` argument, or an explicit
   ``timeout=None`` (the API default, meaning "wait forever"), suspends until
@@ -7673,3 +7706,307 @@ def test_single_element_isinstance_lens_flags_redundant_tuples():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_element_isinstance_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _assert_in_finally_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` placed in a
+    ``finally:`` clause, where it runs only during unwinding.
+
+    A failing assert in ``finally`` runs while an exception (or another
+    failure) is unwinding, so it *replaces* that in-flight error with its own
+    ``AssertionError`` and the original traceback is lost; a passing assert
+    in ``finally`` adds nothing a check on the normal path would not express.
+    This is the unwind-twin of the assert-inside-``except`` lens. Both
+    ``try``/``finally`` and ``except*``/``finally`` (``ast.TryStar``) forms
+    are covered."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Try, ast.TryStar)):
+            continue
+        for stmt in node.finalbody:
+            if isinstance(stmt, ast.Assert):
+                found.append(
+                    (
+                        stmt.lineno,
+                        f"assert {ast.unparse(stmt.test)} in a finally: clause masks any in-flight exception",
+                    )
+                )
+    return found
+
+
+def test_no_assert_in_finally():
+    """An assertion in a ``finally:`` clause runs only during unwinding, so it
+    either masks the exception that triggered the unwind (an ``AssertionError``
+    replaces the original traceback a reader needs to debug the real
+    regression) or verifies nothing that a check on the normal path could not
+    express more clearly. Move the check to the normal path or into the
+    ``except`` handler that owns the failure."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _assert_in_finally_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assert(s) inside a finally: clause.\n"
+        "An assert in finally runs during unwinding and masks the original failure.\n"
+        "Move the check to the normal path or into the except handler that owns it.\n" + "\n".join(violations)
+    )
+
+
+def test_assert_in_finally_lens_flags_unwind_time_verification():
+    """Synthetic positive/negative control for the assert-in-finally lens: it
+    must flag an ``assert`` in a ``finally:`` clause (plain ``try`` and
+    ``try/except`` twins) and ignore asserts on the normal path, asserts in
+    ``except`` handlers (owned by the sibling lens), and non-assert ``finally``
+    statements."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleanup_done\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except Exception:\n"
+            "        raise\n"
+            "    finally:\n"
+            "        assert x == 1\n"
+        ),
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        assert result is not None\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _assert_in_finally_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        foo()\n    finally:\n        cleanup()\n",
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    try:\n        assert x\n    except Exception:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception as e:\n        assert e.args\n",
+        (
+            "def test_foo():\n"
+            "    try:\n"
+            "        foo()\n"
+            "    except Exception as e:\n"
+            "        assert e.args\n"
+            "    finally:\n"
+            "        cleanup()\n"
+        ),
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _assert_in_finally_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _exception_names(node: ast.AST) -> list[str]:
+    """Collect the class names named in an ``except`` type expression — a bare
+    name (``except BaseException:``) or the elements of a handled tuple
+    (``except (ValueError, BaseException):``). Attribute-qualified spellings
+    (``except infra.Error:``) and nested tuples deliberately return nothing."""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Tuple):
+        return [e.id for e in node.elts if isinstance(e, ast.Name)]
+    return []
+
+
+def _named_base_exception_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``except`` handler that
+    names ``BaseException`` — directly or as an element of a handled tuple.
+
+    ``BaseException`` is the base of ``KeyboardInterrupt``/``SystemExit``/
+    ``GeneratorExit`` as well as ``Exception``, so a test handler that names it
+    swallows the control-flow signals a test can never want to catch, silently
+    converting an interrupt during a hang into a false green. This is the
+    name-spelled mask the bare-``except:`` lens exists to forbid; a bare
+    ``except:`` (no type) is owned by that sibling lens and is left alone
+    here."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler) or node.type is None:
+            continue
+        if "BaseException" in _exception_names(node.type):
+            found.append(
+                (node.lineno, "except BaseException swallows KeyboardInterrupt/SystemExit alongside Exception")
+            )
+    return found
+
+
+def test_no_named_base_exception_handler():
+    """A handler that names ``BaseException`` explicitly is the bare-``except:``
+    swallow wearing a mask: it catches ``KeyboardInterrupt``/``SystemExit``/
+    ``GeneratorExit`` as well as ``Exception``, so a test can accidentally
+    absorb an interrupt that should have aborted the run and report false
+    green. Name ``Exception`` (or the concrete failures the code is documented
+    to raise) instead."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _named_base_exception_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} except handler(s) naming BaseException.\n"
+        "BaseException catches KeyboardInterrupt/SystemExit too; name Exception\n"
+        "or the specific failure the code is documented to raise.\n" + "\n".join(violations)
+    )
+
+
+def test_named_base_exception_lens_flags_control_flow_swallows():
+    """Synthetic positive/negative control for the named-BaseException lens: it
+    must flag ``except BaseException`` directly, with ``as``, and inside a
+    handled tuple, and ignore bare ``except:`` (owned by the sibling lens),
+    ``except Exception``, tuples of concrete exceptions, and
+    attribute-qualified handlers."""
+    positive_sources = [
+        "def test_foo():\n    try:\n        foo()\n    except BaseException:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except (ValueError, BaseException):\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except BaseException as exc:\n        handle(exc)\n",
+        "def test_foo():\n    try:\n        foo()\n    except (BaseException,):\n        pass\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _named_base_exception_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    try:\n        foo()\n    except:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except Exception as exc:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except (TypeError, ValueError):\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except ExceptionGroup:\n        pass\n",
+        "def test_foo():\n    try:\n        foo()\n    except infra.Error:\n        pass\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _named_base_exception_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _loop_has_exit(node: ast.While) -> bool:
+    """True when ``node``'s body reaches a statement that terminates it: a
+    ``break`` targeting ``node`` itself, or a ``return``/``raise`` that
+    unwinds the enclosing function and therefore the loop.
+
+    A ``break`` inside a nested ``for``/``while`` targets the *inner* loop and
+    never exits ``node``, so it does not count; a ``return``/``raise`` inside a
+    nested loop (or via a ``try``/``except``) still unwinds the function and
+    *does* count. ``try``/``except``/``else``/``finally`` create no loop scope
+    of their own. Nested function/class/lambda definitions are skipped
+    entirely — their ``return``s belong to a different scope and cannot exit
+    ``node``."""
+
+    def walk(n: ast.AST, in_nested_loop: bool) -> bool:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return False
+        if isinstance(n, ast.Break):
+            return not in_nested_loop
+        if isinstance(n, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(n, (ast.For, ast.AsyncFor, ast.While)) and n is not node:
+            in_nested_loop = True
+        return any(walk(child, in_nested_loop) for child in ast.iter_child_nodes(n))
+
+    return walk(node, False)
+
+
+def _infinite_exit_less_loop_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``while`` loop whose
+    condition is a statically-foldable constant-true literal and whose body has
+    no statement that can terminate it — no ``break`` targeting the loop and no
+    reachable ``return``/``raise`` unwinding the enclosing function.
+
+    A ``while True:``/``while 1:`` loop's condition never becomes false at the
+    language level, so it terminates only via ``break``/``return``/``raise``.
+    One with none of those reachable is an infinite loop that hangs the test —
+    and every test after it in the same process — with an opaque failure, the
+    exact hazard the unbounded-subprocess and unbounded-thread-join lenses
+    already guard. Dynamic conditions (names, calls, comparisons) are left
+    alone: those can change through the code under test."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.While):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Constant):
+            continue
+        if isinstance(test.value, complex) or not test.value:
+            continue
+        if _loop_has_exit(node):
+            continue
+        found.append(
+            (node.lineno, f"while {ast.unparse(test)} has no break/return/raise that stops it — the loop is infinite")
+        )
+    return found
+
+
+def test_no_infinite_constant_condition_loops():
+    """A ``while`` loop whose condition is a statically-foldable constant-true
+    literal (``while True:``, ``while 1:``, ...) terminates only via ``break``;
+    without one, it is an infinite loop that hangs the test and every test
+    after it in the same process, with an opaque failure. Guard on a real
+    condition or break explicitly when the work completes."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _infinite_exit_less_loop_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} exit-less constant-condition while loop(s).\n"
+        "A while True loop with no break can never terminate; add a break on the\n"
+        "completion condition or drive the loop with a real (non-constant) guard.\n" + "\n".join(violations)
+    )
+
+
+def test_infinite_loop_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the infinite-loop lens: it must
+    flag ``while True:``/``while 1:`` bodies with no way out — no ``break``
+    targeting the loop (a nested-loop ``break`` does not count) and no reachable
+    ``return``/``raise`` — and ignore loops with a direct ``break`` (even one
+    reached through an ``if`` or a ``try`` body), loops that unwind via
+    ``return``/``raise``, loops with a dynamic condition, and ``for`` loops."""
+    positive_sources = [
+        "def test_foo():\n    while True:\n        step()\n",
+        "def test_foo():\n    while 1:\n        x = foo()\n        x.bar()\n",
+        "def test_foo():\n    while True:\n        for i in items:\n            break\n",
+        (
+            "def test_foo():\n"
+            "    while True:\n"
+            "        try:\n"
+            "            work()\n"
+            "        except Exception:\n"
+            "            pass\n"
+        ),
+        "def test_foo():\n    while True:\n        step(1)\n        step(2)\n    return\n",
+        "async def test_foo():\n    while True:\n        await tick()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _infinite_exit_less_loop_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    while True:\n        if done:\n            break\n",
+        "def test_foo():\n    while True:\n        if not done:\n            continue\n        break\n",
+        (
+            "def test_foo():\n"
+            "    while True:\n"
+            "        try:\n"
+            "            work()\n"
+            "            break\n"
+            "        except Exception:\n"
+            "            retry()\n"
+        ),
+        "def test_foo():\n    while True:\n        if end:\n            return obj\n",
+        ("def test_foo():\n    while True:\n        if text[index] == 'X':\n            raise AssertionError('bad')\n"),
+        "def test_foo():\n    while condition:\n        step()\n",
+        "def test_foo():\n    while not done:\n        step()\n",
+        "def test_foo():\n    for x in items:\n        if x:\n            break\n",
+        "def test_foo():\n    while True:\n        break\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _infinite_exit_less_loop_violations(tree), f"lens should NOT flag:\n{source}"

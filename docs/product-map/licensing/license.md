@@ -20,7 +20,6 @@ unit-tests:
 bdd:
   - backend/tests/bdd/features/licensing/license_management.feature
   - backend/tests/bdd/features/licensing/team_gates.feature
-  - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
   - backend/tests/bdd/steps/test_license_management.py
   - backend/tests/bdd/steps/test_team_gates.py
 depends-on:

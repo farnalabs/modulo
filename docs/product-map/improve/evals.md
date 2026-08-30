@@ -29,8 +29,6 @@ bdd:
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
   - backend/tests/bdd/features/evals/eval_block.feature
-  - backend/tests/bdd/features/evals/eval_llm_judge.feature
-  - backend/tests/bdd/features/evals/eval_regex.feature
   - backend/tests/bdd/features/ui/eval_dashboard.feature
   - backend/tests/bdd/steps/test_eval.py
   - backend/tests/bdd/steps/test_eval_block_steps.py
