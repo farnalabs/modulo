@@ -1482,6 +1482,43 @@ async def _sweep_org_stale_runs(
     return never_count, capacity_timeout_count, lost_count
 
 
+async def _redispatch_stranded_rows(stranded_rows: list[Any]) -> dict[str, int]:
+    """Re-dispatch stranded capacity-blocked rows; return per-outcome counts.
+
+    Runs AFTER each org's sweep transaction commits so ``dispatch_run``'s own
+    sessions (and the row lock the UPDATE held) never overlap a live
+    transaction.
+    """
+    redispatch_outcomes: dict[str, int] = {}
+    for row in stranded_rows:
+        outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
+        redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
+    return redispatch_outcomes
+
+
+async def _advance_terminalised_run(
+    async_engine: AsyncEngine,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Advance a terminalised sweep run's journeys and record its daily fact.
+
+    The sweep's raw terminal UPDATEs never run ``finalize_cost``, so the swept
+    runs' journeys would never advance (FAR-143 follow-up) and the runs would
+    be invisible to the analytics failure/stall dimensions (FAR-162, P6'). Each
+    helper opens its own RLS-scoped session after the sweep's UPDATEs have
+    committed, so it reads the run as ``failed`` with ``completed_at`` set.
+    Fail-open per run — one run's facts failure must not fail the whole sweep.
+    """
+    await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), "failed")
+    try:
+        await _record_fact_for_terminal_failed_run(async_engine, str(run_id), str(org_id))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.sweep_terminal_facts_failed run=%s", run_id, exc_info=True)
+
+
 async def stale_run_recovery_sweep(
     async_engine: AsyncEngine,
     *,
@@ -1574,29 +1611,15 @@ async def stale_run_recovery_sweep(
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
         # own sessions (and the row lock the UPDATE held) never overlap a live
         # transaction.
-        redispatch_outcomes: dict[str, int] = {}
-        for row in stranded_rows:
-            outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
-            redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
+        redispatch_outcomes = await _redispatch_stranded_rows(stranded_rows)
 
         # FAR-143 follow-up — the sweep's raw terminal UPDATEs never run
         # finalize_cost, so the swept runs' journeys would never advance. Advance
         # each from its CREATE-STAMPED refs, fail-open per run (same pattern as
         # mark_complete / fail_run_terminal). Runs only re-dispatched (stranded
-        # capacity-blocked) are NOT terminal — no advance. Each helper opens its
-        # own session after the UPDATEs have committed, so it reads the run as
-        # ``failed`` with ``completed_at`` set.
+        # capacity-blocked) are NOT terminal — no advance.
         for run_id, run_org_id in terminalised_run_ids:
-            await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(run_org_id), "failed")
-            # FAR-162 (P6') — compensating daily fact for the same terminal
-            # runs (separate RLS-scoped session, fail-open per run — one run's
-            # facts failure must not fail the whole sweep).
-            try:
-                await _record_fact_for_terminal_failed_run(async_engine, str(run_id), str(run_org_id))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning("pipeline_execution.sweep_terminal_facts_failed run=%s", run_id, exc_info=True)
+            await _advance_terminalised_run(async_engine, run_id, run_org_id)
 
         if never_count or lost_count or capacity_timeout_count or stranded_count:
             _log.info(
