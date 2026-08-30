@@ -27,10 +27,7 @@ bdd:
   - backend/tests/bdd/features/pipelines/conditional_transitions.feature
   - backend/tests/bdd/features/pipelines/concurrency.feature
   - backend/tests/bdd/features/pipelines/error_recovery.feature
-  - backend/tests/bdd/features/pipelines/validation.feature
-  - backend/tests/bdd/features/pipelines/pipeline_config_validation.feature
   - backend/tests/bdd/features/pipelines/scheduling.feature
-  - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
   - backend/tests/bdd/features/pipelines/webhook_trigger.feature
   - backend/tests/bdd/features/admin/node-categories.feature
   - backend/tests/bdd/steps/test_pipelines.py
@@ -64,12 +61,13 @@ the pipelines BDD/unit suites.
       (`waiting_for_approval`) — are authorable and execute per type (`node_types.feature`)
 - [x] Conditional transitions and parallel fan-out route state between nodes
       (`conditional_transitions.feature`)
-- [x] Concurrency, error-recovery, validation and pipeline-config validation guard the
-      authored graph (`concurrency.feature`, `error_recovery.feature`,
-      `validation.feature`, `pipeline_config_validation.feature`)
+- [x] Concurrency and error-recovery guard the authored graph
+      (`concurrency.feature`, `error_recovery.feature`); graph/config validation is
+      unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
       (`scheduling.feature`, `webhook_trigger.feature`); checkpoint/resume replays a
-      failed run from its last checkpoint (`checkpoint_resume.feature`)
+      failed run from its last checkpoint (`tests/unit/pipeline_engine` recovery
+      suite)
 - [x] Node categories: deleting an unreferenced category succeeds, deleting one still
       referenced by a pipeline node is refused (409) with the referencing pipeline listed,
       and viewers cannot delete categories (403) (`admin/node-categories.feature`)
@@ -86,6 +84,15 @@ the pipelines BDD/unit suites.
   `run_variants.feature`** live under the pipelines BDD directory but describe run-time
   behaviour; they are exercised by the same step suite and are not re-listed here to keep
   the run surfaces owned by `feat-runs`.
+- **No executing BDD surface for graph validation, pipeline-config validation or
+  checkpoint/resume** — `pipelines/validation.feature`,
+  `pipelines/pipeline_config_validation.feature` and
+  `pipelines/checkpoint_resume.feature` ship under `tests/bdd/features/pipelines/`
+  but `steps/test_pipelines.py` does not register them via `scenarios(...)`, so they
+  never execute and are no longer cited as coverage here. The behaviours are
+  unit-covered (`tests/unit/graph_validator`, `tests/unit/pipeline_engine`,
+  `test_pipelines_endpoint.py`); wiring the feature files up needs their missing step
+  definitions written.
 
 ## QA History
 

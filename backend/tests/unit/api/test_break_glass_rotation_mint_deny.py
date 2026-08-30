@@ -36,6 +36,7 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_public_url="http://localhost:8000",
+        modulo_system_database_url="postgresql+asyncpg://localhost/system",
     )
 
 
@@ -132,15 +133,119 @@ def test_normal_admin_can_rotate_key(client: TestClient) -> None:
     )
     with (
         patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.admin_rotation.get_or_create_engine", return_value=MagicMock()),
-        patch(
-            "modulo.api.routes.admin_rotation.get_or_create_session_factory",
-            return_value=AsyncMock(),
-        ),
         patch("modulo.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()),
     ):
         resp = client.post(_ROTATE_KEY_URL, json={"new_fernet_key": _VALID_32})
     assert resp.status_code == 202
+    admin_rotation._rotation_in_progress = False
+
+
+def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -> None:
+    """A missing modulo_system role must fail LOUDLY (503), not silently no-op.
+
+    Regression for the RLS no-op bug: rotation runs cross-org on the BYPASSRLS
+    modulo_system role; if that role is unprovisioned the factory would fall
+    back to the NOBYPASSRLS app role and rotate zero rows. The route must
+    refuse rather than silently accept a hollow rotation.
+    """
+    from modulo.api.routes import admin_rotation
+
+    admin_rotation._rotation_in_progress = False
+
+    def _unprovisioned_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_public_url="http://localhost:8000",
+            modulo_system_database_url="",  # system role NOT provisioned
+        )
+
+    app.dependency_overrides[get_settings] = _unprovisioned_settings
+    _configure_auth(
+        app,
+        session=_make_session(_make_account(is_break_glass=False)),
+        principal=_make_principal(is_break_glass=False, is_system_admin=True),
+    )
+    try:
+        resp = client.post(_ROTATE_KEY_URL, json={"new_fernet_key": _VALID_32})
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+    assert resp.status_code == 503
+    assert "MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
+    admin_rotation._rotation_in_progress = False
+
+
+async def test_run_rotation_background_uses_system_factory() -> None:
+    """Prove-the-fix: rotation must run on the modulo_system (BYPASSRLS) factory.
+
+    This test FAILS on the pre-fix code (which opened the rotation session via
+    the NOBYPASSRLS app-role ``get_or_create_session_factory`` engine and
+    therefore failed-closed to zero rows under RLS) and PASSES with the
+    system-factory fix. It spies on ``_make_system_session_factory`` and
+    asserts the re-encryption actually ran on the session the system factory
+    produced.
+    """
+    from modulo.api.routes import admin_rotation
+    from modulo.core.fernet_rotation import RotationResult
+
+    admin_rotation._rotation_in_progress = False
+
+    factory_calls: list[int] = []
+    captured_session: dict[str, object] = {}
+
+    fake_session = AsyncMock()
+    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session.__aexit__ = AsyncMock(return_value=False)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    fake_session.begin = MagicMock(return_value=begin_cm)
+
+    def fake_factory() -> object:
+        factory_calls.append(1)
+
+        def make_session() -> AsyncMock:
+            return fake_session
+
+        return make_session
+
+    async def fake_rotate(session: object, new_key: str, old_key: str) -> RotationResult:
+        captured_session["session"] = session
+        return RotationResult(
+            tables_processed=["secrets"],
+            total_rows_reencrypted=3,
+            details={"secrets": 3},
+        )
+
+    with (
+        patch(
+            "modulo.api.routes.admin_rotation._make_system_session_factory",
+            side_effect=fake_factory,
+        ),
+        patch(
+            "modulo.api.routes.admin_rotation.rotate_all_encrypted_data",
+            side_effect=fake_rotate,
+        ),
+        patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
+        patch(
+            "modulo.api.routes.admin_rotation.get_settings",
+            return_value=Settings(modulo_system_database_url="postgresql+asyncpg://localhost/system"),
+        ),
+    ):
+        await admin_rotation._run_rotation_background(
+            new_key=_VALID_32,
+            old_key="",
+            org_id=_ORG_ID,
+            actor_user_id=_USER_ID,
+        )
+
+    assert factory_calls, "rotation did not open a session via _make_system_session_factory"
+    assert captured_session.get("session") is fake_session, (
+        "rotate_all_encrypted_data did not run on the modulo_system factory session"
+    )
+    assert admin_rotation._last_rotation_result["status"] == "completed"
     admin_rotation._rotation_in_progress = False
 
 

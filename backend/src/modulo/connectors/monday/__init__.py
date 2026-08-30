@@ -12,6 +12,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 _MONDAY_API = "https://api.monday.com/v2"
@@ -200,7 +201,7 @@ class MondayConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

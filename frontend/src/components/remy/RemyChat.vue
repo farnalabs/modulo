@@ -393,13 +393,7 @@ const slashCommands: SlashCommand[] = [
   },
 ]
 
-const styledInput = computed(() => {
-  if (!inputText.value) return ''
-  return inputText.value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-})
+const styledInput = computed(() => escapeHtml(inputText.value))
 
 const showSlashMenu = ref(false)
 const slashHighlightIdx = ref(0)

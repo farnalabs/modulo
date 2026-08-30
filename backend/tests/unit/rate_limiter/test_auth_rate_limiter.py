@@ -419,7 +419,10 @@ class TestAuthRateLimiterCore:
         ((ts, score),) = member.items()
         now = time.time()
         assert abs(score - now) < 2
-        assert ts == str(score)
+        ts_str, sep, suffix = ts.partition(":")
+        assert sep == ":"
+        assert ts_str == str(score)
+        assert len(suffix) == 32
         mock_redis.expire.assert_awaited_once_with("auth_ratelimit:203.0.113.5", 120)
 
     async def test_record_success_resets_failure_and_lockout(self, mock_redis):

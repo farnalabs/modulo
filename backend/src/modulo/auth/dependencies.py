@@ -85,7 +85,7 @@ async def get_current_user(
             "auth.jwt_decode_failed",
             extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)},
         )
-        raise InvalidToken() from exc
+        raise InvalidToken from exc
 
     return principal
 
@@ -100,7 +100,7 @@ async def get_current_tenant_user(
     message instead of letting them surface as confusing 409 FK violations.
     """
     if current_user.organisation_id is None or current_user.org_role is None:
-        raise OrganisationMembershipRequired()
+        raise OrganisationMembershipRequired
 
     live_role = await _verify_identity(current_user)
 
@@ -146,7 +146,7 @@ async def get_current_tenant_user_or_api_key(
     behaviour is identical to :func:`get_current_tenant_user`.
     """
     if credentials is None:
-        raise InvalidToken()
+        raise InvalidToken
 
     token = credentials.credentials
     if token.startswith("mk_"):
@@ -201,7 +201,7 @@ async def get_current_tenant_user_or_api_key(
                     ).scalar_one_or_none()
                     org_id = key_record.organisation_id if key_record is not None else None
             if org_id is None:
-                raise ApiKeyInvalidError()
+                raise ApiKeyInvalidError
 
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
@@ -217,7 +217,7 @@ async def get_current_tenant_user_or_api_key(
                     str(key.organisation_id),
                 )
         except ApiKeyInvalidError:
-            raise InvalidToken() from None
+            raise InvalidToken from None
         except SQLAlchemyError:
             _log.warning("auth.api_key_verify_failed", exc_info=True)
             raise HTTPException(
@@ -231,7 +231,7 @@ async def get_current_tenant_user_or_api_key(
                 "auth.api_key_membership_not_found",
                 extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
             )
-            raise OrganisationMembershipNotFound()
+            raise OrganisationMembershipNotFound
         clamped_role = _clamp_role(key.role, live_role)
         if not clamped_role:
             _log.warning(
@@ -243,7 +243,7 @@ async def get_current_tenant_user_or_api_key(
                     "live_role": live_role,
                 },
             )
-            raise OrganisationMembershipNotFound()
+            raise OrganisationMembershipNotFound
         return TenantPrincipal(
             username=key.name,
             organisation_id=key.organisation_id,
@@ -259,7 +259,7 @@ async def get_current_tenant_user_or_api_key(
             "auth.jwt_decode_failed",
             extra={"token_prefix": token[:10] + "...", "error": str(exc)},
         )
-        raise InvalidToken() from exc
+        raise InvalidToken from exc
 
     return await get_current_tenant_user(principal)
 
@@ -318,7 +318,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
                         "username": principal.username,
                     },
                 )
-                raise AccountNotFound()
+                raise AccountNotFound
 
             result = await session.execute(
                 _text("SELECT 1 FROM organisations WHERE id = :oid"),
@@ -332,7 +332,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
                         "username": principal.username,
                     },
                 )
-                raise OrganisationNotFound()
+                raise OrganisationNotFound
 
             live_role = await resolve_role_from_membership(
                 session,
@@ -357,7 +357,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
                 "username": principal.username,
             },
         )
-        raise OrganisationMembershipNotFound()
+        raise OrganisationMembershipNotFound
     return live_role
 
 
@@ -366,5 +366,5 @@ async def require_system_admin(
 ) -> AuthenticatedPrincipal:
     """Require the current user to have system admin privileges."""
     if not current_user.is_system_admin:
-        raise SystemAdminRequired()
+        raise SystemAdminRequired
     return current_user

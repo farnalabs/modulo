@@ -147,7 +147,7 @@ class TestExceptionMapping:
     async def test_cancelled_error_is_never_wrapped(self) -> None:
         @handle_db_errors("test.cancel")
         async def fail() -> None:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
             await _run(fail())

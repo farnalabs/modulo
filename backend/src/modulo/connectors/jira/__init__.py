@@ -29,6 +29,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 # Retry/backoff configuration (canonical values live in _retry_headers)
@@ -286,11 +287,11 @@ class JiraConnector(ConnectorBase):
             display_name = user_info.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

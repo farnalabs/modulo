@@ -21,7 +21,7 @@ from enum import StrEnum
 from typing import Any, ClassVar, Literal, Protocol
 from uuid import UUID, uuid4
 
-import jsonschema  # type: ignore[import-untyped]
+import jsonschema
 from pydantic import BaseModel, Field
 
 _log = logging.getLogger(__name__)

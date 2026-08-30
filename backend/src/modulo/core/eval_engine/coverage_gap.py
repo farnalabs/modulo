@@ -11,8 +11,8 @@ This is a **pure read-model** over the existing
 docstring below) — there is **no new table, no migration**. It is deterministic
 (terminal runs only, canonical serialisation, stable ordering) and org-scoped:
 every query injects the explicit ``organisation_id`` predicate (``modulo_app``
-is BYPASSRLS, so the predicate is the ONLY isolation control; ``set_rls_org``
-remains defense-in-depth).
+is NOBYPASSRLS so RLS also enforces org scoping; the predicate is the PRIMARY
+isolation control; ``set_rls_org`` remains defense-in-depth).
 
 Data model it reads (already on main):
 * ``Run`` — ``variant_group_id``, ``batch_id`` (one batch = all runs fired
@@ -175,10 +175,9 @@ def compute_variant_divergence(outputs: Sequence[object]) -> float:
     outputs = list(outputs)
     if len(outputs) < 2:
         return 0.0
-    pairwise: list[float] = []
-    for i in range(len(outputs)):
-        for j in range(i + 1, len(outputs)):
-            pairwise.append(_output_similarity(outputs[i], outputs[j]))
+    pairwise = [
+        _output_similarity(outputs[i], outputs[j]) for i in range(len(outputs)) for j in range(i + 1, len(outputs))
+    ]
     similarity = sum(pairwise) / len(pairwise)
     divergence = 1.0 - similarity
     return round(max(0.0, divergence), 4)

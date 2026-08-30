@@ -23,10 +23,7 @@ bdd:
   - backend/tests/bdd/features/hitl/claim.feature
   - backend/tests/bdd/features/hitl/approve.feature
   - backend/tests/bdd/features/hitl/reject.feature
-  - backend/tests/bdd/features/hitl/modify_then_approve.feature
   - backend/tests/bdd/features/hitl/deliver_manual.feature
-  - backend/tests/bdd/features/hitl/human_only_gate.feature
-  - backend/tests/bdd/features/hitl/overdue_warning.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/hitl/feedback_handler.feature
   - backend/tests/bdd/features/teams/team_hitl_gate.feature
@@ -68,16 +65,19 @@ may decide.
       the rejected path rather than leaving a non-terminal state
 - [x] Modify-then-approve applies the reviewer's modified output into state
       before resuming; missing/expired claim_token → 403/410, already-decided
-      → 409 (modify_then_approve.feature)
+      → 409 (`test_hitl_manager` approve-with-modification cases,
+      `test_node_runner_hitl` modified-output resume cases)
 - [x] Deliver-manual / submit-manual validates reviewer-supplied output and
       passes it to the pipeline; manual output delivery is audited
       (deliver_manual.feature, `test_output_delivery_audit`)
 - [x] `human_only` gates refuse automation/MCP clients entirely
-      (human_only_gate.feature, team_hitl_gate.feature)
+      (team_hitl_gate.feature, `test_mcp_security`, `test_mcp_runtime_tools`,
+      `test_node_runner_hitl`)
 - [x] Team-scoped gates restrict claiming to members whose team role is
       `runner`/`operator` — otherwise `NotTeamMemberError` (`_TEAM_CLAIM_ROLES`)
 - [x] Stale gates warn their owners and expired claims are reset to unclaimed
-      (overdue_warning.feature, `overdue_warning.py`, `expiry_job.py`)
+      (`test_overdue_warning`, `test_claim_expiry_job`, `overdue_warning.py`,
+      `expiry_job.py`)
 - [x] Conditional HITL: an eval condition decides whether a gate activates at
       run time (conditional_hitl BDD + `test_conditional_hitl`)
 - [x] Decisions and deliveries are audited (`hitl.output_delivered`,
@@ -97,6 +97,14 @@ may decide.
 - **Claim expiry runs on the SAQ worker cadence** — a held claim that expires
   between ticks stays claimed until the next `claim_expiry` sweep
   (`expiry_job.py`).
+- **No executing BDD surface for modify-then-approve, `human_only` refusal, or
+  overdue warnings** — `modify_then_approve.feature`, `human_only_gate.feature`
+  and `overdue_warning.feature` ship under `tests/bdd/features/hitl/` but no
+  step module registers them via `scenarios(...)`, so they never execute and are
+  no longer cited as coverage here. The behaviours themselves are unit-tested
+  (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
+  `test_mcp_runtime_tools`, `test_overdue_warning`, `test_claim_expiry_job`);
+  wiring the feature files up needs their missing step definitions written.
 
 ## QA History
 

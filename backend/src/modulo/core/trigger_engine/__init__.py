@@ -414,7 +414,7 @@ class TriggerEngine:
                     payload_hash=payload_hash,
                     result="hmac_failed",
                 )
-                raise HmacValidationError()
+                raise HmacValidationError
 
             # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
             # validation (an unauthenticated delivery still gets its typed

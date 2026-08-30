@@ -820,7 +820,7 @@ class TestSkillLoaderBuildSystemPrompt:
     ) -> None:
         class _CancellingConfigService:
             async def get_config(self, org_id: uuid.UUID) -> RemyConfig:
-                raise asyncio.CancelledError()
+                raise asyncio.CancelledError
 
         with (
             patch.object(loader, "_config_service", _CancellingConfigService()),
@@ -837,7 +837,7 @@ class TestSkillLoaderBuildSystemPrompt:
     ) -> None:
         class _CancellingCtxService:
             async def get_effective_config(self, org_id: uuid.UUID, user_id: uuid.UUID) -> RemyConfig:
-                raise asyncio.CancelledError()
+                raise asyncio.CancelledError
 
         with (
             patch.object(loader, "_ctx_service", _CancellingCtxService()),
@@ -874,7 +874,7 @@ class TestSkillLoaderBuildSystemPrompt:
         user_id: uuid.UUID,
     ) -> None:
         def _cancel() -> str:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         with patch.object(loader, "_ui_tools_text_fn", _cancel), pytest.raises(asyncio.CancelledError):
             await loader.build_system_prompt(org_id=org_id, user_id=user_id, include_ui_tools_text=True)

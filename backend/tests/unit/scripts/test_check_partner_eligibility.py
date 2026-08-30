@@ -242,7 +242,7 @@ def _patch_api_responses(monkeypatch, status_code: int, headers: dict) -> None:
 
     def _run(*_args, **_kwargs):
         # gh CLI unavailable -> fall through to the requests path.
-        raise FileNotFoundError()
+        raise FileNotFoundError
 
     def _get(*_args, **_kwargs):
         return _Resp()

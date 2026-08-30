@@ -77,75 +77,120 @@ def _safe_str_attr(target: Any, attr: str, resource_type: str, action_name: str)
     return str(val)
 
 
+def _resolve_resource_type(target: Any, action: str) -> str | None:
+    """Return the resource type for *target*, logging and returning ``None`` if unknown."""
+    resource_type = _RESOURCE_TYPES.get(type(target))
+    if resource_type is None:
+        _log.warning(
+            "event_listener.unknown_model",
+            extra={"model": type(target).__name__, "action": action},
+        )
+    return resource_type
+
+
+def _resolve_action_name(action: str) -> str | None:
+    """Return the canonical action name for *action*, logging and returning ``None`` if unknown."""
+    action_name = _ACTION_MAP.get(action)
+    if action_name is None:
+        _log.warning(
+            "event_listener.unknown_action",
+            extra={"action": action},
+        )
+    return action_name
+
+
+def _get_running_loop(resource_type: str, action_name: str) -> asyncio.AbstractEventLoop | None:
+    """Return the running event loop, logging and returning ``None`` if none is running."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        _log.warning(
+            "event_listener.no_running_loop",
+            extra={"resource_type": resource_type, "action": action_name},
+        )
+        return None
+
+
+def _next_version(org_id: str) -> int:
+    """Atomically increment and return the per-org version counter."""
+    with _version_counter_lock:
+        version = _version_counters[org_id] + 1
+        _version_counters[org_id] = version
+    return version
+
+
+def _on_task_done(
+    task: asyncio.Task[Any],
+    resource_type: str,
+    action_name: str,
+    org_id: str,
+) -> None:
+    """Discard a finished publish task and log any failure or cancellation."""
+    _background_tasks.discard(task)
+    if task.cancelled():
+        _log.warning(
+            "event_listener.task_cancelled",
+            extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
+        )
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.warning(
+            "event_listener.publish_failed",
+            exc_info=exc,
+            extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
+        )
+
+
+def _schedule_event_publish(
+    loop: asyncio.AbstractEventLoop,
+    org_id: str,
+    resource_type: str,
+    resource_id: str,
+    action_name: str,
+) -> None:
+    """Publish a resource-change event as a background task."""
+    version = _next_version(org_id)
+    task = loop.create_task(
+        get_event_bus().publish(
+            org_id=org_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=action_name,
+            version=version,
+        ),
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(
+        lambda t: _on_task_done(t, resource_type, action_name, org_id),
+    )
+
+
 def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
     """Return an event-listener function for the given SQLAlchemy action."""
 
     def listener(_mapper: object, _connection: object, target: Any) -> None:
-        resource_type = _RESOURCE_TYPES.get(type(target))
+        resource_type = _resolve_resource_type(target, action)
         if resource_type is None:
-            _log.warning(
-                "event_listener.unknown_model",
-                extra={"model": type(target).__name__, "action": action},
-            )
             return
 
-        action_name = _ACTION_MAP.get(action)
+        action_name = _resolve_action_name(action)
         if action_name is None:
-            _log.warning(
-                "event_listener.unknown_action",
-                extra={"action": action},
-            )
             return
 
         org_id = _safe_str_attr(target, "organisation_id", resource_type, action_name)
         if org_id is None:
             return
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _log.warning(
-                "event_listener.no_running_loop",
-                extra={"resource_type": resource_type, "action": action_name},
-            )
+        loop = _get_running_loop(resource_type, action_name)
+        if loop is None:
             return
 
         resource_id = _safe_str_attr(target, "id", resource_type, action_name)
         if resource_id is None:
             return
 
-        with _version_counter_lock:
-            version = _version_counters[org_id] + 1
-            _version_counters[org_id] = version
-
-        task = loop.create_task(
-            get_event_bus().publish(
-                org_id=org_id,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                action=action_name,
-                version=version,
-            ),
-        )
-        _background_tasks.add(task)
-
-        def _on_task_done(t: asyncio.Task[Any]) -> None:
-            _background_tasks.discard(t)
-            if t.cancelled():
-                _log.warning(
-                    "event_listener.task_cancelled",
-                    extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
-                )
-                return
-            exc = t.exception()
-            if exc is not None:
-                _log.warning(
-                    "event_listener.publish_failed",
-                    exc_info=exc,
-                    extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
-                )
-
-        task.add_done_callback(_on_task_done)
+        _schedule_event_publish(loop, org_id, resource_type, resource_id, action_name)
 
     return listener
 

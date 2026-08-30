@@ -9,7 +9,9 @@ code:
   - .github/workflows/uptime-monitor.yml
 unit-tests:
   - backend/tests/unit/api/test_health.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/infra/health.feature
+  - backend/tests/bdd/features/infra/test_health_steps.py
 depends-on: []
 status: covered
 ---
@@ -50,12 +52,15 @@ redirected to this infra-health surface via `feat-infra-health`.
 - **No PRD section reference.** The health endpoints are an internal infrastructure
   concern spanning deployment, monitoring, and operations; no single PRD section covers
   liveness/readiness.
-- **No BDD feature files.** Health endpoints use FastAPI `TestClient` unit tests
-  (`backend/tests/unit/api/test_health.py`) with patched check functions. No pytest-bdd
-  scenarios exist.
 
 ## QA History
 
+- 2026-08-26: **improve-architecture (product-map walk)** — closed the "No BDD feature
+  files" gap: added `backend/tests/bdd/features/infra/health.feature` + `test_health_steps.py`
+  (7 scenarios, self-contained: real health router in a fresh app with only the per-check
+  probes patched). Covers liveness advisory, ok/degraded/unavailable aggregation, the 503
+  gate, and the FAR-199 dispatcher-reconcile two-tier (unavailable gates, degraded stays
+  advisory). Status: covered.
 - 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph that was lost from the public tree.
   Registered the dangling `feat-infra-health` reference: `backend/tests/unit/api/test_health.py`

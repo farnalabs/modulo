@@ -56,6 +56,40 @@ class TestMobileSidebarRailFlag:
         assert flag.description
 
 
+class TestUserManagementFlag:
+    """FAR-462: basic user management is a community-tier feature — the Users
+    admin view must not be tier-locked on any plan."""
+
+    def test_flag_is_registered(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("user_management")
+        assert flag is not None, "user_management flag must be registered in _KNOWN_FLAGS"
+
+    def test_flag_tier_is_community(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("user_management")
+        assert flag is not None
+        assert flag.tier == "community"
+
+    def test_flag_active_on_community_tier(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        flag = registry.get_flag("user_management")
+        assert flag is not None
+        assert flag.currently_active is True
+
+    def test_flag_active_on_team_tier(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+        flag = registry.get_flag("user_management")
+        assert flag is not None
+        assert flag.currently_active is True
+
+    def test_flag_has_description(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("user_management")
+        assert flag is not None
+        assert flag.description
+
+
 class TestFeatureFlagModel:
     def test_creates_with_minimal_fields(self) -> None:
         flag = FeatureFlag(name="test_flag", tier="community", description="test")

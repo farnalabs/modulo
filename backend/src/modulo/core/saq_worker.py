@@ -1242,12 +1242,15 @@ _SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
 def _get_system_async_engine() -> AsyncEngine:
     """Engine for cross-org system crons using the modulo_system role.
 
-    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
-    so deployments that haven't provisioned the system role still work. The
-    fallback runs system crons as modulo_app, which is NOBYPASSRLS (see
+    FAIL CLOSED when MODULO_SYSTEM_DATABASE_URL is not set: cross-org system
+    crons require the modulo_system role (LOGIN, BYPASSRLS). Falling back to the
+    regular engine would run them as modulo_app, which is NOBYPASSRLS (see
     bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
-    RLS-scoped reads silently return zero rows — a warning is emitted to surface
-    that the system role is unprovisioned.
+    RLS-scoped read silently returns zero rows — a silent no-op that masks a
+    misconfigured deployment. Instead, a clear ``RuntimeError`` is raised. The
+    engine is created LAZILY on first use inside a cron invocation (never at
+    worker startup), so this raise fails only the specific system cron — which
+    SAQ logs — while the worker stays up to serve every other job.
     """
     global _SYSTEM_ASYNC_ENGINE
     if _SYSTEM_ASYNC_ENGINE is None:
@@ -1273,16 +1276,21 @@ def _get_system_async_engine() -> AsyncEngine:
                 connect_args={"ssl": False, "statement_cache_size": 0},
             )
         else:
-            _log.warning(
-                "saq_worker.system_engine_fallback",
+            _log.error(
+                "saq_worker.system_engine_misconfigured",
                 extra={
                     "reason": (
-                        "MODULO_SYSTEM_DATABASE_URL not set — system crons run as modulo_app "
-                        "(NOBYPASSRLS); RLS-scoped reads return zero rows"
+                        "MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org "
+                        "system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would "
+                        "silently return zero rows. Set the modulo_system role URL."
                     )
                 },
             )
-            _SYSTEM_ASYNC_ENGINE = _get_async_engine()
+            raise RuntimeError(
+                "MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require "
+                "the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to "
+                "modulo_app (NOBYPASSRLS), which would silently return zero rows."
+            )
     return _SYSTEM_ASYNC_ENGINE
 
 

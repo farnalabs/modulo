@@ -25,8 +25,9 @@ Execution path (given a resolved trigger config):
 
 Load-bearing guards:
 * **Org isolation** — every query injects an unconditional
-  ``organisation_id = :org`` predicate (the BYPASSRLS -> explicit predicate is
-  the isolation control); RLS is never relied on alone.
+  ``organisation_id = :org`` predicate (the NOBYPASSRLS -> explicit predicate is
+  the primary isolation control; RLS also enforces org scoping, never relied on
+  alone).
 * **Loop guard** — the enforcement is the WRITE SURFACE: a SuiteRun completion
   writes ONLY to ``suite_runs`` and ``eval_results``. It never creates a ``Run``,
   never writes a ``TriggerEvent`` and never writes a

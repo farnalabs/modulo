@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -48,7 +49,7 @@ class RedisSlidingWindowRateLimiter:
 
         pipe = self._redis.pipeline(transaction=True)
         pipe.zremrangebyscore(redis_key, 0, cutoff)
-        pipe.zadd(redis_key, {str(now): now})
+        pipe.zadd(redis_key, {f"{now}:{uuid.uuid4().hex}": now})
         pipe.zcard(redis_key)
         pipe.expire(redis_key, window_s * 2)
         _, _, count, _ = await pipe.execute()
@@ -198,7 +199,7 @@ class AuthRateLimiter:
         """Record a failed login attempt for *ip*."""
         now = time.time()
         key = f"{self._prefix}{ip}"
-        await self._redis.zadd(key, {str(now): now})
+        await self._redis.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
         await self._redis.expire(key, self._window_s * 2)
 
     async def record_success(self, ip: str) -> None:

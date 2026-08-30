@@ -453,11 +453,6 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
                     ).fetchall()
                     visible = {r[0] for r in rows}
                 assert visible == {str(suite_b)}, f"org B should see only its suite; got {visible}"
-        finally:
-            async with engine.connect() as conn:
-                await conn.execute(text(f'DROP OWNED BY "{role}"'))
-                await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
-                await conn.execute(text("COMMIT"))
 
             # --- Downgrade reverses the migration cleanly (-1 = one step back) ---
             # env.py's boot fast-path skips migrations when invoked programmatically
@@ -481,6 +476,16 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
                     )
                 ).scalar()
                 assert col == 0, "eval_suite_id column should be dropped after downgrade"
+        finally:
+            # Drop the temporary RLS role so it never outlives the test. The
+            # downgrade assertions live in the try body, NOT here: an assert in a
+            # finally block runs on every exit path and, when the try body already
+            # failed, silently replaces the original exception (and its traceback)
+            # with a bare AssertionError (test_no_assert_inside_finally).
+            async with engine.connect() as conn:
+                await conn.execute(text(f'DROP OWNED BY "{role}"'))
+                await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+                await conn.execute(text("COMMIT"))
     finally:
         # Restore the head state: drop seeded data, re-run migration to head.
         async with engine.begin() as conn:

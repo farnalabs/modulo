@@ -24,6 +24,7 @@ Every lens reports actionable file:line diagnostics instead of a bare
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import yaml
@@ -300,19 +301,160 @@ def _feature_scenario_tags(feature: Path) -> list[tuple[int, str, set[str]]]:
         if line.startswith("@"):
             tags = {t for t in line.split() if t.startswith("@")}
             continue
-        if line.startswith("Scenario Outline") or line.startswith("Scenario:"):
+        if line.startswith(("Scenario Outline", "Scenario:")):
             scenarios.append((lineno, line.split(":", 1)[1].strip(), tags))
             tags = set()
     return scenarios
 
 
-def _quarantine_entries() -> list[dict]:
-    if not QUARANTINE_FILE.exists():
+def _quarantine_entries(quarantine_file: Path | None = None) -> list[dict]:
+    qf = quarantine_file or QUARANTINE_FILE
+    if not qf.exists():
         return []
-    data = yaml.safe_load(QUARANTINE_FILE.read_text(encoding="utf-8"))
+    data = yaml.safe_load(qf.read_text(encoding="utf-8"))
     if not data:
         return []
     return list(data.get("quarantine") or [])
+
+
+def _stripped_symbol(nodeid_symbol: str) -> str:
+    """Strip the ``[...]`` parametrization suffix from *each* ``::`` segment of a
+    nodeid symbol so ``test_foo[abc]`` resolves to ``test_foo``, and a
+    parametrized class nodeid ``TestFoo[param]::test_bar`` keeps its
+    ``::test_bar`` method component instead of degrading to a bare-class check
+    that would mask a renamed/deleted method."""
+    return "::".join(part.split("[", 1)[0] for part in nodeid_symbol.split("::"))
+
+
+def _resolves_definitions(nodeid_symbol: str, symbols: set[str]) -> bool:
+    """Return True when ``nodeid_symbol`` resolves against the collected set.
+
+    pytest item nodeids are either a bare ``test_*`` function (``test_foo``) or
+    a ``Class::method`` chain (``TestFoo::test_bar``), each possibly with a
+    ``[...]`` parametrization suffix.
+
+    A class reference MUST carry an explicit ``::method`` component: pytest
+    never emits ``file.py::TestFoo`` as an item nodeid, so a bare-class entry
+    would be accepted by the lens but could never match the plugin's verbatim
+    ``item.nodeid in quarantined`` check — a false pass. A ``Class::method`` node
+    only resolves when *both* the class and the exact method exist (exact-set
+    membership, not substring containment), so a renamed method is caught even
+    though its class still does.
+    """
+    symbol = _stripped_symbol(nodeid_symbol)
+    parts = symbol.split("::")
+    if len(parts) == 1:
+        # Bare function: pytest only collects ``test_*`` names. A bare class
+        # (TestFoo) is never a valid pytest item nodeid, so reject it.
+        return parts[0].startswith("test_") and parts[0] in symbols
+    if len(parts) == 2:
+        cls, method = parts
+        return cls in symbols and f"{cls}::{method}" in symbols
+    # 3+ segments (e.g. Class::TestCaseKind::nodes) — exact membership only.
+    return symbol in symbols
+
+
+def _collect_definitions(path: Path) -> set[str]:
+    """Return the set of pytest-collectable test symbols defined in ``path``.
+
+    Walks the module AST for every ``test_*`` function (top level or inside a
+    ``Test*`` class) plus every ``Test*`` class, matching pytest's collection
+    rules closely enough to catch a renamed/deleted test. (BDD scenario modules
+    are handled separately — see :func:`_is_bdd_scenario_module`.)
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return set()
+
+    symbols: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            symbols.add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            symbols.add(node.name)
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name.startswith("test_"):
+                    symbols.add(f"{node.name}::{sub.name}")
+    return symbols
+
+
+def _is_bdd_scenario_module(path: Path) -> bool:
+    """Return True for pytest-bdd step/scenario modules.
+
+    pytest-bdd 7.x modules that call ``scenarios(...)`` at import time have
+    their ``test_<scenario>`` item functions injected at runtime, so they never
+    appear in static source — a legitimate entry such as
+    ``test_audit_export_steps.py::test_paginated_csv_export_loads_events`` would
+    be falsely flagged "symbol not found" by the AST walk. The plugin still
+    xfails those items by verbatim nodeid, so we skip AST symbol validation for
+    these modules (a stale BDD entry is still caught by the file-existence
+    check). Recognised by the ``scenarios(`` injection point or its
+    ``pytest_bdd`` import.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return "scenarios(" in source or "import pytest_bdd" in source or "from pytest_bdd" in source
+
+
+def _resolve_quarantine_target(
+    test_id: str, backend: Path | None = None, repo: Path | None = None
+) -> tuple[Path | None, str | None, str]:
+    """Return ``(file, test_name, error)`` for a quarantine ``test_id``.
+
+    ``file`` is the resolved module path (or ``None`` when the nodeid is
+    malformed or the file does not exist), ``test_name`` is the symbol after
+    the ``::`` separator (or ``None`` on failure), and ``error`` is non-empty
+    exactly when the entry cannot be resolved to a file.
+    """
+    if "::" not in test_id:
+        return None, None, "entry missing '::' separator between file and test name"
+    path_part, test_part = test_id.split("::", 1)
+    if not path_part:
+        return None, None, "entry missing file path before '::' — a test_id must be 'file.py::test_name'"
+    backend = backend or BACKEND
+    repo = repo or REPO
+    resolved = backend / path_part if path_part.startswith("tests/") else repo / path_part
+    if not resolved.exists():
+        return None, None, f"file not found ({resolved}) — rename or remove the entry"
+    if not resolved.is_file():
+        return None, None, f"path is not a file ({resolved}) — a test_id must point at a test module"
+    return resolved, test_part, ""
+
+
+def _quarantine_violations(quarantine_file: Path, backend: Path, repo: Path) -> list[str]:
+    """Return the list of stale/incomplete ``.quarantine.yml`` entry violations.
+
+    Extracted from :func:`test_quarantine_registry_entries_resolve` so it can be
+    exercised directly by unit tests against a synthetic registry (the real
+    ``.quarantine.yml`` holds only commented examples, so the lens iterates an
+    empty list and the symbol-resolution code paths never run in CI).
+    """
+    violations: list[str] = []
+    for entry in _quarantine_entries(quarantine_file):
+        test_id = str(entry.get("test_id", ""))
+        if not test_id:
+            violations.append("  entry missing test_id")
+            continue
+        _path, test_part, error = _resolve_quarantine_target(test_id, backend, repo)
+        if error:
+            violations.append(f"  {test_id}: {error}")
+            continue
+        if not test_part:
+            violations.append(f"  {test_id}: missing test name after '::'")
+            continue
+        if not _is_bdd_scenario_module(_path) and not _resolves_definitions(test_part, _collect_definitions(_path)):
+            violations.append(
+                f"  {test_id}: test symbol {_stripped_symbol(test_part)!r} not found in {_path} — "
+                "the test was renamed/deleted, so this quarantine entry protects nothing"
+            )
+        if not entry.get("reason"):
+            violations.append(f"  {test_id}: missing required 'reason' field")
+        if not entry.get("expiry"):
+            violations.append(f"  {test_id}: missing required 'expiry' field (ISO 8601)")
+    return violations
 
 
 def _workflow_run_blocks(workflow: Path) -> list[str]:
@@ -388,25 +530,12 @@ def test_awaiting_implementation_set_is_pinned():
 
 
 def test_quarantine_registry_entries_resolve():
-    """Every quarantined test_id must point at a real test file and carry the
-    fields the plugin needs — a stale entry is a dead safety net."""
-    violations = []
-    for entry in _quarantine_entries():
-        test_id = str(entry.get("test_id", ""))
-        if not test_id:
-            violations.append("  entry missing test_id")
-            continue
-        if "::" not in test_id:
-            violations.append(f"  {test_id}: not in 'path::test_name' nodeid form")
-            continue
-        path_part, _test_part = test_id.split("::", 1)
-        resolved = BACKEND / path_part if path_part.startswith("tests/") else REPO / path_part
-        if not resolved.exists():
-            violations.append(f"  {test_id}: file not found ({resolved}) — rename or remove the entry")
-        if not entry.get("reason"):
-            violations.append(f"  {test_id}: missing required 'reason' field")
-        if not entry.get("expiry"):
-            violations.append(f"  {test_id}: missing required 'expiry' field (ISO 8601)")
+    """Every quarantined test_id must point at a real test file, resolve to a
+    real collectable test symbol inside that file, and carry the fields the
+    plugin needs — a stale entry (a missing file, or a renamed/deleted test
+    function or class) is a dead safety net that silently stops protecting
+    anything because the xfail marker never applies."""
+    violations = _quarantine_violations(QUARANTINE_FILE, BACKEND, REPO)
     assert not violations, (
         "Found stale or incomplete .quarantine.yml entries — a quarantined test that "
         "cannot resolve is silently never xfailed.\n" + "\n".join(violations)

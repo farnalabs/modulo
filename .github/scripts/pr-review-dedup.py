@@ -13,17 +13,23 @@ the logic in a versioned script also makes it unit-testable (see
 backend/tests/unit/scripts/test_pr_review_dedup.py).
 """
 
+from __future__ import annotations
+
 import json
 import sys
+from typing import Any
+
+Review = dict[str, Any]
+Commit = dict[str, Any]
 
 
-def last_review(reviews):
+def last_review(reviews: list[Review]) -> Review | None:
     """Return the most recent non-PENDING review dict, or None."""
     non_pending = [r for r in reviews if r.get("state") != "PENDING"]
     return non_pending[-1] if non_pending else None
 
 
-def non_merge_commits_since(commits, last_sha):
+def non_merge_commits_since(commits: list[Commit], last_sha: str) -> tuple[bool, int]:
     """Return (found_last, count_non_merge_since).
 
     Walk the PR commit list newest-first (reverse order) until we hit the
@@ -42,7 +48,7 @@ def non_merge_commits_since(commits, last_sha):
     return found, count
 
 
-def decide(reviews, commits, head_sha):
+def decide(reviews: list[Review], commits: list[Commit], head_sha: str) -> tuple[bool, str]:
     """Return (skip: bool, reason: str).
 
     skip=True  -> the PR Reviewer webhook should NOT fire for this head.
@@ -87,12 +93,12 @@ def decide(reviews, commits, head_sha):
     return False, f"Prior state {state or 'empty'} is not decisive - dispatch."
 
 
-def load(path):
+def load(path: str) -> Any:
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if len(argv) != 4:
         print(
             "usage: pr-review-dedup.py <reviews.json> <commits.json> <head_sha>",

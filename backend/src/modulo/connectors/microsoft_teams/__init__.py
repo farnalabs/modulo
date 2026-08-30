@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
@@ -56,7 +57,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

@@ -56,8 +56,9 @@ def create_access_token(
     org_role: str,
     is_system_admin: bool = False,
     user_id: str = "",
+    ttl_minutes: int | None = None,
 ) -> str:
-    """15-minute access token."""
+    """Access token with a configurable TTL (default 15 minutes)."""
     resolved_account_id: str = account_id or user_id
     now: datetime = datetime.now(UTC)
     claims: dict[str, object] = {
@@ -67,7 +68,7 @@ def create_access_token(
         "org_role": org_role,
         "is_system_admin": is_system_admin,
         "iat": now,
-        "exp": now + timedelta(minutes=_ACCESS_TOKEN_MINUTES),
+        "exp": now + timedelta(minutes=ttl_minutes if ttl_minutes is not None else _ACCESS_TOKEN_MINUTES),
     }
     return str(jwt.encode(claims, secret_key, algorithm=_ALGORITHM))
 

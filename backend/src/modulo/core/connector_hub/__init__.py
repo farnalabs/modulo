@@ -133,25 +133,14 @@ def resolve_shared_rate_limit_redis(org_id: str | None) -> Any | None:
     fail-open FAR-439 removed.
     """
     try:
-        from modulo.settings import get_settings
-
-        settings = get_settings()
+        settings = _read_rate_limit_settings()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if org_id:
-            logger.exception(
-                "Settings could not be read on the tenant path — fail-closed (no local-bucket fallback)",
-            )
-            raise SharedBudgetUnavailableError(
-                f"settings could not be read to wire the shared rate-limit budget: {exc}"
-            ) from exc
-        logger.warning(
-            "Unable to read settings for the shared Redis rate limiter — using the local bucket",
-            exc_info=True,
-        )
+        _handle_settings_read_failure(exc, org_id)
         return None
-    if not settings.redis_url or settings.modulo_db.lower() == "sqlite":
+
+    if _shared_redis_unconfigured(settings):
         # Redis is genuinely NOT configured — the connector-local bucket is correct
         # (no shared budget exists to multiply).
         return None
@@ -161,6 +150,41 @@ def resolve_shared_rate_limit_redis(org_id: str | None) -> Any | None:
         # share one Redis budget across distinct orgs (cross-tenant leak). These
         # short-lived probes stay on the connector-local bucket, which is correct.
         return None
+
+    return _build_shared_redis_client(settings)
+
+
+def _read_rate_limit_settings() -> Any:
+    """Read app settings (the source of ``redis_url`` for the shared budget)."""
+    from modulo.settings import get_settings
+
+    return get_settings()
+
+
+def _handle_settings_read_failure(exc: Exception, org_id: str | None) -> None:
+    """Fail-closed on the tenant path, degrade to the local bucket on a probe path."""
+    if org_id:
+        logger.error(
+            "Settings could not be read on the tenant path — fail-closed (no local-bucket fallback)",
+            exc_info=True,
+        )
+        raise SharedBudgetUnavailableError(
+            f"settings could not be read to wire the shared rate-limit budget: {exc}"
+        ) from exc
+    logger.warning(
+        "Unable to read settings for the shared Redis rate limiter — using the local bucket",
+        exc_info=True,
+    )
+    return
+
+
+def _shared_redis_unconfigured(settings: Any) -> bool:
+    """True when no shared Redis budget exists and the connector-local bucket is correct."""
+    return not settings.redis_url or settings.modulo_db.lower() == "sqlite"
+
+
+def _build_shared_redis_client(settings: Any) -> Any:
+    """Construct the shared Redis client, fail-closed on any construction error (FAR-439)."""
     try:
         from redis.asyncio import Redis
 

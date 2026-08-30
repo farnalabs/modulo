@@ -46,6 +46,7 @@ vi.mock('../composables/useDataFetch', async () => {
 
 import AdminUsersView from '../views/AdminUsersView.vue'
 import { generateStrongPassword } from '../utils/password'
+import { usePlanStore } from '../stores/planStore'
 
 const USERS_RESPONSE = {
   items: [
@@ -89,6 +90,24 @@ function mountView() {
       },
     },
   })
+}
+
+// The FAR-462 gating tests assert on FeatureGate's own markup, so they mount
+// the REAL FeatureGate (no stubs) with a patched plan store. The users list is
+// served by the module-level useApi mock above rather than a global fetch stub.
+async function mountViewWithPlan(planPatch: Record<string, unknown>) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const store = usePlanStore()
+  store.$patch(planPatch)
+  const wrapper = mount(AdminUsersView, {
+    global: { plugins: [pinia] },
+  })
+  await flushPromises()
+  for (let i = 0; i < 3; i++) {
+    await nextTick()
+  }
+  return wrapper
 }
 
 describe('AdminUsersView', () => {
@@ -200,6 +219,27 @@ describe('AdminUsersView', () => {
     // Copying delivers the temporary credential from the reset response.
     await wrapper.find('[data-testid="admin-users-copy-password"]').trigger('click')
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('temp-passw0rd')
+  })
+
+  it('renders the users table with no lock overlay on community tier (FAR-462)', async () => {
+    const wrapper = await mountViewWithPlan({
+      features: { user_management: true },
+      currentTier: 'community',
+    })
+
+    expect(wrapper.find('[data-testid="feature-gate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="feature-gate-lock"]').exists()).toBe(false)
+    expect(wrapper.find('table').exists()).toBe(true)
+    expect(wrapper.text()).toContain('alice@example.com')
+  })
+
+  it('stays unlocked via the community required-tier fallback when flags have not loaded', async () => {
+    const wrapper = await mountViewWithPlan({ features: {}, currentTier: 'community' })
+
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="feature-gate-lock"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Users')
   })
 })
 

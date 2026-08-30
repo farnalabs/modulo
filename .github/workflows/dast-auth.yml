@@ -1,0 +1,178 @@
+name: "DAST: Authenticated API Scan"
+
+on:
+  schedule:
+    # Nightly authenticated API scan against staging, 02:40 UTC. Report-only.
+    - cron: '40 2 * * *'
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL'
+        required: false
+        default: 'https://staging.modulo.run'
+      scan_type:
+        description: 'baseline (safe/passive) or full (active)'
+        required: false
+        default: 'baseline'
+
+permissions:
+  contents: read
+
+jobs:
+  dast-auth:
+    name: Authenticated OWASP ZAP API scan
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Generate OpenAPI from backend + inject servers URL
+        working-directory: backend
+        shell: bash
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
+          SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          MODULO_CSRF_ENABLED: "false"
+        run: |
+          uv sync --frozen
+          cat > /tmp/gen_openapi.py <<'EOF'
+          import json, sys
+          sys.tracebacklimit = 0
+          from modulo.api.main import app
+          with open("/tmp/modulo_openapi.json", "w", encoding="utf-8") as f:
+              json.dump(app.openapi(), f, ensure_ascii=False)
+          print("OPENAPI_DUMPED")
+          EOF
+          uv run --no-build --no-sync python /tmp/gen_openapi.py
+          TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
+          mkdir -p "$GITHUB_WORKSPACE/zap-report"
+          # Ephemeral CI dir mounted into the ZAP container; world-writable so the
+          # container (running as a fixed uid) can write the report.
+          chmod 777 "$GITHUB_WORKSPACE/zap-report"
+          python3 -c "import json; p=json.load(open('/tmp/modulo_openapi.json')); p['servers']=[{'url':\"$TARGET\"}]; json.dump(p, open('$GITHUB_WORKSPACE/zap-report/modulo_openapi_target.json','w')); print('servers injected, paths=', len(p['paths']))"
+
+      - name: Login and run authenticated ZAP API scan
+        shell: bash
+        env:
+          DAST_EMAIL: ${{ secrets.DAST_STAGING_EMAIL || secrets.E2E_STAGING_ADMIN_EMAIL }}
+          DAST_PASSWORD: ${{ secrets.DAST_STAGING_PASSWORD || secrets.E2E_STAGING_ADMIN_PASSWORD }}
+          TARGET: ${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}
+          SCAN_TYPE: ${{ github.event.inputs.scan_type || 'baseline' }}
+        run: |
+          set -euo pipefail
+          # Fail loudly when staging credentials are absent rather than silently
+          # downgrading to a deceptive "demo" scan.
+          if [ -z "$DAST_EMAIL" ] || [ -z "$DAST_PASSWORD" ]; then
+            echo "::error::Staging DAST credentials missing (DAST_STAGING_* / E2E_STAGING_ADMIN_*). Refusing to run a deceptive scan."
+            exit 1
+          fi
+          echo "Logging in as ${DAST_EMAIL} ..."
+          # Mint a CSRF token first so the login POST succeeds even when staging
+          # has CSRF enabled (the default). Harmless when CSRF is disabled.
+          curl -s -c /tmp/cj.txt -m 30 "${TARGET}/api/v1/auth/csrf-token" || true
+          CSRF=$(grep -i 'xsrf-token' /tmp/cj.txt | awk '{print $7}' || true)
+          LOGIN=$(curl -s -m 30 -b /tmp/cj.txt -c /tmp/cj.txt -X POST "${TARGET}/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            ${CSRF:+-H "X-CSRF-Token: ${CSRF}"} \
+            -d "{\"email\":\"${DAST_EMAIL}\",\"password\":\"${DAST_PASSWORD}\"}")
+          TOKEN=$(echo "$LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+          if [ -z "$TOKEN" ]; then echo "::error::Login failed"; echo "$LOGIN"; exit 1; fi
+          echo "::add-mask::${TOKEN}"
+          echo "login ok, token_len=${#TOKEN}"
+          # NOTE: access_token is a 15-minute JWT. This single static token is
+          # injected for the whole scan; once it expires (~15 min in) ZAP silently
+          # scans UNAUTHENTICATED. Prefer short 'baseline' scans, or keep 'full'
+          # scans within the token lifetime. Token-refresh loop is a tracked follow-up.
+          ZAPOPTS="-config replacer.full_list(0).description=modulo-auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQUEST_HEADER -config replacer.full_list(0).matchregex=true -config replacer.full_list(0).matchstring=Authorization -config replacer.full_list(0).replacement=Bearer ${TOKEN} -config replacer.full_list(0).init=true"
+          ZAP_RUN="docker run --rm -t -v \"$PWD/zap-report:/zap/wrk/:rw\" ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py -t /zap/wrk/modulo_openapi_target.json -f openapi"
+          if [ "$SCAN_TYPE" = "full" ]; then
+            $ZAP_RUN -r /zap/wrk/zap-api-report.html -J /zap/wrk/zap-api-report.json -z "${ZAPOPTS}" || echo "::warning::ZAP scan completed with non-zero exit (see report)"
+          else
+            $ZAP_RUN -S -r /zap/wrk/zap-api-report.html -J /zap/wrk/zap-api-report.json -z "${ZAPOPTS}" || echo "::warning::ZAP scan completed with non-zero exit (see report)"
+          fi
+          # Robustness gate: a scan that never produced a report must fail loud,
+          # not silently finish green.
+          if [ ! -f zap-report/zap-api-report.json ]; then
+            echo "::error::ZAP report not generated - the scan did not actually run."
+            exit 1
+          fi
+
+      - name: Redact secrets from ZAP report
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json, os, re
+          p = "zap-report/zap-api-report.json"
+          if not os.path.exists(p):
+              raise SystemExit("report missing")
+          d = json.load(open(p))
+          # Strip recorded request/response (which embed the Authorization header)
+          # from every alert before the artifact is uploaded to this public repo.
+          strip = ("request", "requestHeader", "response", "responseHeader")
+          def clean(alerts):
+              for a in alerts:
+                  for k in strip:
+                      a.pop(k, None)
+                  if isinstance(a.get("instances"), list):
+                      for inst in a["instances"]:
+                          for k in strip:
+                              inst.pop(k, None)
+          for site in d.get("site", []):
+              clean(site.get("alerts", []))
+          json.dump(d, open(p, "w"), ensure_ascii=False)
+          # Redact any Authorization header left in the HTML report.
+          h = "zap-report/zap-api-report.html"
+          if os.path.exists(h):
+              txt = open(h, encoding="utf-8", errors="replace").read()
+              txt = re.sub(r"Authorization:\s*Bearer\s+[^\s\"'<>\r\n]+",
+                           "Authorization: Bearer ***", txt)
+              open(h, "w", encoding="utf-8").write(txt)
+          print("report redacted")
+          PYEOF
+
+      - name: Upload ZAP report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-auth-report-${{ github.run_id }}
+          path: zap-report/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Summarize findings
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          p = "zap-report/zap-api-report.json"
+          if not os.path.exists(p):
+              print("::error::No JSON report generated - check the scan step.")
+              sys.exit(1)
+          d = json.load(open(p))
+          agg = {}
+          riskorder = {"Critical":0,"High":1,"Medium":2,"Low":3,"Informational":4}
+          for s in d.get("site", []):
+              for a in s.get("alerts", []):
+                  name = a.get("name") or a.get("alert") or "?"
+                  risk = (a.get("riskdesc") or "?").split(" (")[0]
+                  try: cnt = int(a.get("count", 1))
+                  except: cnt = 1
+                  agg.setdefault(name, [0, risk])
+                  agg[name][0] += cnt
+                  agg[name][1] = risk
+          print("=== AUTHENTICATED ZAP FINDINGS ===")
+          for n in sorted(agg, key=lambda n: (riskorder.get(agg[n][1], 9), n)):
+              print(f"{agg[n][0]:>3} x {agg[n][1]} : {n}")
+          print(f"=== {len(agg)} distinct findings ===")
+          PYEOF

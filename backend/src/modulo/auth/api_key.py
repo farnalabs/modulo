@@ -260,7 +260,7 @@ async def validate_api_key(
     itself).
     """
     if not full_key.startswith(_MK_PREFIX):
-        raise ApiKeyInvalidError()
+        raise ApiKeyInvalidError
 
     inner = full_key[len(_MK_PREFIX) :]
     prefix = inner[:_PREFIX_LEN]
@@ -276,7 +276,7 @@ async def validate_api_key(
     keys = list(result.scalars())
     if not keys:
         _log.info("api_key.not_found", extra={"prefix": prefix, "org_id": str(org_id) if org_id else None})
-        raise ApiKeyInvalidError()
+        raise ApiKeyInvalidError
 
     actual_hash = _hash_key(full_key)
     for key in keys:
@@ -287,7 +287,7 @@ async def validate_api_key(
             await session.flush()
             return key
 
-    raise ApiKeyInvalidError()
+    raise ApiKeyInvalidError
 
 
 async def revoke_api_key(

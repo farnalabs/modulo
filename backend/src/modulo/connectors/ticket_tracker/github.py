@@ -6,7 +6,14 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType, HealthResult
+from modulo.connectors.base import (
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorResult,
+    ConnectorType,
+    HealthResult,
+    health_check_failure,
+)
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 
 
@@ -39,7 +46,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return HealthResult(ok=False, detail=str(e)[:200])
+            return health_check_failure(e)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}

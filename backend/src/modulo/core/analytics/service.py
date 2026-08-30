@@ -6,10 +6,11 @@ statement timeout, validation, bucketing, and error semantics stay identical
 across surfaces.
 
 Isolation invariant (CRITICAL — carried over from the route): ``modulo_app``
-is BYPASSRLS and the ORM tenant filter is NOT registered on Postgres — the
-explicit ``organisation_id = :org`` predicate injected by the builder is the
-ONLY isolation control. ``set_rls_org`` remains defense-in-depth, never the
-control. The ``factory`` (sessionmaker over the shared engine) is supplied by
+is NOBYPASSRLS (tenant isolation relies on RLS policies) and the ORM tenant
+filter is NOT registered on Postgres — the explicit ``organisation_id = :org``
+predicate injected by the builder is the PRIMARY isolation control (RLS also
+enforces org scoping). ``set_rls_org`` remains defense-in-depth. The ``factory``
+(sessionmaker over the shared engine) is supplied by
 the caller so this core module never imports ``modulo.api`` (import-linter).
 
 The service never raises FastAPI exceptions — it raises the typed
@@ -457,8 +458,10 @@ async def _resolve_pool_reference(
     failed query. With a single ``pipeline_id`` filter the pool reference is
     that pipeline's ``max_concurrent_runs`` (the binding cap for a one-pipeline
     query); otherwise it is the org's ``run_concurrency_limit``. Reads use the
-    explicit org predicate because ``modulo_app`` is BYPASSRLS — the predicate
-    is the ONLY isolation control, and ``session.get`` alone would not scope it.
+    explicit org predicate because ``modulo_app`` is NOBYPASSRLS (tenant
+    isolation relies on RLS policies) — the predicate is the PRIMARY isolation
+    control (RLS also enforces org scoping), and ``session.get`` alone would not
+    scope it.
     """
     try:
         async with factory() as session:

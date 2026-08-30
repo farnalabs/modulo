@@ -110,6 +110,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
+        name="user_management",
+        description="Basic user management — create, deactivate, and role-assign organisation users",
+        tier="community",
+    ),
+    FeatureFlag(
         name="observability",
         description="OpenTelemetry export and LangSmith integration settings",
         tier="community",

@@ -23,6 +23,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 _SLACK_API = "https://slack.com/api"
@@ -166,7 +167,7 @@ class SlackConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="Bot is not in any channel")
             return HealthResult(ok=True)
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

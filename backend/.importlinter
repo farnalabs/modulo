@@ -21,6 +21,13 @@ ignore_imports =
     modulo.api.mcp_server -> modulo.core.cron_helpers
     modulo.api.mcp_server -> modulo.core.dispatch
     modulo.api.routes.pipelines -> modulo.core.reports.quality_report
+    # Admin fernet-rotation is a cross-org system operation: it must run on the
+    # modulo_system (BYPASSRLS) session factory so the org-scoped rls policies on
+    # secrets/connector_instances/model_backends/notification_endpoints do not
+    # fail-closed to zero rows. Same exempt seam category as triggers/webhooks ->
+    # cron_helpers/dispatch above (admin API drives the cross-org system worker
+    # machinery).
+    modulo.api.routes.admin_rotation -> modulo.core.saq_worker
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API

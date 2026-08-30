@@ -157,86 +157,142 @@ async def append_audit_event(
     resolved_payload = payload_json or {}
     for attempt in range(APPEND_MAX_RETRIES):
         try:
-            async with session.begin_nested():
-                head = await _get_chain_head_locked(session, org_id)
-                prev_hash = head.last_event_hash if head else None
-
-                event = AuditEvent(
-                    organisation_id=org_id,
-                    event_type=event_type,
-                    account_id=actor_user_id,
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    payload_json=resolved_payload,
-                    request_id=request_id,
-                    previous_hash=prev_hash,
-                )
-                if event.created_at is None:
-                    event.created_at = datetime.now(UTC)
-                session.add(event)
-                await session.flush()
-
-                event_hash = _compute_event_hash(
-                    event_type=event_type,
-                    actor_user_id=actor_user_id,
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    payload_json=resolved_payload,
-                    request_id=request_id,
-                    previous_hash=prev_hash,
-                    event_id=event.id,
-                    organisation_id=org_id,
-                    created_at=event.created_at.isoformat(),
-                )
-
-                if head:
-                    head.last_event_hash = event_hash
-                    head.last_event_id = event.id
-                    head.event_count = (head.event_count or 0) + 1
-                else:
-                    head = AuditChainHead(
-                        organisation_id=org_id,
-                        last_event_hash=event_hash,
-                        last_event_id=event.id,
-                        event_count=1,
-                    )
-                    session.add(head)
-
-                await session.flush()
-                return event
+            return await _append_audit_event_attempt(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                actor_user_id=actor_user_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                resolved_payload=resolved_payload,
+                request_id=request_id,
+            )
         except IntegrityError:
-            _log.warning(
-                "append_audit_event: IntegrityError on attempt %d/%d for org=%s event_type=%s",
-                attempt + 1,
-                APPEND_MAX_RETRIES,
-                org_id,
-                event_type,
-                exc_info=True,
-            )
-            if attempt == APPEND_MAX_RETRIES - 1:
-                _log.exception(
-                    "append_audit_event: exhausted %d retries for org=%s event_type=%s",
-                    APPEND_MAX_RETRIES,
-                    org_id,
-                    event_type,
-                )
-                raise
-            await asyncio.sleep(RETRY_BASE_DELAY_S * (attempt + 1))
+            await _maybe_retry_integrity(attempt, org_id, event_type)
         except ProgrammingError:
-            _log.exception(
-                "append_audit_event: ProgrammingError (missing table) for org=%s event_type=%s",
-                org_id,
-                event_type,
-            )
+            _log_append_fatal_error("ProgrammingError (missing table)", org_id, event_type)
             raise
         except SQLAlchemyError:
-            _log.exception(
-                "append_audit_event: SQLAlchemyError for org=%s event_type=%s",
-                org_id,
-                event_type,
-            )
+            _log_append_fatal_error("SQLAlchemyError", org_id, event_type)
             raise
     raise RuntimeError("append_audit_event: unexpected fallthrough")
+
+
+async def _maybe_retry_integrity(attempt: int, org_id: uuid.UUID, event_type: str) -> None:
+    """Handle a retryable IntegrityError.
+
+    Logs the retry, then backs off and returns so the caller retries the
+    append — unless this was the final attempt, in which case it logs
+    exhaustion and re-raises the original error.
+    """
+    _log_integrity_retry(attempt, org_id, event_type)
+    if attempt != APPEND_MAX_RETRIES - 1:
+        await asyncio.sleep(RETRY_BASE_DELAY_S * (attempt + 1))
+        return
+    _log.exception(
+        "append_audit_event: exhausted %d retries for org=%s event_type=%s",
+        APPEND_MAX_RETRIES,
+        org_id,
+        event_type,
+    )
+    raise
+
+
+def _log_append_fatal_error(prefix: str, org_id: uuid.UUID, event_type: str) -> None:
+    """Log a non-retryable append failure (missing table / SQLAlchemy error)."""
+    _log.exception(
+        "append_audit_event: %s for org=%s event_type=%s",
+        prefix,
+        org_id,
+        event_type,
+    )
+
+
+def _log_integrity_retry(attempt: int, org_id: uuid.UUID, event_type: str) -> None:
+    """Log an IntegrityError during a retryable append attempt."""
+    _log.warning(
+        "append_audit_event: IntegrityError on attempt %d/%d for org=%s event_type=%s",
+        attempt + 1,
+        APPEND_MAX_RETRIES,
+        org_id,
+        event_type,
+        exc_info=True,
+    )
+
+
+async def _append_audit_event_attempt(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    event_type: str,
+    actor_user_id: uuid.UUID | None,
+    resource_type: str | None,
+    resource_id: uuid.UUID | None,
+    resolved_payload: dict[str, Any],
+    request_id: str | None,
+) -> AuditEvent:
+    """Perform a single attempt to append an audit event inside a nested savepoint.
+
+    Raises IntegrityError (propagated to the caller for retry) when a concurrent
+    transaction created the chain head between the lock and the insert.
+    """
+    async with session.begin_nested():
+        head = await _get_chain_head_locked(session, org_id)
+        prev_hash = head.last_event_hash if head else None
+
+        event = AuditEvent(
+            organisation_id=org_id,
+            event_type=event_type,
+            account_id=actor_user_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            payload_json=resolved_payload,
+            request_id=request_id,
+            previous_hash=prev_hash,
+        )
+        if event.created_at is None:
+            event.created_at = datetime.now(UTC)
+        session.add(event)
+        await session.flush()
+
+        event_hash = _compute_event_hash(
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            payload_json=resolved_payload,
+            request_id=request_id,
+            previous_hash=prev_hash,
+            event_id=event.id,
+            organisation_id=org_id,
+            created_at=event.created_at.isoformat(),
+        )
+
+        _update_chain_head(session, head, org_id, event, event_hash)
+        await session.flush()
+        return event
+
+
+def _update_chain_head(
+    session: AsyncSession,
+    head: AuditChainHead | None,
+    org_id: uuid.UUID,
+    event: AuditEvent,
+    event_hash: str,
+) -> None:
+    """Advance the existing chain head or create the first one for the org."""
+    if head:
+        head.last_event_hash = event_hash
+        head.last_event_id = event.id
+        head.event_count = (head.event_count or 0) + 1
+        return
+    head = AuditChainHead(
+        organisation_id=org_id,
+        last_event_hash=event_hash,
+        last_event_id=event.id,
+        event_count=1,
+    )
+    session.add(head)
 
 
 async def append_audit_event_isolated(

@@ -1730,34 +1730,41 @@ class TestGetSystemAsyncEngine:
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 
-    def test_falls_back_to_regular_engine_when_url_empty(self) -> None:
-        regular_engine = MagicMock()
+    def test_fails_closed_when_url_empty(self) -> None:
         mock_settings = _settings(modulo_system_database_url="")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
+        errors: list[tuple[object, object]] = []
         try:
             with (
                 patch.object(sw, "get_settings", return_value=mock_settings),
-                patch.object(sw, "_get_async_engine", return_value=regular_engine),
+                patch.object(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra))),
+                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
             ):
-                result = sw._get_system_async_engine()
+                sw._get_system_async_engine()
 
-            assert result is regular_engine
+            assert len(errors) == 1
+            msg, extra = errors[0]
+            assert msg == "saq_worker.system_engine_misconfigured"
+            assert "MODULO_SYSTEM_DATABASE_URL not set" in extra["reason"]
+            # Fail-closed leaves no engine cached — the next invocation raises again.
+            assert sw._SYSTEM_ASYNC_ENGINE is None
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_caches_engine_singleton(self) -> None:
-        regular_engine = MagicMock()
-        mock_settings = _settings(modulo_system_database_url="")
+        system_engine = MagicMock()
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
                 patch.object(sw, "get_settings", return_value=mock_settings),
-                patch.object(sw, "_get_async_engine", return_value=regular_engine),
+                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=system_engine),
             ):
                 first = sw._get_system_async_engine()
                 second = sw._get_system_async_engine()
 
             assert first is second
+            assert first is system_engine
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 

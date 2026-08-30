@@ -178,7 +178,7 @@ def _classify_self_report(
         return None
     node_report_key = entry.get("report_key")
     for rk, comp in consuming.items():
-        if node_report_key == rk or rk == "model_cost_usd":
+        if rk in (node_report_key, "model_cost_usd"):
             return comp
     return consuming.get("model_cost_usd") if entry.get("model_cost_usd") is not None else None
 

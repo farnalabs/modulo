@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     fernet_key_old: str = Field(default="")
     redis_url: str = Field("redis://localhost:6379/0")
     modulo_ws_token_ttl_seconds: int = Field(60)
+    modulo_access_token_minutes: int = Field(default=15, ge=5, le=1440)
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.
@@ -749,16 +750,20 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 True,
-                "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
-                "MODULO_BREAK_GLASS_STANDBY_SECRET are empty",
+                (
+                    "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
+                    "MODULO_BREAK_GLASS_STANDBY_SECRET are empty"
+                ),
             )
         )
     elif not (has_primary and has_standby):
         findings.append(
             (
                 False,
-                "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
-                "the operator rotation path is degraded",
+                (
+                    "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
+                    "the operator rotation path is degraded"
+                ),
             )
         )
 
@@ -768,8 +773,10 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 False,
-                "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
-                "deactivate/force/status commands are inoperable while disabled",
+                (
+                    "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
+                    "deactivate/force/status commands are inoperable while disabled"
+                ),
             )
         )
     return findings
