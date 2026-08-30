@@ -43,6 +43,7 @@ def _make_mock_session():
     session.execute = AsyncMock(return_value=exec_result)
     session.flush = AsyncMock()
     session.add = MagicMock()
+    session.get = AsyncMock(return_value=None)
     return session
 
 
