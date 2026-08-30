@@ -10,7 +10,7 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 2. **Check the Alembic migration chain** – review what schema changes will be applied:
    ```bash
    uv run alembic history
-   uv run alembic upgrade head --sql  # preview SQL without applying
+   uv run alembic upgrade heads --sql  # preview SQL without applying
    ```
 3. **Back up the database** – always take a backup before upgrading:
    ```bash
@@ -49,7 +49,7 @@ cd backend
 uv sync
 
 # 3. Run migrations
-uv run alembic upgrade head
+uv run alembic upgrade heads
 
 # 4. Restart the service
 sudo systemctl restart modulo

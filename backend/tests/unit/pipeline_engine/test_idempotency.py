@@ -40,11 +40,11 @@ def test_stable_idempotency_key_without_index() -> None:
 def test_stable_idempotency_key_rejects_naive_run_id() -> None:
     """A bare per-replay run_id (no <pipeline_id>:<run_number> shape) must fail
     loudly rather than silently minting a fresh key on every re-run."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         stable_idempotency_key(run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f", node_ref="node-a")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         stable_idempotency_key(run_ref="pipeline:not-a-number", node_ref="node-a")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         stable_idempotency_key(run_ref="", node_ref="node-a")
 
 

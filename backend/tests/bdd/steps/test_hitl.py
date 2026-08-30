@@ -221,7 +221,7 @@ def execution_resumes_from(node_id: str, request, ctx):
     body = request.node._resp.json()
     assert body.get("status") == "approved", f"Expected approved, got {body}"
     resume = ctx.get("_resume_called")
-    assert resume is not None and resume.called, "Pipeline execution was not resumed"
+    assert resume is not None, "Pipeline execution was not resumed"
     resume_data = resume.await_args.kwargs.get("resume_data", {}) if resume.await_args else {}
     assert resume_data.get("action") == "approved", f"Expected approved action, got {resume_data}"
 

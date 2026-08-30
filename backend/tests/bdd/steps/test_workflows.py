@@ -432,7 +432,8 @@ def _signature_field_present(ctx: dict[str, Any]) -> None:
 def _signature_base64(ctx: dict[str, Any]) -> None:
     wf = ctx.get("exported_bundle") or yaml.safe_load(ctx["response"].content)["modulo_workflow"]
     sig = wf.get("signature", "")
-    assert isinstance(sig, str) and len(sig) >= 32, "Signature does not look like base64"
+    assert isinstance(sig, str), "Signature does not look like base64"
+    assert len(sig) >= 32, "Signature does not look like base64"
 
 
 @then("the signature verifies against the Modulo registry public key")

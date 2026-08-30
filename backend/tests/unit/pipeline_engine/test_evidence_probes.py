@@ -575,7 +575,8 @@ class TestHeuristicMetrics:
         evidence.record_heuristic_error("probe_raised")
         counter = fake_meter.counter("modulo_heuristic_errors_total")
         assert counter is not None
-        assert counter.calls and counter.calls[0]["attributes"] == {"reason": "probe_raised"}
+        assert counter.calls
+        assert counter.calls[0]["attributes"] == {"reason": "probe_raised"}
 
     def test_unverifiable_total_fires_when_row_unverifiable(
         self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
@@ -597,10 +598,12 @@ class TestHeuristicMetrics:
         assert result == EvidenceResult.verified_empty
         hist = fake_meter.histogram("modulo_heuristic_probe_latency")
         assert hist is not None
-        assert hist.records and hist.records[0] >= 0
+        assert hist.records
+        assert hist.records[0] >= 0
         gauge = fake_meter.gauge("modulo_heuristic_probe_cost")
         assert gauge is not None
-        assert gauge.values and gauge.values[0] >= 0
+        assert gauge.values
+        assert gauge.values[0] >= 0
 
     async def test_probe_latency_bounded_at_3s_and_unverifiable_on_timeout(
         self, sqlite_factory, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
@@ -621,10 +624,12 @@ class TestHeuristicMetrics:
         assert result == EvidenceResult.unverifiable
         hist = fake_meter.histogram("modulo_heuristic_probe_latency")
         assert hist is not None
-        assert hist.records and hist.records[0] <= EVIDENCE_PROBE_TIMEOUT_SECONDS + 1.0
+        assert hist.records
+        assert hist.records[0] <= EVIDENCE_PROBE_TIMEOUT_SECONDS + 1.0
         unv = fake_meter.counter("modulo_heuristic_unverifiable_total")
         assert unv is not None
-        assert unv.calls and "bounded window" in unv.calls[0]["attributes"]["reason"]
+        assert unv.calls
+        assert "bounded window" in unv.calls[0]["attributes"]["reason"]
 
     def test_metrics_noop_without_meter_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_meter(monkeypatch, None)

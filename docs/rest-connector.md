@@ -1,9 +1,9 @@
 # REST Connector
 
 The generic REST connector (`ConnectorType.REST`) lets a Modulo pipeline make
-an arbitrary HTTP request to an external system configured by the operator —
-no per-vendor client. It is the FAR-401 "point Modulo at any external system"
-implementation: a declarative, templated HTTP call.
+an arbitrary HTTP request to an external system configured by the operator,
+with no per-vendor client. It is the FAR-401 "point Modulo at any external
+system" implementation: a declarative, templated HTTP call.
 
 Because it is **verb-agnostic**, the connector does not infer meaning from the
 HTTP verb. You declare the method; the node surface fixes the access-control
@@ -11,8 +11,8 @@ gate:
 
 | Node surface | ACL operation | Declared method |
 |---|---|---|
-| `query()` — read | `read` | `GET` (default), `HEAD` |
-| `write()` — write | `write` | `POST` (default), `PUT`, `PATCH`, `DELETE` |
+| `query()` – read | `read` | `GET` (default), `HEAD` |
+| `write()` – write | `write` | `POST` (default), `PUT`, `PATCH`, `DELETE` |
 
 A `PUT` / `PATCH` / `DELETE` mutates the remote system, so it belongs on the
 **write** surface even though it is not a "create". The capability set is
@@ -28,9 +28,9 @@ Jinja2 against the runtime variables supplied per call
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `base_url` | `str` | — (required) | Scheme + host of the endpoint. `http://`/`https://` only. |
+| `base_url` | `str` | – (required) | Scheme + host of the endpoint. `http://`/`https://` only. |
 | `method` | `str` | `GET` (query) / `POST` (write) | HTTP verb. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`. |
-| `path` | `str` | — (required) | Path template appended to `base_url` (e.g. `/v1/users/{{ user_id }}`). |
+| `path` | `str` | – (required) | Path template appended to `base_url` (e.g. `/v1/users/{{ user_id }}`). |
 | `headers` | `dict` | `{}` | Header templates. May not override auth/transport headers (`authorization`, `host`, `content-length`, …). |
 | `params` | `dict` | `{}` | Query parameter templates (URL-encoded by httpx). |
 | `body` | `dict` | `{}` | JSON body template (write path). |
@@ -41,10 +41,10 @@ Jinja2 against the runtime variables supplied per call
 | `passthrough` | `bool` | `false` | Force a single-record `{"body", "content_type", "status_code", "headers"}` wrap of the raw body. |
 | `max_response_size` | `int` | `10485760` | Max response body bytes before the read aborts (10 MiB default). |
 | `timeout_seconds` | `float` | `30.0` | Per-request timeout (connect + read/write) for the pooled client. |
-| `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert — the SSRF guard still blocks loopback/metadata targets regardless. |
+| `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert – the SSRF guard still blocks loopback/metadata targets regardless. |
 | `idempotency_header` | `str` | `null` | Header that makes a non-`GET`/`HEAD` request safe to retry; a fresh UUID is injected per attempt. |
 
-You can also declare **operations** — a map of named resources, each with its
+You can also declare **operations** – a map of named resources, each with its
 own method/path/headers/params/body/records_path. When present, a node must
 reference a declared resource; requesting an undeclared resource fails fast.
 

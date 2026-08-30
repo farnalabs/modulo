@@ -551,7 +551,7 @@ def test_pipeline_graph_node_stall_detector_round_trip() -> None:
 def test_pipeline_graph_node_stall_detector_bounds() -> None:
     """FAR-306: stdout_percentage_delta is bounded to [0, 1] by Pydantic.
     Pydantic v2 ValidationError is a ValueError subclass."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="less than or equal to 1"):
         PipelineGraphNode.model_validate({**_sandbox_node_json(), "stdout_percentage_delta": 1.5})
 
 

@@ -74,7 +74,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Service | Version | Required | Purpose |
 |---------|---------|----------|---------|
 | PostgreSQL | 16+ | **Yes** (production) | Primary data store |
-| Redis | 7+ | **Conditional** | Task queue, rate limiting, event broker |
+| Redis | 7+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | Latest | Yes | Python package manager |
 | Node.js | 20+ | For frontend dev | Frontend build toolchain |
@@ -84,7 +84,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 
 | Deployment Type | Redis Required? | Reason |
 |----------------|-----------------|--------|
-| Single replica, single process | **Yes** | Startup aborts if `REDIS_URL` is unset; used for event coordination, rate limiting, caching, and session state (defaults to `redis://localhost:6379/0`) |
+| Single replica, single process | **Yes** | Required for SAQ execution, event coordination, rate limiting, caching, and session state (defaults to `redis://localhost:6379/0`) |
 | Multiple replicas | **Yes** | SAQ worker coordination, distributed rate limiting |
 | Horizontal scaling | **Yes** | Cross-replica event broker, cron triggers |
 | Production with 2+ backend pods | **Yes** | See [`docs/deployment.md`](./deployment.md) §Scaling |

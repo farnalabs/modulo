@@ -19,6 +19,18 @@ select = [
     "RET",
     "PYI",
     "FURB",
+    # Defensive gate-strengthening: every rule below was verified to have zero
+    # current violations (run `ruff check . --extend-select <codes> --statistics`),
+    # so enabling them tightens the lint gate against future regressions without
+    # touching existing code.
+    "G001", "G002", "G003", "G004", "G201",
+    "PERF101", "PERF203", "PERF402", "PERF403",
+    "PT020", "PT021",
+    "Q000", "Q003",
+    "ICN",
+    "FA",
+    "NPY",
+    "RUF100",
 ]
 ignore = [
     "S101",

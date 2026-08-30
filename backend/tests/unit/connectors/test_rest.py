@@ -120,7 +120,7 @@ def test_query_empty_resource_raises() -> None:
         {"base_url": "https://api.example.com", "path": "/items"},
         {"auth_mode": "bearer", "token": "t"},
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="requires a resource name"):
         asyncio_run(c.query(ConnectorQuery(resource="")))
 
 
@@ -1751,7 +1751,7 @@ def test_no_secret_in_status_error_detail() -> None:
         {"auth_mode": "bearer", "token": secret},
     )
     c._transport = httpx.MockTransport(handler)
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(RESTStatusError) as exc_info:
         asyncio_run(c.query(ConnectorQuery(resource="default")))
     assert secret not in str(exc_info.value)
 

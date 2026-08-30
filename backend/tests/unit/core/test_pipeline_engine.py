@@ -218,7 +218,7 @@ class TestOutputSchemaValidation:
         assert _validate_against_schema({"name": "x", "status": "done"}, schema) is None
 
     def test_error_is_a_value_error_subclass(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="missing required field 'x'"):
             _validate_against_schema({}, {"required": ["x"]})
 
     def test_schema_validation_failure_maps_to_contract_schema(self) -> None:

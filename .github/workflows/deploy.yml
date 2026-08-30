@@ -472,11 +472,14 @@ jobs:
         # an instant no-op). It is NOT a fallback for pre-migrate failure: a
         # pre-migrate failure aborts the deploy before it starts.
         #
-        # Known limitation (inherent to flyctl): the exit code of a stopped
-        # one-off machine is not reliably exposed, so a fast-failing
-        # release.sh looks like a clean stop here. That is exactly why the
-        # authoritative release command in `fly deploy` still gates the
-        # deploy on migration success.
+        # Exit-code gate: when the machine stops, the poll below reads the
+        # machine's exit event (`fly machine list --json` includes each
+        # machine's event log). A non-zero exit code fails the deploy before
+        # the swap. Known gap: the Fly API OMITS exit_code on a clean exit
+        # (code 0, omitempty) and requested stops record none either, so a
+        # missing exit_code is warned about and treated as success - that is
+        # exactly why the authoritative release command in `fly deploy` still
+        # gates the deploy on migration success.
         #
         # The machine does NOT auto-destroy when its command exits
         # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
@@ -509,9 +512,18 @@ jobs:
           # command in fly.toml).
           echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
           # positional command: --command is ignored without --shell (flyctl) - the machine ran bare bash forever (2026-08-27).
+          # --detach: return right after launch instead of flyctl's blocking
+          # wait. A one-off script machine sits in "starting" until its
+          # process exits, so flyctl's ~60s wait is NOT a success signal -
+          # real migrations routinely exceed it and flyctl errors out while
+          # the migration actually succeeded (FAR-486, run 33249359778).
+          # Genuine launch failures (bad image ref) still exit non-zero and
+          # are caught below; the state poll after discovery is the real
+          # verification.
           fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
             --entrypoint /bin/bash \
             --vm-size shared-cpu-1x --memory 1024 \
+            --detach \
             "/release.sh"
           if [ $? -ne 0 ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
@@ -589,6 +601,38 @@ jobs:
           print(state)
           ' 2>/dev/null || echo "")"
             if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means
+              # release.sh failed and migrations did NOT complete - abort
+              # before the swap. The Fly API omits exit_code on a clean exit
+              # (code 0) and requested stops record none, so a missing
+              # exit_code is warned about and treated as success (the
+              # release command in `fly deploy` remains the authoritative
+              # migration gate). Events are newest-first; the first "exit"
+              # event is the latest.
+              EXIT_CODE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
               echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
               exit 0
             fi
@@ -1136,11 +1180,14 @@ jobs:
         # an instant no-op). It is NOT a fallback for pre-migrate failure: a
         # pre-migrate failure aborts the deploy before it starts.
         #
-        # Known limitation (inherent to flyctl): the exit code of a stopped
-        # one-off machine is not reliably exposed, so a fast-failing
-        # release.sh looks like a clean stop here. That is exactly why the
-        # authoritative release command in `fly deploy` still gates the
-        # deploy on migration success.
+        # Exit-code gate: when the machine stops, the poll below reads the
+        # machine's exit event (`fly machine list --json` includes each
+        # machine's event log). A non-zero exit code fails the deploy before
+        # the swap. Known gap: the Fly API OMITS exit_code on a clean exit
+        # (code 0, omitempty) and requested stops record none either, so a
+        # missing exit_code is warned about and treated as success - that is
+        # exactly why the authoritative release command in `fly deploy` still
+        # gates the deploy on migration success.
         #
         # The machine does NOT auto-destroy when its command exits
         # (--restart=no leaves it in 'stopped'); the "Destroy pre-migrate
@@ -1173,9 +1220,18 @@ jobs:
           # command in fly.toml).
           echo "Launching pre-deploy migration machine from ${PREMIGRATE_IMAGE_REF} ..."
           # positional command: --command is ignored without --shell (flyctl) - the machine ran bare bash forever (2026-08-27).
+          # --detach: return right after launch instead of flyctl's blocking
+          # wait. A one-off script machine sits in "starting" until its
+          # process exits, so flyctl's ~60s wait is NOT a success signal -
+          # real migrations routinely exceed it and flyctl errors out while
+          # the migration actually succeeded (FAR-486, run 33249359778).
+          # Genuine launch failures (bad image ref) still exit non-zero and
+          # are caught below; the state poll after discovery is the real
+          # verification.
           fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
             --entrypoint /bin/bash \
             --vm-size shared-cpu-1x --memory 1024 \
+            --detach \
             "/release.sh"
           if [ $? -ne 0 ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
@@ -1253,6 +1309,38 @@ jobs:
           print(state)
           ' 2>/dev/null || echo "")"
             if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means
+              # release.sh failed and migrations did NOT complete - abort
+              # before the swap. The Fly API omits exit_code on a clean exit
+              # (code 0) and requested stops record none, so a missing
+              # exit_code is warned about and treated as success (the
+              # release command in `fly deploy` remains the authoritative
+              # migration gate). Events are newest-first; the first "exit"
+              # event is the latest.
+              EXIT_CODE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
               echo "Pre-deploy migrations completed before the deploy swap (machine ${MID} stopped, attempt ${attempt}/${ATTEMPTS})."
               exit 0
             fi

@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, Numeric, Uuid
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -30,6 +30,9 @@ class OrgDailyRunCount(OrgScoped):
             unique=True,
             postgresql_nulls_not_distinct=True,
         ),
+        CheckConstraint("run_count >= 0", name="ck_org_daily_run_counts_run_count"),
+        CheckConstraint("total_spend_usd >= 0", name="ck_org_daily_run_counts_total_spend"),
+        CheckConstraint("refused_spend_usd >= 0", name="ck_org_daily_run_counts_refused_spend"),
     )
 
     run_date: Mapped[date] = mapped_column(Date, nullable=False)

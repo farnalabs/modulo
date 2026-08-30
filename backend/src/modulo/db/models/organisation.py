@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Integer, Numeric, String, Uuid, func, text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Index, Integer, Numeric, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -21,11 +21,18 @@ class Organisation(Base):
             "NOT guardrails_kill_switch OR guardrails_kill_switch_at IS NOT NULL",
             name="ck_organisations_guardrails_kill_switch_at",
         ),
+        CheckConstraint("org_cumulative_spend_cents >= 0", name="ck_organisations_cum_spend"),
+        Index(
+            "uq_organisations_slug",
+            "slug",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()

@@ -257,7 +257,8 @@ class TestCreateOrUpdateRole:
     async def test_escapes_single_quotes_in_password(self, conn: _FakeConn) -> None:
         await _create_or_update_role(conn, "modulo_app", login=True, password="p'word")
         escaped = [q for q in conn.executed if "CREATE ROLE" in q]
-        assert escaped and "p''word" in escaped[0]
+        assert escaped
+        assert "p''word" in escaped[0]
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +310,9 @@ class TestApplyAccountsAllowList:
         conn.columns = {"accounts": {"email"}}
         await _apply_accounts_allow_list(conn, "modulo_app")
         grant = [q for q in conn.executed if "GRANT UPDATE" in q]
-        assert grant and "email" in grant[0] and "password_hash" not in grant[0]
+        assert grant
+        assert "email" in grant[0]
+        assert "password_hash" not in grant[0]
 
     async def test_no_grant_statement_when_no_allow_listed_column_exists(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}

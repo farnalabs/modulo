@@ -84,6 +84,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 ### Build
 - **feat-dashboard** - Home dashboard, metrics overview, and saved views - routes: `/`, `/admin/views`
 - **feat-pipelines** - Visual pipeline editor, composite editor, and node categories - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`, `/admin/node-categories`
+- **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
 - **feat-library** - Reusable pipeline templates and the template library - routes: `/library/:id/create-pipeline`, `/library`
 - **feat-runs** - Run execution, history, detail, and output diffs - routes: `/runs`, `/runs/diff`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
@@ -133,16 +134,27 @@ Fresh entries for these features are added to the graph below as behaviour track
 Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
+### Audit
+- [feat-audit](audit/audit-trail.md) => PRD N/A
+
 ### Auth and Security
 - [feat-core-oidc-integration](auth/oidc-integration.md) => PRD 9.4
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
 
+### Configure
+- [feat-guardrails](configure/guardrails.md) => PRD N/A
+- [feat-mcp](configure/mcp.md) => PRD N/A
+
 ### Core Platform
+- [feat-hitl](hitl/hitl-gates.md) => PRD N/A
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
+
+### Improve
+- [feat-evals](improve/evals.md) => PRD N/A
 
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
@@ -150,6 +162,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Pipelines
 - [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
+- [feat-router (Router & HITL nodes)](pipelines/router-hitl-nodes.md) => PRD N/A
+
+### Observability
+- [feat-observability](observability/observability.md) => PRD N/A
 
 ### Teams
 - [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
+
+### Triggers
+- [feat-triggers](triggers/trigger-engine.md) => PRD N/A
