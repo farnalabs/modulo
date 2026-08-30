@@ -175,10 +175,9 @@ def compute_variant_divergence(outputs: Sequence[object]) -> float:
     outputs = list(outputs)
     if len(outputs) < 2:
         return 0.0
-    pairwise: list[float] = []
-    for i in range(len(outputs)):
-        for j in range(i + 1, len(outputs)):
-            pairwise.append(_output_similarity(outputs[i], outputs[j]))
+    pairwise = [
+        _output_similarity(outputs[i], outputs[j]) for i in range(len(outputs)) for j in range(i + 1, len(outputs))
+    ]
     similarity = sum(pairwise) / len(pairwise)
     divergence = 1.0 - similarity
     return round(max(0.0, divergence), 4)

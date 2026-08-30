@@ -97,8 +97,10 @@ _SPECS: list[_TableSpec] = [
         checks=[
             (
                 "ck_remy_skills_owner",
-                "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-                "(organisation_id IS NULL AND account_id IS NOT NULL)",
+                (
+                    "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
+                    "(organisation_id IS NULL AND account_id IS NOT NULL)"
+                ),
             )
         ],
         trigger_old="trg_remy_skills_user_id_tenant",
@@ -117,8 +119,10 @@ _SPECS: list[_TableSpec] = [
         checks=[
             (
                 "ck_remy_context_sources_owner",
-                "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-                "(organisation_id IS NULL AND account_id IS NOT NULL)",
+                (
+                    "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
+                    "(organisation_id IS NULL AND account_id IS NOT NULL)"
+                ),
             )
         ],
         trigger_old="trg_remy_context_sources_user_id_tenant",

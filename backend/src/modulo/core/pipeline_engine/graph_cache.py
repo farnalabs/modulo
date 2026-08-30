@@ -544,18 +544,15 @@ def make_join_node_fn(
     def _fn(state: dict[str, Any]) -> dict[str, Any]:
         manifest_map = state.get("__scatter_manifest__", {})
         status_map = state.get("__scatter_status__", {})
-        collected: list[dict[str, Any]] = []
-        for spec in collect:
-            parent_id = spec.get("node") if isinstance(spec, dict) else spec.node
-            child_ids = manifest_map.get(parent_id, [])
-            for child_id in child_ids:
-                collected.append(
-                    {
-                        "node_id": child_id,
-                        "output": state.get(child_id),
-                        "status": status_map.get(child_id, "succeeded"),
-                    }
-                )
+        collected = [
+            {
+                "node_id": child_id,
+                "output": state.get(child_id),
+                "status": status_map.get(child_id, "succeeded"),
+            }
+            for spec in collect
+            for child_id in manifest_map.get(spec.get("node") if isinstance(spec, dict) else spec.node, [])
+        ]
         result = run_join_node(node_def, collected=collected)
         return {node_id: result.get("aggregated")}
 
