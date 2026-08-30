@@ -1,5 +1,6 @@
 """TrelloConnector — async Trello REST API v1 connector."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -68,66 +69,87 @@ class TrelloConnector(ConnectorBase):
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
-            match q.resource:
-                case "boards":
-                    params: dict[str, str] = {}
-                    if "filter" in q.filters:
-                        params["filter"] = q.filters["filter"]
-                    if "fields" in q.filters:
-                        params["fields"] = q.filters["fields"]
-                    r = await client.get("/members/me/boards", params=params)
-                    r.raise_for_status()
-                    boards: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=boards, total=len(boards))
+            handler = self._query_handlers().get(q.resource)
+            if handler is None:
+                raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+            return await handler(client, q)
 
-                case "lists":
-                    if "board_id" not in q.filters:
-                        raise ValueError("Trello lists query requires 'board_id' filter")
-                    board_id = q.filters["board_id"]
-                    params = {}
-                    if "filter" in q.filters:
-                        params["filter"] = q.filters["filter"]
-                    r = await client.get(f"/boards/{board_id}/lists", params=params)
-                    r.raise_for_status()
-                    lists: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=lists, total=len(lists))
+    def _query_handlers(
+        self,
+    ) -> dict[str, Callable[[httpx.AsyncClient, ConnectorQuery], Awaitable[ConnectorResult]]]:
+        return {
+            "boards": self._query_boards,
+            "lists": self._query_lists,
+            "cards": self._query_cards,
+            "card": self._query_card,
+            "members": self._query_members,
+        }
 
-                case "cards":
-                    params = {}
-                    if "fields" in q.filters:
-                        params["fields"] = q.filters["fields"]
-                    board_id = q.filters.get("board_id")
-                    list_id = q.filters.get("list_id")
-                    if board_id:
-                        r = await client.get(f"/boards/{board_id}/cards", params=params)
-                    elif list_id:
-                        r = await client.get(f"/lists/{list_id}/cards", params=params)
-                    else:
-                        raise ValueError("Trello cards query requires 'board_id' or 'list_id' filter")
-                    r.raise_for_status()
-                    cards: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=cards, total=len(cards))
+    async def _query_boards(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, str] = {}
+        params.update(self._filter_param(q))
+        params.update(self._fields_param(q))
+        r = await client.get("/members/me/boards", params=params)
+        r.raise_for_status()
+        boards: list[dict[str, Any]] = r.json()
+        return ConnectorResult(records=boards, total=len(boards))
 
-                case "card":
-                    if "card_id" not in q.filters:
-                        raise ValueError("Trello card query requires 'card_id' filter")
-                    card_id = q.filters["card_id"]
-                    r = await client.get(f"/cards/{card_id}")
-                    r.raise_for_status()
-                    card: dict[str, Any] = r.json()
-                    return ConnectorResult(records=[card])
+    async def _query_lists(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        if "board_id" not in q.filters:
+            raise ValueError("Trello lists query requires 'board_id' filter")
+        board_id = q.filters["board_id"]
+        params = self._filter_param(q)
+        r = await client.get(f"/boards/{board_id}/lists", params=params)
+        r.raise_for_status()
+        lists: list[dict[str, Any]] = r.json()
+        return ConnectorResult(records=lists, total=len(lists))
 
-                case "members":
-                    if "board_id" not in q.filters:
-                        raise ValueError("Trello members query requires 'board_id' filter")
-                    board_id = q.filters["board_id"]
-                    r = await client.get(f"/boards/{board_id}/members")
-                    r.raise_for_status()
-                    members: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=members, total=len(members))
+    async def _query_cards(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params = self._fields_param(q)
+        r = await client.get(self._cards_endpoint(q), params=params)
+        r.raise_for_status()
+        cards: list[dict[str, Any]] = r.json()
+        return ConnectorResult(records=cards, total=len(cards))
 
-                case _:
-                    raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+    async def _query_card(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        if "card_id" not in q.filters:
+            raise ValueError("Trello card query requires 'card_id' filter")
+        card_id = q.filters["card_id"]
+        r = await client.get(f"/cards/{card_id}")
+        r.raise_for_status()
+        card: dict[str, Any] = r.json()
+        return ConnectorResult(records=[card])
+
+    async def _query_members(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        if "board_id" not in q.filters:
+            raise ValueError("Trello members query requires 'board_id' filter")
+        board_id = q.filters["board_id"]
+        r = await client.get(f"/boards/{board_id}/members")
+        r.raise_for_status()
+        members: list[dict[str, Any]] = r.json()
+        return ConnectorResult(records=members, total=len(members))
+
+    @staticmethod
+    def _cards_endpoint(q: ConnectorQuery) -> str:
+        board_id = q.filters.get("board_id")
+        list_id = q.filters.get("list_id")
+        if board_id:
+            return f"/boards/{board_id}/cards"
+        if list_id:
+            return f"/lists/{list_id}/cards"
+        raise ValueError("Trello cards query requires 'board_id' or 'list_id' filter")
+
+    @staticmethod
+    def _filter_param(q: ConnectorQuery) -> dict[str, str]:
+        if "filter" in q.filters:
+            return {"filter": q.filters["filter"]}
+        return {}
+
+    @staticmethod
+    def _fields_param(q: ConnectorQuery) -> dict[str, str]:
+        if "fields" in q.filters:
+            return {"fields": q.filters["fields"]}
+        return {}
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:
