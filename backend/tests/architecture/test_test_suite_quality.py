@@ -6018,7 +6018,7 @@ def test_unreachable_assert_lens_flags_dead_asserts():
 def _chdir_reference(node: ast.AST) -> bool:
     """Return True for the ``os.chdir`` spelling — ``import os`` + the
     attribute path ``os.chdir(...)`` (and the ``os.fchdir`` twin)."""
-    if not isinstance(node, (ast.Attribute,)) or not isinstance(node.value, ast.Name):
+    if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
         return False
     return node.value.id == "os" and node.attr in ("chdir", "fchdir")
 
@@ -6970,3 +6970,364 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unconditional_skip_marker_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: empty-string membership / str-method tautologies
+# ---------------------------------------------------------------------------
+_EMPTY_STRING_METHODS = frozenset(
+    {
+        "startswith",
+        "endswith",
+        "removeprefix",
+        "removesuffix",
+        "find",
+        "rfind",
+        "index",
+        "count",
+        "split",
+        "rsplit",
+        "partition",
+        "rpartition",
+        "replace",
+    }
+)
+"""``str`` methods whose *empty-string* first argument forces a fixed outcome."""
+
+_EMPTY_STRING_FIXED_OUTCOMES: dict[str, str] = {
+    "startswith": "always True — every string begins with the empty string",
+    "endswith": "always True — every string ends with the empty string",
+    "removeprefix": "no-op — returns the receiver unchanged",
+    "removesuffix": "no-op — returns the receiver unchanged",
+    "find": "fixed non-negative index — can never report -1 (missing)",
+    "rfind": "fixed non-negative index — can never report -1 (missing)",
+    "index": "always succeeds immediately — can never raise ValueError",
+    "count": "always truthy — the empty string occurs len(receiver) + 1 times",
+    "split": "always raises ValueError — the assertion can never complete",
+    "rsplit": "always raises ValueError — the assertion can never complete",
+    "partition": "always raises ValueError — the assertion can never complete",
+    "rpartition": "always raises ValueError — the assertion can never complete",
+    "replace": "always raises ValueError — the assertion can never complete",
+}
+
+
+def _empty_str_constant(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str) and not node.value
+
+
+def _empty_string_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose test
+    expression contains an empty-string membership test or ``str`` method call
+    with a fixed, source-time outcome.
+
+    ``'' in value`` is always True and ``'' not in value`` always False — the
+    empty string is a substring of every string — while ``x.startswith('')``
+    / ``x.endswith('')`` are always True, ``x.removeprefix('')`` /
+    ``x.removesuffix('')`` are no-ops, ``x.find('')`` / ``x.rfind('')`` /
+    ``x.index('')`` / ``x.count('')`` can never report a missing match, and
+    ``x.split('')`` / ``x.rsplit('')`` / ``x.partition('')`` /
+    ``x.rpartition('')`` / ``x.replace('', ...)`` always raise ``ValueError``.
+    Every one of these reports a fixed verdict no matter how broken the
+    behaviour under test is; they are usually a typo for ``' '`` (or for the
+    bare method together with a real argument) and always a dead assertion."""
+    found: list[tuple[int, str]] = []
+
+    def _record(lineno: int, detail: str) -> None:
+        pair = (lineno, detail)
+        if pair not in found:
+            found.append(pair)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node.test):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in _EMPTY_STRING_METHODS
+                and sub.args
+                and _empty_str_constant(sub.args[0])
+            ):
+                _record(
+                    node.lineno,
+                    f"assert ... .{sub.func.attr}('') — {_EMPTY_STRING_FIXED_OUTCOMES[sub.func.attr]}",
+                )
+            if isinstance(sub, ast.Compare) and _empty_str_constant(sub.left):
+                for op in sub.ops:
+                    if not isinstance(op, (ast.In, ast.NotIn)):
+                        continue
+                    verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
+                    _record(
+                        node.lineno,
+                        f"assert '' in value — {verdict} at source time "
+                        "(the empty string is a substring of every string)",
+                    )
+    return found
+
+
+def test_no_empty_string_membership_and_method_tautologies():
+    """Assertions built around the empty string have fixed outcomes that can
+    never depend on the behaviour under test: ``assert '' in value`` / ``assert
+    value.startswith('')`` report green no matter what, ``assert '' not in
+    value`` always fails (the empty string is a substring of every string), and
+    the ``str`` methods that reject (or no-op on) an empty argument never do any
+    work worth asserting against. These are nearly always a typo for ``' '`` or
+    for a real separator, and the assertion quietly pins a truth that holds for
+    every input — dead code that hides regressions."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_string_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-string tautolog(ies) in assertions.\n"
+        "An empty-string membership test or str-method argument has a fixed outcome "
+        "that can never depend on the code under test — it is a dead assertion "
+        "(usually a ' ' typo).\n" + "\n".join(violations)
+    )
+
+
+def test_empty_string_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the empty-string tautology lens:
+    it must flag every empty-string membership / str-method form in an assert
+    and ignore non-empty separators, empty-string *receivers* (``''.join()`` is
+    a legitimate idiom), and unrelated comparisons."""
+    positive_sources = [
+        "def test_foo():\n    assert '' in value\n",
+        "def test_foo():\n    assert '' not in value\n",
+        "def test_foo():\n    assert text.startswith('')\n",
+        "def test_foo():\n    assert text.endswith('')\n",
+        "def test_foo():\n    assert text.removeprefix('') == expected\n",
+        "def test_foo():\n    assert text.removesuffix('') == expected\n",
+        "def test_foo():\n    assert text.find('') == -1\n",
+        "def test_foo():\n    assert text.rfind('') == -1\n",
+        "def test_foo():\n    assert text.index('') == 0\n",
+        "def test_foo():\n    assert text.count('')\n",
+        "def test_foo():\n    assert text.split('') == []\n",
+        "def test_foo():\n    assert text.rsplit('') == [text]\n",
+        "def test_foo():\n    assert 'a' in text.partition('')\n",
+        "def test_foo():\n    assert text.rpartition('') == ('', '', text)\n",
+        "def test_foo():\n    assert text.replace('', '-') == text\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_string_tautologies(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert text.startswith('a')\n",
+        "def test_foo():\n    assert text.endswith('!')\n",
+        "def test_foo():\n    assert text.find('x') != -1\n",
+        "def test_foo():\n    assert text.split(' ') == [text]\n",
+        "def test_foo():\n    assert text.replace('a', 'b') == expected\n",
+        "def test_foo():\n    assert ''.join(items) == expected\n",
+        "def test_foo():\n    assert ' ' in text\n",
+        "def test_foo():\n    assert text == ''\n",
+        "def test_foo():\n    assert value is None\n",
+        "def test_foo():\n    assert len(text) == 0\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_string_tautologies(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: NaN as an expected comparison value
+# ---------------------------------------------------------------------------
+def _is_nan_literal(node: ast.AST) -> bool:
+    """Return True when ``node`` is a NaN-typed expression: a ``float`` or
+    ``str`` constant spelling NaN, ``float('nan')`` (with optional sign), or
+    ``math.nan``."""
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, float) and str(value).lower() == "nan":
+            return True
+        if isinstance(value, str) and value.lower() in {"nan", "+nan", "-nan"}:
+            return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return _is_nan_literal(node.operand)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "float":
+        return bool(node.args) and _is_nan_literal(node.args[0])
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "nan"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "math"
+    )
+
+
+def _nan_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every single comparison assertion
+    that uses NaN (``float('nan')`` / ``math.nan``) directly as an expected
+    operand.
+
+    NaN is the one IEEE-754 value unequal to itself, and every NaN-typed
+    expression evaluates to a distinct NaN object (``float('nan')`` /
+    ``math.nan`` is minted on each reference in CPython), so ``==`` / ``is``
+    against it can never hold (always FAILS) and ``!=`` / ``is not`` against it
+    always PASSES. NaN fed *into* the code under test as an argument — e.g.
+    ``assert safe_int(float('nan')) == 0`` — is a legitimate edge-case test and
+    is deliberately not flagged; only a comparison whose expected operand is a
+    NaN expression is a fixed-outcome dead assertion."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        op = test.ops[0]
+        if not isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
+            continue
+        for side in (test.left, *test.comparators):
+            if not _is_nan_literal(side):
+                continue
+            verdict = "always FAILS" if isinstance(op, (ast.Eq, ast.Is)) else "always PASSES"
+            found.append(
+                (
+                    node.lineno,
+                    f"assert {ast.unparse(test)} — comparing against {ast.unparse(side)} "
+                    f"(NaN, the one value unequal to itself): {verdict}",
+                )
+            )
+            break
+    return found
+
+
+def test_no_nan_expected_comparison_value():
+    """Assertions that compare a value against NaN are fixed-outcome dead code:
+    NaN is the one IEEE-754 value unequal to itself, so ``assert x == float('nan')``
+    / ``assert x is math.nan`` can never pass and the ``!=`` / ``is not`` twins
+    can never fail — green or red regardless of the behaviour under test. The
+    only legitimate NaN use in a test is pushing it *into* the code under test
+    (``assert safe_int(float('nan')) == 0``), which is unaffected here."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _nan_comparison_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} comparison(s) against NaN.\n"
+        "NaN is the one value unequal to itself, so ==/is can never pass and !=/is not can never fail.\n"
+        "Assert against the real expected value instead.\n" + "\n".join(violations)
+    )
+
+
+def test_nan_lens_flags_dead_comparisons():
+    """Synthetic positive/negative control for the NaN lens: it must flag every
+    spelling of a NaN expected operand (`float('nan')`, `float('-nan')`,
+    `math.nan`, on either side, with any of `==`/`!=`/`is`/`is not`) and ignore
+    NaN fed into the code under test, `math.isnan()` guards, and ordinary
+    numeric comparisons."""
+    positive_sources = [
+        "def test_foo():\n    assert result == float('nan')\n",
+        "def test_foo():\n    assert result != float('nan')\n",
+        'def test_foo():\n    assert result == float("nan")\n',
+        "def test_foo():\n    assert result is math.nan\n",
+        "def test_foo():\n    assert result is not math.nan\n",
+        "def test_foo():\n    assert math.nan == result\n",
+        "def test_foo():\n    assert result == -float('nan')\n",
+        "def test_foo():\n    assert result != float('-nan')\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _nan_comparison_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert safe_int(float('nan')) == 0\n",
+        "def test_foo():\n    assert math.isnan(float('nan'))\n",
+        "def test_foo():\n    assert result == float('inf')\n",
+        "def test_foo():\n    assert result == 1.5\n",
+        "def test_foo():\n    assert value is None\n",
+        "def test_foo():\n    assert result >= 0\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _nan_comparison_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: redundant single-element isinstance type tuple
+# ---------------------------------------------------------------------------
+def _single_element_isinstance_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``isinstance(x, (T,))`` call
+    whose types argument is a single-element tuple literal.
+
+    A one-element type tuple is element-for-element identical to passing the
+    type bare, so the tuple adds nothing beyond signalling that the author
+    thought ``isinstance`` needed a tuple when it did not. It reads as a
+    defensive-typing leftover and, written inside an assertion, quietly checks
+    the same thing ``isinstance(x, T)`` would — most likely a copy-paste from a
+    sibling call that really does pass several types."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "isinstance":
+            continue
+        if len(node.args) != 2:
+            continue
+        types = node.args[1]
+        if not isinstance(types, ast.Tuple) or len(types.elts) != 1:
+            continue
+        inner = ast.unparse(types.elts[0])
+        found.append(
+            (
+                node.lineno,
+                f"isinstance({ast.unparse(node.args[0])}, ({inner},)) — a single-element type tuple "
+                f"is just isinstance(x, {inner}); drop the redundant tuple",
+            )
+        )
+    return found
+
+
+def test_no_single_element_isinstance_type_tuple():
+    """``isinstance(x, (T,))`` wraps a single type in a tuple that behaves
+    identically to ``isinstance(x, T)`` — the tuple only confuses the reader
+    into thinking more than one type is being checked. Inside an assertion it
+    never changes the verdict, so the surrounding check is what the author
+    thinks it is only by luck; spell it ``isinstance(x, T)``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _single_element_isinstance_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} isinstance call(s) with a single-element type tuple.\n"
+        "A one-element type tuple is equivalent to isinstance(x, T) — write it without "
+        "the redundant tuple.\n" + "\n".join(violations)
+    )
+
+
+def test_single_element_isinstance_lens_flags_redundant_tuples():
+    """Synthetic positive/negative control for the single-element isinstance
+    lens: it must flag a one-type tuple literal whether in an assert, in helper
+    code, or on an attribute path, and ignore bare types, multi-type tuples,
+    ``type()`` comparisons, and unrelated calls."""
+    positive_sources = [
+        "isinstance(value, (str,))\n",
+        "def test_foo():\n    assert isinstance(result, (int,))\n",
+        "def _helper(x):\n    return isinstance(x, (list,))\n",
+        "isinstance(value, (module.Type,))\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _single_element_isinstance_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "isinstance(value, str)\n",
+        "isinstance(value, (str, bytes))\n",
+        "def test_foo():\n    assert isinstance(value, int)\n",
+        "def test_foo():\n    assert type(value) is int\n",
+        "def test_foo():\n    assert value.__class__ is int\n",
+        "isinstance(value, typing.Union[str, bytes])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _single_element_isinstance_violations(tree), f"lens should NOT flag:\n{source}"
