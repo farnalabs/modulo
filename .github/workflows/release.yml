@@ -1,0 +1,150 @@
+name: "Release: Cut / Recut / Promote"
+
+# Alpha release process (spec: devtools harness/docs/release-process.md).
+# The code freeze on main is signalled by the existence of the 'release-freeze'
+# tag; merge-queue.yml's freeze-gate job pauses merging while it exists.
+#
+#   cut     - tag vX.Y.Z-rcN at main HEAD, push release-freeze, trigger rc-validate
+#   recut   - after a manually-merged fix on main: tag the NEXT RC, re-freeze
+#   release - promote vX.Y.Z GA at the validated RC commit and lift the freeze (requires a successful rc-validate run recorded as validated/<rc>)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "cut = new RC + freeze | recut = next RC after manual fix | release = promote GA + unfreeze"
+        type: choice
+        required: true
+        options:
+          - cut
+          - recut
+          - release
+      version:
+        description: "Release version in X.Y.Z form (e.g. 0.1.0)"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-process
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release (${{ inputs.action }})
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git
+        run: |
+          git config user.name "modulo-release-bot"
+          git config user.email "bot@modulo.run"
+
+      - name: Validate version input
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
+            exit 1
+          fi
+
+      - name: Cut release candidate and freeze main
+        id: cut
+        if: inputs.action == 'cut' || inputs.action == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          BASE="v${VERSION}"
+
+          # Next free RC number for this version.
+          N=1
+          while git rev-parse -q --verify "refs/tags/${BASE}-rc${N}" >/dev/null 2>&1; do
+            N=$((N+1))
+          done
+          RC_TAG="${BASE}-rc${N}"
+
+          echo "Tagging RC: $RC_TAG at $(git rev-parse --short HEAD)"
+          git tag -a "$RC_TAG" -m "Release candidate $RC_TAG"
+          git push origin "$RC_TAG"
+
+          # The freeze signal: merge-queue.yml's freeze-gate pauses while this
+          # tag exists. Force-move it on recut so the gate always tracks the
+          # latest freeze.
+          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
+          git push origin release-freeze --force
+
+          # Kick off validation against the deployed RC (app.modulo.run).
+          gh workflow run rc-validate.yml --ref main -f rc_tag="$RC_TAG"
+          echo "Triggered rc-validate.yml for $RC_TAG."
+
+      - name: Promote to GA and lift the freeze
+        if: inputs.action == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          GA_TAG="v${VERSION}"
+
+          # Safety 1: only promote OUT of an active freeze.
+          if ! git rev-parse -q --verify "refs/tags/release-freeze" >/dev/null 2>&1; then
+            echo "::error::No release freeze active ('release-freeze' tag missing) - refusing to promote. Run 'cut' first."
+            exit 1
+          fi
+
+          # Safety 2: never overwrite an existing GA tag.
+          if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${GA_TAG} already exists - refusing to overwrite."
+            exit 1
+          fi
+
+          # Safety 3: promote exactly the validated RC commit, not whatever
+          # happens to be on main right now.
+          LATEST_RC=$(git tag --list "${GA_TAG}-rc*" --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_RC" ]; then
+            echo "::error::No ${GA_TAG}-rc* tags found - nothing to promote."
+            exit 1
+          fi
+           RC_SHA=$(git rev-parse "${LATEST_RC}^{commit}")
+           # The checkout at workflow start reflects a possibly-stale local ref;
+           # fetch live main so HEAD_SHA reflects what is actually on main now
+           # (a commit could have landed between checkout and this step).
+           git fetch origin main
+           HEAD_SHA=$(git rev-parse origin/main)
+          if [ "$RC_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::main HEAD (${HEAD_SHA}) is not the latest RC ${LATEST_RC} (${RC_SHA}). Re-cut or investigate before promoting."
+            exit 1
+          fi
+
+          # Safety 4: GA may only be promoted from a VALIDATED RC. rc-validate.yml
+          # pushes validated/<rc_tag> on success; its commit must equal the RC.
+          VALIDATED_TAG="validated/${LATEST_RC}"
+          if ! git rev-parse -q --verify "refs/tags/${VALIDATED_TAG}" >/dev/null 2>&1; then
+            echo "::error::No validation marker ${VALIDATED_TAG} - rc-validate.yml has not recorded a successful validation for ${LATEST_RC}. Wait for (or re-run) validation before promoting."
+            exit 1
+          fi
+          VAL_SHA=$(git rev-parse "${VALIDATED_TAG}^{commit}")
+          if [ "$VAL_SHA" != "$RC_SHA" ]; then
+            echo "::error::Validation marker ${VALIDATED_TAG} points at ${VAL_SHA}, not the RC commit ${RC_SHA}. Re-run validation."
+            exit 1
+          fi
+
+          echo "Promoting $LATEST_RC to GA as $GA_TAG"
+          git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
+          git push origin "$GA_TAG"
+
+          # Lift the freeze: the merge queue resumes on its next tick.
+          git push origin --delete release-freeze
+          echo "Freeze lifted - merge queue resumes."
