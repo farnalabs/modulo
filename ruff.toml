@@ -19,6 +19,8 @@ select = [
     "RET",
     "PYI",
     "FURB",
+    "PIE",
+    "RSE",
     # Defensive gate-strengthening: every rule below was verified to have zero
     # current violations (run `ruff check . --extend-select <codes> --statistics`),
     # so enabling them tightens the lint gate against future regressions without

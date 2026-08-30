@@ -7590,3 +7590,243 @@ def test_single_element_isinstance_lens_flags_redundant_tuples():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_element_isinstance_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _call_has_constant_args(call: ast.Call) -> bool:
+    """True when a Call's positional/keyword args are pure constant literals.
+
+    Names, attribute paths, subscripts, starred values and comprehensions
+    reference or bind state the call could depend on, so ``f(x) == f(x)`` is a
+    legitimate determinism check. A bare-name callee called ONLY with constant
+    literals can never exercise distinct inputs — ``f({'a': 1}) ==
+    f({'a': 1})`` is as vacuous as ``x == x``, just with more ceremony. Method
+    calls (``obj.method(...)``) are never considered: the receiver holds state.
+
+    A zero-argument call (``get_time() == get_time()``, ``uuid4() ==
+    uuid4()``) is deliberately NOT considered constant: the lens cannot tell a
+    deterministic identity from a non-deterministic value without
+    interprocedural analysis, and such comparisons are legitimate determinism
+    checks (they CAN fail), so an empty arg list returns False.
+    """
+    args = list(call.args) + [kw.value for kw in call.keywords]
+    if not args:
+        return False
+    for arg in args:
+        for n in ast.walk(arg):
+            if isinstance(
+                n,
+                (
+                    ast.Name,
+                    ast.Attribute,
+                    ast.Subscript,
+                    ast.Starred,
+                    ast.ListComp,
+                    ast.SetComp,
+                    ast.DictComp,
+                    ast.GeneratorExp,
+                    ast.Lambda,
+                    ast.FormattedValue,
+                ),
+            ):
+                return False
+    return True
+
+
+def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``asyncio.wait_for`` /
+    ``asyncio.wait`` call without a timeout bound.
+
+    ``asyncio.wait_for(coro)`` with no ``timeout`` argument — or an explicit
+    ``timeout=None``, the API default meaning "wait forever" — suspends until
+    the awaited coroutine finishes with no upper bound, so a coroutine that
+    never completes hangs the test, and every test after it on the same event
+    loop, indefinitely. ``asyncio.wait(tasks)`` has the same contract and the
+    same ``None`` default. This is the asyncio twin of the unbounded-subprocess
+    and unbounded-thread-``join`` safety nets: bound the wait so a hang fails
+    loudly as a ``TimeoutError`` with a named bound instead of stalling the
+    whole run. ``wait_for(coro, 0)`` and any non-``None`` ``timeout`` (literal,
+    name, call) are bounded and left alone. Only the ``asyncio.*`` attribute
+    spelling is matched; a local helper named ``wait_for``/``wait`` cannot be
+    distinguished statically and is deliberately not flagged."""
+    found: list[tuple[int, str]] = []
+
+    def _timeout_is_bounded(call: ast.Call) -> bool:
+        if call.keywords:
+            for kw in call.keywords:
+                if kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                    return True
+        if len(call.args) >= 2:
+            second = call.args[1]
+            if not (isinstance(second, ast.Constant) and second.value is None):
+                return True
+        return False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("wait_for", "wait"):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "asyncio":
+            continue
+        if not node.args:
+            continue
+        if _timeout_is_bounded(node):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} — unbounded asyncio {'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
+                "with no timeout; pass timeout=<secs> so a hung coroutine fails loudly "
+                "instead of stalling the whole test run",
+            )
+        )
+    return found
+
+
+def test_no_unbounded_async_wait():
+    """An ``asyncio.wait_for``/``asyncio.wait`` called without a timeout bound
+    can hang the whole test run: a coroutine or task that never completes makes
+    the await wait forever, the runner simply stops, and every test after it on
+    the same event loop is lost without a trace. This is the asyncio sibling of
+    the unbounded-subprocess and unbounded-thread-``join`` lenses, which guard
+    the child-process and in-process versions of the same hazard. Always pass
+    an explicit numeric ``timeout=<secs>`` so a hang surfaces as a bounded
+    ``TimeoutError`` instead of stalling CI."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unbounded_async_wait_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unbounded asyncio wait call(s).\n"
+        "Give every asyncio.wait_for / asyncio.wait an explicit timeout bound: "
+        "pass timeout=<secs> (a None or omitted timeout means 'wait forever' "
+        "and can hang the whole test run).\n" + "\n".join(violations)
+    )
+
+
+def test_unbounded_async_wait_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the unbounded-async-wait lens:
+    it must flag ``asyncio.wait_for``/``asyncio.wait`` calls with an omitted or
+    ``None`` timeout (positional or keyword, awaited or not), and ignore
+    bounded calls (numeric literal or bound name), ``wait_for(coro, 0)``,
+    non-``asyncio`` callers, and local helpers that merely share the name."""
+    positive_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), None)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=None)\n",
+        "async def test_foo():\n    await asyncio.wait(futures)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=None)\n",
+        "async def test_foo():\n    asyncio.wait_for(coro())\n",
+        "async def test_foo():\n    task = asyncio.create_task(coro())\n    await asyncio.wait_for(task)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unbounded_async_wait_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=5)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), timeout=TIMEOUT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(coro(), 0)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=10)\n",
+        "async def test_foo():\n    await asyncio.wait(futures, timeout=SHORT)\n",
+        "async def test_foo():\n    await asyncio.wait_for(proc.communicate(), 10)\n",
+        "def test_foo():\n    wait_for(a)\n",
+        "def test_foo():\n    wait(a)\n",
+        "async def test_foo():\n    await socket.wait()\n",
+        "async def test_foo():\n    await asyncio.gather(coro())\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unbounded_async_wait_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` for every ``assert obj.attr`` /
+    ``assert not obj.attr`` whose attribute is a *method* — evidenced by the
+    same attribute being called (``obj.attr(...)``) elsewhere in the file —
+    but is asserted without trailing parentheses.
+
+    A bare attribute access on a bound method returns the method object
+    itself, which is always truthy; the ``assert`` is therefore a silent
+    false-green (``assert obj.method`` always passes) or a permanent failure
+    (``assert not obj.method`` always fails, since a method object is never
+    falsy). Either way the assertion says nothing about the behaviour under
+    test. The call-site evidence keeps this lens precise: an attribute that
+    is *never* called (a plain boolean/property attribute, e.g.
+    ``assert response.ok``) is a legitimate truthiness check and is left
+    alone; only a demonstrably-invocable method trips it."""
+    called = {
+        ast.dump(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    violations: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            test = test.operand
+        if not isinstance(test, ast.Attribute):
+            continue
+        if ast.dump(test) not in called:
+            continue
+        name = test.attr
+        violations.append((node.lineno, f"assert {name} — bare bound-method reference is always truthy; call {name}()"))
+    return violations
+
+
+def test_no_bound_method_truthiness_asserts():
+    """An ``assert obj.method`` / ``assert not obj.method`` against a bound
+    method (verified to be a method by its use as a call elsewhere in the same
+    file) asserts the method object itself, which is always truthy. The
+    positive spelling is a silent false-green — the test passes regardless of
+    whether ``method()`` would return a truthy value — and the ``not``-wrapped
+    spelling always fails. Both are almost always a missing ``()`` from a
+    forgotten call. The lens only fires when the attribute is demonstrably a
+    method (it is invoked parenthesised elsewhere); a plain truthiness check on
+    a boolean/property attribute (``assert response.ok``) is legitimate."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _bound_method_truthiness_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} truthiness assert(s) against a bare bound method.\n"
+        "assert obj.method() — a bound method object is always truthy, so asserting the bare\n"
+        "reference is a silent false-green (or, under 'not', always fails). Add the calling ()\n"
+        "so the assertion actually exercises the method's return value." + "\n".join(violations)
+    )
+
+
+def test_bound_method_lens_flags_missing_call_parens():
+    """The bound-method lens must flag a bare assert on an attribute that is
+    called parenthesised elsewhere (proving it is a method), and must NOT flag
+    a plain truthiness check on a boolean/property attribute, a comparison, or
+    a method that is genuinely invoked in the assert."""
+    positive_sources = [
+        ("def test_foo():\n    result = service.lookup(1)\n    assert service.lookup\n"),
+        ("def test_foo():\n    started = runner.start()\n    assert not runner.start\n"),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _bound_method_truthiness_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert response.ok\n",
+        "def test_foo():\n    assert not config.enabled\n",
+        "def test_foo():\n    service.lookup(1)\n    assert service.lookup(1) is not None\n",
+        "def test_foo():\n    assert service.lookup(1) == expected\n",
+        "def test_foo():\n    assert obj.method()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _bound_method_truthiness_violations(tree), f"lens should NOT flag:\n{source}"

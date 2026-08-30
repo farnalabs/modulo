@@ -73,7 +73,7 @@ class TestTriggersPausedError:
 
     def test_is_runtime_error(self) -> None:
         with pytest.raises(RuntimeError):
-            raise TriggersPausedError()
+            raise TriggersPausedError
 
 
 class TestOrgDeletedError:

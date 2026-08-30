@@ -300,7 +300,7 @@ def _feature_scenario_tags(feature: Path) -> list[tuple[int, str, set[str]]]:
         if line.startswith("@"):
             tags = {t for t in line.split() if t.startswith("@")}
             continue
-        if line.startswith("Scenario Outline") or line.startswith("Scenario:"):
+        if line.startswith(("Scenario Outline", "Scenario:")):
             scenarios.append((lineno, line.split(":", 1)[1].strip(), tags))
             tags = set()
     return scenarios

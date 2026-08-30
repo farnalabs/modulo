@@ -175,7 +175,7 @@ class TestModelBackendBaseHealthCheck:
         backend = _StubBackend()
 
         async def _cancel(*args, **kwargs):
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         backend.invoke = _cancel
         with pytest.raises(asyncio.CancelledError):

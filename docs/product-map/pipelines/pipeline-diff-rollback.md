@@ -14,6 +14,7 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/api/test_error_handling.py
 bdd:
+  - backend/tests/bdd/features/pipelines/snapshot_versioning.feature
   - backend/tests/bdd/features/pipelines/crud.feature
   - backend/tests/bdd/steps/test_pipelines.py
 depends-on:
@@ -47,16 +48,21 @@ product-map entry touched during centralized authorization cleanup.
 
 ## Known Gaps
 
-- **No dedicated standalone snapshot BDD feature file** — snapshot/rollback/diff
-  scenarios live inside ``tests/bdd/features/pipelines/crud.feature`` (snapshot
-  creation at run start, list + pagination, get, tag, rollback + HITL-gate
-  weakening denial, delete + latest refusal, diff, missing-pipeline 404); the
-  500/422 error-path semantics are unit-tested
-  (``backend/tests/unit/db/test_pipeline_snapshot.py``,
-  ``backend/tests/unit/pipelines/test_snapshot_versioning.py``).
+None acknowledged: the standalone snapshot/diff/rollback BDD surface now ships
+(snapshot_versioning.feature) alongside the unit suites; the 500/422 error-path
+semantics stay unit-tested (
+``backend/tests/unit/db/test_pipeline_snapshot.py``,
+``backend/tests/unit/pipelines/test_snapshot_versioning.py``).
 
 ## QA History
 
+- 2026-08-29: **improve-architecture (product-map walk)** — closed the "no
+  dedicated standalone snapshot BDD feature file" gap: the snapshot/rollback/diff
+  scenarios (create-at-run-start, list/pagination, get, tag, rollback + HITL-gate
+  weakening denial, delete + latest refusal, diff, missing-pipeline 404,
+  empty-graph) were extracted from the higher-level ``crud.feature`` into
+  ``tests/bdd/features/pipelines/snapshot_versioning.feature`` and registered in
+  ``tests/bdd/steps/test_pipelines.py``. ``bdd:`` now names the dedicated file.
 - 2026-08-26: **improve-architecture (product-map walk)** — fixed a stale
   coverage claim: the entry was parked at ``status: partial`` with ``bdd: []``
   while ``tests/bdd/features/pipelines/crud.feature`` already exercised

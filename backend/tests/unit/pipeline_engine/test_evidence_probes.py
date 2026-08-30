@@ -987,7 +987,7 @@ class TestRunEvidenceProbeErrorPaths:
     async def test_cancelled_error_propagates(self, sqlite_factory) -> None:
         class _CancelProvider:
             async def git_diff_empty(self, run_id, node_id):
-                raise asyncio.CancelledError()
+                raise asyncio.CancelledError
 
             async def sandbox_filesystem_probe(self, run_id, node_id):
                 return EvidenceResult.verified_empty

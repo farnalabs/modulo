@@ -4079,9 +4079,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     scoped_state = dict(state)
     scoped_state["run_context"] = scoped_run_context
 
-    run_id: str = str(state.get("_run_id", ""))
-    pipeline_id: str = str(state.get("_pipeline_id", ""))
-    org_id: str = str(state.get("_org_id", ""))
+    _run_id = state.get("_run_id")
+    _pipeline_id = state.get("_pipeline_id")
+    _org_id = state.get("_org_id")
+    run_id: str = str(_run_id) if _run_id is not None else ""
+    pipeline_id: str = str(_pipeline_id) if _pipeline_id is not None else ""
+    org_id: str = str(_org_id) if _org_id is not None else ""
 
     # FAR-296 mode split: llm mode renders the prompt + agent_command through
     # the SandboxedEnvironment; script mode runs script_command VERBATIM —

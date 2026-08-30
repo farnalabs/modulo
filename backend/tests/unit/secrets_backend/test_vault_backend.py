@@ -355,7 +355,7 @@ class TestVaultSecretsBackend:
         backend = VaultSecretsBackend()
 
         def login(**kwargs):
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         mock_hvac.Client.return_value.auth.approle.login = login
 

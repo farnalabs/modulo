@@ -408,7 +408,7 @@ class TestReconcileEdgeCases:
         await _seed_run(session, refs=[{"kind": "github_pr", "ref": "1", "source": "derived"}])
 
         async def _cancel(*args: Any, **kwargs: Any) -> int:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.advance_journeys", _cancel)
         with pytest.raises(asyncio.CancelledError):

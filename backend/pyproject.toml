@@ -181,6 +181,7 @@ select = [
     "RET",      # flake8-return (RET503 missing explicit return)
     "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
     "FURB",     # refurb (FURB125 `while` ├óÔÇáÔÇÖ `for` loop, FURB163 unnecessary `None` check)
+    "PIE",      # flake8-pie (PIE810 single startswith/endswith tuple, PIE807 useless lambda)
     # Defensive gate-strengthening: every rule below was verified to have zero
     # current violations (run `ruff check . --extend-select <codes> --statistics`),
     # so enabling them tightens the lint gate against future regressions without

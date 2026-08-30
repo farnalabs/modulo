@@ -1,7 +1,7 @@
 """Step definitions for pipeline feature files.
 
-Covers: crud, run_lifecycle, pipeline_config_validation, checkpoint_resume,
-run_variants, scheduling, webhook_trigger.
+Covers: crud, snapshot_versioning, run_lifecycle, pipeline_config_validation,
+checkpoint_resume, run_variants, scheduling, webhook_trigger.
 """
 
 import contextlib
@@ -17,6 +17,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/crud.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../../bdd/features/pipelines/snapshot_versioning.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/error_recovery.feature")
 with contextlib.suppress(FileNotFoundError, OSError):

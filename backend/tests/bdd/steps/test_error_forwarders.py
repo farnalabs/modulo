@@ -60,6 +60,7 @@ def _seed_mock_session(ctx):
     exec_result.scalars.return_value = scalars_mock
     exec_result.scalar_one_or_none.return_value = next(iter(existing.values())) if existing else None
     session.execute = AsyncMock(return_value=exec_result)
+    session.get = AsyncMock(return_value=None)
     return session
 
 
@@ -68,7 +69,7 @@ def _build_app(ctx):
     ``ctx``.  Supports no-org, viewer role, feature gating, and missing-DB-table scenarios."""
     from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.api.routes.error_forwarder_config import router as fwd_router
-    from modulo.auth.dependencies import get_current_tenant_user
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
     from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import Settings, get_settings
 
@@ -83,7 +84,7 @@ def _build_app(ctx):
         if org_id is None or org_role is None:
             from modulo.auth.dependencies import OrganisationMembershipRequired
 
-            raise OrganisationMembershipRequired()
+            raise OrganisationMembershipRequired
         return TenantPrincipal(
             username="admin",
             organisation_id=org_id,
@@ -108,6 +109,7 @@ def _build_app(ctx):
 
     app.dependency_overrides[get_settings] = _settings
     app.dependency_overrides[get_current_tenant_user] = _user
+    app.dependency_overrides[get_current_user] = _user
     app.dependency_overrides[get_db_session] = _db
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     return app

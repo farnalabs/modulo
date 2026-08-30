@@ -90,7 +90,10 @@ class TestRedisSlidingWindowRateLimiter:
         ((ts, score),) = member.items()
         now = time.time()
         assert abs(score - now) < 2
-        assert ts == str(score)
+        ts_str, sep, suffix = ts.partition(":")
+        assert sep == ":"
+        assert ts_str == str(score)
+        assert len(suffix) == 32
 
     async def test_blocks_every_request_when_max_requests_zero(self, mock_redis):
         """max_requests=0 must block: the current request is recorded before the check."""

@@ -47,11 +47,11 @@ from modulo.core.analytics.maintenance import backfill_facts, backfill_ledger, r
 
 def _normalise_async_url(raw: str) -> str:
     """Ensure the URL carries an async driver usable by ``create_async_engine``."""
-    if raw.startswith("postgresql://") or raw.startswith("postgresql+psycopg://"):
+    if raw.startswith(("postgresql://", "postgresql+psycopg://")):
         return raw.replace("postgresql://", "postgresql+asyncpg://").replace(
             "postgresql+psycopg://", "postgresql+asyncpg://"
         )
-    if raw.startswith("mysql://") or raw.startswith("mysql+pymysql://"):
+    if raw.startswith(("mysql://", "mysql+pymysql://")):
         return raw.replace("mysql://", "mysql+aiomysql://").replace("mysql+pymysql://", "mysql+aiomysql://")
     return raw
 
