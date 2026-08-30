@@ -625,6 +625,25 @@ regression that silently weakens the suite:
   assert inside is reachable and meaningful. Move the assertion after the
   ``with`` block (asserting on the recorded ``exc_info.value`` is the canonical
   form), or make it the intentional trigger with ``pytest.raises(AssertionError)``
+- a wall-clock *elapsed* measure compared inside an ``assert`` —
+  ``assert time.monotonic() - started < 1.0``, ``assert deadline -
+   time.time() > 0.1``, ``assert (time.perf_counter() - t0) == 0.5``. An
+   ``assert`` whose compare operand is a subtraction that reads ``time.<clock>()``
+   on either side embeds real wall-clock passage into the verdict: the test
+   passes or fails on how long the suite *actually took* between the two clock
+   reads, so a loaded CI runner, a preempted process, or a slow sandbox flakes
+   it, and an artificially fast run can pass without exercising the slow path
+   it was written to bound. This is the assertion twin of the computed-wall-clock
+   sleep lens, which guards the ``sleep(<computed-duration>)`` half of the same
+   hazard. The fix is to inject the time source the code under test reads (a
+   monotonic ``now`` callable) and advance it deterministically, or to drag the
+   elapsed measure out of the assertion and compare pinned timestamps. Bare
+   ordering reads (``assert started < time.monotonic()`` — a monotonicity check
+   that cannot flake), subscriptions and ``_ns`` twin reads not in a subtraction,
+   and a ``Sub`` whose children are *not* ``time.<clock>()`` reads (``elapsed() -
+   started``, ``abs(a) - b``) are deliberately left alone, as are wall-clock reads
+   inside subtraction buried more than one level under the compare operand (the
+   lens owns the top-level operand shape only)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -9642,3 +9661,145 @@ def test_point_collapsed_range_lens_flags_degenerate_bounds():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _point_collapsed_range_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Wall-clock reads (``time.<name>()`` attribute spellings) whose subtraction
+#: from another value yields an *elapsed* measure. Reads on the left of a
+#: subtraction measure elapsed-since-anchor; reads on the right measure
+#: remaining-until-deadline. ``time.get_clock_info`` and friends that do not
+#: return a clock value are out of scope, as are the ``clock()``/``ticks()``
+#: names that do not exist on Python 3.12.
+_WALL_CLOCK_READS = frozenset(
+    {
+        "monotonic",
+        "perf_counter",
+        "process_time",
+        "thread_time",
+        "time",
+        "monotonic_ns",
+        "perf_counter_ns",
+        "process_time_ns",
+        "thread_time_ns",
+    }
+)
+
+
+def _wall_clock_read(node: ast.AST) -> bool:
+    """Return True for a fresh ``time.<clock>()`` read (the attribute spelling).
+
+    ``time.monotonic()``/``time.time()``/``time.perf_counter()`` and their
+    ``_ns``/``thread_time`` twins. A local helper bound to a different name
+    cannot be distinguished statically and is deliberately not matched,
+    mirroring the ``wait_for``/``wait`` exclusion in the asyncio lens."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _WALL_CLOCK_READS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "time"
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _wall_clock_elapsed_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assert whose compare carries a
+    wall-clock *elapsed* measure as a top-level operand — a subtraction that
+    reads ``time.<clock>()`` on either side: ``assert time.monotonic() - started
+    < 1.0``, ``assert deadline - time.time() > 0.1``. The verdict depends on how
+    long the suite actually took between two clock reads, so the assertion is a
+    wall-clock timing contract that flakes under CI load. Only the direct
+    operand shape is judged: a measure buried under a wrapping call
+    (``abs(time.monotonic() - start)``) belongs to the same hazard but is out of
+    scope, and a bare ordering read (``started < time.monotonic()``) is a
+    monotonicity check that cannot flake and is left alone."""
+    found: list[tuple[int, str]] = []
+
+    def _is_elapsed(operand: ast.AST) -> bool:
+        if not isinstance(operand, ast.BinOp) or not isinstance(operand.op, ast.Sub):
+            return False
+        return _wall_clock_read(operand.left) or _wall_clock_read(operand.right)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        for operand in (test.left, *test.comparators):
+            if not _is_elapsed(operand):
+                continue
+            clock_side = "left" if _wall_clock_read(operand.left) else "right"
+            flavor = "elapsed-since-anchor measure" if clock_side == "left" else "remaining-time measure"
+            found.append(
+                (
+                    node.lineno,
+                    f"assert {ast.unparse(test)} — a wall-clock {flavor} compared "
+                    "against a bound; the verdict depends on how long the suite really took "
+                    "between clock reads, so the check flakes under load. Inject the time "
+                    "source the code under test reads (a monotonic ``now`` callable) and "
+                    "advance it deterministically instead",
+                )
+            )
+            break
+    return found
+
+
+def test_no_wall_clock_elapsed_assertions():
+    """An assert that compares a wall-clock *elapsed* measure —
+    ``assert time.monotonic() - started < 1.0``, ``assert deadline -
+    time.time() > 0.1`` — bakes real elapsed time into the verdict: the test
+    passes or fails on how long the suite actually took between two clock reads,
+    so it flakes on a loaded runner or a preempted process, and an artificially
+    fast run can pass without exercising the slow path it was written to bound.
+    This is the assertion twin of the computed-wall-clock-sleep lens. Inject the
+    time source the code under test reads and advance it deterministically, or
+    compare pinned timestamps instead."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _wall_clock_elapsed_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} wall-clock elapsed assertion(s).\n"
+        "An assert on an elapsed duration bakes real wall-clock time into the verdict and\n"
+        "flakes under CI load; inject the clock the code under test reads instead.\n" + "\n".join(violations)
+    )
+
+
+def test_wall_clock_elapsed_lens_flags_flaky_durations():
+    """Synthetic positive/negative control for the wall-clock-elapsed lens: it
+    must flag every compare whose top-level operand is a subtraction reading
+    ``time.<clock>()`` on either side (all clock spellings, both elapsed and
+    remaining-time shapes), and ignore bare ordering reads, non-``time`` clock
+    providers, subtractions without a wall-clock read, and elapsed measures not
+    sitting at the top of a compare operand."""
+    positive_sources = [
+        "def test_foo():\n    assert time.monotonic() - started < 1.0\n",
+        "def test_foo():\n    assert d.last_activity() >= time.monotonic() - 1.0\n",
+        "def test_foo():\n    assert time.perf_counter() - t0 <= 0.5\n",
+        "def test_foo():\n    assert deadline - time.time() > 0.1\n",
+        "def test_foo():\n    assert time.process_time_ns() - begin == 0\n",
+        "def test_foo():\n    assert time.monotonic() - start >= 2 * timeout\n",
+        "def test_foo():\n    assert time.thread_time() - cpu_start < 5\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _wall_clock_elapsed_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert started < time.monotonic()\n",
+        "def test_foo():\n    assert start + 5 < time.monotonic()\n",
+        "def test_foo():\n    assert clock.now() - started < 1.0\n",
+        "def test_foo():\n    assert time.monotonic() < deadline\n",
+        "def test_foo():\n    assert elapsed() - started < 1.0\n",
+        "def test_foo():\n    assert time.monotonic() + 1.0 < deadline\n",
+        "def test_foo():\n    assert x == 5\n",
+        "def test_foo():\n    assert (time.monotonic() - started < 1.0) or pending\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _wall_clock_elapsed_violations(tree), f"lens should NOT flag:\n{source}"
