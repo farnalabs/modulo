@@ -2357,3 +2357,35 @@ async def test_sandbox_lifetime_exceeds_command_timeout():
     lifetime = create.await_args.kwargs["timeout"]
     assert lifetime == 60 + _SANDBOX_LIFETIME_GRACE_S
     assert lifetime > 60
+
+
+async def test_sandbox_lifetime_is_int():
+    """FAR-489: the lifetime passed to AsyncSandbox.create must be an int.
+
+    E2B's Go server unmarshals NewSandbox.timeout into an int32 and REJECTS
+    a float payload ("360.0") with HTTP 400. The e2b SDK's attrs-based
+    NewSandbox model does not coerce, so a float reaches the wire verbatim.
+    With the float grace constant (120.0) every production sandbox create
+    failed instantly ("Sandbox agent execution failed", ~1.4s node wall
+    clock, zero LLM tokens) from 2026-08-29T19:43Z until this fix."""
+    node_def = _base_node_def(timeout_seconds=60)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create:
+        await fn(_run_state())
+
+    lifetime = create.await_args.kwargs["timeout"]
+    assert isinstance(lifetime, int), f"lifetime must be int, got {type(lifetime).__name__}: {lifetime!r}"
+
+    # The guard must hold even when the node's configured timeout is a
+    # float (defensive: sandbox_timeout comes from node_def JSON).
+    node_def = _base_node_def(timeout_seconds=60.5)
+    fn = make_sandbox_agent_fn(node_def)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create:
+        await fn(_run_state())
+
+    lifetime = create.await_args.kwargs["timeout"]
+    assert isinstance(lifetime, int), f"lifetime must be int, got {type(lifetime).__name__}: {lifetime!r}"
+    assert lifetime > 60

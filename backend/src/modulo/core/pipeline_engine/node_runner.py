@@ -305,7 +305,11 @@ _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after comm
 # 15+ production PR-Reviewer runs on 2026-08-29. The grace window makes the
 # runner's OWN timeout path (clean kill + correct stall/timeout
 # classification) win the race deterministically.
-_SANDBOX_LIFETIME_GRACE_S = 120.0
+# FAR-489: this MUST be an int. The E2B create API (Go) unmarshals
+# ``NewSandbox.timeout`` into an int32 — a float payload ("360.0") is
+# rejected with HTTP 400 and every sandbox create fails instantly. The
+# int() cast at the create call site is the load-bearing guard; keep both.
+_SANDBOX_LIFETIME_GRACE_S = 120
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 # FAR-188 (QA round 1): the raw-output retention DB write is bounded to fit
 # inside the node decorator's grace budget (_DECORATOR_GRACE = 5.0s) so a hung
@@ -4422,7 +4426,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         # path — a mid-command sandbox death fabricated a
                         # zero-exit completion and misreported the failure as
                         # "no parseable output.json (exit code 0)".
-                        timeout=sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S,
+                        # FAR-489: int() — the e2b SDK's attrs model does NOT
+                        # coerce a float, and E2B's Go server rejects
+                        # "1320.0" with 400 (int32 unmarshal), instantly
+                        # failing every sandbox create.
+                        timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
                         allow_internet_access=(egress_policy not in ("deny_all", "selected")),
                         # deny_all/selected -> no internet; default/None ->
                         # internet allowed (e2b default). IMPORTANT
