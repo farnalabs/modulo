@@ -1,7 +1,7 @@
 """accounts — add ``must_change_password`` flag (FAR-460).
 
-Revision ID: 0158_accounts_must_change_password
-Revises: 0157_add_numeric_check_constraints
+Revision ID: 0159_accounts_must_change_password
+Revises: 0158_sso_provider_id
 Create Date: 2026-08-27
 
 Admin actions that hand a user a temporary credential (``admin_reset_password``,
@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0158_accounts_must_change_password"
-down_revision: str | None = "0157_add_numeric_check_constraints"
+revision: str = "0159_accounts_must_change_password"
+down_revision: str | None = "0158_sso_provider_id"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

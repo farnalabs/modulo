@@ -1,7 +1,7 @@
 """invitations — one-time in-app invite tokens (FAR-461).
 
-Revision ID: 0159_invitations
-Revises: 0158_accounts_must_change_password
+Revision ID: 0160_invitations
+Revises: 0159_accounts_must_change_password
 Create Date: 2026-08-27
 
 Admins hand new members a one-time enrollment link instead of typing a
@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0159_invitations"
-down_revision: str | None = "0158_accounts_must_change_password"
+revision: str = "0160_invitations"
+down_revision: str | None = "0159_accounts_must_change_password"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
