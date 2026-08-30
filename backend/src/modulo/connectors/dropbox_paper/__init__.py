@@ -1,6 +1,7 @@
 """DropboxPaperConnector — async Dropbox Paper API v2 connector."""
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -80,73 +81,81 @@ class DropboxPaperConnector(ConnectorBase):
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
-            match q.resource:
-                case "docs":
-                    payload: dict[str, Any] = {
-                        "limit": min(q.limit, 100),
-                        "filter_by": q.filters.get("filter_by", "docs_created"),
-                    }
-                    sort_by = q.filters.get("sort_by")
-                    if sort_by:
-                        payload["sort_by"] = sort_by
-                    sort_order = q.filters.get("sort_order")
-                    if sort_order:
-                        payload["sort_order"] = sort_order
-                    if q.cursor:
-                        payload["cursor"] = q.cursor
-                    r = await client.post("/paper/docs/list", json=payload)
-                    r.raise_for_status()
-                    body = r.json()
-                    records: list[dict[str, Any]] = [{"doc_id": did} for did in _safe_records(body, "doc_ids")]
-                    cursor_obj = body.get("cursor") if isinstance(body, dict) else None
-                    next_cursor: str | None = (
-                        _safe_cursor(cursor_obj.get("value")) if isinstance(cursor_obj, dict) else None
-                    )
-                    return ConnectorResult(
-                        records=records,
-                        total=len(records),
-                        next_cursor=next_cursor,
-                    )
+            handler = self._query_handlers().get(q.resource)
+            if handler is None:
+                raise ValueError(f"Unsupported Dropbox Paper resource: {q.resource!r}")
+            return await handler(client, q)
 
-                case "doc":
-                    doc_id = q.filters.get("doc_id")
-                    if not doc_id:
-                        raise ValueError("Dropbox Paper doc query requires 'doc_id' filter")
-                    r = await client.post(
-                        "/paper/docs/download",
-                        headers={"Dropbox-API-Arg": json.dumps({"doc_id": doc_id})},
-                        content=b"",
-                    )
-                    r.raise_for_status()
-                    content = r.text
-                    return ConnectorResult(
-                        records=[{"doc_id": doc_id, "content": content}],
-                        total=1,
-                    )
+    def _query_handlers(self) -> dict[str, Callable[[httpx.AsyncClient, ConnectorQuery], Awaitable[ConnectorResult]]]:
+        return {
+            "docs": self._query_docs,
+            "doc": self._query_doc,
+            "folders": self._query_folders,
+        }
 
-                case "folders":
-                    payload = {
-                        "path": q.filters.get("path", ""),
-                        "recursive": q.filters.get("recursive", False),
-                    }
-                    if q.cursor:
-                        payload["cursor"] = q.cursor
-                    r = await client.post("/files/list_folder", json=payload)
-                    r.raise_for_status()
-                    body = r.json()
-                    entries = _safe_records(body, "entries")
-                    cursor = body.get("cursor") if isinstance(body, dict) else None
-                    next_cursor = (
-                        _safe_cursor(cursor.get("value")) if isinstance(cursor, dict) else _safe_cursor(cursor)
-                    )
-                    return ConnectorResult(
-                        records=entries,
-                        total=len(entries),
-                        next_cursor=next_cursor,
-                    )
+    async def _query_docs(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        payload: dict[str, Any] = self._docs_payload(q)
+        r = await client.post("/paper/docs/list", json=payload)
+        r.raise_for_status()
+        body = r.json()
+        records: list[dict[str, Any]] = [{"doc_id": did} for did in _safe_records(body, "doc_ids")]
+        next_cursor: str | None = self._docs_next_cursor(body)
+        return ConnectorResult(records=records, total=len(records), next_cursor=next_cursor)
 
-                case _:
-                    raise ValueError(f"Unsupported Dropbox Paper resource: {q.resource!r}")
+    async def _query_doc(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        doc_id = q.filters.get("doc_id")
+        if not doc_id:
+            raise ValueError("Dropbox Paper doc query requires 'doc_id' filter")
+        r = await client.post(
+            "/paper/docs/download",
+            headers={"Dropbox-API-Arg": json.dumps({"doc_id": doc_id})},
+            content=b"",
+        )
+        r.raise_for_status()
+        return ConnectorResult(records=[{"doc_id": doc_id, "content": r.text}], total=1)
+
+    async def _query_folders(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        payload = {
+            "path": q.filters.get("path", ""),
+            "recursive": q.filters.get("recursive", False),
+        }
+        self._apply_pagination(payload, q)
+        r = await client.post("/files/list_folder", json=payload)
+        r.raise_for_status()
+        body = r.json()
+        entries = _safe_records(body, "entries")
+        next_cursor = self._folders_next_cursor(body)
+        return ConnectorResult(records=entries, total=len(entries), next_cursor=next_cursor)
+
+    @staticmethod
+    def _apply_pagination(payload: dict[str, Any], q: ConnectorQuery) -> None:
+        if q.cursor:
+            payload["cursor"] = q.cursor
+
+    @staticmethod
+    def _docs_payload(q: ConnectorQuery) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "limit": min(q.limit, 100),
+            "filter_by": q.filters.get("filter_by", "docs_created"),
+        }
+        sort_by = q.filters.get("sort_by")
+        if sort_by:
+            payload["sort_by"] = sort_by
+        sort_order = q.filters.get("sort_order")
+        if sort_order:
+            payload["sort_order"] = sort_order
+        DropboxPaperConnector._apply_pagination(payload, q)
+        return payload
+
+    @staticmethod
+    def _docs_next_cursor(body: Any) -> str | None:
+        cursor_obj = body.get("cursor") if isinstance(body, dict) else None
+        return _safe_cursor(cursor_obj.get("value")) if isinstance(cursor_obj, dict) else None
+
+    @staticmethod
+    def _folders_next_cursor(body: Any) -> str | None:
+        cursor = body.get("cursor") if isinstance(body, dict) else None
+        return _safe_cursor(cursor.get("value")) if isinstance(cursor, dict) else _safe_cursor(cursor)
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:
