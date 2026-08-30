@@ -67,6 +67,44 @@ class RedisEventBroker:
             ),
         )
 
+    async def _close_clients(self, pub: aioredis.Redis | None, sub: aioredis.Redis | None) -> None:
+        """Best-effort close of one or both freshly created clients."""
+        if pub is not None:
+            await pub.close()
+        if sub is not None:
+            await sub.close()
+
+    async def _adopt_new_clients(self, pub: aioredis.Redis | None, sub: aioredis.Redis | None) -> bool:
+        """Store the freshly created clients, unless a concurrent connect beat us.
+
+        Returns ``True`` if the new clients were adopted (first connect to win the
+        lock), or ``False`` if both connections were already established by another
+        task (in which case the new clients are closed).
+        """
+        async with self._lock:
+            if self._pub is not None and self._sub is not None:
+                await self._close_clients(pub, sub)
+                return False
+            if pub is not None:
+                self._pub = pub
+            if sub is not None:
+                self._sub = sub
+            return True
+
+    async def _close_client_after_error(self, client: aioredis.Redis | None, log_key: str) -> None:
+        """Best-effort close of a client after an error, logging failures.
+
+        Re-raises ``asyncio.CancelledError`` so cancellation always propagates.
+        """
+        if client is None:
+            return
+        try:
+            await client.close(close_connection_pool=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(log_key, exc_info=True)
+
     async def connect(self) -> None:
         """Open dedicated connections for publishing and subscribing."""
         async with self._lock:
@@ -85,23 +123,10 @@ class RedisEventBroker:
             raise
         except Exception:
             _log.exception("redis_broker.connect_failed", extra={"url": self._redact_url(self._redis_url)})
-            if pub is not None:
-                await pub.close()
-            if sub is not None:
-                await sub.close()
+            await self._close_clients(pub, sub)
             raise
-        async with self._lock:
-            if self._pub is not None and self._sub is not None:
-                if pub is not None:
-                    await pub.close()
-                if sub is not None:
-                    await sub.close()
-                return
-            if pub is not None:
-                self._pub = pub
-            if sub is not None:
-                self._sub = sub
-        _log.info("RedisEventBroker connected to %s", self._redact_url(self._redis_url))
+        if await self._adopt_new_clients(pub, sub):
+            _log.info("RedisEventBroker connected to %s", self._redact_url(self._redis_url))
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
         """Serialize *data* as JSON and publish to the given *channel*."""
@@ -126,13 +151,7 @@ class RedisEventBroker:
             async with self._lock:
                 old = self._pub
                 self._pub = None
-            if old is not None:
-                try:
-                    await old.close(close_connection_pool=True)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning("redis_broker.pub_close_failed_after_error", exc_info=True)
+            await self._close_client_after_error(old, "redis_broker.pub_close_failed_after_error")
 
     async def subscribe(self, channel: str) -> PubSub:
         """Return a PubSub object subscribed to the given *channel*.
@@ -159,13 +178,7 @@ class RedisEventBroker:
             async with self._lock:
                 old = self._sub
                 self._sub = None
-            if old is not None:
-                try:
-                    await old.close(close_connection_pool=True)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning("redis_broker.sub_close_failed_after_error", exc_info=True)
+            await self._close_client_after_error(old, "redis_broker.sub_close_failed_after_error")
             raise
         return pubsub
 
@@ -176,20 +189,8 @@ class RedisEventBroker:
             sub = self._sub
             self._pub = None
             self._sub = None
-        if pub is not None:
-            try:
-                await pub.close(close_connection_pool=True)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning("redis_broker.pub_close_failed", exc_info=True)
-        if sub is not None:
-            try:
-                await sub.close(close_connection_pool=True)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning("redis_broker.sub_close_failed", exc_info=True)
+        await self._close_client_after_error(pub, "redis_broker.pub_close_failed")
+        await self._close_client_after_error(sub, "redis_broker.sub_close_failed")
         # After releasing the lock, another publish()/subscribe() call may have
         # created new connections via connect(). That's fine - they're independent.
         _log.info("RedisEventBroker closed for %s", self._redact_url(self._redis_url))
