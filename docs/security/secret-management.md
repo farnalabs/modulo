@@ -6,11 +6,11 @@ Modulo supports three backends for secret storage, configured via the `MODULO_SE
 
 | Backend | Env Value | Description |
 |---------|-----------|-------------|
-| Fernet (default) | `fernet` | Encrypted at rest in the database using `FERNET_KEY`. Fernet symmetric encryption (AES-128-CBC + HMAC-SHA256). The encryption key must be exactly 32 base64-encoded bytes. |
+| Fernet (default) | `fernet` | Encrypted at rest in the database using `FERNET_KEY`. Fernet symmetric encryption (AES-128-CBC + HMAC-SHA256). The key must be a URL-safe base64 string that decodes to exactly 32 bytes (a 44-character value), as produced by `Fernet.generate_key()`. |
 | HashiCorp Vault | `vault` | KV v2 secrets engine via `hvac`. Configured via `VAULT_ADDR`, `VAULT_TOKEN` or `VAULT_ROLE_ID`+`VAULT_SECRET_ID`. |
 | AWS Secrets Manager | `aws` | Managed via `boto3`. IAM role or access key determines access. |
 
-At startup, Modulo reads `SECRET_KEY` (for JWT signing, minimum 32 bytes) and `FERNET_KEY` (for Fernet encryption, exactly 32 base64-encoded bytes). The application refuses to start if either is absent or insufficient.
+At startup, Modulo reads `SECRET_KEY` (for JWT signing, minimum 32 bytes) and `FERNET_KEY` (for Fernet encryption, at least 32 bytes). The application refuses to start if either is absent or insufficient. Note that the startup check only enforces a minimum length; Fernet itself additionally requires the key to decode to exactly 32 bytes, so always generate `FERNET_KEY` with `Fernet.generate_key()` rather than supplying an arbitrary string.
 
 Connector credentials and webhook secrets are decrypted once per run into a run-scoped context object. Decrypted values **never** enter:
 
@@ -40,7 +40,7 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 
 1. Generate a new key:
    - `SECRET_KEY`: any 32+ byte random value (`openssl rand -base64 32`)
-   - `FERNET_KEY`: 32 base64-encoded bytes (`python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+   - `FERNET_KEY`: a URL-safe base64 string decoding to exactly 32 bytes (`python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
 2. For `FERNET_KEY`, set the new key as `FERNET_KEY` and keep the old key in
    `FERNET_KEY_OLD` during the rotation window so existing values remain
    decryptable.
