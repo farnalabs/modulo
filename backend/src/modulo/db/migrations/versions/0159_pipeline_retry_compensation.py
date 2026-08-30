@@ -1,7 +1,7 @@
 """Register ``compensation_failed``/``unknown`` run statuses + P5 columns (FAR-402 P5).
 
-Revision ID: 0158_pipeline_retry_compensation
-Revises: 0157_add_numeric_check_constraints
+Revision ID: 0159_pipeline_retry_compensation
+Revises: 0158_sso_provider_id
 Create Date: 2026-08-26
 
 Renumber note: this migration was authored as ``0150_pipeline_retry_compensation``
@@ -13,10 +13,10 @@ and was renumbered to ``0151``; that in turn collided with main's
 ``0153_add_numeric_check_constraints`` -> ``0154_add_web_vital_events_time_index``
 -> ``0155_add_hot_query_indexes`` -> ``0156_add_soft_delete_partial_uniques`` ->
 ``0157_add_numeric_check_constraints``, so this migration is now numbered
-``0158`` and re-parented onto main's real head ``0157_add_numeric_check_constraints``,
-keeping the graph a single linear chain with ``0159_run_idempotency_key`` as the
-sole head (chain: 0157 -> 0158_pipeline_retry_compensation ->
-0159_run_idempotency_key).
+``0159`` and re-parented onto main's real head ``0158_sso_provider_id``,
+keeping the graph a single linear chain with ``0160_run_idempotency_key`` as the
+sole head (chain: 0157 -> 0158_sso_provider_id -> 0159_pipeline_retry_compensation ->
+0160_run_idempotency_key).
 
 Implements the FAR-402 P5 (FAR-419) failure/retry + compensation data-model
 deltas:
@@ -50,8 +50,8 @@ deltas:
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0158_pipeline_retry_compensation"
-down_revision = "0157_add_numeric_check_constraints"
+revision = "0159_pipeline_retry_compensation"
+down_revision = "0158_sso_provider_id"
 branch_labels = None
 depends_on = None
 

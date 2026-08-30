@@ -8,6 +8,7 @@ import httpx
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
+from modulo.core.ssrf import validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class GitLabCIRunner(CIRunnerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
@@ -76,6 +78,11 @@ class GitLabCIRunner(CIRunnerBase):
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPError as exc:
             return HealthResult(ok=False, detail=f"HTTP error: {exc}")
+        except ValueError as exc:
+            # The outbound SSRF guard in _client() rejects a private/internal
+            # base_url. Report unhealthy with the remediation text instead of
+            # raising, matching the base_url-bearing connectors.
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def trigger_run(
         self,

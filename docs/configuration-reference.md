@@ -322,6 +322,65 @@ Secrets backend selection: `MODULO_SECRETS_BACKEND` (default: `fernet`, options:
 
 ---
 
+## Outbound Egress Guard (SSRF)
+
+Every outbound URL Modulo is given by a user or an organisation is validated
+before a request is made: notification webhooks, SSO test connections,
+observability and error-forwarder tests, all `base_url`-bearing connectors, and
+the OpenAI-compatible model backends. Private, loopback, link-local,
+cloud-metadata and CGNAT destinations are refused by default.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SSRF_ALLOW_PRIVATE_RANGES` | No | – | Comma-separated CIDRs to permit as outbound targets, e.g. `127.0.0.0/8,::1/128,10.0.0.0/8` |
+| `SSRF_DNS_TIMEOUT` | No | `10` | DNS resolution timeout in seconds; a hung resolver fails closed |
+
+Link-local (`169.254.0.0/16`, `fe80::/10`), multicast, IPv6 site-local and the
+cloud-metadata ranges are a **non-negotiable floor** — no allowlist entry can
+make them reachable.
+
+### Self-hosted targets on localhost
+
+Reaching a service on the host (a local Ollama / vLLM / LM Studio model backend,
+or a connector left on its localhost default) requires an explicit opt-in:
+
+```bash
+SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128
+```
+
+**Both entries are required.** `localhost` resolves to `127.0.0.1` *and* `::1` on
+a dual-stack host, and validation fails closed if any resolved address is
+blocked — allowlisting only `127.0.0.0/8` leaves `http://localhost:11434`
+unreachable. Alternatively, use a literal `http://127.0.0.1:11434` URL, which
+skips DNS resolution entirely and needs only `127.0.0.0/8`.
+
+These connectors ship a localhost default `base_url`, so they need the opt-in
+above (or an explicit non-loopback `base_url`) before they will connect:
+
+| Connector | Default `base_url` |
+|-----------|--------------------|
+| Trivy | `http://localhost:8080` |
+| SonarQube | `http://localhost:9000` |
+| 1Password Connect | `http://localhost:8080` |
+| TeamCity | `http://localhost:8111` |
+| Jenkins | `http://localhost:8080` |
+| n8n | `http://localhost:5678` |
+| Grafana | `http://localhost:3000` |
+
+Without the opt-in, these fail with a `ValueError` naming the blocked address and
+the exact variable to set; connector health checks surface the same text as an
+unhealthy detail rather than raising.
+
+### Scope
+
+`SSRF_ALLOW_PRIVATE_RANGES` is **cluster-wide**: it is read by every validation
+call site. Allowlisting loopback for a local model backend also permits a
+tenant-supplied connector `base_url` to target loopback on the same deployment.
+Grant the narrowest CIDRs that work, and prefer a dedicated deployment when
+untrusted tenants share a cluster with localhost services.
+
+---
+
 ## Health Checks
 
 Per-check timeout limits for `/healthz/ready` dependency probes. The global

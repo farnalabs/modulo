@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.ssrf import validate_outbound_url
 
 
 def _parse_teamcity_status(state: str, status: str | None = None) -> CIRunStatus:
@@ -38,6 +39,13 @@ class TeamCityConnector(ConnectorBase):
 
     Authenticates via Bearer token.
     Connects to a configurable base_url (default http://localhost:8111).
+
+    NOTE — that default is loopback, which the outbound SSRF guard blocks unless
+    the operator opts in with ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128``
+    (both entries: ``localhost`` resolves to IPv4 and IPv6 on dual-stack hosts).
+    Without the opt-in, building the client raises ``ValueError`` naming the
+    blocked address, and ``health_check`` reports it as unhealthy. See
+    ``docs/configuration-reference.md`` → "Outbound Egress Guard (SSRF)".
     """
 
     def __init__(self, token: str, base_url: str = "http://localhost:8111") -> None:
@@ -52,6 +60,7 @@ class TeamCityConnector(ConnectorBase):
         return {"Authorization": f"Bearer {self._token}"}
 
     def _client(self) -> httpx.AsyncClient:
+        validate_outbound_url(self._base_url)
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers=self._auth_header(),
@@ -99,6 +108,12 @@ class TeamCityConnector(ConnectorBase):
             return HealthResult(ok=False, detail="TeamCity API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="TeamCity API connection error")
+        except ValueError as exc:
+            # The outbound SSRF guard in ``_client`` rejects a private/internal
+            # base_url by raising — and the default base_url is loopback. A health
+            # check must REPORT that as unhealthy (surfacing the guard's
+            # remediation text), never propagate it.
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def trigger_run(
         self,

@@ -591,3 +591,27 @@ async def test_ci_runner_query_not_implemented(gh_runner):
 async def test_ci_runner_write_not_implemented(gh_runner):
     with pytest.raises(ConnectorTypeError):
         await gh_runner.write(None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# SSRF egress gate — gitlab_ci runner (CHANGES_REQUESTED #3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.real_ssrf_dns
+async def test_gitlab_ci_refuses_blocked_egress(monkeypatch):
+    """The GitLab CI runner (gitlab_ci) must gate a tenant-supplied base_url.
+
+    A tenant pointing ``base_url`` at the cloud-metadata address must not get a
+    usable client, and ``health_check`` must report unhealthy rather than raise.
+    Removing the ``validate_outbound_url`` call from ``GitLabCIRunner._client``
+    makes the first assertion fail — that is the prove-the-fix contract.
+    """
+    monkeypatch.delenv("SSRF_ALLOW_PRIVATE_RANGES", raising=False)
+    runner = GitLabCIRunner(token="glpat_test", base_url="http://169.254.169.254")
+    with pytest.raises(ValueError, match="private/internal"):
+        runner._client()
+
+    result = await runner.health_check()
+    assert result.ok is False
+    assert "169.254.169.254" in result.detail

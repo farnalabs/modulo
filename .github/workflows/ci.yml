@@ -117,10 +117,13 @@ jobs:
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
         # self-contained (no browser/live app), so wire them into CI — a green
         # PR that never exercised the repaired steps would not validate them.
+        # test_eval_scorer_gates registers the llm_judge/regex scorer feature
+        # files (improve-architecture product-map walk), also self-contained.
         shell: bash
         run: |
           uv run --no-build --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
+            tests/bdd/steps/test_eval_scorer_gates.py \
             -q --tb=short --timeout=120 -p no:warnings
       - uses: actions/upload-artifact@v4
         if: always()
