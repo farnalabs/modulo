@@ -306,10 +306,10 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        # 0159_run_idempotency_key (FAR-438) is the current single head, chained off
-        # 0158_pipeline_retry_compensation (FAR-402 P5) which itself chains off main's
+        # 0160_run_idempotency_key (FAR-438) is the current single head, chained off
+        # 0159_pipeline_retry_compensation (FAR-402 P5) which itself chains off main's
         # 0157_add_numeric_check_constraints head.
-        assert heads == ["0159_run_idempotency_key"], f"expected a single head, got {heads}"
+        assert heads == ["0160_run_idempotency_key"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
