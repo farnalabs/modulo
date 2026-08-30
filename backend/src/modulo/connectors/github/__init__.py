@@ -35,6 +35,7 @@ from modulo.connectors.base import (
     ConnectorResult,
     ConnectorType,
     HealthResult,
+    health_check_failure,
 )
 
 _GITHUB_API = "https://api.github.com"
@@ -823,12 +824,12 @@ class GitHubConnector(ConnectorBase):
         except GitHubNetworkError as exc:
             return HealthResult(ok=False, detail=f"GitHub network error: {exc}")
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
         try:
             user_login = (await self._parse_json(r)).get("login", "")
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return health_check_failure(exc)
 
         token_scopes = self._parse_scopes_from_headers(r)
         if is_fine_grained_pat(self._token):

@@ -11,7 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature, require_target_org_role
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    get_db_session,
+    require_feature,
+    require_target_org_role,
+)
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.secret_storage import decode_stored_secret, encrypt_stored_secret
 from modulo.core.email_service import (
@@ -117,7 +122,7 @@ async def admin_get_email_settings(
 
 @router.put(
     "/{org_id}/email-settings",
-    dependencies=[require_feature("email_config")],
+    dependencies=[require_feature("email_config"), Depends(deny_break_glass_mint)],
 )
 @handle_db_errors("admin.email.admin_update_email_settings")
 async def admin_update_email_settings(

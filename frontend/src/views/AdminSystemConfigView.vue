@@ -7,19 +7,19 @@
         type="button"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
         :disabled="loading"
+        data-testid="admin-system-config-refresh"
         @click="loadConfig"
       >
-        Refresh
+        {{ $t('views.AdminSystemConfigView.refresh') }}
       </button>
     </header>
 
-    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-if="error" :message="error" :on-retry="loadConfig" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConfig" />
-
-    <div v-else-if="items.length === 0" class="rounded-lg border p-6 text-center text-sm text-muted-foreground">
-      No configuration entries found.
-    </div>
+    <EmptyState
+      v-else-if="!loading && items.length === 0"
+      :title="$t('views.AdminSystemConfigView.no_configuration_entries_found')"
+    />
 
     <div v-else class="rounded-lg border">
       <table class="w-full">
@@ -30,7 +30,14 @@
             <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.updated') }}</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody v-if="loading">
+          <tr v-for="n in 3" :key="n" class="border-b last:border-0">
+            <td class="px-4 py-3"><div class="h-5 w-24 animate-pulse rounded bg-muted" /></td>
+            <td class="px-4 py-3"><div class="h-16 animate-pulse rounded bg-muted" /></td>
+            <td class="px-4 py-3"><div class="h-4 w-32 animate-pulse rounded bg-muted" /></td>
+          </tr>
+        </tbody>
+        <tbody v-else>
           <tr
             v-for="entry in items"
             :key="entry.key"
@@ -60,8 +67,8 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { Ref, ref, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 
 interface ConfigEntry {
   key: string

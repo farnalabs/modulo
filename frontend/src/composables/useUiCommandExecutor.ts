@@ -667,7 +667,7 @@ function sanitizeExtract(el: Element): string {
   return clone.textContent?.trim() || ''
 }
 
-export function waitForDomStable(timeout = 10000): Promise<void> {
+function waitForDomStable(timeout = 10000): Promise<void> {
   return new Promise((resolve) => {
     const scope = document.querySelector('main') || document.querySelector('[role="main"]') || document.body
     let timer: ReturnType<typeof setTimeout> | null = null

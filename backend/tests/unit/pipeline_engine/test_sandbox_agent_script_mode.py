@@ -1247,7 +1247,7 @@ async def test_e2b_rate_limit_retry_is_cancellable():
     create = AsyncMock(side_effect=RateLimitException("rate limited"))
 
     async def _cancelling_sleep(_seconds: float) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),

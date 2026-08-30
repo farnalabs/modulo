@@ -162,7 +162,7 @@ async def test_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> No
     import modulo.core.audit_logger as al
 
     async def _cancel(*args: Any, **kwargs: Any) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     monkeypatch.setattr(al, "append_audit_event", _cancel)
     monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())

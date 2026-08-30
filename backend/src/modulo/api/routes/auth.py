@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from jwt import InvalidTokenError as JWTError
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -453,29 +454,78 @@ async def _advance_refresh_sequence(
     session: AsyncSession,
     claims: _RefreshClaims,
 ) -> tuple[str | None, int, bool]:
-    """Re-read the LIVE org role (ADR 017) then advance the family sequence."""
+    """Re-check live account status + org role (ADR 017), then advance the family."""
     live_org_role: str | None = None
+    new_sequence = 0
+    theft_detected = False
+    account_denied = False
     async with session.begin():
-        # ADR 017: check live membership BEFORE advancing the token-family
-        # sequence - a removed member's repeated refresh attempts must not
-        # keep advancing sequences needlessly.
-        if claims.org_id:
-            live_org_role = await resolve_role_from_membership(
-                session,
-                claims.account_id,
-                claims.org_id,
-            )
-        if claims.org_id and live_org_role is None:
+        # FAR-463 defense-in-depth: re-read ACCOUNT.ACTIVE on every refresh.
+        # Deactivation must kill outstanding sessions exactly like membership
+        # removal does. The caller-bound deactivate_break_glass blacklists only
+        # families scoped to the deactivating admin's orgs, so families minted
+        # under other orgs (or with NULL organisation_id) can outlive
+        # deactivation - and removed-member semantics cannot catch them because
+        # their memberships were left untouched. This check applies to ALL
+        # principals, including system admins without memberships (they
+        # authenticate by account too).
+        #
+        # Ordered BEFORE the membership read: equally decisive, cheaper (single
+        # PK lookup), and ADR-017 membership-not-found semantics stay intact
+        # for removed members whose accounts remain active.
+        account = await get_account_by_id(session, claims.account_uuid)
+        # getattr with a falsy default: a row shape that cannot report its
+        # active flag (missing row handled via the None check; inert test
+        # doubles or a partially-loaded row) is treated as INACTIVE and denied
+        # - fail-closed, matching authenticate_db_user's not-account-active
+        # semantics at login.
+        if account is None or getattr(account, "active", False) is not True:
             _log.warning(
-                "auth.refresh_membership_not_found",
-                extra={"account_id": claims.account_id, "org_id": claims.org_id},
+                "auth.refresh_account_inactive",
+                extra={"account_id": claims.account_id},
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Account no longer has access to this organisation",
+            # Inline correlated UPDATE (not blacklist_family): same predicate
+            # (family_id AND account_id - never crosses accounts), same flags,
+            # same transaction - expressed as a bulk statement so the denial
+            # persists atomically. Account-bound like the logout blacklisting.
+            await session.execute(
+                update(TokenFamily)
+                .where(
+                    TokenFamily.family_id == claims.family_uuid,
+                    TokenFamily.account_id == claims.account_uuid,
+                )
+                .values(is_blacklisted=True, blacklisted_at=datetime.now(UTC))
             )
-        new_sequence, theft_detected = await advance_sequence(
-            session, claims.family_uuid, claims.sequence, claims.account_uuid
+            # Flag-and-raise-after-commit: raising inside the transaction would
+            # roll back the blacklist above; committing it first also means a
+            # later reactivation cannot resurrect pre-deactivation tokens.
+            account_denied = True
+        else:
+            # ADR 017: check live membership BEFORE advancing the token-family
+            # sequence - a removed member's repeated refresh attempts must not
+            # keep advancing sequences needlessly.
+            if claims.org_id:
+                live_org_role = await resolve_role_from_membership(
+                    session,
+                    claims.account_id,
+                    claims.org_id,
+                )
+            if claims.org_id and live_org_role is None:
+                _log.warning(
+                    "auth.refresh_membership_not_found",
+                    extra={"account_id": claims.account_id, "org_id": claims.org_id},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account no longer has access to this organisation",
+                )
+            new_sequence, theft_detected = await advance_sequence(
+                session, claims.family_uuid, claims.sequence, claims.account_uuid
+            )
+    if account_denied:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account no longer has access to this organisation",
         )
     return live_org_role, new_sequence, theft_detected
 
@@ -675,7 +725,7 @@ async def _resolve_live_org_role(
             "permission.membership_not_found",
             extra={"account_id": account_id, "org_id": org_id, "username": username},
         )
-        raise OrganisationMembershipNotFound()
+        raise OrganisationMembershipNotFound
     return live_org_role
 
 

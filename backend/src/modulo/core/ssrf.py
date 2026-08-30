@@ -34,15 +34,23 @@ _log = logging.getLogger(__name__)
 
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-# Extra ranges not covered by ipaddress.is_private (cloud metadata, CGNAT).
-# NOSONAR S1313: these are documented reserved/private network blocks that must
-# be BLOCKED for outbound requests by this SSRF guard — they are destination
-# filters, never connection endpoints, so hardcoding them is required and safe.
+# SSRF guard: blocks outbound requests to private/reserved/link-local/cloud-
+# metadata ranges. The literals below are DESTINATION filters that must be
+# blocked — never connection endpoints — so hardcoding them is required and
+# safe (S1313 specifically exempts such documented network blocks). NOSONAR
+# marks each ``ip_network`` literal which is not a client-configurable
+# connection address.
 _EXCLUDED_NETWORKS = [
+    # 169.254.0.0/16 is the IPv4 link-local block (AWS EC2 IMDS, GCP, Azure
+    # instance metadata) — the classic SSRF pivot target. NOSONAR.
     ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR - AWS/GCP/Azure link-local metadata
+    # 100.64.0.0/10 is the CGNAT shared-address space (RFC 6598) — reachable
+    # only within a private network but never a safe public egress target.
     ipaddress.ip_network("100.64.0.0/10"),  # NOSONAR - CGNAT
+    # 198.18.0.0/15 is the benchmarking/reserved range (RFC 2544/6815).
     ipaddress.ip_network("198.18.0.0/15"),  # NOSONAR - benchmarking
     ipaddress.ip_network("0.0.0.0/8"),  # NOSONAR - current network
+    # 100.100.100.200/32 is the Alibaba Cloud (Aliyun) metadata endpoint.
     ipaddress.ip_network("100.100.100.200/32"),  # NOSONAR - Aliyun metadata
 ]
 

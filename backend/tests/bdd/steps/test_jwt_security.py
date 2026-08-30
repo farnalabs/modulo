@@ -61,6 +61,26 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
     ctx["response"] = resp
 
 
+def _active_account() -> MagicMock:
+    """An active account mock for the FAR-463 refresh-time active check.
+
+    The refresh endpoint now re-reads ACCOUNT.ACTIVE on every call; under the
+    fully-mocked BDD session get_account_by_id would otherwise return a bare
+    MagicMock whose .active is not exactly True and trip the fail-closed deny.
+    """
+    account = MagicMock()
+    account.active = True
+    account.email = "user@example.com"
+    return account
+
+
+def _patch_active_account() -> Any:
+    return patch(
+        "modulo.api.routes.auth.get_account_by_id",
+        new=AsyncMock(return_value=_active_account()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Token-authenticated TestClient (overrides DB session but NOT get_current_user)
 # ---------------------------------------------------------------------------
@@ -293,6 +313,7 @@ def refresh_with_stored_token(request: Any, ctx: dict[str, Any], token_client: T
     refresh_token = ctx.get("login_refresh_token")
     time_mod.sleep(1.0)
     with (
+        _patch_active_account(),
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
@@ -358,6 +379,7 @@ def refresh_token_seq0(request: Any, ctx: dict[str, Any]) -> None:
 def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("theft_refresh_token")
     with (
+        _patch_active_account(),
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
@@ -372,6 +394,7 @@ def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) ->
 def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("theft_refresh_token")
     with (
+        _patch_active_account(),
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):

@@ -1222,6 +1222,7 @@ dev = [
     { name = "semgrep" },
     { name = "testcontainers" },
     { name = "types-jmespath" },
+    { name = "types-jsonschema" },
     { name = "types-passlib" },
     { name = "types-pyyaml" },
     { name = "vulture" },
@@ -1341,6 +1342,7 @@ dev = [
     { name = "semgrep", specifier = ">=1.70.0" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.14.2" },
     { name = "types-jmespath", specifier = ">=1.1.0.20260508" },
+    { name = "types-jsonschema", specifier = ">=4.26.0" },
     { name = "types-passlib", specifier = ">=1.7.7" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260518" },
     { name = "vulture", specifier = ">=2.16" },
@@ -5733,6 +5735,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9b/a6/946e666f3830ef81506fad6d453b7331cf78003f7abaaaa52d2f51f16646/types_jmespath-1.1.0.20260508.tar.gz", hash = "sha256:6301cdc0c8f4fd5c48f04bdc89a45d79fe102ef9a89d9c9564d111fbebaaf855", size = 10772, upload-time = "2026-05-08T04:47:41.692Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/86/01434f1d59365e8a78bb0ce349e1da1473c3a580c1afc69b70eb8fbaf97d/types_jmespath-1.1.0.20260508-py3-none-any.whl", hash = "sha256:12b644fdea5100e36b391cfdd540d1d11a430bc2492a624d9a72d699f7544762", size = 11516, upload-time = "2026-05-08T04:47:40.634Z" },
+]
+
+[[package]]
+name = "types-jsonschema"
+version = "4.26.0.20260518"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "referencing" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/46/73b6a5d61a61015c4248030a8cb07e5bdddb4041430fae9e585a68692578/types_jsonschema-4.26.0.20260518.tar.gz", hash = "sha256:e1dd53dc97a64f5eccdd6fa9839666e09bb500a8ebba2db6fdaf1789faea81a6", size = 16638, upload-time = "2026-05-18T06:06:44.106Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/d5/134f8a147dcecda10db7f60cfc6af0578a25a5c53c87b3907a64385e0184/types_jsonschema-4.26.0.20260518-py3-none-any.whl", hash = "sha256:30b30a518c7fe335df85c919fcbcc631b69c03d4a4b5b632fa916bea03065307", size = 16072, upload-time = "2026-05-18T06:06:43.264Z" },
 ]
 
 [[package]]

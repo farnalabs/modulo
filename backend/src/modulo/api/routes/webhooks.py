@@ -243,7 +243,7 @@ async def receive_webhook(
             if hmac_secret is not None:
                 ts = verify_timestamp(modulo_timestamp)
                 if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                    raise HmacValidationError()
+                    raise HmacValidationError
             else:
                 _log.warning(
                     "webhooks.receive_webhook: unauthenticated delivery accepted "
@@ -482,7 +482,7 @@ async def replay_webhook(
                 cfg = trigger.config_json or {}
                 hmac_secret_raw: str | None = cfg.get("hmac_secret")
                 if hmac_secret_raw is None:
-                    raise HmacValidationError()
+                    raise HmacValidationError
                 try:
                     hmac_secret = decode_stored_secret(hmac_secret_raw, get_settings().fernet_key)
                 except Exception:
@@ -498,7 +498,7 @@ async def replay_webhook(
                 if stored is None:
                     raise ReplayNotFoundError(event_id)
                 if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                    raise HmacValidationError()
+                    raise HmacValidationError
 
             try:
                 # Pause pre-check AFTER principal auth / trigger load, BEFORE the

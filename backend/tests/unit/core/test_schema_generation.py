@@ -202,7 +202,7 @@ class TestSchemaGenerationService:
                 return "test/timeout"
 
             async def invoke(self, messages: list, **kwargs: object) -> object:
-                raise TimeoutError()
+                raise TimeoutError
 
             def stream(self, messages: list, **kwargs: object) -> object:
                 raise NotImplementedError

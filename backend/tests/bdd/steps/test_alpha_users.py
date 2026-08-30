@@ -135,7 +135,11 @@ def token_encodes_org(request):
 
 @when("I use the refresh_token to get a new access_token")
 def use_refresh_token(request, client):
+    active_account = MagicMock()
+    active_account.active = True
+    active_account.email = "user@example.com"
     with (
+        patch("modulo.api.routes.auth.get_account_by_id", new_callable=AsyncMock, return_value=active_account),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
         patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False)),
     ):

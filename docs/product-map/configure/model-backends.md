@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/core/model_backend_hub/
   - backend/src/modulo/model_backends/
   - backend/src/modulo/db/crud/model_backend.py
+  - backend/src/modulo/db/models/model_backend.py
   - frontend/src/views/AdminModelBackendsView.vue
   - frontend/src/views/setup/
 unit-tests:
@@ -17,8 +18,21 @@ unit-tests:
   - backend/tests/unit/model_backends/
 bdd:
   - backend/tests/bdd/features/model_backends/
+  - backend/tests/bdd/features/model_backends/backend_crud.feature
+  - backend/tests/bdd/features/model_backends/backend_selection.feature
+  - backend/tests/bdd/features/model_backends/backend_error_handling.feature
+  - backend/tests/bdd/features/model_backends/backend_health_check.feature
+  - backend/tests/bdd/features/model_backends/health_check.feature
+  - backend/tests/bdd/features/model_backends/configure.feature
+  - backend/tests/bdd/features/model_backends/hub.feature
+  - backend/tests/bdd/features/model_backends/rate_limiting.feature
+  - backend/tests/bdd/features/model_backends/rotation.feature
+  - backend/tests/bdd/steps/test_model_backends.py
+  - backend/tests/bdd/steps/test_model_backend_hub.py
+  - backend/tests/bdd/steps/test_alpha_model_backends.py
 depends-on:
   - feat-environments
+  - feat-auth
 status: covered
 ---
 
@@ -98,4 +112,4 @@ with an org default and fallback chains, and served through the
   `api/routes/model_backends.py`, `core/model_backend_hub/`,
   `model_backends/base.py`, `db/crud/model_backend.py`, the nine
   `model_backends/` BDD feature files and the hub/failover/endpoint unit suites.
-  Status: covered.
+   Status: covered.

@@ -3,9 +3,9 @@
 
     <div class="page-wide">
     <header class="flex items-center justify-between">
-      <PageHeader title="Connectors" subtitle="Manage connector instances for data source integration" />
+      <PageHeader :title="$t('views.AdminConnectorsView.connectors')" :subtitle="$t('views.AdminConnectorsView.manage_connector_instances_for_data_source_integration')" />
       <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-connectors-add" @click="openAddForm">
-        Add Connector
+        {{ $t('views.AdminConnectorsView.add_connector') }}
       </Button>
     </header>
 
@@ -24,16 +24,16 @@
                 v-model="formData.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="My connector"
+                :placeholder="$t('views.AdminConnectorsView.name_placeholder')"
                 data-testid="admin-connectors-name-input"
               />
             </div>
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
               <Select
-  aria-label="Type"
+  :aria-label="$t('views.AdminConnectorsView.type')"
   v-model="formData.connector_type"
-  placeholder="PostgreSQL"
+  :placeholder="$t('views.AdminConnectorsView.type_placeholder')"
   data-testid="admin-connectors-type-select"
   class="w-full"
   :options="connectorTypes.map(ct => ({ value: ct.id, label: ct.display_name }))"
@@ -51,7 +51,7 @@
                 v-model="formData.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="Optional description"
+                :placeholder="$t('views.AdminConnectorsView.description_placeholder')"
                 data-testid="admin-connectors-description-input"
               />
             </div>
@@ -68,7 +68,7 @@
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
               <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-submit">
-                {{ saving ? 'Creating...' : 'Create' }}
+                {{ saving ? $t('views.AdminConnectorsView.creating') : $t('views.AdminConnectorsView.create') }}
               </Button>
               <button
                 type="button"
@@ -76,7 +76,7 @@
                 data-testid="admin-connectors-cancel"
                 @click="closeForm"
               >
-                Cancel
+                {{ $t('views.AdminConnectorsView.cancel') }}
               </button>
             </div>
           </div>
@@ -86,7 +86,7 @@
       <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">{{ $t('views.AdminConnectorsView.no_connectors_configured') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
-          Add a connector to integrate with external data sources.
+          {{ $t('views.AdminConnectorsView.add_connector_hint') }}
         </p>
       </div>
 
@@ -124,7 +124,7 @@
                     class="h-1.5 w-1.5 rounded-full"
                     :class="connector.enabled ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ connector.enabled ? 'Enabled' : 'Disabled' }}
+                  {{ connector.enabled ? $t('views.AdminConnectorsView.enabled') : $t('views.AdminConnectorsView.disabled') }}
                 </span>
               </td>
               <td class="table-cell-numeric">
@@ -208,7 +208,7 @@
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
               <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-save">
-                {{ saving ? 'Saving...' : 'Save' }}
+                {{ saving ? $t('views.AdminConnectorsView.saving') : $t('views.AdminConnectorsView.save') }}
               </Button>
               <button
                 type="button"
@@ -216,7 +216,7 @@
                 data-testid="admin-connectors-edit-cancel"
                 @click="closeEditForm"
               >
-                Cancel
+                {{ $t('views.AdminConnectorsView.cancel') }}
               </button>
             </div>
           </div>
@@ -224,18 +224,18 @@
       </div>
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
+        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminConnectorsView.delete_connector_confirm', { name: deleteConfirmName }) }}</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
-            {{ deleting ? 'Deleting...' : 'Delete' }}
+            {{ deleting ? $t('views.AdminConnectorsView.deleting') : $t('views.AdminConnectorsView.delete') }}
           </Button>
           <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-connectors-delete-cancel"
             @click="deleteConfirmConnectorId = null"
           >
-            Cancel
+            {{ $t('views.AdminConnectorsView.cancel') }}
           </button>
         </div>
         <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -259,6 +259,9 @@ import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const planStore = usePlanStore()
 
@@ -472,12 +475,12 @@ function connectorActions(connector: ConnectorItem) {
   return [
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('views.AdminConnectorsView.edit'),
       onClick: () => openEditForm(connector),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.AdminConnectorsView.delete'),
       onClick: () => confirmDelete(connector),
       danger: true,
     },

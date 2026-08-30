@@ -24,6 +24,7 @@ def _make_session_mock() -> MagicMock:
     exec_result.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=exec_result)
     session.flush = AsyncMock()
+    session.get = AsyncMock(return_value=None)
     return session
 
 

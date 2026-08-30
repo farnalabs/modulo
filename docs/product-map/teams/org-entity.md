@@ -74,12 +74,15 @@ authorization cleanup.
   referential integrity on the creator field.
 - **No org-CRUD BDD feature file** — system-admin org CRUD is unit-tested only; BDD
   covers deletion/scoping/RLS/multi-backend.
-- **No `organisation exists` shared BDD step** — only defined in the library feature
-  conftest, not as a reusable fixture.
 - **No E2E smoke test for `AdminOrgSettingsView`** — vitest coverage only.
 
 ## QA History
 
+- 2026-08-29: **improve-architecture (product-map walk)** — removed the stale
+  "no ``organisation exists`` shared BDD step" Known Gap: the step
+  ``Given the organisation exists`` is now defined once in the top-level
+  ``tests/bdd/conftest.py`` (shared by every BDD module) and reused by the
+  library and remy feature files.
 - 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 017/018
   (centralized-authorization cleanup). Re-verified model columns, the RLS exclusion, the

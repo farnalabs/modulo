@@ -393,6 +393,11 @@ def _coerce_timeout(value: object) -> float | None:
     return parsed
 
 
+def _mark_failed(result: dict[str, Any], *, status_code: int | None = None, error: str | None = None) -> None:
+    """Record a failed per-URL delivery outcome on ``result`` (display value only)."""
+    result.update({"status": "failed", "status_code": status_code, "error": error})
+
+
 async def _deliver_to_urls(
     urls: list[str],
     body: dict[str, Any] | list[Any],
@@ -435,13 +440,7 @@ async def _deliver_to_urls(
                     display_url,
                     invalid_reason,
                 )
-                result.update(
-                    {
-                        "status": "failed",
-                        "status_code": None,
-                        "error": f"invalid_webhook_url: {invalid_reason}",
-                    }
-                )
+                _mark_failed(result, error=f"invalid_webhook_url: {invalid_reason}")
                 results.append(result)
                 continue
             last_resp_or_exc: httpx.Response | Exception | None = None
@@ -477,13 +476,7 @@ async def _deliver_to_urls(
                         delay = min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
                         await asyncio.sleep(delay)
                         continue
-                    result.update(
-                        {
-                            "status": "failed",
-                            "status_code": resp.status_code,
-                            "error": resp.text[:200],
-                        }
-                    )
+                    _mark_failed(result, status_code=resp.status_code, error=resp.text[:200])
                     break
                 except (httpx.RequestError, TypeError) as exc:
                     _log.warning(
@@ -500,18 +493,12 @@ async def _deliver_to_urls(
                         await asyncio.sleep(delay)
             else:
                 if isinstance(last_resp_or_exc, Exception):
-                    result.update({"status": "failed", "status_code": None, "error": str(last_resp_or_exc)})
+                    _mark_failed(result, error=str(last_resp_or_exc))
                 elif last_resp_or_exc is not None:
                     err_text = getattr(last_resp_or_exc, "text", None) or "max_retries_exceeded"
-                    result.update(
-                        {
-                            "status": "failed",
-                            "status_code": last_resp_or_exc.status_code,
-                            "error": err_text[:200],
-                        }
-                    )
+                    _mark_failed(result, status_code=last_resp_or_exc.status_code, error=err_text[:200])
                 else:
-                    result.update({"status": "failed", "error": "max_retries_exceeded"})
+                    _mark_failed(result, error="max_retries_exceeded")
             results.append(result)
     return results
 
