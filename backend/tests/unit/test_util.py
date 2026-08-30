@@ -47,6 +47,7 @@ class TestIsValidHttpUrl:
             "https://x.com",
             "HTTP://x.com",
             " http://x.com",
+            "  https://x.com  ",
         ],
     )
     def test_scheme_with_netloc_accepted(self, url: str) -> None:

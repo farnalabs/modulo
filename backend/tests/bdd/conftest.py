@@ -108,6 +108,40 @@ def make_mock_session() -> AsyncMock:
     return session
 
 
+def make_mock_system_session() -> AsyncMock:
+    """System-session mock for pre-auth SSO provider resolution.
+
+    The system session (``modulo_system`` role) is only used by the SSO routes
+    to read instance-global IdP config from the ``sso_providers`` table. It must
+    return NO rows so the resolution falls through to the env-var provider
+    config (which is what the SSO BDD scenarios configure) — a truthy MagicMock
+    here would make the code think a DB provider exists and try to parse
+    MagicMock SAML metadata.
+    """
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    empty_row = AsyncMock()
+    empty_row.scalar_one_or_none = MagicMock(return_value=None)
+    empty_row.scalar_one = AsyncMock(return_value=0)
+    empty_row.scalar = AsyncMock(return_value=0)
+    empty_scalars = MagicMock()
+    empty_scalars.all = MagicMock(return_value=[])
+    empty_row.scalars = MagicMock(return_value=empty_scalars)
+    empty_row.first = MagicMock(return_value=None)
+    empty_row.all = MagicMock(return_value=[])
+    session.execute.return_value = empty_row
+    session.scalar = AsyncMock(return_value=0)
+    session.scalar_one = AsyncMock(return_value=0)
+    return session
+
+
+async def _system_session_override() -> AsyncGenerator[AsyncMock, None]:
+    yield make_mock_system_session()
+
+
 def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p = MagicMock()
     p.id = kwargs.get("id", uuid.uuid4())
@@ -211,7 +245,9 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
+    from unittest.mock import AsyncMock, patch
+
+    from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
     from modulo.api.main import app
     from modulo.settings import get_settings
 
@@ -220,10 +256,36 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = _system_session_override
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    yield TestClient(app)
 
-    app.dependency_overrides.clear()
+    sso_patches = [
+        patch(
+            "modulo.api.routes.sso.list_enabled_oidc_providers",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "modulo.api.routes.sso.get_enabled_saml_provider",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.auth.sso.get_enabled_saml_provider",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.auth.sso.get_provider_by_provider_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ]
+    for p in sso_patches:
+        p.start()
+
+    try:
+        yield TestClient(app)
+    finally:
+        for p in sso_patches:
+            p.stop()
+        app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +501,15 @@ def _bdd_get_verify_chain_broken(client, request) -> None:
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+    from unittest.mock import patch
+
+    from modulo.api.dependencies import (
+        _get_engine,
+        _get_session_factory,
+        get_db_session,
+        get_plan_context,
+        get_system_db_session,
+    )
     from modulo.api.main import app
     from modulo.auth.dependencies import (
         get_current_tenant_user,
@@ -470,6 +540,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
 
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = _system_session_override
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[_get_session_factory] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = _override_plan_context
@@ -482,9 +553,40 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
         app.dependency_overrides[get_current_tenant_user] = _override_tenant
         app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
 
-    yield TestClient(app)
+    # The SSO routes resolve pre-auth provider config through the sso_providers
+    # DB table (system session) first, then the app session, then the env-var
+    # fallback. The BDD SQLite DB has no sso_providers rows, so patch the crud
+    # reads (at their use sites) to return "no DB providers" — this mirrors the
+    # production fallback to env-var SSO config (exactly what these scenarios
+    # configure) instead of letting the generic mock session return a truthy
+    # MagicMock that crashes SAML metadata parsing.
+    sso_patches = [
+        patch(
+            "modulo.api.routes.sso.list_enabled_oidc_providers",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "modulo.api.routes.sso.get_enabled_saml_provider",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.auth.sso.get_enabled_saml_provider",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.auth.sso.get_provider_by_provider_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ]
+    for p in sso_patches:
+        p.start()
 
-    app.dependency_overrides.clear()
+    try:
+        yield TestClient(app)
+    finally:
+        for p in sso_patches:
+            p.stop()
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -920,15 +1022,19 @@ def _shared_teams_client(state: dict[str, Any], mock_session) -> Any:
     steps build their own client configured for the current org role.
     """
     role = state.get("org_role", "admin")
-    return next(
-        _make_test_client(
-            mock_session,
-            username="testuser",
-            organisation_id=ORG_ID,
-            account_id=USER_ID,
-            org_role=role,
-        )
+    gen = _make_test_client(
+        mock_session,
+        username="testuser",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role=role,
     )
+    # Keep the generator alive for the scenario: its ``finally`` clears
+    # ``app.dependency_overrides``, so discarding it (via ``next(...)``) lets the
+    # GC run the cleanup before the request is made, dropping the auth override
+    # and making every call fall through to real auth (401).
+    state.setdefault("_client_generators", []).append(gen)
+    return next(gen)
 
 
 @when(

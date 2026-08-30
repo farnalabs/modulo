@@ -308,7 +308,7 @@ class TestMigrationBackfillGrace:
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
         # 0160_run_idempotency_key (FAR-438) is the current single head, chained off
         # 0159_pipeline_retry_compensation (FAR-402 P5) which itself chains off main's
-        # 0157_add_numeric_check_constraints head.
+        # 0158_sso_provider_id head.
         assert heads == ["0160_run_idempotency_key"], f"expected a single head, got {heads}"
 
 

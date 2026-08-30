@@ -577,6 +577,80 @@ def get_or_create_session_factory(
     return _session_factory
 
 
+_SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
+_SYSTEM_SESSION_FACTORY: async_sessionmaker[AsyncSession] | None = None
+
+
+def get_or_create_system_engine() -> AsyncEngine:
+    """Return the process-global system engine (``modulo_system`` role, BYPASSRLS).
+
+    Used for cross-org reads that must bypass per-org RLS — e.g. pre-auth SSO
+    provider resolution (provider config is instance-global, not tenant data).
+    Mirrors ``saq_worker._get_system_async_engine``: when
+    ``MODULO_SYSTEM_DATABASE_URL`` is set, builds a dedicated engine connected
+    as the ``modulo_system`` role (LOGIN, BYPASSRLS); otherwise falls back to
+    the regular engine with a warning. The fallback runs as ``modulo_app``
+    (NOBYPASSRLS), so an RLS-scoped read returns zero rows — callers must treat
+    an empty result as a signal to fall back to a scoped app read.
+    """
+    global _SYSTEM_ASYNC_ENGINE
+    if _SYSTEM_ASYNC_ENGINE is None:
+        settings = get_settings()
+        if settings.modulo_system_database_url:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                settings.modulo_system_database_url,
+                pool_pre_ping=True,
+                pool_size=20,
+                max_overflow=10,
+                pool_recycle=3600,
+                pool_timeout=30,
+                connect_args={"ssl": False, "statement_cache_size": 0, "timeout": 10},
+            )
+        else:
+            logger.warning(
+                "api.system_engine_fallback",
+                extra={
+                    "reason": (
+                        "MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider "
+                        "resolution falls back to a scoped app read (single-org)"
+                    )
+                },
+            )
+            _SYSTEM_ASYNC_ENGINE = get_or_create_engine(settings)
+    return _SYSTEM_ASYNC_ENGINE
+
+
+def get_or_create_system_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the process-global system session factory (``modulo_system`` role)."""
+    global _SYSTEM_SESSION_FACTORY
+    if _SYSTEM_SESSION_FACTORY is None:
+        _SYSTEM_SESSION_FACTORY = async_sessionmaker(
+            get_or_create_system_engine(),
+            expire_on_commit=False,
+            autobegin=False,
+        )
+    return _SYSTEM_SESSION_FACTORY
+
+
+def _get_system_session_factory() -> async_sessionmaker[AsyncSession]:
+    return get_or_create_system_session_factory()
+
+
+async def get_system_db_session(
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_system_session_factory),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a system (``modulo_system``, BYPASSRLS) AsyncSession for global reads.
+
+    Transaction management is left to the caller (mirrors ``get_db_session``).
+    The system role sees all orgs; pre-auth SSO route resolution relies on it so
+    provider resolution is instance-global instead of pinned to the first org.
+    """
+    async with factory() as session:
+        yield session
+
+
 def _get_engine(settings: Settings = Depends(get_settings)) -> AsyncEngine:
     return get_or_create_engine(settings)
 
