@@ -149,8 +149,8 @@ def read_checksums(extract_dir: str) -> dict[str, str]:
         return {}
     checksums: dict[str, str] = {}
     with open(cs_file) as f:
-        for line in f:
-            line = line.strip()
+        for raw_line in f:
+            line = raw_line.strip()
             if not line:
                 continue
             parts = line.split("  ", 1)
@@ -278,8 +278,8 @@ def restore_config(extract_dir: str) -> None:
     print(f"  Found: {secrets_path}")
     print("  To apply, source or copy the values:")
     with open(secrets_path) as f:
-        for line in f:
-            line = line.strip()
+        for raw_line in f:
+            line = raw_line.strip()
             if line and not line.startswith("#"):
                 print(f"    export {line}")
 

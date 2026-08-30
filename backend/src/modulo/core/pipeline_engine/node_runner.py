@@ -4487,11 +4487,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # Persist the real sandbox id so the heartbeat-lost path
         # (run_executor_with_watchdog) can kill the sandbox by id.
         await _store_dispatch_marker_sandbox(_sandbox_id)
-        for path, content in context_files.items():
-            if path.endswith(".b64"):
-                content = base64.b64decode(content).decode()
-                path = path[:-4]
-            await asyncio.wait_for(sandbox.files.write(path, content), timeout=_SANDBOX_IO_TIMEOUT)
+        for raw_path, raw_content in context_files.items():
+            write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
+            write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
+            await asyncio.wait_for(sandbox.files.write(write_path, write_content), timeout=_SANDBOX_IO_TIMEOUT)
 
         # FAR-296 mode split: llm mode writes the rendered prompt to
         # prompt.md; script mode writes the FULL run input (no 10KB

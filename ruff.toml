@@ -33,6 +33,14 @@ select = [
     "FA",
     "NPY",
     "RUF100",
+    # Second wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.15.20: run `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the backend/pyproject.toml gate.
+    "PLC3002", "PLR0206", "PLR1711", "PLR1722", "PLR5501",
+    "PLW0120", "PLW0127", "PLW0131", "PLW0211", "PLW0642",
+    "PLW2901",
+    "PYI025",
+    "UP032",
 ]
 ignore = [
     "S101",

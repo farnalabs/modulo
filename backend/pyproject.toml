@@ -192,12 +192,20 @@ select = [
     # requires, plus zero-violation families that would otherwise drift in.
     "G001", "G002", "G003", "G004", "G201",
     "PERF101", "PERF203", "PERF402", "PERF403",
-    "PT020", "PT021",
+    "PT020", "PT021", "PT027",
     "Q000", "Q003",
     "ICN",
     "FA",
     "NPY",
     "RUF100",
+    # --- Second wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.15.20: `ruff check . --extend-select <codes>
+    # --statistics`). These mirror the repo-root ruff.toml gate. ---
+    "PLC3002", "PLR0206", "PLR1711", "PLR1722", "PLR5501",
+    "PLW0120", "PLW0127", "PLW0131", "PLW0211", "PLW0642",
+    "PLW2901",
+    "PYI025",
+    "UP032",
 ]
 ignore = [
     "S101",     # assert allowed in tests
