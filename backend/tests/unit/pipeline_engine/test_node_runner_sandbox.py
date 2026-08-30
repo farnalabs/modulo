@@ -1680,8 +1680,8 @@ def test_stall_detector_disable_removes_channel():
 def test_stall_detector_no_channels_never_stalls():
     """With zero enabled channels last_activity() returns now, so the watchdog
     never fires (belt-and-braces against a fully-disabled node)."""
-    d = _StallDetector()
-    assert d.last_activity() >= time.monotonic() - 1.0
+    d = _StallDetector(now=lambda: 1234.5)
+    assert d.last_activity() == 1234.5
 
 
 def test_delta_ratio_semantics():
@@ -1925,16 +1925,22 @@ def test_heartbeat_disabled_but_agent_output_keeps_run_alive():
     Asserted via the detector's liveness semantics: repeated ``output`` touches
     keep ``last_activity()`` fresh, so the watchdog's stale-check never fires.
     """
-    detector = _StallDetector()
+    now: list[float] = [100.0]
+
+    def _clock() -> float:
+        return now[0]
+
+    detector = _StallDetector(now=_clock)
     detector.enable("output")
     assert "heartbeat" not in detector.enabled  # strict mode
 
     for _ in range(5):
+        now[0] += 10.0
         detector.touch("output")
 
-    # The output channel is continually refreshed -> last_activity tracks now,
-    # never going stale.
-    assert time.monotonic() - detector.last_activity() < 1.0
+    # The output channel is continually refreshed -> last_activity tracks the
+    # freshest touch (== now), never going stale.
+    assert detector.last_activity() == now[0]
 
 
 def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
@@ -1946,7 +1952,12 @@ def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
     successful get_info (without any output growth) keeps ``last_activity()``
     fresh, so the watchdog never treats the run as stalled.
     """
-    detector = _StallDetector()
+    now: list[float] = [0.0]
+
+    def _clock() -> float:
+        return now[0]
+
+    detector = _StallDetector(now=_clock)
     detector.enable("output")
     detector.enable("heartbeat")
     assert "heartbeat" in detector.enabled  # default enabled
@@ -1954,9 +1965,10 @@ def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
     # Simulate many silent drain ticks that only refresh the heartbeat (get_info
     # success, no output growth).
     for _ in range(50):
+        now[0] += 1.0
         detector.touch("heartbeat")
         # last_activity() is the max across enabled channels and stays fresh.
-        assert time.monotonic() - detector.last_activity() < 1.0
+        assert detector.last_activity() == now[0]
 
 
 # ---------------------------------------------------------------------------
