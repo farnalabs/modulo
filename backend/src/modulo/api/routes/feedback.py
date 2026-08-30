@@ -291,24 +291,8 @@ async def list_feedback_inbox(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
-    date_from_dt: datetime | None = None
-    date_to_dt: datetime | None = None
-    if date_from:
-        try:
-            date_from_dt = datetime.fromisoformat(date_from).replace(tzinfo=UTC)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid date_from format: '{date_from}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            ) from None
-    if date_to:
-        try:
-            date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid date_to format: '{date_to}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            ) from None
+    date_from_dt = _parse_optional_iso(date_from, "date_from")
+    date_to_dt = _parse_optional_iso(date_to, "date_to")
 
     try:
         async with session.begin():
@@ -359,6 +343,19 @@ async def list_feedback_inbox(
         "page": result["page"],
         "page_size": result["page_size"],
     }
+
+
+def _parse_optional_iso(value: str | None, field: str) -> datetime | None:
+    """Parse an optional ISO-8601 query value, mapping bad input to a 422."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).replace(tzinfo=UTC)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid {field} format: '{value}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
+        ) from None
 
 
 async def _build_node_name_map(session: AsyncSession, items: list[Any]) -> dict[str, str]:
@@ -874,6 +871,38 @@ async def get_inbox_item(
     return _serialise_record(record, pipeline_name=pipeline_name)
 
 
+async def _spawn_correction_run(
+    mgr: FeedbackManager,
+    record: FeedbackRecord,
+    record_id: uuid.UUID,
+) -> tuple[str, str]:
+    """Spawn a correction run, returning ``(run_id, transitioned_to)``."""
+    if not record.run_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Feedback has no associated run — cannot create correction run",
+        )
+
+    try:
+        new_run_id = await mgr.spawn_correction_run(record_id)
+    except FeedbackRecordNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except FeedbackRecordRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except (InvalidTransitionError, ConcurrentModificationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return str(new_run_id), "correcting"
+
+
 async def _apply_review_action(
     mgr: FeedbackManager,
     session: AsyncSession,
@@ -896,32 +925,7 @@ async def _apply_review_action(
         record = await mgr.update_status(record_id, "dismissed")
         transitioned_to = "dismissed"
     elif req.action == "create_correction_run":
-        if not record.run_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Feedback has no associated run — cannot create correction run",
-            )
-
-        try:
-            new_run_id = await mgr.spawn_correction_run(record_id)
-        except FeedbackRecordNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except FeedbackRecordRunNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except (InvalidTransitionError, ConcurrentModificationError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
-            ) from exc
-
-        correction_run_id = str(new_run_id)
-        transitioned_to = "correcting"
+        correction_run_id, transitioned_to = await _spawn_correction_run(mgr, record, record_id)
 
     if req.annotation is not None:
         await session.execute(

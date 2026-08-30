@@ -113,6 +113,39 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     return LicenseStatusResponse(has_license=False, tier="community")
 
 
+async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusResponse | None:
+    """Best-effort Redis cache read for an org's license status."""
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        cached = await redis.get(f"license:{org_id}")
+        if cached:
+            return LicenseStatusResponse(**json.loads(cached))
+    except Exception:
+        logger.warning("license.cache_read_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+    return None
+
+
+async def _write_license_cache(settings: Settings, org_id: str, response: LicenseStatusResponse) -> None:
+    """Best-effort Redis cache write (60s TTL) for an org's license status."""
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        await redis.setex(f"license:{org_id}", 60, response.model_dump_json())
+    except Exception:
+        logger.warning("license.cache_write_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
+
 @router.get("")
 @handle_db_errors("admin.license.get_license_status")
 async def get_license_status(
@@ -121,43 +154,20 @@ async def get_license_status(
     session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
 
-    # Attempt Redis cache read
-    redis: Redis | None = None
-    try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
-        cache_key = f"license:{current_user.organisation_id}"
-        cached = await redis.get(cache_key)
-        if cached:
-            return LicenseStatusResponse(**json.loads(cached))
-    except Exception:
-        logger.warning("license.cache_read_failed", exc_info=True)
-    finally:
-        if redis is not None:
-            await redis.aclose()
+    org_id = current_user.organisation_id
+    if org_id is not None:
+        cached = await _read_license_cache(settings, str(org_id))
+        if cached is not None:
+            return cached
 
     try:
         org = None
-        if current_user.organisation_id is not None:
+        if org_id is not None:
             async with session.begin():
-                org = await get_organisation(session, current_user.organisation_id)
+                org = await get_organisation(session, org_id)
 
         response = _resolve_effective_license(settings, org=org)
-
-        # Write to Redis cache (best-effort, 60s TTL)
-        try:
-            redis = Redis.from_url(
-                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-            )
-            cache_key = f"license:{current_user.organisation_id}"
-            await redis.setex(cache_key, 60, response.model_dump_json())
-        except Exception:
-            logger.warning("license.cache_write_failed", exc_info=True)
-        finally:
-            if redis is not None:
-                await redis.aclose()
-
+        await _write_license_cache(settings, str(org_id), response)
         return response
     except ProgrammingError:
         logger.exception(_CODE_LICENSE_GET_FAILED)
