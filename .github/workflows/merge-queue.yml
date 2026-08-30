@@ -2,7 +2,8 @@ name: "Merge: Queue"
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Off-boundary minutes dodge the scheduler sampling that drops round-boundary crons on high-activity repos (FAR-492).
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 concurrency:
