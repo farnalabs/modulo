@@ -773,7 +773,12 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         )
 
     if enabled and not has_url:
-        findings.append((True, "MODULO_BREAK_GLASS_ENABLED=true but MODULO_BREAK_GLASS_DATABASE_URL is empty"))
+        findings.append(
+            (
+                True,
+                "MODULO_BREAK_GLASS_ENABLED=true but MODULO_BREAK_GLASS_DATABASE_URL is empty",
+            )
+        )
     elif not has_url:
         findings.append(
             (
