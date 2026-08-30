@@ -152,6 +152,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
+- [feat-onboarding](auth/onboarding.md) => PRD N/A
 
 ### Configure
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
@@ -167,6 +168,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Improve
 - [feat-evals](improve/evals.md) => PRD N/A
+- [feat-feedback](improve/feedback.md) => PRD 8.20
 
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
@@ -212,20 +214,31 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Configure
 - [feat-model-backends](configure/model-backends.md) => PRD N/A
-- [feat-schemas](configure/schemas.md) => PRD N/A
+- [feat-schemas](schemas/schemas.md) => PRD N/A
 
 ### Triggers
 - [feat-triggers](triggers/trigger-engine.md) => PRD N/A
 
+### Build
+- [feat-dashboard](build/dashboard.md) => PRD 8.20
+- [feat-runs](build/runs.md) => PRD N/A
+
+### Monitor
+- [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
+
+### Configure
+- [feat-remy](configure/remy.md) => PRD 8.23
+
+### Admin
+- [feat-plugins](admin/plugins.md) => PRD N/A
+
 ## Known graph gaps
 
-Registered manifest features with no `docs/product-map/` behaviour-tracker yet
-(the graph stays honest about what remains untracked; each improve-architecture
-product-map walk closes a batch): `feat-auth`, `feat-analytics`,
-`feat-connectors` (behaviours inlined in the manifest registry),
-`feat-dashboard`, `feat-environments`, `feat-feedback`,
-`feat-library`, `feat-license`, `feat-lifecycle-maps`,
-`feat-notifications`, `feat-onboarding`, `feat-org`, `feat-pipelines`,
-`feat-plugins`, `feat-product-analytics`, `feat-remy`, `feat-runtime`,
-`feat-sso`, `feat-system-config`, `feat-system-orgs`, `feat-teams`,
-`feat-variants` — 22 registered features remain untracked after this walk.
+Registered manifest features with no `docs/product-map/` behaviour-tracker yet (the
+graph stays honest about what remains untracked; each improve-architecture product-map
+walk closes a batch): `feat-analytics`, `feat-auth`, `feat-connectors`,
+`feat-environments`, `feat-library`, `feat-license`, `feat-lifecycle-maps`,
+`feat-model-backends`, `feat-notifications`, `feat-observability`, `feat-org`,
+`feat-pipelines`, `feat-product-analytics`, `feat-runtime`, `feat-schemas`,
+`feat-sso`, `feat-system-config`, `feat-system-orgs`, `feat-teams`, `feat-variants` —
+20 registered features remain untracked after this walk.

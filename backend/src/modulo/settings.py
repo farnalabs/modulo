@@ -749,16 +749,20 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 True,
-                "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
-                "MODULO_BREAK_GLASS_STANDBY_SECRET are empty",
+                (
+                    "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
+                    "MODULO_BREAK_GLASS_STANDBY_SECRET are empty"
+                ),
             )
         )
     elif not (has_primary and has_standby):
         findings.append(
             (
                 False,
-                "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
-                "the operator rotation path is degraded",
+                (
+                    "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
+                    "the operator rotation path is degraded"
+                ),
             )
         )
 
@@ -768,8 +772,10 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 False,
-                "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
-                "deactivate/force/status commands are inoperable while disabled",
+                (
+                    "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
+                    "deactivate/force/status commands are inoperable while disabled"
+                ),
             )
         )
     return findings

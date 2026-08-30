@@ -18,6 +18,10 @@ build/
 !docs/product-map/build/**
 .eggs/
 
+# docs/product-map uses a "build" group that must NOT be treated as build output
+!docs/product-map/build/
+!docs/product-map/build/**
+
 # uv — lockfile IS committed (reproducible installs)
 # uv.lock
 
