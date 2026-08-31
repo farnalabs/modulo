@@ -238,6 +238,7 @@
           </button>
         </div>
         <!-- Run dialog modal -->
+        <!-- eslint-disable-next-line vuejs-accessibility/click-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
         <div
           v-if="showRunDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -2122,6 +2123,25 @@ function closeRunDialog() {
   confirmEmptyRun.value = false
   emptyRunWarning.value = null
 }
+
+function onRunDialogKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showRunDialog.value) {
+    event.preventDefault()
+    closeRunDialog()
+  }
+}
+
+watch(showRunDialog, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onRunDialogKeydown)
+  } else {
+    document.removeEventListener('keydown', onRunDialogKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onRunDialogKeydown)
+})
 
 async function saveGraph() {
   savingGraph.value = true

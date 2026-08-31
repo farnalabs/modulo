@@ -46,19 +46,25 @@ _INDEXES = [
     ),
     (
         "ix_runs_status_heartbeat",
-        "CREATE INDEX IF NOT EXISTS ix_runs_status_heartbeat "
-        'ON public."runs" (status, heartbeat_at) '
-        "WHERE status IN ('pending', 'running');",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_runs_status_heartbeat "
+            'ON public."runs" (status, heartbeat_at) '
+            "WHERE status IN ('pending', 'running');"
+        ),
     ),
     (
         "ix_error_groups_org_status_last_seen",
-        "CREATE INDEX IF NOT EXISTS ix_error_groups_org_status_last_seen "
-        'ON public."error_groups" (organisation_id, status, last_seen);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_error_groups_org_status_last_seen "
+            'ON public."error_groups" (organisation_id, status, last_seen);'
+        ),
     ),
     (
         "ix_error_events_org_created_at",
-        "CREATE INDEX IF NOT EXISTS ix_error_events_org_created_at "
-        'ON public."error_events" (organisation_id, created_at);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_error_events_org_created_at "
+            'ON public."error_events" (organisation_id, created_at);'
+        ),
     ),
     (
         "ix_error_events_org_status",
@@ -66,8 +72,10 @@ _INDEXES = [
     ),
     (
         "ix_audit_events_org_created_at",
-        "CREATE INDEX IF NOT EXISTS ix_audit_events_org_created_at "
-        'ON public."audit_events" (organisation_id, created_at);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_audit_events_org_created_at "
+            'ON public."audit_events" (organisation_id, created_at);'
+        ),
     ),
     (
         "ix_audit_events_resource",
@@ -75,18 +83,24 @@ _INDEXES = [
     ),
     (
         "ix_notifications_org_created_at",
-        "CREATE INDEX IF NOT EXISTS ix_notifications_org_created_at "
-        'ON public."notifications" (organisation_id, created_at);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_notifications_org_created_at "
+            'ON public."notifications" (organisation_id, created_at);'
+        ),
     ),
     (
         "ix_notifications_org_level_scope_category",
-        "CREATE INDEX IF NOT EXISTS ix_notifications_org_level_scope_category "
-        'ON public."notifications" (organisation_id, level, scope, category);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_notifications_org_level_scope_category "
+            'ON public."notifications" (organisation_id, level, scope, category);'
+        ),
     ),
     (
         "ix_chat_messages_session_created",
-        "CREATE INDEX IF NOT EXISTS ix_chat_messages_session_created "
-        'ON public."chat_messages" (session_id, created_at);',
+        (
+            "CREATE INDEX IF NOT EXISTS ix_chat_messages_session_created "
+            'ON public."chat_messages" (session_id, created_at);'
+        ),
     ),
 ]
 

@@ -103,3 +103,106 @@ def test_organisations_table_is_the_only_exclusion() -> None:
     # legitimately unpoliced, this test (and its reviewers) must be updated
     # deliberately.
     assert sorted(_EXCLUDED_TABLES) == ["organisations"]
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed RLS regression guard for migrations 0155 / 0156
+# ---------------------------------------------------------------------------
+
+# The null-safe strict scope that migrations 0155/0156 re-created the
+# rls_org_isolation policy with — a null/empty app.organisation_id yields NULL
+# which matches no row (fail-closed), instead of the old fail-open OR-branch.
+_STRICT_SCOPE_MARKER = "nullif(current_setting('app.organisation_id', true), '')"
+
+# Any of these substrings indicates a fail-open OR-branch on the rls_org_isolation
+# policy: `(... IS NULL) OR ...` or `... OR (nullif(...) IS NULL)` lets a caller
+# with no org context read every row.
+_FAIL_OPEN_MARKERS = (
+    "IS NULL OR",
+    "OR (nullif",
+    "OR (current_setting",
+)
+
+# Migration file -> tables it must tighten to fail-closed.
+_STRICT_MIGRATIONS: dict[str, tuple[str, ...]] = {
+    "0162_rls_strict_parameter_schemas_sets": ("parameter_schemas", "parameter_sets"),
+    "0163_rls_strict_oauth_auth_codes_token_families": (
+        "oauth_authorization_codes",
+        "oauth_token_families",
+    ),
+}
+
+# Matches the scope variable an upgrade CREATE POLICY actually binds, e.g.
+#   CREATE POLICY rls_org_isolation ON public.{table} USING ({_STRICT_SCOPE})
+_CREATE_POLICY_RE = re.compile(
+    r"CREATE POLICY rls_org_isolation ON public\.\{_?\w+\} USING \(\{(_?\w+)\}\)",
+)
+
+# Captures the whole (possibly multi-line, implicitly-concatenated) assignment
+# block for a top-level scope variable, e.g.
+#   _FAIL_OPEN_SCOPE = (
+#       "(organisation_id = ...) "
+#       "OR (nullif(...) IS NULL)"
+#   )
+_SCOPE_BLOCK_RE = re.compile(r"(\w+)\s*=((?s:.*?)(?=\n(?!\s)|\Z))")
+
+
+def _scope_block(text: str, var_name: str) -> str:
+    for name, block in _SCOPE_BLOCK_RE.findall(text):
+        if name == var_name:
+            return block
+    raise AssertionError(f"could not find scope variable {var_name!r} definition")
+
+
+def test_strict_rls_migrations_close_fail_open_branch() -> None:
+    """Migrations 0155/0156 must close the fail-open rls_org_isolation OR-branch.
+
+    Regression guard: the prior policy on these four tables OR'd the strict
+    org scope with a null-context branch, so any caller without an
+    ``app.organisation_id`` setting could read every row (a silent
+    cross-tenant fail-open). The migrations were tightened to a null-safe
+    strict scope that fails CLOSED.
+
+    We assert that the rls_org_isolation CREATE POLICY in these migrations is
+    bound to a scope literal that is the null-safe strict form (fails closed)
+    and contains NO fail-open OR-branch. The upgrade path must also not create
+    the stacked permissive ``rls_org_isolation_null_context`` policy and must
+    contain no fail-open OR-branch text. The downgrade leg intentionally
+    restores the prior fail-open form, so its scope literal is allowed to be
+    fail-open — but the upgrade (strict) scope must not be.
+
+    Without this guard a future revert to the fail-open form (or a missed
+    ``set_rls_org`` call site) would re-open these tables with no test
+    tripping.
+    """
+    for filename, tables in _STRICT_MIGRATIONS.items():
+        path = _MIGRATIONS_DIR / f"{filename}.py"
+        assert path.is_file(), f"strict RLS migration missing: {path}"
+
+        text = path.read_text(encoding="utf-8")
+        for table in tables:
+            assert table in text, f"{filename}: expected target table {table!r} not referenced"
+
+        # Every scope variable bound to an rls_org_isolation CREATE POLICY, and
+        # the subset that are the null-safe strict (fail-closed) form.
+        policy_scopes = set(_CREATE_POLICY_RE.findall(text))
+        assert policy_scopes, f"{filename}: no rls_org_isolation CREATE POLICY found"
+
+        def _is_strict(source: str, var: str) -> bool:
+            block = _scope_block(source, var)
+            return _STRICT_SCOPE_MARKER in block and not any(m in block for m in _FAIL_OPEN_MARKERS)
+
+        strict_scopes = {v for v in policy_scopes if _is_strict(text, v)}
+        assert strict_scopes, (
+            f"{filename}: no strict (fail-closed) rls_org_isolation scope found — "
+            "the fail-open OR-branch may have been reintroduced"
+        )
+
+        # Isolate the upgrade() body from the module-level constants/helpers
+        # (the downgrade's fail-open scope is reused only there).
+        upgrade_src = text.split("def upgrade(", 1)[1].split("def downgrade", 1)[0]
+        assert "rls_org_isolation_null_context" not in upgrade_src, (
+            f"{filename}: upgrade must not create the fail-open rls_org_isolation_null_context policy"
+        )
+        for marker in _FAIL_OPEN_MARKERS:
+            assert marker not in upgrade_src, f"{filename}: upgrade still contains a fail-open OR branch ({marker!r})"

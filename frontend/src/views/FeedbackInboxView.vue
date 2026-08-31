@@ -155,7 +155,8 @@
                     >
                       {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
                     </button>
-                    <output v-if="annotationMessage[record.id]" aria-live="polite" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
+                    <output v-if="annotationMessage[record.id]" aria-live="polite" aria-labelledby="feedback-inbox-annotation-label" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
+                      <span class="sr-only" id="feedback-inbox-annotation-label">{{ $t('views.FeedbackInboxView.aria_annotation') }}</span>
                       {{ annotationMessage[record.id]?.text }}
                     </output>
                   </div>
