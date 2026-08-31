@@ -419,21 +419,56 @@ async def heartbeat_loop(
         claim_token = await _read_current_claim_token(aeng, run_id, org_id)
     consecutive_failures = 0
     while True:
-        try:
-            await asyncio.sleep(interval_seconds)
-            await heartbeat_once(aeng, run_id, org_id, job=job, claim_token=claim_token)
-            consecutive_failures = 0
-        except ClaimSupersededError:
-            _log.warning("Heartbeat superseded for run %s — aborting heartbeat", run_id)
-            if superseded is not None:
-                superseded.set()
+        keep_going, consecutive_failures = await _heartbeat_round(
+            aeng,
+            run_id,
+            org_id,
+            interval_seconds=interval_seconds,
+            job=job,
+            claim_token=claim_token,
+            superseded=superseded,
+            health_failed=health_failed,
+            consecutive_failures=consecutive_failures,
+        )
+        if not keep_going:
             break
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            consecutive_failures = _heartbeat_failure(consecutive_failures, health_failed, run_id)
-            if consecutive_failures >= 3:
-                break
+
+
+async def _heartbeat_round(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    interval_seconds: int,
+    job: Any,
+    claim_token: str | None,
+    superseded: asyncio.Event | None,
+    health_failed: asyncio.Event | None,
+    consecutive_failures: int,
+) -> tuple[bool, int]:
+    """Run one heartbeat cycle and return ``(keep_going, consecutive_failures)``.
+
+    Sleeps the configured interval then writes a fenced heartbeat. Returns
+    ``False`` when the loop must stop: the run was superseded (the *superseded*
+    event is set first) or the fail-closed threshold of three consecutive
+    failures was reached. A transient failure counts toward
+    *consecutive_failures* (reset to ``0`` on success); CancelledError
+    propagates unchanged.
+    """
+    try:
+        await asyncio.sleep(interval_seconds)
+        await heartbeat_once(aeng, run_id, org_id, job=job, claim_token=claim_token)
+        return True, 0
+    except ClaimSupersededError:
+        _log.warning("Heartbeat superseded for run %s — aborting heartbeat", run_id)
+        if superseded is not None:
+            superseded.set()
+        return False, consecutive_failures
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        consecutive_failures = _heartbeat_failure(consecutive_failures, health_failed, run_id)
+        return consecutive_failures < 3, consecutive_failures
 
 
 def _heartbeat_failure(

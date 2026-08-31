@@ -384,6 +384,11 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "concurrency_limit": ctx.concurrency_limit,
         "waiting": _is_capacity_waiting(run.status, ctx.active_count, ctx.concurrency_limit),
     }
+    # FAR-490: snapshot_id must be a UUID/str or None; a MagicMock (e.g. in
+    # test fakes) or any other non-UUID value must surface as None, never a 500.
+    # Mirror the FAR-228/FAR-213 defensive coercion above.
+    _raw_list_snapshot_id = getattr(run, "snapshot_id", None)
+    _list_snapshot_id = str(_raw_list_snapshot_id) if isinstance(_raw_list_snapshot_id, (uuid.UUID, str)) else None
     return {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
@@ -391,6 +396,9 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "status": run.status,
         "trigger_type": run.trigger_type,
         "run_number": run.run_number,
+        # FAR-490: snapshot the run executes (None only for legacy/pre-FK rows)
+        # so run→snapshot verification is one GET, not pagination archaeology.
+        "snapshot_id": _list_snapshot_id,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -586,6 +594,12 @@ class RunResponse(BaseModel):
     run_number: int | None = None
     pipeline_name: str | None = None
     langgraph_thread_id: str
+    # FAR-490: the immutable snapshot this run executes. Every run-start path
+    # creates a fresh snapshot from the committed live graph, so the snapshot
+    # (fetchable via GET /pipelines/{id}/snapshots/{snapshot_id}) is the
+    # authoritative record of what the run ACTUALLY executed — expose the link
+    # so staleness investigations never have to diff the live graph instead.
+    snapshot_id: uuid.UUID | None = None
     error_detail: str | None = None
     error_code: str | None = None
     total_cost_usd: Decimal | None = None
@@ -745,6 +759,12 @@ def _build_run_response(
     # FAR-213: same defensive coercion for the blocked_partial_summary column.
     blocked_partial_summary = run.blocked_partial_summary if isinstance(run.blocked_partial_summary, dict) else None
 
+    # FAR-490: defensive coercion — snapshot_id must be a UUID/str or None; a
+    # MagicMock (e.g. in test fakes) or any other non-UUID value must never 500
+    # the run detail endpoint.
+    _raw_snapshot_id = getattr(run, "snapshot_id", None)
+    snapshot_id = _raw_snapshot_id if isinstance(_raw_snapshot_id, (uuid.UUID, str)) else None
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -752,6 +772,7 @@ def _build_run_response(
         run_number=run.run_number,
         pipeline_name=pipeline_name,
         langgraph_thread_id=run.langgraph_thread_id,
+        snapshot_id=snapshot_id,
         error_detail=error_detail,
         error_code=error_code,
         total_cost_usd=run.total_cost_usd,
