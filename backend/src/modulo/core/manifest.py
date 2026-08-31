@@ -56,7 +56,7 @@ def _load_manifest_yaml(path: Path) -> Any:
         try:
             return loader.get_single_data()
         finally:
-            loader.dispose()  # type: ignore[no-untyped-call]  # yaml stubs omit dispose()
+            loader.dispose()
 
 
 def get_manifest_path() -> Path:
