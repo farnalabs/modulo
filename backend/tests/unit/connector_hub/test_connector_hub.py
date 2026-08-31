@@ -37,6 +37,16 @@ def _encrypt(payload: dict[str, Any]) -> bytes:
     return Fernet(_KEY.encode()).encrypt(json.dumps(payload).encode())
 
 
+@pytest.fixture(autouse=True)
+def _reset_skip_warn_registry():
+    """Keep the module-level skip-warning dedup registry isolated between tests (FAR-465)."""
+    from modulo.core.connector_hub import _SKIP_WARN_SEEN
+
+    _SKIP_WARN_SEEN.clear()
+    yield
+    _SKIP_WARN_SEEN.clear()
+
+
 def _encrypt_raw(payload: str) -> bytes:
     """Encrypt a raw (non-JSON) string — how legacy bare-token credentials rows look."""
     return Fernet(_KEY.encode()).encrypt(payload.encode())
@@ -570,6 +580,69 @@ async def test_initialise_programming_bug_logs_error():
         await hub.initialise([ci])
     with pytest.raises(ConnectorNotFoundError):
         hub.get(ci.id)
+
+
+# ---------------------------------------------------------------------------
+# Skip-warning dedup (FAR-465)
+# ---------------------------------------------------------------------------
+
+
+async def test_skip_warning_dedup_full_traceback_once_per_process(caplog):
+    """The first initialise of a misconfigured connector logs the full traceback;
+    a second hub in the same process logs a concise repeat instead (FAR-465)."""
+    import logging
+
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt({}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        patch.object(backend, "get_secret", return_value="{}"),
+    ):
+        hub1 = ConnectorHub(secrets_backend=backend)
+        await hub1.initialise([ci])
+        hub2 = ConnectorHub(secrets_backend=backend)
+        await hub2.initialise([ci])
+
+    skips = [rec for rec in caplog.records if "Skipping connector" in rec.message]
+    assert len(skips) == 2
+    assert skips[0].exc_info is not None
+    assert "Missing credential key" in str(skips[0].exc_info[1])
+    assert skips[1].exc_info is None
+    assert "(repeat; full traceback logged earlier)" in skips[1].message
+    assert not hub1.connector_ids
+    assert not hub2.connector_ids
+
+
+async def test_skip_warning_dedup_different_instance_id_logs_traceback(caplog):
+    """A different instance id with the same problem logs its own full traceback
+    on first sighting — dedup is keyed per instance, not per connector type."""
+    import logging
+
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        patch.object(backend, "get_secret", return_value="{}"),
+    ):
+        ci_a = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        hub_a = ConnectorHub(secrets_backend=backend)
+        await hub_a.initialise([ci_a])
+
+        ci_b = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        hub_b = ConnectorHub(secrets_backend=backend)
+        await hub_b.initialise([ci_b])
+
+    skips = [rec for rec in caplog.records if "Skipping connector" in rec.message]
+    assert len(skips) == 2
+    for rec in skips:
+        assert rec.exc_info is not None
+        assert "Missing credential key" in str(rec.exc_info[1])
+        assert "(repeat; full traceback logged earlier)" not in rec.getMessage()
 
 
 # ---------------------------------------------------------------------------
