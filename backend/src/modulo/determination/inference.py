@@ -6,7 +6,7 @@ Uncertainty is surfaced explicitly; gaps are preferred over fabrication.
 
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -40,6 +40,20 @@ _CI_FILES = {
     "azure-pipelines",
 }
 
+_PLANNING_STATUSES = {"backlog", "to do", "todo", "ready", "selected for development"}
+
+
+@dataclass
+class _InferenceData:
+    """Aggregated sample data consumed by the per-stage finding builders."""
+
+    repo_names: list[str] = field(default_factory=list)
+    pull_requests: list[dict[str, Any]] = field(default_factory=list)
+    issue_statuses: list[str] = field(default_factory=list)
+    has_ci_config: bool = False
+    pr_ages: list[float] = field(default_factory=list)
+    stale_pr_count: int = 0
+
 
 def _age_days(value: Any) -> float | None:
     """Parse ISO datetime string and return days since then.
@@ -58,90 +72,106 @@ def _age_days(value: Any) -> float | None:
     return (datetime.now(UTC) - dt).total_seconds() / 86400
 
 
-def infer(samples: list[ScanSample]) -> list[Finding]:
-    """Run inference on a list of ScanSample objects and return findings."""
-    findings: list[Finding] = []
-
-    repo_names: list[str] = []
-    pull_requests: list[dict[str, Any]] = []
-    issue_statuses: list[str] = []
-    has_ci_config = False
-    has_planning_stage = False
-    pr_ages: list[float] = []
-    stale_pr_count = 0
-
+def _aggregate(samples: list[ScanSample]) -> _InferenceData:
+    """Fold sampled connector records into a single :class:`_InferenceData`."""
+    data = _InferenceData()
     for s in samples:
         match s.resource:
             case "repos" | "projects":
-                for rec in s.records:
-                    name = _repo_name(rec)
-                    if name:
-                        repo_names.append(name)
-                    desc = (rec.get("description") or "").lower()
-                    if any(ci in desc or ci in name.lower() for ci in _CI_FILES):
-                        has_ci_config = True
-
+                _aggregate_repos(data, s.records)
             case "pulls" | "mrs":
-                pull_requests.extend(s.records)
-                for pr in s.records:
-                    created = pr.get("created_at") or pr.get("createdAt")
-                    days = _age_days(created)
-                    if days is not None:
-                        pr_ages.append(days)
-                        if days > 5:
-                            stale_pr_count += 1
-
+                _aggregate_pull_requests(data, s.records)
             case "issues":
-                for iss in s.records:
-                    fields = iss.get("fields") or {}
-                    status_obj = fields.get("status")
-                    status = status_obj.get("name") if isinstance(status_obj, dict) else (status_obj or "")
-                    if not status:
-                        state = iss.get("state")
-                        status = state.get("name") if isinstance(state, dict) else (state or "")
-                    if status:
-                        issue_statuses.append(status.lower())
+                _aggregate_issues(data, s.records)
+    return data
 
-    # --- Stage: Planning ---
-    planning_statuses = {"backlog", "to do", "todo", "ready", "selected for development"}
-    if any(st in planning_statuses for st in issue_statuses):
-        has_planning_stage = True
-        planning_count = sum(1 for st in issue_statuses if st in planning_statuses)
-        findings.append(
-            Finding(
-                category="stage",
-                finding="Planning stage detected: issues in backlog/todo statuses exist",
-                evidence=f"{planning_count} issues in planning statuses",
-                confidence="high",
-                uncertainty="Status taxonomy varies by tool; mapped via common aliases",
-            )
+
+def _aggregate_repos(data: _InferenceData, records: list[dict[str, Any]]) -> None:
+    for rec in records:
+        name = _repo_name(rec)
+        if name:
+            data.repo_names.append(name)
+        desc = (rec.get("description") or "").lower()
+        if any(ci in desc or ci in name.lower() for ci in _CI_FILES):
+            data.has_ci_config = True
+
+
+def _aggregate_pull_requests(data: _InferenceData, records: list[dict[str, Any]]) -> None:
+    data.pull_requests.extend(records)
+    for pr in records:
+        created = pr.get("created_at") or pr.get("createdAt")
+        days = _age_days(created)
+        if days is not None:
+            data.pr_ages.append(days)
+            if days > 5:
+                data.stale_pr_count += 1
+
+
+def _aggregate_issues(data: _InferenceData, records: list[dict[str, Any]]) -> None:
+    for iss in records:
+        fields = iss.get("fields") or {}
+        status_obj = fields.get("status")
+        status = status_obj.get("name") if isinstance(status_obj, dict) else (status_obj or "")
+        if not status:
+            state = iss.get("state")
+            status = state.get("name") if isinstance(state, dict) else (state or "")
+        if status:
+            data.issue_statuses.append(status.lower())
+
+
+def _has_planning_status(data: _InferenceData) -> bool:
+    return any(st in _PLANNING_STATUSES for st in data.issue_statuses)
+
+
+def _find_planning_stage(data: _InferenceData) -> list[Finding]:
+    """Planning stage: issues sitting in backlog/todo statuses."""
+    if not _has_planning_status(data):
+        return []
+    planning_count = sum(1 for st in data.issue_statuses if st in _PLANNING_STATUSES)
+    return [
+        Finding(
+            category="stage",
+            finding="Planning stage detected: issues in backlog/todo statuses exist",
+            evidence=f"{planning_count} issues in planning statuses",
+            confidence="high",
+            uncertainty="Status taxonomy varies by tool; mapped via common aliases",
         )
+    ]
 
-    # --- Stage: Code Review ---
-    if pull_requests:
-        findings.append(
-            Finding(
-                category="stage",
-                finding="Code review stage detected: open pull/merge requests found",
-                evidence=f"{len(pull_requests)} open PRs/MRs across repos",
-                confidence="high",
-            )
+
+def _find_code_review(data: _InferenceData) -> list[Finding]:
+    """Code review stage: open pull/merge requests were observed."""
+    if not data.pull_requests:
+        return []
+    return [
+        Finding(
+            category="stage",
+            finding="Code review stage detected: open pull/merge requests found",
+            evidence=f"{len(data.pull_requests)} open PRs/MRs across repos",
+            confidence="high",
         )
+    ]
 
-    # --- Stage: Development ---
-    if repo_names:
-        findings.append(
-            Finding(
-                category="stage",
-                finding="Development stage detected: source repositories found",
-                evidence=f"{len(repo_names)} {'repository' if len(repo_names) == 1 else 'repositories'} accessible",
-                confidence="high",
-            )
+
+def _find_development(data: _InferenceData) -> list[Finding]:
+    """Development stage: accessible source repositories were observed."""
+    if not data.repo_names:
+        return []
+    repo_label = "repository" if len(data.repo_names) == 1 else "repositories"
+    return [
+        Finding(
+            category="stage",
+            finding="Development stage detected: source repositories found",
+            evidence=f"{len(data.repo_names)} {repo_label} accessible",
+            confidence="high",
         )
+    ]
 
-    # --- Stage: CI/CD ---
-    if has_ci_config:
-        findings.append(
+
+def _find_ci(data: _InferenceData) -> list[Finding]:
+    """CI/CD automation: repo metadata referencing known CI tooling."""
+    if data.has_ci_config:
+        return [
             Finding(
                 category="automation",
                 finding="CI/CD configuration detected in repository metadata",
@@ -149,77 +179,85 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                 confidence="medium",
                 uncertainty="Cannot verify CI is actively running; only config references were checked",
             )
+        ]
+    return [
+        Finding(
+            category="automation",
+            finding="No CI/CD configuration detected in sampled repo metadata",
+            evidence="Sampled repo metadata does not reference known CI tooling",
+            confidence="low",
+            uncertainty="CI config may exist in files not sampled; only repo metadata was scanned",
         )
-    else:
-        findings.append(
-            Finding(
-                category="automation",
-                finding="No CI/CD configuration detected in sampled repo metadata",
-                evidence="Sampled repo metadata does not reference known CI tooling",
-                confidence="low",
-                uncertainty="CI config may exist in files not sampled; only repo metadata was scanned",
-            )
-        )
+    ]
 
-    # --- Bottleneck: Stale PRs ---
-    if pr_ages:
-        avg_age = sum(pr_ages) / len(pr_ages)
-        evidence_detail = f"Average PR/MR age: {avg_age:.1f} days, {stale_pr_count}/{len(pr_ages)} open for >5 days"
-        if stale_pr_count > 0:
-            findings.append(
-                Finding(
-                    category="bottleneck",
-                    finding=f"Potential review bottleneck: {stale_pr_count} PRs/MRs open for >5 days without merge",
-                    evidence=evidence_detail,
-                    confidence="medium",
-                    uncertainty="Cannot determine if PRs are waiting for review "
-                    "or intentionally long-lived (e.g., draft PRs, WIP)",
-                )
-            )
-        else:
-            findings.append(
-                Finding(
-                    category="bottleneck",
-                    finding="No stale PRs detected — all sampled PRs/MRs are recent",
-                    evidence=evidence_detail,
-                    confidence="low",
-                    uncertainty="Small sample may miss long-lived PRs on other branches or repos",
-                )
-            )
 
-    # --- Transition: Issue lifecycle ---
-    if issue_statuses:
-        status_counts = Counter(issue_statuses)
-        transitions = " → ".join(
-            sorted(
-                {st for st in issue_statuses if st not in planning_statuses}
-                | {"planning" for st in issue_statuses if st in planning_statuses}
-            )
-        )
-        findings.append(
+def _find_stale_prs(data: _InferenceData) -> list[Finding]:
+    """Review bottlenecks: open PRs/MRs older than five days."""
+    if not data.pr_ages:
+        return []
+    avg_age = sum(data.pr_ages) / len(data.pr_ages)
+    evidence_detail = (
+        f"Average PR/MR age: {avg_age:.1f} days, {data.stale_pr_count}/{len(data.pr_ages)} open for >5 days"
+    )
+    if data.stale_pr_count > 0:
+        return [
             Finding(
-                category="transition",
-                finding=f"Issue lifecycle observed: {transitions}",
-                evidence=f"Issue statuses found: {dict(status_counts)}",
+                category="bottleneck",
+                finding=f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge",
+                evidence=evidence_detail,
                 confidence="medium",
-                uncertainty="Cannot infer transition order or speed from a single scan; "
-                "would need status change history or webhook events",
+                uncertainty="Cannot determine if PRs are waiting for review "
+                "or intentionally long-lived (e.g., draft PRs, WIP)",
             )
+        ]
+    return [
+        Finding(
+            category="bottleneck",
+            finding="No stale PRs detected — all sampled PRs/MRs are recent",
+            evidence=evidence_detail,
+            confidence="low",
+            uncertainty="Small sample may miss long-lived PRs on other branches or repos",
         )
+    ]
 
-    # --- Overall assessment ---
+
+def _find_issue_lifecycle(data: _InferenceData) -> list[Finding]:
+    """Issue lifecycle: observed statuses mapped to planning / non-planning."""
+    if not data.issue_statuses:
+        return []
+    status_counts = Counter(data.issue_statuses)
+    transitions = " → ".join(
+        sorted(
+            {st for st in data.issue_statuses if st not in _PLANNING_STATUSES}
+            | {"planning" for st in data.issue_statuses if st in _PLANNING_STATUSES}
+        )
+    )
+    return [
+        Finding(
+            category="transition",
+            finding=f"Issue lifecycle observed: {transitions}",
+            evidence=f"Issue statuses found: {dict(status_counts)}",
+            confidence="medium",
+            uncertainty="Cannot infer transition order or speed from a single scan; "
+            "would need status change history or webhook events",
+        )
+    ]
+
+
+def _find_overview(data: _InferenceData) -> list[Finding]:
+    """Overall SDLC snapshot, or the honest gap signal when no stages matched."""
     stages_found = []
-    if repo_names:
+    if data.repo_names:
         stages_found.append("development")
-    if has_planning_stage:
+    if _has_planning_status(data):
         stages_found.append("planning")
-    if pull_requests:
+    if data.pull_requests:
         stages_found.append("code review")
-    if has_ci_config:
+    if data.has_ci_config:
         stages_found.append("ci/cd")
 
     if stages_found:
-        findings.append(
+        return [
             Finding(
                 category="overview",
                 finding=f"SDLC stages detected: {', '.join(stages_found)}",
@@ -231,16 +269,27 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                 "without deployment tool connector; "
                 "monitoring/incident stages not detectable from sampled data",
             )
+        ]
+    return [
+        Finding(
+            category="overview",
+            finding="No SDLC stages could be detected from connected tools",
+            evidence="No connector produced stage-identifying records",
+            confidence="low",
+            uncertainty="Connectors may not be configured, or sampled data may not contain stage metadata",
         )
-    else:
-        findings.append(
-            Finding(
-                category="overview",
-                finding="No SDLC stages could be detected from connected tools",
-                evidence="No connector produced stage-identifying records",
-                confidence="low",
-                uncertainty="Connectors may not be configured, or sampled data may not contain stage metadata",
-            )
-        )
+    ]
 
-    return findings
+
+def infer(samples: list[ScanSample]) -> list[Finding]:
+    """Run inference on a list of ScanSample objects and return findings."""
+    data = _aggregate(samples)
+    return [
+        *_find_planning_stage(data),
+        *_find_code_review(data),
+        *_find_development(data),
+        *_find_ci(data),
+        *_find_stale_prs(data),
+        *_find_issue_lifecycle(data),
+        *_find_overview(data),
+    ]

@@ -17,6 +17,13 @@ pytestmark = [
     pytest.mark.integration,
 ]
 
+_NODE_B = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
+_NODE_C = uuid.UUID("00000000-0000-0000-0000-0000000000cc")
+_NODE_D = uuid.UUID("00000000-0000-0000-0000-0000000000dd")
+_NODE_E = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
+_NODE_N1 = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+_NODE_N2 = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
+
 
 @pytest.mark.usefixtures("rls_session")
 class TestFeedbackFlowUnit:
@@ -37,7 +44,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Output quality insufficient",
             rejected_output={"result": "poor quality text"},
-            producing_node_id="node-b",
+            producing_node_id=str(_NODE_B),
             producing_agent_id=None,
             feedback_handler_type="human",
         )
@@ -61,7 +68,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Bad",
             rejected_output={},
-            producing_node_id="node-c",
+            producing_node_id=str(_NODE_C),
         )
 
         fetched = await mgr.get_feedback_record(created.id)
@@ -94,7 +101,7 @@ class TestFeedbackFlowUnit:
                 account_id=test_user,
                 rejection_reason=f"Reason {i}",
                 rejected_output={},
-                producing_node_id="node-b",
+                producing_node_id=str(_NODE_B),
             )
 
         result = await mgr.get_feedback_records(page=1, page_size=2)
@@ -128,7 +135,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Needs correction",
             rejected_output={},
-            producing_node_id="node-b",
+            producing_node_id=str(_NODE_B),
         )
 
         updated = await mgr.update_status(record.id, "routing")
@@ -165,7 +172,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Fix it",
             rejected_output={},
-            producing_node_id="node-b",
+            producing_node_id=str(_NODE_B),
         )
 
         updated = await mgr.link_correction_run(record.id, correction_id)
@@ -188,7 +195,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Manual review required",
             rejected_output={"doc": "needs human edit"},
-            producing_node_id="node-d",
+            producing_node_id=str(_NODE_D),
             feedback_handler_type="ai_correction_with_human_review",
         )
 
@@ -210,7 +217,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="Auto-fix",
             rejected_output={"code": "buggy"},
-            producing_node_id="node-e",
+            producing_node_id=str(_NODE_E),
             feedback_handler_type="ai_correction",
         )
 
@@ -227,7 +234,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="R1",
             rejected_output={},
-            producing_node_id="n1",
+            producing_node_id=str(_NODE_N1),
         )
         await mgr.create_feedback_record(
             run_id=run_id,
@@ -235,7 +242,7 @@ class TestFeedbackFlowUnit:
             account_id=test_user,
             rejection_reason="R2",
             rejected_output={},
-            producing_node_id="n2",
+            producing_node_id=str(_NODE_N2),
         )
         await mgr.update_status(r1.id, "routing")
         await mgr.update_status(r1.id, "resolved")

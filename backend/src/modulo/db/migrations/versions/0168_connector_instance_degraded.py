@@ -1,7 +1,7 @@
 """connector_instances — degraded-skip marker columns (FAR-495).
 
-Revision ID: 0164_connector_instance_degraded
-Revises: 0163_rls_strict_oauth_auth_codes_token_families
+Revision ID: 0168_connector_instance_degraded
+Revises: 0167_add_hot_query_indexes
 Create Date: 2026-08-30
 
 When a connector instance's stored credentials are missing or malformed,
@@ -29,8 +29,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0164_connector_instance_degraded"
-down_revision: str | None = "0163_rls_strict_oauth_auth_codes_token_families"
+revision: str = "0168_connector_instance_degraded"
+down_revision: str | None = "0167_add_hot_query_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

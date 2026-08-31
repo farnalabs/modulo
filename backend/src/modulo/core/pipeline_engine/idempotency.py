@@ -22,18 +22,31 @@ primitive (:func:`stable_idempotency_key`) is the delivered contract;
 :func:`read_before_write_suppression` is the read-before-write dedupe that
 consumes it.
 
-SCOPE LIMITATION (connector-write dedupe, FAR-438): the read-before-write
-dedupe (:func:`read_before_write_suppression`) is currently wired ONLY to the
-sandbox single-node transient-recovery path (the executor's
-``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
-suppression for a ``single_sandbox_node`` graph on the sandbox transient
-retry). It is NOT yet wired to the connector-write UNKNOWN-recovery surface
-(the actual FAR-410 scenario this module was framed around): a connector node
-whose write reached upstream but whose outcome was reported UNKNOWN is not
-currently deduped. The derivation primitive + the suppression decision function
-are the portable contract — wiring the connector-write surface to consume them
-is deferred (see the TODO below) and should land with the connector
-UNKNOWN-recovery path + its tests.
+SCOPE (connector-write dedupe, FAR-458): the read-before-write dedupe
+(:func:`read_before_write_suppression`) is wired at TWO distinct decision
+points:
+
+1. **Sandbox single-node transient recovery** (FAR-438) — the executor's
+   ``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
+   suppression for a ``single_sandbox_node`` graph on the sandbox transient
+   retry.
+2. **Connector-write UNKNOWN recovery** (FAR-458) — the connector node's write
+   boundary (``make_connector_fn`` → ``_connector_node``) is now the
+   connector-specific decision point: it consults
+   :func:`read_before_write_suppression` BEFORE re-sending a write that was
+   previously delivered (the persisted ``delivery_done`` marker on the same
+   derived key), and stamps a ``delivery_done`` marker when a connector write
+   genuinely succeeds. This is the actual FAR-410 scenario this module was
+   framed around.
+
+REMAINING GAP (honest, FAR-458): the connector node gate runs at the node level,
+one logical write per node invocation, so it threads ``index=None`` and the
+write-content ``payload``. A multi-item REST fan-out runs INSIDE the connector
+(``write()`` iterates items internally); the node cannot see per-item
+cardinality without the connector surfacing it, so per-item fan-out
+idempotency-key derivation is NOT wired through the node boundary — it remains
+a capability of the primitive (:func:`node_idempotency_key` accepts ``index``).
+A future change can thread per-item keys out of the fan-out outcome set.
 """
 
 from __future__ import annotations
@@ -56,11 +69,28 @@ _IDEMPOTENCY_NAMESPACE = "modulo"
 # the same samples so the mirror cannot drift from this definition.
 _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
 
-# TODO(FAR-438): wire :func:`read_before_write_suppression` into the
-# connector-write UNKNOWN-recovery path. Today the dedupe runs only on the
-# sandbox single-node transient-recovery surface (see the SCOPE LIMITATION note
-# in the module docstring); the connector write that actually reaches upstream
-# but reports UNKNOWN is NOT deduped. Add tests alongside the wiring.
+# TODO(FAR-438 RESOLVED by FAR-458): :func:`read_before_write_suppression` is
+# now wired into the connector-write UNKNOWN-recovery path at the connector
+# node's write boundary (see the SCOPE note in the module docstring). The
+# sandbox single-node transient-recovery surface remains wired via the
+# executor's ``_idempotency_gate_ok``. Remaining per-item fan-out key threading
+# is documented in the SCOPE note as an honest gap. New wiring must keep the
+# ``delivery_done is True`` + same-``idempotency_key`` contract — never suppress
+# a first-time write or a changed-payload re-run.
+#
+# FAR-458 refinement (per-connector ``on_unknown``): the CONFIRMED-delivered
+# suppression (``delivery_done is True`` + matching key) is mode-independent —
+# dedup's whole point. The AMBIGUOUS case — a prior attempt that touched the
+# SAME derived key but whose delivery could not be confirmed (``delivery_done``
+# absent) — is a SEPARATE decision governed by the per-connector-per-write
+# ``on_unknown`` option (:func:`read_before_write_ambiguous`). The per-action
+# reasoning: a MISS (fail_closed suppresses a write that might never have
+# landed) can be catastrophic for an action that is not self-healing (e.g. a
+# one-way email/notification the operator cannot easily re-send), while a
+# DUPLICATE (fail_open re-fires an indeterminate write) is usually recoverable
+# (a duplicate record can be reconciled/cleaned). Choose fail_closed only when
+# a silent miss is the worse outcome (a non-idempotent, hard-to-restore write);
+# default is fail_open.
 
 
 def stable_idempotency_key(
@@ -179,5 +209,56 @@ def read_before_write_suppression(
         return False
     return any(
         isinstance(marker, dict) and marker.get("delivery_done") is True and marker.get("idempotency_key") == derived
+        for marker in markers.values()
+    )
+
+
+def read_before_write_ambiguous(
+    markers: Any,
+    *,
+    run_ref: str,
+    node_ref: str,
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+) -> bool:
+    """READ-BEFORE-WRITE UNKNOWN detection (FAR-458): was there a prior attempt
+    for this exact write whose delivery is UNCONFIRMED?
+
+    True ONLY when a marker carries the SAME derived ``idempotency_key`` as this
+    write (computed with the SAME ``run_ref`` / ``node_ref`` / ``index`` /
+    ``payload`` as the marker write) but WITHOUT ``delivery_done is True``. That
+    is the AMBIGUOUS state: a prior attempt touched this exact write but its
+    side-effecting delivery could not be confirmed (an indeterminate upstream
+    result, or the process died after the write before confirming). The
+    connector-write idempotency gate (:func:`_connector_write_gate`) uses this to
+    apply the per-connector-per-write ``on_unknown`` policy: ``fail_closed``
+    SUPPRESSES the ambiguous write (possible silent miss; the operator
+    reconciles), ``fail_open`` lets it FIRE (possible duplicate, usually
+    recoverable).
+
+    This is DELIBERATELY distinct from :func:`read_before_write_suppression`,
+    which returns True ONLY for the CONFIRMED-delivered case (``delivery_done is
+    True`` + matching key). A confirmed-delivered write is mode-independent (it
+    always suppresses) — ``on_unknown`` governs ONLY the couldn't-confirm case.
+    A first-time write (no marker) or a changed-payload/target re-run (derives a
+    DIFFERENT key) is never ambiguous and never suppressed on this branch.
+
+    Fail-open: a missing/None ``run_ref``, a malformed ``run_ref``, a missing
+    ``node_ref``, or a non-dict ``markers`` returns ``False`` (never treated as
+    ambiguous), so a misconfigured run record never falsely fail-closes a write.
+    """
+    if not run_ref or not node_ref:
+        return False
+    if not isinstance(markers, dict):
+        return False
+    try:
+        derived = node_idempotency_key(run_ref, node_ref, index=index, payload=payload)
+    except ValueError:
+        # A malformed persisted run key must fail open (never treat as ambiguous).
+        return False
+    return any(
+        isinstance(marker, dict)
+        and marker.get("idempotency_key") == derived
+        and marker.get("delivery_done") is not True
         for marker in markers.values()
     )

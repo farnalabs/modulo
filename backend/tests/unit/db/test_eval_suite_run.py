@@ -646,13 +646,13 @@ def test_single_migration_head() -> None:
     # 0150_add_router_no_match_status (FAR-378) chains off 0149.
     chaining_off_0149 = [p for p in revisions if parents[p] == "0149_suite_run_trigger_kind"]
     assert [_basename(p) for p in chaining_off_0149] == ["0150_add_router_no_match_status.py"]
-    # 0151_fix_constraints (improve-database CHECKs + partial slug) chains off 0150.
+    # 0151_fix_constraints (main) chains off 0150.
     chaining_off_0150 = [p for p in revisions if parents[p] == "0150_add_router_no_match_status"]
     assert [_basename(p) for p in chaining_off_0150] == ["0151_fix_constraints.py"]
     # 0152_dismissed_by_user_id_index (improve-database FK index) chains off 0151.
     chaining_off_0151 = [p for p in revisions if parents[p] == "0151_fix_constraints"]
     assert [_basename(p) for p in chaining_off_0151] == ["0152_add_indexes.py"]
-    # 0153_add_numeric_check_constraints chains off 0152.
+    # 0153_add_numeric_check_constraints (main) chains off 0152.
     chaining_off_0152 = [p for p in revisions if parents[p] == "0152_dismissed_by_user_id_index"]
     assert [_basename(p) for p in chaining_off_0152] == ["0153_add_numeric_check_constraints.py"]
     # 0154_add_web_vital_events_time_index chains off 0153.
@@ -685,12 +685,24 @@ def test_single_migration_head() -> None:
     # 0163_rls_strict_oauth_auth_codes_token_families (on main, RLS fail-open close) chains off 0162.
     chaining_off_0162 = [p for p in revisions if parents[p] == "0162_rls_strict_parameter_schemas_sets"]
     assert [_basename(p) for p in chaining_off_0162] == ["0163_rls_strict_oauth_auth_codes_token_families.py"]
-    # 0164_connector_instance_degraded (FAR-495, this PR) chains off 0163 and is the head.
+    # 0164_add_missing_foreign_keys (DB-improvement FK sweep) chains off 0163.
     chaining_off_0163 = [p for p in revisions if parents[p] == "0163_rls_strict_oauth_auth_codes_token_families"]
-    assert [_basename(p) for p in chaining_off_0163] == ["0164_connector_instance_degraded.py"]
-    # Nothing chains off 0164 -> it is the single head.
-    chaining_off_0164 = [p for p in revisions if parents[p] == "0164_connector_instance_degraded"]
-    assert chaining_off_0164 == []
+    assert [_basename(p) for p in chaining_off_0163] == ["0164_add_missing_foreign_keys.py"]
+    # 0165_add_check_constraints chains off 0164.
+    chaining_off_0164 = [p for p in revisions if parents[p] == "0164_add_missing_foreign_keys"]
+    assert [_basename(p) for p in chaining_off_0164] == ["0165_add_check_constraints.py"]
+    # 0166_promote_uuid_fk_columns chains off 0165.
+    chaining_off_0165 = [p for p in revisions if parents[p] == "0165_add_check_constraints"]
+    assert [_basename(p) for p in chaining_off_0165] == ["0166_promote_uuid_fk_columns.py"]
+    # 0167_add_hot_query_indexes chains off 0166.
+    chaining_off_0166 = [p for p in revisions if parents[p] == "0166_promote_uuid_fk_columns"]
+    assert [_basename(p) for p in chaining_off_0166] == ["0167_add_hot_query_indexes.py"]
+    # 0168_connector_instance_degraded (FAR-495, this PR) chains off 0167 and is the head.
+    chaining_off_0167 = [p for p in revisions if parents[p] == "0167_add_hot_query_indexes"]
+    assert [_basename(p) for p in chaining_off_0167] == ["0168_connector_instance_degraded.py"]
+    # Nothing chains off 0168 -> it is the single head.
+    chaining_off_0168 = [p for p in revisions if parents[p] == "0168_connector_instance_degraded"]
+    assert chaining_off_0168 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

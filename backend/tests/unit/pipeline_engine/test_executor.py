@@ -29,6 +29,10 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from modulo.core.pipeline_engine.runtime_retry import (
+    COMPENSATION_FAILED_CODE,
+    CompensationFailedError,
+)
 from modulo.otel_bridge import trace_id_for_thread
 
 
@@ -372,6 +376,188 @@ async def test_resume_wires_reclassify_after_work_intact():
     assert order == ["apply_work_intact", "reclassify_after_work_intact"]
 
 
+async def test_resume_wires_retry_policy_into_graph_hash_and_compile():
+    """FAR-402 P5: resume() folds the pipeline retry_policy into the compile-cache
+    hash and threads ``pipeline_retry_policy`` + ``node_idempotency_key`` into
+    ``build_graph_from_json`` — so a checkpoint-resumed run executes with the
+    SAME per-node retry / per-edge retry / compensation as a fresh run.
+
+    This is the prove-the-fix test for the reviewer's CHANGES_REQUESTED finding 1:
+    without the change, ``get_or_compile`` would be called with the base hash and
+    ``build_graph_from_json`` would NOT receive ``pipeline_retry_policy`` — so this
+    test FAILS on the unpatched code.
+    """
+    from modulo.core.pipeline_engine.executor import compute_retry_aware_topology_hash
+
+    policy = {"on": ["failure"], "max_retries": 2}
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot, retry_policy=policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {"output": {"output": {"status": "completed", "cost_estimate_usd": 0.0}}},
+        }
+    ]
+    compiled = _mock_compiled(events)
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    goc_calls: list[tuple[Any, Any, str | None]] = []
+
+    def _spy_get_or_compile(pipeline_id, snapshot_id, compile_fn, *, graph_struct_hash=None, **_kwargs):
+        goc_calls.append((pipeline_id, snapshot_id, graph_struct_hash))
+        # Invoke the captured compile_fn so the build_graph_from_json spy records it.
+        compile_fn()
+        return compiled
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.get_or_compile",
+            side_effect=_spy_get_or_compile,
+        ),
+        patch("modulo.core.pipeline_engine.executor.build_graph_from_json") as spy_build,
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    # (a) graph_struct_hash equals compute_retry_aware_topology_hash(graph_json, policy)
+    assert len(goc_calls) == 1
+    observed_hash = goc_calls[0][2]
+    expected_hash = compute_retry_aware_topology_hash(snapshot.graph_json, policy)
+    assert observed_hash == expected_hash
+
+    # (b) build_graph_from_json received pipeline_retry_policy + node_idempotency_key
+    spy_build.assert_called_once()
+    build_kwargs = spy_build.call_args.kwargs
+    assert build_kwargs.get("pipeline_retry_policy") == policy
+    assert callable(build_kwargs.get("node_idempotency_key"))
+
+    # (c) the retry-aware hash differs from the no-policy base hash, so a policy
+    # PATCH forces a recompile rather than serving a stale (policy-less) graph.
+    base_hash = compute_retry_aware_topology_hash(snapshot.graph_json, None)
+    assert observed_hash != base_hash
+
+
+async def test_resume_fails_open_when_retry_policy_access_raises():
+    """CHANGES_REQUESTED finding 2 (MINOR): the resume path must mirror the
+    execute() path and fail OPEN to no-retry when the pipeline retry_policy
+    raises on access (malformed/legacy value). A bare getattr that raises must
+    NOT crash resume where execute degrades to no-retry."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    # Make pipeline.retry_policy RAISE on attribute access (legacy/malformed value).
+    from unittest.mock import PropertyMock
+
+    from modulo.core.pipeline_engine.executor import compute_retry_aware_topology_hash
+
+    pipe = _make_pipeline()
+    type(pipe).retry_policy = PropertyMock(side_effect=ValueError("legacy blob"))
+
+    # Build a resume session whose pipeline query returns our raising pipeline.
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = pipe
+    eval_result = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    eval_result.scalars.return_value = scalars_mock
+    eval_result.scalar_one_or_none.return_value = pipe
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one.return_value = snapshot
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
+
+    async def _execute(*_a: Any, **_k: Any) -> Any:
+        try:
+            return next(execute_results)
+        except StopIteration:
+            return count_result
+
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = _execute
+
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {"output": {"output": {"status": "completed", "cost_estimate_usd": 0.0}}},
+        }
+    ]
+    compiled = _mock_compiled(events)
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    goc_calls: list[str | None] = []
+
+    def _spy_get_or_compile(pipeline_id, snapshot_id, compile_fn, *, graph_struct_hash=None, **_kwargs):
+        goc_calls.append(graph_struct_hash)
+        compile_fn()
+        return compiled
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
+        patch("modulo.core.pipeline_engine.executor.build_graph_from_json") as spy_build,
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        # Must NOT raise — fails open to no-retry (empty policy).
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    # No policy threaded through -> base hash (legacy value ignored safely).
+    assert goc_calls == [compute_retry_aware_topology_hash(snapshot.graph_json, None)]
+    spy_build.assert_called_once()
+    assert not spy_build.call_args.kwargs.get("pipeline_retry_policy")
+
+
 # ---------------------------------------------------------------------------
 # FAR-198 — deterministic OTel trace context seeding + per-node span stamps
 # ---------------------------------------------------------------------------
@@ -492,6 +678,52 @@ async def test_stream_graph_maps_output_schema_validation_error_to_domain_code()
     detach.assert_called_once()
 
 
+async def test_stream_graph_maps_compensation_failed_error_to_terminal_status():
+    """FAR-402 P5 (§E): when a watched node's compensation edge itself fails, the
+    node wrapper raises ``CompensationFailedError`` and the executor must
+    terminalize the run as ``compensation_failed`` (never retry, never
+    ``failed``) with the canonical ``compensation_failed`` error code. The
+    runtime suite only asserts the exception type — this exercises the executor
+    terminalization branch (executor.py:4467) end to end through ``_stream_graph``.
+    """
+    compiled = _mock_compiled_raising(
+        CompensationFailedError(
+            node_id="node-a",
+            compensation_target="comp-n",
+            cause=RuntimeError("compensation boom"),
+        )
+    )
+
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, error_code, detail, _ntu = await executor._stream_graph(
+            compiled,
+            None,
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+        )
+
+    assert status == "compensation_failed"
+    assert error_code == COMPENSATION_FAILED_CODE
+    assert "compensation boom" in detail
+
+    published = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"]
+    assert len(published) == 1
+    assert published[0][1]["error"] == COMPENSATION_FAILED_CODE
+    executor._otel_bridge.end_run_root.assert_called_once()
+    detach.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -581,7 +813,7 @@ def _make_session_factory(session: AsyncMock) -> MagicMock:
     return MagicMock(side_effect=lambda: _ctx())
 
 
-def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
+def _make_resume_session(snapshot: MagicMock, retry_policy: dict[str, Any] | None = None) -> AsyncMock:
     """Session mock whose execute() order matches resume()'s query sequence.
 
     resume() queries the snapshot's graph_json FIRST (the atomic sandbox-capacity
@@ -589,6 +821,8 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     of execute(), so the shared _make_session iterator is not reusable here.
     """
     pipeline = _make_pipeline()
+    if retry_policy is not None:
+        pipeline.retry_policy = retry_policy
 
     pipeline_result = MagicMock()
     pipeline_result.scalar_one_or_none.return_value = pipeline
@@ -603,6 +837,10 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = []
     eval_result.scalars.return_value = scalars_mock
+    # The pipeline query (select(Pipeline)) resolves to this mock's
+    # scalar_one_or_none(); ensure it returns the pipeline (with any configured
+    # retry_policy) regardless of which iterator slot resume() consumes it from.
+    eval_result.scalar_one_or_none.return_value = pipeline
 
     count_result = MagicMock()
     count_result.scalar.return_value = 0

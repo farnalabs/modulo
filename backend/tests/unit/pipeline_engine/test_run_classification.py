@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session as SASession
 from modulo.core.pipeline_engine.classify import (
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
+    REASON_COMPENSATION_FAILED,
     REASON_DELIVERED,
     REASON_DELIVERED_EMAIL,
     REASON_NEEDS_HUMAN,
@@ -111,6 +112,15 @@ class TestDecisionTable:
             ("budget_exceeded", (_PR,), RunClassificationValue.excluded, REASON_BUDGET_EXCEEDED),
             ("router_no_match", (), RunClassificationValue.excluded, REASON_ROUTER_NO_MATCH),
             ("router_no_match", (_PR,), RunClassificationValue.excluded, REASON_ROUTER_NO_MATCH),
+            # FAR-402 P5: compensation_failed is a COUNTABLE no_delivery with its
+            # own explicit reason (a watched node AND its compensation path both
+            # failed) — never fail-safe. A complementary `unknown` row asserts a
+            # terminal status outside the excluded/countable buckets is EXCLUDED
+            # (not silently counted as no_delivery).
+            ("compensation_failed", (), RunClassificationValue.no_delivery, REASON_COMPENSATION_FAILED),
+            ("compensation_failed", (_PR,), RunClassificationValue.no_delivery, REASON_COMPENSATION_FAILED),
+            ("unknown", (), RunClassificationValue.excluded, "unrecognized_status:unknown"),
+            ("unknown", (_PR,), RunClassificationValue.excluded, "unrecognized_status:unknown"),
         ],
         ids=[
             "complete-no-pr",
@@ -127,6 +137,10 @@ class TestDecisionTable:
             "budget_exceeded-with-pr",
             "router_no_match-no-pr",
             "router_no_match-with-pr",
+            "compensation_failed-no-pr",
+            "compensation_failed-with-pr",
+            "unknown-no-pr",
+            "unknown-with-pr",
         ],
     )
     def test_terminal_status_matrix(

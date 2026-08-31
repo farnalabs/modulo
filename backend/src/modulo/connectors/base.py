@@ -499,6 +499,27 @@ class ConnectorBase(ABC):
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Write data to the external tool. Returns the created/updated resource."""
 
+    def on_unknown_for(self, resource: str) -> str:
+        """Effective ``on_unknown`` mode for a connector write to *resource*
+        (FAR-458).
+
+        Governs the FAR-458 connector-write idempotency gate's AMBIGUOUS-case
+        decision (couldn't-confirm-delivery). Three values, validated at
+        config-parse time:
+
+        - ``"fail_open"`` (default): on ambiguity the gate does NOT suppress —
+          the write fires (possible duplicate, usually recoverable).
+        - ``"fail_closed"``: on ambiguity the gate SUPPRESSES — the write does
+          not fire (possible silent miss; the operator reconciles).
+        - ``"off"``: the write is never deduped (gate bypassed entirely).
+
+        A CONFIRMED-delivered write (``delivery_done is True`` + matching key)
+        is suppressed in every mode except ``off`` — that is the point of dedup.
+        The default implements the fail-open contract of every other gate
+        failure mode here; connectors override to declare a per-op policy.
+        """
+        return "fail_open"
+
     async def compensate(
         self,
         operation: CompensationOperation,

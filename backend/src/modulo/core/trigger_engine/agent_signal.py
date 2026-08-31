@@ -189,7 +189,10 @@ async def _process_trigger(
     snapshot_id, snapshot_skip = await _resolve_snapshot_id(session, trigger, org_id)
     if snapshot_skip is not None:
         return [snapshot_skip]
-    assert snapshot_id is not None
+    if snapshot_id is None:
+        # Invariant: _resolve_snapshot_id returns (None, skip) together. Raising
+        # instead of asserting keeps the guard live under `python -O`.
+        raise RuntimeError(f"agent_signal trigger {trigger.id}: snapshot_id unresolved with no skip result")
 
     # Create child run within a SAVEPOINT so a failed insert only rolls back
     # the child-run, leaving the caller's transaction usable. A pause gate
@@ -225,7 +228,10 @@ async def _process_trigger(
 
     if create_skip is not None:
         return [create_skip]
-    assert child_run is not None
+    if child_run is None:
+        # Invariant: _create_child_run_in_savepoint returns (None, skip) together.
+        # Raising instead of asserting keeps the guard live under `python -O`.
+        raise RuntimeError(f"agent_signal trigger {trigger.id}: child run creation failed with no skip result")
 
     # Log TriggerEvent.
     await _log_signal_event(

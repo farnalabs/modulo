@@ -24,6 +24,8 @@ from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_evidence import RunEvidence
 
+_NODE_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
 
 class _FakeEvidenceProvider:
     def __init__(self, result: EvidenceResult) -> None:
@@ -244,10 +246,10 @@ class TestPostTerminalEvidenceProbes:
             run_id=run_id,
             org_id=uuid.uuid4(),
             final_status="complete",
-            completed_node_outputs={"node-a": _declared_success_output()},
+            completed_node_outputs={str(_NODE_A): _declared_success_output()},
         )
 
-        assert provider.probes == [(run_id, "node-a")]
+        assert provider.probes == [(run_id, str(_NODE_A))]
         rows = await _evidence_rows(factory)
         assert len(rows) == 1
         assert rows[0].run_id == run_id
@@ -262,7 +264,7 @@ class TestPostTerminalEvidenceProbes:
             run_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
             final_status="failed",
-            completed_node_outputs={"node-a": _declared_success_output()},
+            completed_node_outputs={str(_NODE_A): _declared_success_output()},
         )
 
         assert not provider.probes
@@ -277,7 +279,7 @@ class TestPostTerminalEvidenceProbes:
             run_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
             final_status="complete",
-            completed_node_outputs={"node-a": {"output": {"agent_status": "completed"}}},
+            completed_node_outputs={str(_NODE_A): {"output": {"agent_status": "completed"}}},
         )
 
         assert not provider.probes
