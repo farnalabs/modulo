@@ -280,7 +280,6 @@ import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
-import { useI18n } from 'vue-i18n'
 import RestConnectorConfigForm from '../components/connectors/RestConnectorConfigForm.vue'
 import { REST_FLAT_FIELDS, type RestConfigState, type RestCredsState } from '../components/connectors/RestConnectorConfigForm.vue'
 
