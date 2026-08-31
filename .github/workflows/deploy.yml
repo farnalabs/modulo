@@ -41,6 +41,11 @@ jobs:
             exit 0
           fi
           # If a deploy run is already in progress, batch this one - do not cancel/compete.
+          # FAR-492 (documented, accepted): a push and a workflow_dispatch can fire
+          # near-simultaneously; both register as in-progress within seconds, so this
+          # batching check collapses the second trigger. The residual race (both pass
+          # this check before either is visible) is accepted by design - the throttle
+          # anchor below still gates the second run behind the last real deploy.
           IN_PROGRESS="$(gh api \"repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?status=in_progress&branch=${{ github.ref_name }}\" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id] | .[0] // empty' 2>/dev/null || echo '')"
           if [ -n "$IN_PROGRESS" ]; then
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"

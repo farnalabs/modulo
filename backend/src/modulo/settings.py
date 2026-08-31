@@ -241,6 +241,16 @@ class Settings(BaseSettings):
     # bounds that accumulation while staying above the max node timeout so a
     # slow-but-healthy first node is never false-failed. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
+    # Budget of successful-claim cycles for claimed-but-nodeless SAQ zombies
+    # whose retry_policy does not cover "stall" (dispatcher_reconcile nodeless
+    # repair, FAR-509). A nodeless zombie executed ZERO nodes, so a re-dispatch
+    # cannot double-execute anything. This bounds the CLAIM CYCLES a zombie
+    # gets (terminal-fail once claim_count exceeds it) — it does NOT bound the
+    # enqueue rate: the rate is throttled separately to at most one re-dispatch
+    # per SAQ_CLAIMED_NODELESS_MINUTES window per run (dispatched_at is
+    # refreshed by every dispatch). A zombie that can never be re-claimed is
+    # ultimately bounded by the mid-graph-wedge age backstop.
+    saq_nodeless_redispatch_budget: int = Field(default=2, alias="SAQ_NODELESS_REDISPATCH_BUDGET", ge=1, le=10)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     # Default 30. The pool MUST stay >= SAQ_WORKER_CONCURRENCY + reserve (5):
     # every concurrent run holds a connection in pre-node setup (claim_run_async

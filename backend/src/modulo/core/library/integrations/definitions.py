@@ -35,15 +35,10 @@ SENTRY_INTEGRATION: dict[str, Any] = {
         "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
-        "auth_token": {
+        "token": {
             "type": "string",
             "description": "Sentry authentication token (org-level)",
             "required": True,
-        },
-        "dsn": {
-            "type": "string",
-            "description": "Sentry DSN for event ingestion",
-            "required": False,
         },
     },
     "tool_group": "monitoring",
@@ -101,7 +96,7 @@ AZURE_DEVOPS_INTEGRATION: dict[str, Any] = {
         "api_version": "7.1",
     },
     "credential_fields": {
-        "personal_access_token": {
+        "token": {
             "type": "string",
             "description": "Azure DevOps PAT with Code (Read/Write) and Build (Read) scopes",
             "required": True,
@@ -206,15 +201,10 @@ PAGERDUTY_INTEGRATION: dict[str, Any] = {
         "escalation_policy_id": "",
     },
     "credential_fields": {
-        "api_token": {
+        "token": {
             "type": "string",
             "description": "PagerDuty API token (v2)",
             "required": True,
-        },
-        "routing_key": {
-            "type": "string",
-            "description": "Events API v2 routing key for trigger/acknowledge/resolve",
-            "required": False,
         },
     },
     "tool_group": "incident_management",
@@ -272,7 +262,7 @@ GITLAB_INTEGRATION: dict[str, Any] = {
         "default_branch": "main",
     },
     "credential_fields": {
-        "personal_access_token": {
+        "token": {
             "type": "string",
             "description": "GitLab personal access token with api scope",
             "required": True,
@@ -464,7 +454,7 @@ N8N_INTEGRATION: dict[str, Any] = {
         "workflow_activation": True,
     },
     "credential_fields": {
-        "api_key": {
+        "token": {
             "type": "string",
             "description": "n8n API key",
             "required": True,

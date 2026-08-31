@@ -143,9 +143,18 @@ CAPACITY_REDISPATCH_SECONDS = 120
 # LangGraph checkpoints for its thread) after SAQ_CLAIMED_NODELESS_MINUTES is a
 # zombie: the execute_run watchdog (pipeline_execution.zombie_watchdog) normally
 # fails these at SAQ_SETUP_GRACE_SECONDS, but a wedged worker process that can
-# still refresh the DB heartbeat would otherwise slip through. This branch
-# terminal-fails the run (never re-dispatches — a re-dispatch could
-# double-execute a live-but-stuck execute_run).
+# still refresh the DB heartbeat would otherwise slip through. The reconcile
+# re-dispatches these (safe: zero nodes executed, so nothing can double-execute)
+# bounded by the retry budget (_should_redispatch_nodeless — retry_policy or
+# SAQ_NODELESS_REDISPATCH_BUDGET) and THROTTLED to one re-dispatch per
+# SAQ_CLAIMED_NODELESS_MINUTES window per run (_is_nodeless_redispatch_throttled
+# — the fresh key_suffix defeats SAQ dedupe, so without the throttle a
+# budget-eligible zombie would collect one duplicate no-op job per 60s tick),
+# CAPPED at NODELESS_REDISPATCH_MAX_PER_TICK re-dispatches per tick (fleet-wide
+# — mirrors the B3 enqueue-failed cap); terminal-fail once the budget is
+# exhausted (_fail_nodeless_run). A
+# never-re-claimable zombie is ultimately bounded by the B4 mid-graph-wedge age
+# backstop.
 _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
 
 # ---------------------------------------------------------------------------
@@ -167,6 +176,16 @@ ENQUEUE_FAILED_REDISPATCH_SECONDS = 120
 # window that hit hundreds of webhooks must not flood the queue the moment it
 # recovers. Beyond the cap the remaining rows are deferred to later ticks.
 ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK = 50
+
+# Per-tick re-dispatch cap for the nodeless-zombie branch — mirrors
+# ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK. After a fleet-wide worker wedge every
+# aged nodeless zombie becomes throttle-eligible in the SAME tick, and the
+# fresh key_suffix defeats SAQ dedupe, so without the cap the first recovery
+# tick floods the queue with one duplicate no-op job per zombie. Beyond the cap
+# the remaining zombies are deferred (no enqueue, no terminal-fail — they stay
+# running and become eligible again next tick); budget-exhausted rows still
+# terminal-fail (terminal-fail reduces load; it never enqueues).
+NODELESS_REDISPATCH_MAX_PER_TICK = 50
 
 # TTL backstop: an enqueue-failed run whose marker is older than this is
 # terminal-failed with ``dispatch_failed`` — but ONLY when Redis is verifiably
@@ -206,6 +225,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "deduped": 0,
     "nodeless_failed": 0,
     "nodeless_redispatched": 0,
+    "nodeless_capped": 0,
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
@@ -236,6 +256,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
     _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
     _dispatcher_reconcile_stats["nodeless_redispatched"] = stats.get("nodeless_redispatched", 0)
+    _dispatcher_reconcile_stats["nodeless_capped"] = stats.get("nodeless_capped", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
@@ -3759,6 +3780,12 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     max-length first node, zero checkpoints in between) could be false-failed.
     ``SAQ_CLAIMED_NODELESS_MINUTES`` must be tuned to exceed worst-case
     compile + first-node duration.
+
+    The nodeless re-dispatch throttle (at most one re-dispatch per window per
+    run, FAR-509) is enforced ROW-level in ``_reconcile_nodeless_repair`` via
+    ``_is_nodeless_redispatch_throttled`` — a row can match multiple branches,
+    so the row-level re-check is authoritative; this predicate deliberately
+    does NOT filter on ``dispatched_at``.
     """
     from sqlalchemy import and_
     from sqlalchemy import exists as sa_exists
@@ -3789,7 +3816,8 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
 
     The combined reconcile predicate can match a row via MULTIPLE branches
     (e.g. stale heartbeat AND nodeless); this discriminates the nodeless repair
-    (terminal-fail) from the stale repair (re-dispatch).
+    (budget- and throttle-bounded re-dispatch; terminal-fail on budget
+    exhaustion) from the stale repair (unconditional re-dispatch).
     """
     if row.status != "running":
         return False
@@ -3801,20 +3829,31 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
 
 
 def _should_redispatch_nodeless(row: Any) -> bool:
-    """Decide whether a nodeless zombie should be RE-DISPATCHED (not terminal-failed).
+    """Decide whether a nodeless zombie's retry BUDGET allows a re-dispatch.
 
     A nodeless zombie executed ZERO nodes (no checkpoint, no node_token_usage,
     no outputs_json), so re-dispatch is SAFE — there is nothing to
     double-execute, and these pipelines only create PRs after a node runs.
 
-    Retry budgeting (FAR — nodeless safe re-dispatch):
+    This is the pure budget decision ONLY — it does NOT bound the enqueue
+    rate. The rate is throttled separately in the repair branch
+    (:func:`_is_nodeless_redispatch_throttled`): at most one re-dispatch per
+    ``SAQ_CLAIMED_NODELESS_MINUTES`` window per run. Between the two, a
+    never-re-claimable zombie is ultimately bounded by the B4 mid-graph-wedge
+    age backstop.
+
+    Retry budgeting (FAR-509) — the budget bounds successful-claim CYCLES
+    (terminal-fail once ``claim_count`` exceeds it; it does NOT bound the
+    enqueue count):
       * ``retry_policy`` present (non-empty) with ``"stall"`` in ``on``: honor the
         ``max_retries`` budget. ``claim_count`` is 1 for the initial claim, so a
         re-dispatch is allowed while ``claim_count <= max_retries`` (initial
         attempt + up to ``max_retries`` retries).
       * ``retry_policy`` absent/None OR an empty policy (the column defaults to
-        ``{}``): re-dispatch ONCE only, bounded by ``claim_count <= 1`` (the
-        original claim has not yet been re-dispatched).
+        ``{}``): re-dispatch while ``claim_count`` is within the configurable
+        budget (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 2). Zero nodes have
+        executed, so every re-dispatch is safe; terminal-fail applies once the
+        budget is exhausted.
       * ``retry_policy`` present (non-empty) but WITHOUT ``"stall"`` in ``on``:
         terminal-fail — never re-dispatch a nodeless zombie for a trigger it does
         not cover.
@@ -3828,9 +3867,30 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # A non-empty policy that does not cover "stall" must NOT re-dispatch a
         # nodeless zombie — terminal-fail it.
         return False
-    # No stall retry policy (or no/empty policy): re-dispatch exactly once
-    # (only the un-re-redispatched claim).
-    return bool(row.claim_count <= 1)
+    # No stall retry policy (or no/empty policy): re-dispatch while within the
+    # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2 — FAR-509;
+    # claim_count is 1 for the un-re-dispatched initial claim). This bounds the
+    # successful-claim cycles, NOT the enqueue rate — the rate is throttled in
+    # the repair branch (one re-dispatch per nodeless window per run).
+    return bool(row.claim_count <= int(get_settings().saq_nodeless_redispatch_budget))
+
+
+def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
+    """Re-dispatch throttle for the nodeless repair (FAR-509): True when the
+    run was (re-)dispatched within the last ``nodeless_window`` minutes.
+
+    Without this, a run that stays ``running`` + nodeless with budget to spare
+    would be re-enqueued on EVERY 60s tick (the fresh ``key_suffix`` defeats
+    SAQ dedupe) — one duplicate no-op job per tick for the whole degraded
+    window. ``dispatched_at`` is refreshed by every dispatch
+    (``_record_dispatched`` writes it before enqueue), so this bounds the
+    enqueue rate to at most ONE re-dispatch per nodeless window per run.
+    ``dispatched_at IS NULL`` (never dispatched) is never throttled.
+    """
+    dispatched_at = getattr(row, "dispatched_at", None)
+    if dispatched_at is None:
+        return False
+    return bool((datetime.now(UTC) - dispatched_at).total_seconds() <= nodeless_window * 60)
 
 
 async def _fail_nodeless_run(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -4282,9 +4342,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
       * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
         progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
         puts_json both NULL + no LangGraph checkpoint for the thread):
-        nodeless zombie - terminal-failed with ``executor_stalled``, NEVER
-        re-dispatched (a re-dispatch could double-execute a live-but-stuck
-        execute_run).
+        nodeless zombie — safe to re-dispatch (zero nodes executed, so
+        nothing can double-execute). Bounded by the retry budget
+        (``_should_redispatch_nodeless``: retry_policy or
+        SAQ_NODELESS_REDISPATCH_BUDGET), THROTTLED to at most one
+        re-dispatch per nodeless window per run
+        (``_is_nodeless_redispatch_throttled``), and CAPPED at
+        ``NODELESS_REDISPATCH_MAX_PER_TICK`` re-dispatches per tick
+        (fleet-wide, mirroring the B3 enqueue-failed cap — budget-exhausted
+        rows still terminal-fail when the cap is hit); terminal-failed with
+        ``executor_stalled`` once the budget is exhausted.
       * awaiting_human/claimed: ``dispatcher='saq'``, heartbeat stale by
         2*SAQ_JOB_HEARTBEAT, AND no SAQ job in Redis (F6a gated recovery — the
         no-job gate is applied per-row). A half-resumed run whose ``resume_run``
@@ -4383,7 +4450,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             # The fresh heartbeat excludes it from the stale branch above
             # (that is the primary hang mechanism - a live heartbeat keeps
             # the run 'running' forever), so it gets its own predicate.
-            # Repaired by terminal-fail, NOT re-dispatch (see _fail_nodeless_run).
+            # Repaired by re-dispatch — budget-bounded (claim-cycle budget,
+            # terminal-fail on exhaustion) and rate-throttled to one
+            # re-dispatch per nodeless window per run (see
+            # _reconcile_nodeless_repair). The throttle is enforced ROW-level
+            # in the repair branch (a row can match multiple branches), so
+            # this predicate deliberately admits throttled rows.
             _nodeless_zombie_predicate(nodeless_window),
         )
         for org_id in org_ids:
@@ -4432,6 +4504,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         "deduped": 0,
         "nodeless_failed": 0,
         "nodeless_redispatched": 0,
+        "nodeless_capped": 0,
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
@@ -4843,40 +4916,93 @@ async def _reconcile_nodeless_repair(
     A nodeless zombie executed ZERO nodes (no checkpoint, no
     ``node_token_usage``, no ``outputs_json``), so re-dispatch is SAFE (no
     double-execution; these pipelines only create PRs after a node runs).
-    Re-dispatch it back to the queue (a fresh worker picks it up) instead of
-    terminal-failing, bounded by ``retry_policy`` / ``claim_count``. Only
-    terminal-fail when re-dispatch is NOT warranted (retry budget exhausted)
-    or the re-dispatch itself fails (fall back so the run is never left
-    dangling). Returns the (possibly updated) enqueue-failed counter when the
-    branch fully handled the row, ``None`` when the caller must proceed with
-    the normal repairs. Extracted from ``_reconcile_one_row`` (complexity
-    bound).
+    Four-way outcome (FAR-509):
+
+      * TERMINAL-FAIL — the retry budget is exhausted
+        (``_should_redispatch_nodeless`` False): terminal-fail exactly as
+        before, REGARDLESS of the throttle (waiting cannot help a run that can
+        no longer be re-dispatched). Checked FIRST, independent of the
+        throttle and of the per-tick cap (terminal-fail reduces load; it never
+        enqueues).
+      * THROTTLED — budget available but the run was (re-)dispatched within
+        the last ``nodeless_window`` minutes: skip silently this tick (no
+        enqueue, no terminal-fail). ``dispatched_at`` is refreshed by every
+        dispatch (``_record_dispatched`` writes it before enqueue), so this
+        bounds the enqueue rate to at most one re-dispatch per nodeless window
+        per run — without it, a healthy re-claimed run executing its first
+        long node (no checkpoint yet) would collect one duplicate no-op job
+        per 60s tick.
+      * CAPPED — budget available, window elapsed, but this tick has already
+        re-dispatched ``NODELESS_REDISPATCH_MAX_PER_TICK`` nodeless zombies
+        (per-tick fleet cap, mirroring the B3 enqueue-failed cap): skip — no
+        enqueue, no terminal-fail; the row stays running and becomes eligible
+        again next tick (budget and throttle are unaffected). Counted
+        ``nodeless_capped``; the warning logs once per tick.
+      * RE-DISPATCH — budget available, the throttle window elapsed, and
+        under the per-tick cap: enqueue a fresh ``execute_run`` (a new worker
+        claims it).
+
+    A re-dispatch that itself fails falls back to terminal-fail so the run is
+    never left dangling. Returns the (possibly updated) enqueue-failed counter
+    when the branch fully handled the row, ``None`` when the caller must
+    proceed with the normal repairs. Extracted from ``_reconcile_one_row``
+    (complexity bound).
     """
     if not _is_nodeless_zombie_row(row, nodeless_window):
         return None
-    if _should_redispatch_nodeless(row):
-        job_type = _reconcile_job_type(row.status)
-        key_suffix = uuid.uuid4().hex
-        await _redispatch_nodeless(
-            session,
-            q,
-            org_id,
-            row,
-            job_type,
-            key_suffix,
-            summary,
-            terminalized_run_ids,
+    if not _should_redispatch_nodeless(row):
+        # Budget exhausted (retry budget exhausted / policy excludes 'stall'):
+        # terminal-fail exactly as before — even when throttled, since waiting
+        # cannot help a run that can no longer be re-dispatched.
+        summary["nodeless_failed"] += 1
+        await _fail_nodeless_run(session, row.id, org_id)
+        # FAR-162 (P6'): the nodeless terminalizer writes a raw
+        # ORM UPDATE (never finalize_cost) — add the run so its
+        # compensating daily fact is recorded once the per-org
+        # transaction commits, like the other terminalizers.
+        terminalized_run_ids.append((row.id, org_id))
+        return enqueue_failed_redispatched
+    if _is_nodeless_redispatch_throttled(row, nodeless_window):
+        # Throttle (FAR-509): the run was (re-)dispatched within the last
+        # nodeless window — skip silently this tick (no duplicate enqueue, no
+        # terminal-fail). dispatched_at advances on every dispatch, so the
+        # next re-dispatch happens at the earliest one window later.
+        summary["skipped"] += 1
+        _log.info(
+            "dispatcher_reconcile: nodeless re-dispatch throttled for run %s (dispatched within the nodeless window)",
+            row.id,
         )
         return enqueue_failed_redispatched
-    # Re-dispatch not warranted (retry budget exhausted / policy excludes
-    # 'stall'): terminal-fail exactly as before.
-    summary["nodeless_failed"] += 1
-    await _fail_nodeless_run(session, row.id, org_id)
-    # FAR-162 (P6'): the nodeless terminalizer writes a raw
-    # ORM UPDATE (never finalize_cost) — add the run so its
-    # compensating daily fact is recorded once the per-org
-    # transaction commits, like the other terminalizers.
-    terminalized_run_ids.append((row.id, org_id))
+    if summary["nodeless_redispatched"] >= NODELESS_REDISPATCH_MAX_PER_TICK:
+        # Per-tick fleet cap (mirrors ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK):
+        # after a mass worker wedge every aged zombie becomes throttle-eligible
+        # in the SAME tick — defer the overflow to later ticks. No enqueue, no
+        # terminal-fail: the row stays running and becomes eligible again next
+        # tick (budget and throttle are unaffected). Budget-exhausted rows
+        # never reach this branch — the budget check above already
+        # terminal-failed them. The warning logs once per tick (first capped
+        # row), not once per row.
+        first_capped = summary["nodeless_capped"] == 0
+        summary["nodeless_capped"] += 1
+        if first_capped:
+            _log.warning(
+                "dispatcher_reconcile: nodeless re-dispatch cap hit (%d/tick); deferring run %s to a later tick",
+                NODELESS_REDISPATCH_MAX_PER_TICK,
+                row.id,
+            )
+        return enqueue_failed_redispatched
+    job_type = _reconcile_job_type(row.status)
+    key_suffix = uuid.uuid4().hex
+    await _redispatch_nodeless(
+        session,
+        q,
+        org_id,
+        row,
+        job_type,
+        key_suffix,
+        summary,
+        terminalized_run_ids,
+    )
     return enqueue_failed_redispatched
 
 
