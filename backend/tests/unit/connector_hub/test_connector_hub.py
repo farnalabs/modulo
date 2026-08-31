@@ -37,6 +37,22 @@ def _encrypt(payload: dict[str, Any]) -> bytes:
     return Fernet(_KEY.encode()).encrypt(json.dumps(payload).encode())
 
 
+def _encrypt_raw(payload: str) -> bytes:
+    """Encrypt a raw (non-JSON) string — how legacy bare-token credentials rows look."""
+    return Fernet(_KEY.encode()).encrypt(payload.encode())
+
+
+def _creds_capture_patch(captured: list[tuple[str, dict[str, Any]]]) -> Any:
+    """Patch _build_connector to record (type_id, creds) per call, still building for real."""
+    from modulo.core.connector_hub import _build_connector as real_build
+
+    def _wrapper(type_id: str, config: dict[str, Any] | None, creds: dict[str, Any], **kwargs: Any) -> Any:
+        captured.append((type_id, dict(creds)))
+        return real_build(type_id, config, creds, **kwargs)
+
+    return patch("modulo.core.connector_hub._build_connector", _wrapper)
+
+
 @dataclass
 class _FakeCI:
     """Minimal stand-in for ConnectorInstance (no DB needed)."""
@@ -757,3 +773,139 @@ async def test_initialise_shell_no_runtime_provider_creates_connector():
     assert connector.connector_type == ConnectorType.SHELL
     with pytest.raises(ValueError, match="Runtime provider not configured"):
         await connector.query(ConnectorQuery(resource="directory"))
+
+
+# ---------------------------------------------------------------------------
+# FAR-496: bare-token credentials_ciphertext read-side heal
+# ---------------------------------------------------------------------------
+
+
+async def test_initialise_bare_token_ciphertext_wraps_under_type_key_github():
+    """FAR-496: a github instance whose ciphertext decrypts to a bare token
+    string instantiates successfully — the bare scalar is wrapped under the
+    type's own 'token' key (previously 'api_key', so instantiation always
+    failed with "Missing credential key 'token'")."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt_raw("ghp_bare_token_123"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.GITHUB
+    assert captured == [("github", {"token": "ghp_bare_token_123"})]
+
+
+async def test_initialise_bare_token_ciphertext_rest_keeps_api_key_wrap():
+    """FAR-496: rest is a multi-key (JSON-dict credentials) type — a bare
+    scalar still wraps under the legacy 'api_key' key (unchanged)."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="rest",
+        config_json={"base_url": "https://api.example.com"},
+        credentials_ciphertext=_encrypt_raw("rest_bare_api_key"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert captured == [("rest", {"api_key": "rest_bare_api_key"})]
+
+
+async def test_initialise_bare_token_ciphertext_jira_keeps_api_key_wrap():
+    """FAR-496: jira requires multi-key JSON-dict credentials — a bare scalar
+    still wraps under the legacy 'api_key' key (unchanged)."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="jira",
+        config_json={"instance": "test.atlassian.net"},
+        credentials_ciphertext=_encrypt_raw("jira_bare_token"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert captured == [("jira", {"api_key": "jira_bare_token"})]
+
+
+async def test_initialise_json_dict_ciphertext_used_as_is_for_token_keyed_type():
+    """FAR-496: a JSON-dict ciphertext is still used as-is — no re-wrapping
+    happens for token-keyed types when the plaintext is already a dict."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt({"token": "ghp_dict_token"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.GITHUB
+    assert captured == [("github", {"token": "ghp_dict_token"})]
+
+
+@pytest.mark.parametrize(
+    ("connector_type_id", "bare_token", "expected_key"),
+    [
+        ("slack", "xoxb_bare_token", "bot_token"),
+        ("asana", "asana_pat_bare", "personal_access_token"),
+        ("monday", "monday_key_bare", "api_key"),
+    ],
+)
+async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
+    connector_type_id, bare_token, expected_key
+):
+    """FAR-496: types with a non-'token' credential key (slack bot_token,
+    asana personal_access_token) and single-'api_key' types (monday) wrap
+    bare scalars under their own key."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id=connector_type_id,
+        credentials_ciphertext=_encrypt_raw(bare_token),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == connector_type_id
+    assert captured == [(connector_type_id, {expected_key: bare_token})]

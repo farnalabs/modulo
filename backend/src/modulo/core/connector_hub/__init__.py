@@ -93,6 +93,18 @@ _LOCALHOST_5678: str = "http://localhost:5678"
 _LOCALHOST_8111: str = "http://localhost:8111"
 _LOCALHOST_9000: str = "http://localhost:9000"
 
+# FAR-496 read-side heal: the REST create/update endpoints store `credentials`
+# as a bare string, Fernet-encrypted into `credentials_ciphertext`. Token-keyed
+# connector types below read a DIFFERENT credential key in ``_build_connector``,
+# so legacy bare-token ciphertext rows for those types always failed
+# instantiation with "Missing credential key 'token'". The bare-scalar fallback
+# wrap in ``initialise()`` therefore wraps a decrypted bare scalar under the
+# connector type's OWN single credential key (see ``_bare_credential_key``),
+# healing legacy rows at read time — no write-side migration needed. Multi-key
+# types (jira, trello, jenkins, confluence, datadog, rest, ticket-tracker)
+# require JSON-dict credentials and keep the legacy "api_key" default, as do
+# plugin types.
+
 
 class ConnectorNotFoundError(KeyError):
     """Raised when hub.get() is called with an unregistered connector ID."""
@@ -382,8 +394,11 @@ class ConnectorHub:
                                 plaintext = f.decrypt(ciphertext).decode("utf-8")
                                 # Multi-field creds round-trip: a JSON dict in the
                                 # ciphertext is used as-is (REST auth_mode/token/
-                                # api_key/...); a bare scalar falls back to the
-                                # legacy single api_key wrapper.
+                                # api_key/...); a bare scalar is wrapped under the
+                                # connector type's own single credential key
+                                # (FAR-496 read-side heal — see
+                                # _bare_credential_key), falling back to the
+                                # legacy single api_key wrapper for unlisted types.
                                 try:
                                     parsed_plain = json.loads(plaintext)
                                 except json.JSONDecodeError:
