@@ -647,6 +647,39 @@ regression that silently weakens the suite:
   assert inside is reachable and meaningful. Move the assertion after the
   ``with`` block (asserting on the recorded ``exc_info.value`` is the canonical
   form), or make it the intentional trigger with ``pytest.raises(AssertionError)``
+- a ``dict`` literal that *repeats the same key* more than once —
+  ``{'a': 1, 'a': 2}``, ``{key: 1, key: 2}``. Python evaluates the duplicate
+  keys in source order and silently keeps only the LAST value, so the first
+  occurrence is dead data: an expected-value dict, a mock ``side_effect``
+  table, a request payload, or a config overlay holds an entry that never
+  applies while a reader (and a mutation-testing run) believes both are used.
+  Two identical keys are almost always copy-paste from editing one case into
+  an existing dict — and when the duplicate sits in a *rewrite* (the value the
+  code under test is compared against), the dead first entry desynchronizes
+  the test's expectation from its source. This is the dict-data twin of the
+  duplicate-membership-element lens, which owns repeated elements in
+  list/tuple/set membership containers; a dict literal has a different shape
+  (``ast.Dict`` pairs, not elements) that lens cannot see. Byte-identical
+  pure keys (constants, names, attribute paths, subscripts — the
+  ``_stable_dump`` family) are flagged; call/comprehension keys (may carry
+  side effects or non-determinism) and ``**other`` unpacking (dynamic by
+  nature) are left alone
+- an *unseeded* random-number generator constructed in test code —
+  ``random.Random()``/``random.Random(seed=None)`` (and the ``from random
+  import Random`` bare-name twin), ``numpy.random.RandomState()``, and
+  ``numpy.random.default_rng()`` (with ``np`` the alias spelling). An RNG
+  constructed with no seed draws its state from OS entropy, so every run of
+  the test produces DIFFERENT data: a failing run cannot be re-run with the
+  same inputs (the failure is unreproducible by construction), and a
+  mutation-testing run observes inputs that no real run ever drew. This is
+  the construction twin of the fresh-random-draw lens (which owns a draw
+  standing in an assertion) and the random-reseed lens (which owns the shared
+  global generator) — nowhere else does this file bless ``Random(N)`` as the
+  deterministic form, so an unseeded construction defeats that contract. Pass
+  an explicit seed (``random.Random(0)``, ``default_rng(seed=0)``) so the run
+  is reproducible. Calls carrying any positional argument or a non-``None``
+  ``seed=`` are seeded by definition and left alone; the bare ``Random(...)``
+   spelling is only judged when the module imports the name from ``random``
 - a wall-clock *elapsed* measure compared inside an ``assert`` —
   ``assert time.monotonic() - started < 1.0``, ``assert deadline -
    time.time() > 0.1``, ``assert (time.perf_counter() - t0) == 0.5``. An
@@ -9897,6 +9930,248 @@ def test_point_collapsed_range_lens_flags_degenerate_bounds():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _point_collapsed_range_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _duplicate_dict_key_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``dict`` literal that repeats
+    the same (pure) key more than once — ``{'a': 1, 'a': 2}``,
+    ``{key: 1, key: 2}``, ``{'x': 1, 'y': 2, 'x': 3}``. Python evaluates the
+    duplicate keys in source order and silently keeps only the LAST value, so
+    the first occurrence is dead data: an expected-value dict, a mock
+    ``side_effect`` table, a request payload, or a config overlay carries an
+    entry that never applies while a reader believes both are used. Almost
+    always copy-paste from editing one case into an existing dict. Byte-
+    identical pure keys (constants, names, attribute paths, subscripts —
+    the ``_stable_dump`` set) are flagged; call/comprehension keys (may carry
+    side effects or non-determinism) and ``**other`` unpacking (dynamic keys)
+    are left alone."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        seen: dict[str, int] = {}
+        for key in node.keys:
+            if key is None:
+                continue  # ``{**other}`` unpacking supplies dynamic keys
+            key_dump = _stable_dump(key)
+            if key_dump is None:
+                continue  # dynamic key cannot be judged or compared
+            if key_dump in seen:
+                found.append(
+                    (
+                        node.lineno,
+                        f"dict literal repeats key {ast.unparse(key)} (first occurrence at line "
+                        f"{seen[key_dump]}); Python silently keeps only the last value, so the "
+                        "earlier entry is dead data (drop the duplicate key)",
+                    )
+                )
+                break
+            seen[key_dump] = node.lineno
+    return found
+
+
+def test_no_duplicate_dict_literal_keys():
+    """A ``dict`` literal that repeats the same key — ``{'a': 1, 'a': 2}``,
+    ``{key: 1, key: 2}`` — silently drops the first value: Python evaluates
+    the keys in order and keeps only the last occurrence, so an expected-value
+    dict, a mock ``side_effect`` table, or a request payload carries an entry
+    that never applies. When the duplicate sits in the expected value, the dead
+    first entry desynchronizes the assertion from its source. This is the
+    dict-data twin of the duplicate-membership-element lens (list/tuple/set
+    membership containers only); a dict literal is a different AST shape it
+    cannot see. Identical pure keys are flagged; calls/comprehensions and
+    ``**``-unpacking are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _duplicate_dict_key_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} dict literal(s) with a duplicate key.\n"
+        "Python keeps only the last of two identical keys, so the first occurrence is dead\n"
+        "data that a reader and a mutation-testing run believe is used; drop the duplicate.\n" + "\n".join(violations)
+    )
+
+
+def test_duplicate_dict_key_lens_flags_dead_first_values():
+    """Synthetic positive/negative control for the duplicate-dict-key lens: it
+    must flag every dict literal that repeats a pure key (constants, names,
+    attribute paths, nested pure values) and ignore distinct keys, dynamic
+    ``**``-unpacking, repeated *call* keys, and dict comprehensions."""
+    positive_sources = [
+        "def test_foo():\n    payload = {'a': 1, 'a': 2}\n",
+        "def test_foo():\n    assert get() == {'k': 'v1', 'k': 'v2'}\n",
+        "def test_foo():\n    mock.side_effect = {'k': 1, 'k': 2}\n",
+        "def test_foo():\n    d = {KEY: 1, KEY: 2}\n",
+        "def test_foo():\n    d = {'x': 1, 'y': 2, 'x': 3}\n",
+        "def test_foo():\n    cfg = {item.kind: 1, item.kind: 2}\n",
+        "def test_foo():\n    d = {'a': {'n': 1}, 'a': {'n': 2}}\n",
+        "def test_foo():\n    d = {**base, 'a': 1, 'a': 2}\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_dict_key_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    d = {'a': 1, 'b': 2}\n",
+        "def test_foo():\n    d = {**other, 'a': 1}\n",
+        "def test_foo():\n    d = {f(x): 1, f(x): 2}\n",
+        "def test_foo():\n    d = {'a': 1}\n",
+        "def test_foo():\n    d = {k: None for k in keys}\n",
+        "def test_foo():\n    d = {'a' + 'b': 1, 'ab': 2}\n",
+        "def test_foo():\n    return {'x': 1} or {'x': 2}\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_dict_key_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _rng_construction_has_seed(call: ast.Call) -> bool:
+    """True when an RNG constructor call carries an explicit seed.
+
+    Any positional argument counts as a seed; a ``seed=None`` keyword (or a
+    leading literal ``None``) is the same as omitting the seed entirely — the
+    OS-entropy path — and does not count."""
+    for arg in call.args:
+        if isinstance(arg, ast.Constant) and arg.value is None:
+            continue
+        return True
+    for keyword in call.keywords:
+        if keyword.arg == "seed":
+            if isinstance(keyword.value, ast.Constant) and keyword.value.value is None:
+                continue
+            return True
+    return False
+
+
+def _unseeded_rng_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every random-number generator
+    constructed *without a seed* in a test module — ``random.Random()``,
+    ``random.Random(seed=None)``, the ``from random import Random`` bare-name
+    twin, ``numpy.random.RandomState()``, and ``numpy.random.default_rng()``
+    (with ``np`` the alias spelling). An RNG constructed with no explicit seed
+    draws its state from OS entropy, so every run produces a DIFFERENT dataset:
+    a failing test cannot be re-run with the same inputs, and a mutation-testing
+    run observes inputs no real run drew — the failure is unreproducible by
+    construction. This is the construction twin of the fresh-random-draw lens
+    (a draw standing in an assertion) and the global-reseed lens (the shared
+    ``random`` singleton); wherever this suite blesses determinism it blesses
+    ``random.Random(N)``, so an unseeded construction defeats that contract.
+    The bare ``Random(...)`` spelling is judged only when the module imports the
+    name from ``random`` — otherwise it is some other Random the lens cannot
+    know. Calls carrying any positional argument or a non-``None`` ``seed=`` are
+    seeded by definition and are left alone."""
+    from_random_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "random"
+        for alias in node.names
+    }
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        kind = None
+        if isinstance(func, ast.Attribute):
+            attr = func.attr
+            base = func.value
+            if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+                outer, mid = base.value.id, base.attr
+                if outer in ("numpy", "np") and mid == "random" and attr in ("RandomState", "default_rng"):
+                    kind = attr
+            elif isinstance(base, ast.Name) and base.id == "random" and attr == "Random":
+                kind = "Random"
+        elif isinstance(func, ast.Name) and func.id == "Random" and "Random" in from_random_names:
+            kind = "Random"
+        if kind is None:
+            continue
+        if _rng_construction_has_seed(node):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"{ast.unparse(node)} constructs a random-number generator without a seed — every "
+                "run draws different data, so a failure cannot be reproduced with the same inputs; "
+                "pass an explicit seed (e.g. random.Random(0))",
+            )
+        )
+    return found
+
+
+def test_no_unseeded_rng_construction():
+    """A random-number generator constructed without a seed —
+    ``random.Random()``, ``random.Random(seed=None)``,
+    ``numpy.random.RandomState()``, ``numpy.random.default_rng()`` — draws its
+    state from OS entropy, so every run of the test produces a different
+    dataset: a failing run cannot be re-run with the same inputs (unreproducible
+    by construction), and a mutation-testing run observes inputs no real run
+    drew. This is the construction twin of the fresh-random-draw lens (a draw
+    standing in an assertion) and the global-reseed lens (the shared ``random``
+    singleton); the deterministic form this suite blesses is
+    ``random.Random(N)``, so passing an explicit seed restores reproducibility.
+    Any positional argument or a non-``None`` ``seed=`` counts as seeded; the
+    bare ``Random(...)`` spelling is judged only under a ``from random import
+    Random``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unseeded_rng_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unseeded random-number generator construction(s).\n"
+        "An RNG constructed without a seed draws fresh entropy every run, so failures are\n"
+        "unreproducible and a mutation-testing run observes inputs no real run drew; pass an\n"
+        "explicit seed (e.g. random.Random(0)) to pin the dataset.\n" + "\n".join(violations)
+    )
+
+
+def test_unseeded_rng_lens_flags_nondeterministic_constructions():
+    """Synthetic positive/negative control for the unseeded-RNG lens: it must
+    flag every seedless construction (``random.Random``, the bare ``Random()``
+    twin, explicit ``seed=None``, numpy ``RandomState``/``default_rng``, at
+    module or function scope) and ignore seeded constructions, calls on an
+    already-constructed generator, bare ``Random`` without the from-import,
+    and unrelated random reads."""
+    positive_sources = [
+        "def test_foo():\n    rng = random.Random()\n",
+        "def test_foo():\n    import random\n    random.Random()\n",
+        "def test_foo():\n    rng = random.Random(seed=None)\n",
+        "from random import Random\ndef test_foo():\n    rng = Random()\n",
+        "def test_foo():\n    rng = np.random.RandomState()\n",
+        "def test_foo():\n    rs = numpy.random.default_rng()\n",
+        "import random\nrng = random.Random()\n",
+        "def test_foo():\n    from random import Random\n    rng = Random()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unseeded_rng_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    rng = random.Random(42)\n",
+        "def test_foo():\n    rng = random.Random(seed=7)\n",
+        "def test_foo():\n    rng = random.Random([1, 2, 3])\n",
+        "def test_foo():\n    rng = default_rng(0)\n",
+        "def test_foo():\n    rng = np.random.default_rng(seed=1)\n",
+        "def test_foo():\n    rng = np.random.RandomState(42)\n",
+        "def test_foo():\n    x = random.random()\n",
+        "def test_foo():\n    assert rng.random()\n",
+        "def test_foo():\n    Random()\n",
+        "def test_foo():\n    rng = other.Random()\n",
+        "def test_foo():\n    random.seed(42)\n",
+        "def test_foo():\n    rng = seeded_factory()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unseeded_rng_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 #: Wall-clock reads (``time.<name>()`` attribute spellings) whose subtraction
