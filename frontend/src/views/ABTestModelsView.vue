@@ -66,6 +66,7 @@
           <Button
             as="router-link"
             :to="`/pipelines/${selectedPipelineId}/editor`"
+            type="button"
             data-testid="variant-builder-create-snapshot"
           >
             {{ $t('views.variantCreator.create_snapshot') }}
