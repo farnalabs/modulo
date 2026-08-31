@@ -179,6 +179,70 @@ describe('RestConnectorConfigForm', () => {
     expect(await validateAndFlush(wrapper)).toBe(true)
   })
 
+  it('rejects switching auth_mode to bearer WITHOUT a token (mode change demands the new secret)', async () => {
+    // Repro (FAR-466): edit an existing api_key connector, switch the dropdown
+    // to bearer, save without typing a token. auth_mode is an IDENTITY field, so
+    // the switch flips credsIdentityDirty (NOT credsDirty) and the old
+    // `edit && !credsDirty` gate LEFT the secret-required checks suppressed —
+    // a silently broken connector. The mode switch must demand a bearer token.
+    const { wrapper, credentials } = mountForm('edit', {
+      auth_mode: 'api_key',
+      api_key: '',
+      apiKeyIn: 'header',
+      header_name: 'X-API-Key',
+      query_param_name: '',
+    })
+    await wrapper.vm.$nextTick()
+    // Untouched edit prefill still validates (no secret demanded yet).
+    expect(await validateAndFlush(wrapper)).toBe(true)
+    credentials.value.auth_mode = 'bearer'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    // credsDirty stays false, but the mode changed away from the stored mode →
+    // bearer requires a token.
+    expect(credentials.value.auth_mode).toBe('bearer')
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Bearer token is required')
+  })
+
+  it('passes switching auth_mode to bearer WITH the new-mode token', async () => {
+    const { wrapper, credentials } = mountForm('edit', {
+      auth_mode: 'api_key',
+      api_key: '',
+      apiKeyIn: 'header',
+      header_name: 'X-API-Key',
+      query_param_name: '',
+    })
+    await wrapper.vm.$nextTick()
+    credentials.value.auth_mode = 'bearer'
+    credentials.value.token = 'abc'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
+  it('still passes an identity-only edit that does NOT change auth_mode (no secret demanded)', async () => {
+    // header_name is an identity field but NOT auth_mode: editing it must keep
+    // credsDirty false AND not trip the mode-changed gate, so validate() stays
+    // lenient (no re-entered secret required).
+    const { wrapper, credsDirty, credsIdentityDirty, credentials } = mountForm('edit', {
+      auth_mode: 'api_key',
+      api_key: '',
+      apiKeyIn: 'header',
+      header_name: 'X-API-Key',
+      query_param_name: '',
+    })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    credentials.value.header_name = 'X-API-Key-V2'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(credsDirty.value).toBe(false)
+    expect(credsIdentityDirty.value).toBe(true)
+    expect(credentials.value.auth_mode).toBe('api_key')
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
   it('renders the three on_unknown options and their help text', async () => {
     const { wrapper } = mountForm()
     await wrapper.vm.$nextTick()

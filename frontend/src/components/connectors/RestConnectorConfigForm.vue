@@ -351,7 +351,21 @@ function validate(): boolean {
   // write-only and read back as empty, so a prefill (credsDirty === false)
   // must not be forced to validate a secret. Only validate a credential the
   // user actually edited. On create it stays strictly required.
-  const editingExisting = props.mode === 'edit' && !credsDirty.value
+  //
+  // Exception (FAR-466 iteration 5): a SWITCH of auth_mode is a secret-requiring
+  // edit even when no secret was re-typed. auth_mode lives in IDENTITY_FIELDS,
+  // so changing it flips credsIdentityDirty (NOT credsDirty); the old
+  // `!credsDirty` gate therefore stayed TRUE and suppressed the secret checks
+  // on a mode change — reproducing edit an api_key connector → switch to bearer
+  // → save without a token → backend preserveStoredSecret keeps the old secret
+  // under auth_mode=bearer → `_normalise_auth` raises
+  // "REST bearer auth requires creds['token']" on every later query. So a mode
+  // change away from the mount-time (stored) auth_mode must run the NEW mode's
+  // required-field checks, while an identity-only edit that leaves auth_mode
+  // untouched (e.g. header_name) must still save without demanding a secret.
+  const modeChanged = baselineAuthMode.value !== null
+    && credentials.value.auth_mode !== baselineAuthMode.value
+  const editingExisting = props.mode === 'edit' && !credsDirty.value && !modeChanged
   if (!editingExisting) {
     if (authMode === 'bearer' && !credentials.value.token) {
       errors.token = t('connectors.rest.token_required')
@@ -395,6 +409,10 @@ function validate(): boolean {
 //     real value).
 // Both baselines are captured at mount and compared per-field-set, so a
 // programmatic prefill/reset never marks either channel dirty.
+//
+// auth_mode is additionally captured on its own so validate() can distinguish a
+// real MODE SWITCH from an identity-only edit. A switch away from the stored
+// mode demands the NEW mode's secret; an identity-only edit must not (FAR-466).
 const SECRET_FIELDS = ['token', 'api_key', 'username', 'password'] as const
 const IDENTITY_FIELDS = ['auth_mode', 'apiKeyIn', 'header_name', 'query_param_name'] as const
 function secretSnapshot(): string {
@@ -405,9 +423,15 @@ function identitySnapshot(): string {
 }
 const credsBaseline = ref(secretSnapshot())
 const identityBaseline = ref(identitySnapshot())
+// The auth_mode echoed by the edit prefill (via prefillRestConfig). Non-null
+// only after mount; a null baseline means validate() ran before the prefill
+// settled, in which case a mode switch cannot be detected and the conservative
+// credsDirty-only gate is used.
+const baselineAuthMode = ref<string | null>(null)
 onMounted(() => {
   credsBaseline.value = secretSnapshot()
   identityBaseline.value = identitySnapshot()
+  baselineAuthMode.value = credentials.value.auth_mode ?? null
 })
 watch(
   () => secretSnapshot(),
