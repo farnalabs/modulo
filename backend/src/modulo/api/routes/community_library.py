@@ -64,6 +64,25 @@ async def list_community(
     return {"items": items, "total": len(items), "synced_at": synced_at}
 
 
+async def _fetch_entry_content(content_sha256: str) -> Any:
+    """Fetch and parse an entry blob, failing open to ``None`` on any error."""
+    settings = get_settings()
+    client = LibraryClient(
+        endpoint=settings.modulo_library_endpoint,
+        root_public_key_pem=settings.modulo_library_root_public_key,
+        timeout_seconds=settings.modulo_library_sync_timeout_seconds,
+    )
+    try:
+        blob = await client.fetch_blob(content_sha256)
+        if blob is not None:
+            return json.loads(blob.decode("utf-8"))
+    except Exception:
+        _log.exception("community_library.get_entry_blob")
+    finally:
+        await client.close()
+    return None
+
+
 @router.get("/{entry_id}")
 async def get_entry(
     entry_id: str,
@@ -84,21 +103,7 @@ async def get_entry(
     content: Any = None
     content_sha256 = entry.get("content_sha256")
     if isinstance(content_sha256, str) and content_sha256:
-        settings = get_settings()
-        client = LibraryClient(
-            endpoint=settings.modulo_library_endpoint,
-            root_public_key_pem=settings.modulo_library_root_public_key,
-            timeout_seconds=settings.modulo_library_sync_timeout_seconds,
-        )
-        try:
-            blob = await client.fetch_blob(content_sha256)
-            if blob is not None:
-                content = json.loads(blob.decode("utf-8"))
-        except Exception:
-            _log.exception("community_library.get_entry_blob")
-            content = None
-        finally:
-            await client.close()
+        content = await _fetch_entry_content(content_sha256)
     result = dict(entry)
     result["content"] = content
     return result
