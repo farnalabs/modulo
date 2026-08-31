@@ -360,6 +360,28 @@ regression that silently weakens the suite:
    same — configure the double (``return_value``/``side_effect``) and verify
    through ``assert_called*``/attribute checks instead of comparing to a
    constructor call
+ - an ``assert x in <mock>`` / ``assert x not in <mock>`` membership probe whose
+   container side is a ``unittest.mock`` double — a mock factory call
+   (``MagicMock()``/``AsyncMock()``/``Mock()`` or the ``mocker.``/
+   ``mock.``-qualified twins) or a plain attribute chain rooted at a mock-flagged
+   name (``mock``, ``mocker``, ``_mock_create``, ``mock_run``, ...). A MagicMock
+   supports ``__contains__`` by generating a fresh child double and returning it
+   as a truthy sentinel — never by consulting the recorded calls — so ``assert x
+   in <mock>`` ALWAYS PASSES and ``assert x not in <mock>`` ALWAYS FAILS no
+   matter what the code under test recorded: the behavioural check is dead. (A
+   plain ``Mock`` without ``__contains__`` fails with a confusing ``TypeError``
+   instead.) This is the ``__contains__`` sibling of the ``__eq__``-identity
+   Mock lenses: membership on a double is almost always a broken attempt to ask
+   "was this argument recorded?", which should be
+   ``mock.assert_any_call(...)``/``assert_not_called()`` or membership against
+   the *real* recorded-call containers ``mock.call_args_list``/``mock.method_calls``/
+   ``mock.mock_calls``/``mock.await_args_list`` that the double documents.
+   Attribute-path accessors that legitimately serve real containers
+   (``call_args``/``call_args_list``/``method_calls``/``mock_calls``/
+   ``await_args``/``await_args_list``/``return_value``/``side_effect``/
+   ``kwargs``/``args``) are left alone, as are subscripts
+   (``mock.return_value['plugins']``), method calls on the double, and
+   non-mock containers
  - ``assert`` on a *container literal* whose truthiness is fixed at source time
   — ``assert [x]``, ``assert {}``, ``assert not [y, z]``, and their
   ``list``/``dict``/``set``/``tuple`` literal twins. A literal container is
@@ -2801,6 +2823,187 @@ def test_empty_container_membership_lens_flags_impossible_membership():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
+
+
+#: pytest-framework fixtures / ``unittest.mock`` attributes whose values are *real*
+#: containers (recorded call history, configured return values, captured kwargs) —
+#: membership against them is meaningful and must not be flagged by the
+#: mock-membership lens.
+_MOCK_REAL_CONTAINER_ACCESSORS = frozenset(
+    {
+        "args",
+        "await_args",
+        "await_args_list",
+        "call_args",
+        "call_args_list",
+        "call_count",
+        "called",
+        "kwargs",
+        "method_calls",
+        "mock_calls",
+        "return_value",
+        "side_effect",
+    }
+)
+
+#: ``unittest.mock`` factory constructors: a call to any of these produces a fresh
+#: double whose ``__contains__`` (for the magic variants) returns a truthy sentinel.
+_MOCK_FACTORY_CONSTRUCTORS = frozenset({"Mock", "MagicMock", "AsyncMock"})
+
+
+def _is_mock_flagged_name(name: str) -> bool:
+    """Return True when ``name`` (a bare root identifier) reads as a mock double
+    — ``mock``/``mocker``/``mocks``, ``_mock*``, ``*_mock``, and ``mock*``
+    spellings cover the suite's conventional double variable names
+    (``mock_run``, ``mock_create``, ``_mock_canary``, ...)."""
+    root = name.lower()
+    return root in ("mocker", "mocks") or root.startswith(("mock", "_mock")) or root.endswith("_mock")
+
+
+def _mock_container_expression(node: ast.AST) -> str | None:
+    """Return the source spelling of ``node`` when it denotes a ``unittest.mock``
+    double used as the *container* side of a membership test.
+
+    Accepts a mock factory call (``MagicMock()``, ``mocker.MagicMock()``,
+    ``mock.AsyncMock()``, ...) or a plain name/attribute chain rooted at a
+    mock-flagged name and made only of plain attribute links — ``mock``,
+    ``mock.calls``, ``mocker.recorded``, ``_mock_create.history``. Returns
+    ``None`` for anything else, so the real recorded-call containers and
+    configured values are never wrongly taken for doubles:
+
+    - attribute chains that pass through a real-container accessor (the
+      ``call_args``/``call_args_list``/``kwargs``/``return_value`` family in
+      ``_MOCK_REAL_CONTAINER_ACCESSORS``) — membership there is meaningful
+    - subscripts (``mock.return_value['plugins']``) — the subscript is resolved
+      against whatever the double's attribute actually held
+    - method calls on the double (``mock.items()``) and non-factory calls
+      (``mock_run.error_detail.lower()``) — the trailing call resolves the real
+      value
+    - any expression not rooted at a mock-flagged name
+    """
+    if isinstance(node, ast.Call):
+        if _callable_name(node.func) in _MOCK_FACTORY_CONSTRUCTORS:
+            return ast.unparse(node)
+        return None
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        cur: ast.AST = node
+        while isinstance(cur, ast.Attribute):
+            if cur.attr in _MOCK_REAL_CONTAINER_ACCESSORS:
+                return None
+            cur = cur.value
+        if isinstance(cur, ast.Name) and _is_mock_flagged_name(cur.id):
+            return ast.unparse(node)
+    return None
+
+
+def _mock_membership_probe_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test probes
+    membership (``in``/``not in``) against a ``unittest.mock`` double.
+
+    ``MagicMock`` implements ``__contains__`` by minting a fresh child double and
+    returning it — a value that is always truthy — so the probe never inspects
+    the recorded calls: ``assert x in <mock>`` ALWAYS PASSES (a silent false
+    green a mutation-testing run believes verifies behaviour) and ``assert x not
+    in <mock>`` ALWAYS FAILS. Plain ``Mock`` lacks ``__contains__`` and instead
+    dies with a confusing ``TypeError`` at runtime. Only the container side is
+    examined (the *right* operand of ``in``); the probed value may be anything.
+    Only assertions are covered — an ``in`` probe used as a branch condition is
+    a different (control-flow) statement."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node.test):
+            if not isinstance(sub, ast.Compare):
+                continue
+            for op, right in zip(sub.ops, sub.comparators, strict=True):
+                if not isinstance(op, (ast.In, ast.NotIn)):
+                    continue
+                container = _mock_container_expression(right)
+                if container is None:
+                    continue
+                verdict = "ALWAYS PASSES" if isinstance(op, ast.In) else "ALWAYS FAILS"
+                detail = (
+                    f"assert {ast.unparse(node.test)} — membership against the mock "
+                    f"{container!r}; a mock's __contains__ returns an always-truthy "
+                    f"child double, so this check {verdict} regardless of the recorded calls"
+                )
+                if (node.lineno, detail) not in found:
+                    found.append((node.lineno, detail))
+    return found
+
+
+def test_no_mock_membership_probe():
+    """``assert x in <mock>`` / ``assert x not in <mock>`` probe membership
+    against a ``unittest.mock`` double — the container side is the double, and
+    its ``__contains__`` (for the magic variants) mints a fresh child double and
+    returns it as an always-truthy sentinel rather than consulting the recorded
+    calls. ``assert x in <mock>`` therefore ALWAYS PASSES (a silent false green
+    that a mutation-testing run believes verifies behaviour) and ``assert x not
+    in <mock>`` ALWAYS FAILS, both decided at source time; a plain ``Mock``
+    without magic-method support dies with a confusing ``TypeError`` instead.
+    This is the ``__contains__`` sibling of the ``__eq__``-identity Mock lenses:
+    the recorded-argument question is ``mock.assert_any_call(...)``/
+    ``assert_not_called()`` or membership against the documented recorded-call
+    containers (``mock.call_args_list``/``mock.method_calls``/``mock.mock_calls``/
+    ``mock.await_args_list``), never ``in`` on the double itself."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_membership_probe_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} mock-membership assertion(s).\n"
+        "A mock's __contains__ returns an always-truthy child double, so 'assert x in <mock>'\n"
+        "always passes and 'assert x not in <mock>' always fails no matter what was recorded.\n"
+        "Use mock.assert_any_call(...)/assert_not_called(), or the recorded-call containers\n"
+        "(call_args_list/method_calls/mock_calls/await_args_list) instead.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_membership_lens_flags_mock_containers():
+    """Synthetic positive/negative control for the mock-membership lens: must
+    flag ``in``/``not in`` against a mock factory call or a plain attribute
+    chain rooted at a mock-flagged name, and ignore membership against the
+    real recorded-call/configured-value containers, subscripts, method calls
+    on the double, non-mock containers, and non-``assert`` branch probes."""
+    positive_sources = [
+        "def test_foo():\n    assert 'x' in mock\n",
+        "def test_foo():\n    assert 'x' not in mock\n",
+        "def test_foo():\n    assert result.value in _mock_create\n",
+        "def test_foo():\n    assert 'x' not in mocker.recorded\n",
+        "def test_foo():\n    assert 'x' in mock.calls\n",
+        "def test_foo():\n    assert 'x' in MagicMock()\n",
+        "def test_foo():\n    assert 'x' not in mocker.MagicMock()\n",
+        "def test_foo():\n    assert 'x' in empty_async_mock.history\n",
+        "def test_foo():\n    assert 'a' in mock and 'b' not in await_mock\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_membership_probe_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert 'x' in mock.call_args_list\n",
+        "def test_foo():\n    assert 'x' not in mock.method_calls\n",
+        "def test_foo():\n    assert x in mock.kwargs\n",
+        "def test_foo():\n    assert 'x' in mock.return_value\n",
+        "def test_foo():\n    assert 'x' in mock.await_args_list[0].kwargs\n",
+        "def test_foo():\n    assert 'health' in mock_run.error_detail.lower()\n",
+        "def test_foo():\n    assert '_run_overrides' in mock_create.await_args_list[k].kwargs['input_payload']\n",
+        "def test_foo():\n    assert 'x' in mock.items()\n",
+        "def test_foo():\n    assert 'x' in mocker.patch('a').return_value\n",
+        "def test_foo():\n    assert x in real_list\n",
+        "def test_foo():\n    assert 'x' in response.json()['data']\n",
+        "def test_foo():\n    assert 'x' in 'mock string'\n",
+        "def test_foo():\n    mock.assert_any_call('x', 'y')\n",
+        "def test_foo():\n    if 'x' in mock:\n        pytest.skip('n/a')\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_membership_probe_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr], ast.Call]]:
