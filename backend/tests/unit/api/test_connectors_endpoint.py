@@ -563,3 +563,84 @@ def test_patch_identity_only_edit_round_trip_reads_new_identity(client: TestClie
     auth = RestConnector._normalise_auth(stored_after)
     assert auth["header_name"] == "X-Key-V2"
     assert auth["api_key"] == "secret123"
+
+
+def test_patch_non_rest_full_replace_not_overlaid(client: TestClient) -> None:
+    """Non-REST connectors keep historical FULL-REPLACE semantics: a partial
+    credential dict REPLACES the stored credential outright (no identity-vs-secret
+    overlay), so the secret the incoming payload omits is dropped — unchanged
+    behaviour from before FAR-466."""
+    stored = {"bot_token": "secret123", "other": "x"}
+    existing = _make_connector(_encrypt_creds(stored))  # connector_type_id = "filesystem"
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        if "credentials_ciphertext" in updates:
+            existing.credentials_ciphertext = updates["credentials_ciphertext"]
+        return existing
+
+    mock_update.side_effect = fake_update
+    incoming = {"other": "y"}  # partial — omits bot_token
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
+    assert resp.status_code == 200
+    decoded = json.loads(Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode())
+    assert decoded == {"other": "y"}, f"Non-REST must FULL-REPLACE (no overlay), got {decoded}"
+    assert "bot_token" not in decoded, f"Non-REST full-replace must drop an omitted field, got {decoded}"
+
+
+def test_patch_undecryptable_ciphertext_does_not_wipe_secret(client: TestClient) -> None:
+    """A stored ciphertext that EXISTS but cannot be decrypted must never be
+    silently degraded to {} and re-encrypted as a secret-free overlay (which
+    would wipe the secret). The PATCH fails loudly (5xx) and does NOT commit a
+    credential write."""
+    existing = _make_rest_connector(b"not-a-valid-fern-ciphertext")
+    mock_update = AsyncMock()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": json.dumps({"auth_mode": "api_key", "api_key": "", "header_name": "X-Key"})},
+        )
+    assert resp.status_code == 500
+    assert "could not be decrypted" in resp.json()["detail"]
+    # The secret was never re-encrypted & written: update_connector_instance did not run.
+    mock_update.assert_not_awaited()
+
+
+def test_patch_non_rest_name_only_null_credentials_no_500(client: TestClient) -> None:
+    """A non-REST name-only edit posting credentials: null (empty config textarea)
+    must NOT 500 — the credential write is skipped and the name is updated."""
+    existing = _make_connector()  # connector_type_id = "filesystem"
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        return existing
+
+    mock_update.side_effect = fake_update
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"name": "Renamed", "credentials": None},
+        )
+    assert resp.status_code == 200
+    assert captured["updates"].get("name") == "Renamed"
+    assert "credentials_ciphertext" not in captured["updates"]

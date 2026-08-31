@@ -79,29 +79,47 @@ def _encrypt(credentials: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(credentials.encode())
 
 
-# Credential payloads are treated as a PARTIAL update on PATCH (FAR-466). The
-# connector reads auth identity (auth_mode, in, header_name, query_param_name)
-# from the DECRYPTED credential payload, NOT config_json. So an identity-only
-# edit must actually reach the stored credentials while preserving the secret.
+# Credential payloads are treated as a PARTIAL update on PATCH (FAR-466) — but
+# ONLY for the REST connector, which is the one connector that distinguishes
+# auth identity (auth_mode, in, header_name, query_param_name) from the secret
+# and sends a partial identity edit (the connector reads identity from the
+# DECRYPTED credential payload, NOT config_json). Every other connector keeps
+# the historical FULL-REPLACE semantics (see update_connector_endpoint).
 # A credential dict splits into "secret" fields (replaced only when a real value
 # is supplied) and everything else (identity + legacy keys, always overlaid).
 _CRED_SECRET_FIELDS = {"token", "api_key", "username", "password"}
 
 
+class StoredCredentialDecryptError(Exception):
+    """Stored credential ciphertext exists but could not be decrypted.
+
+    Raised instead of returning ``{}`` so a credential PATCH never silently
+    degrades an undecryptable secret to empty and re-encrypts a secret-free
+    overlay (which would wipe the stored secret).
+    """
+
+
 def _decrypt_credentials(ciphertext: bytes | None, fernet_key: str) -> dict[str, Any]:
-    """Decrypt a stored credential ciphertext, returning ``{}`` when absent or
-    undecryptable (so a PATCH overlay degrades to the incoming payload alone)."""
+    """Decrypt a stored credential ciphertext.
+
+    Returns ``{}`` only when there is NO stored ciphertext (a legitimate
+    "no credentials stored yet"). When ciphertext EXISTS but does not decode
+    (``InvalidToken``/malformed), raises ``StoredCredentialDecryptError`` so the
+    caller can fail loudly rather than silently wipe the secret on a PATCH.
+    """
     if not ciphertext:
         return {}
     try:
         payload = Fernet(fernet_key.encode()).decrypt(ciphertext).decode()
-    except (InvalidToken, ValueError, TypeError):
-        return {}
+    except (InvalidToken, ValueError, TypeError) as exc:
+        raise StoredCredentialDecryptError("Stored credentials could not be decrypted") from exc
     try:
         decoded = json.loads(payload)
-    except ValueError:
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
+    except ValueError as exc:
+        raise StoredCredentialDecryptError("Stored credentials could not be parsed") from exc
+    if not isinstance(decoded, dict):
+        raise StoredCredentialDecryptError("Stored credentials are not a credential map")
+    return decoded
 
 
 def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -469,28 +487,48 @@ async def update_connector_endpoint(
                         merged_cfg[k] = v
                 updates["config_json"] = merged_cfg
             if credentials_updated and existing is not None:
-                assert new_credentials is not None
-                # Partial credential update (FAR-466): overlay the supplied
-                # identity/non-secret fields onto the stored (decrypted) credential
-                # so an identity-only edit applies, while a secret field that is
-                # absent/empty is left intact.
-                incoming: dict[str, Any] | None = None
-                try:
-                    parsed = json.loads(new_credentials)
-                except (ValueError, TypeError):
-                    parsed = None
-                if isinstance(parsed, dict):
-                    incoming = _credential_overlay(
-                        _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key),
-                        parsed,
-                    )
-                if incoming is not None:
-                    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                        json.dumps(incoming), settings.fernet_key
-                    )
+                if new_credentials is None:
+                    # No credential change supplied (e.g. an empty config textarea
+                    # posts credentials: null) — skip the credential write. Never
+                    # 500 on a null credentials payload.
+                    credentials_updated = False
+                elif existing.connector_type_id == "rest":
+                    # Partial credential update (FAR-466) — REST connector only.
+                    # The connector reads auth identity (auth_mode, in,
+                    # header_name, query_param_name) from the DECRYPTED credential
+                    # payload, so an identity-only edit must reach the stored
+                    # credentials while preserving the secret. Overlay the supplied
+                    # identity/non-secret fields onto the stored credential so an
+                    # identity-only edit applies, while a secret field that is
+                    # absent/empty is left intact.
+                    try:
+                        stored = _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key)
+                    except StoredCredentialDecryptError:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Cannot update connector: stored credentials could not be decrypted.",
+                        ) from None
+                    incoming: dict[str, Any] | None = None
+                    try:
+                        parsed = json.loads(new_credentials)
+                    except (ValueError, TypeError):
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        incoming = _credential_overlay(stored, parsed)
+                    if incoming is not None:
+                        updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+                            json.dumps(incoming), settings.fernet_key
+                        )
+                    else:
+                        # A non-JSON credential payload (e.g. a raw token) keeps
+                        # the historical full-replace behaviour for REST too.
+                        updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+                            new_credentials, settings.fernet_key
+                        )
                 else:
-                    # A non-JSON credential payload (e.g. a raw GitHub token) keeps
-                    # the historical full-replace behaviour.
+                    # Non-REST connector: historical FULL-REPLACE (no overlay) —
+                    # whatever credential payload is supplied replaces the stored
+                    # credential outright.
                     updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
                         new_credentials, settings.fernet_key
                     )
