@@ -474,7 +474,7 @@ def _make_node_fn(
             single_sandbox_node=single_sandbox_node,
         )
     if connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
-        return make_connector_fn(node_def, timeout=timeout)
+        return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
     if node_type == "manual":
         return make_manual_node_fn(node_def, timeout=timeout)
     if node_type == "router":
@@ -496,7 +496,7 @@ def _make_node_fn(
                 token_budget=token_budget,
             )
         if connector_binding:
-            return make_connector_fn(node_def, timeout=timeout)
+            return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
         return make_manual_node_fn(node_def, timeout=timeout)
     # agent nodes (with or without a frozen agent_id) and connector nodes
     # without a binding default to the general agent node factory.
