@@ -875,14 +875,19 @@ REST_INTEGRATION: dict[str, Any] = {
                 "enum": ["fail_open", "fail_closed", "off"],
                 "default": "fail_open",
                 "description": (
-                    "Behaviour when the response shape is unknown or no records can be extracted at records_path."
+                    "Connector-write idempotency mode for the FAR-458 read-before-write "
+                    "dedup gate. Controls what happens to a write whose prior delivery "
+                    "could not be confirmed (ambiguous). Inert unless the opt-in "
+                    "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled."
                 ),
                 "help": (
-                    "fail_open: return whatever was fetched even if no records were "
-                    "extracted (safe when a re-run can recover duplicates). "
-                    "fail_closed: fail the run when records cannot be extracted (safe "
-                    "when a silent miss is catastrophic). "
-                    "off: no on-unknown handling — classic root-mapping only."
+                    "fail_open (default): re-fire the write on ambiguous delivery — "
+                    "possible duplicate, usually recoverable. fail_closed: suppress the "
+                    "write on ambiguous delivery — possible silent miss the operator must "
+                    "reconcile. off: bypass the gate entirely, the write always fires "
+                    "(never deduped). Only takes effect when the "
+                    "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled; otherwise "
+                    "all connector writes fire normally."
                 ),
             },
             "records_path": {
