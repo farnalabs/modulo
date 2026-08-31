@@ -125,7 +125,7 @@ async def _run_gate(
 class TestConnectorPayloadHash:
     def test_same_data_same_hash(self) -> None:
         assert _payload_hash({"name": "n1", "id": 1}) == (
-            '{"data": {"id": 1, "name": "n1"}, "provider_ref": null, "resource": ""}'
+            '{"data": {"id": 1, "name": "n1"}, "provider_ref": null, "resource": "command"}'
         )
 
     def test_changed_data_different_hash(self) -> None:
