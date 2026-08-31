@@ -209,6 +209,8 @@ class ConnectorResponse(BaseModel):
     tier: str
     created_at: datetime
     updated_at: datetime
+    degraded_at: datetime | None = None
+    last_skip_error: str | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -252,6 +254,8 @@ def _to_response(ci: Any) -> ConnectorResponse:
         tier=ci.tier,
         created_at=ci.created_at,
         updated_at=ci.updated_at,
+        degraded_at=ci.degraded_at,
+        last_skip_error=ci.last_skip_error,
     )
 
 
@@ -522,6 +526,20 @@ async def update_connector_endpoint(
     new_credentials: str | None = None
     if credentials_updated:
         new_credentials = updates.pop("credentials")
+        if new_credentials is None:
+            # ``min_length`` only constrains str values — an explicit
+            # ``"credentials": null`` would otherwise reach _encrypt(None, ...)
+            # and raise AttributeError → unhandled 500 (FAR-495 QA).
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="'credentials' must be a non-empty string",
+            )
+        ct = _encrypt(new_credentials, settings.fernet_key)
+        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
+        # Fresh credentials clear the degraded marker (FAR-495) — the stored
+        # skip error described the OLD credentials, not the new ones.
+        updates["degraded_at"] = None
+        updates["last_skip_error"] = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
