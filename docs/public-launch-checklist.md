@@ -72,10 +72,10 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
   - Pipeline performance
   - HITL review activity
   - Cost tracking
-- [ ] **Audit log chain** integrity is verified: `uv run modulo audit verify`
+- [ ] **Audit log chain** integrity is verified (`GET /api/v1/admin/audit/verify`; requires `audit.manage`, no CLI wrapper)
 - [ ] **Log retention** is configured:
   - Application logs: 30 days minimum
-  - Audit logs: 365 days (configurable via `MODULO_AUDIT_RETENTION_DAYS`)
+  - Audit logs: append-only table (`audit_events`); not purged automatically
 - [ ] **Alerts** are configured for:
   - Rate limit threshold exceeded (>5% 429s)
   - Audit chain integrity failure

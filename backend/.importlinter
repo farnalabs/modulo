@@ -161,6 +161,16 @@ ignore_imports =
     modulo.connectors.grafana -> modulo.core.ssrf
     modulo.connectors.jenkins -> modulo.core.ssrf
     modulo.connectors.n8n -> modulo.core.ssrf
+    # FAR-512: github / slack / linear / rest now pin their validated IP via the
+    # shared SSRF security primitive (modulo.core.ssrf) just like the other
+    # base_url-bearing connectors above — the same narrow exception for a shared
+    # security primitive, keeping the connectors decoupled from all other core
+    # business logic. github/slack/linear/rest pin the validated address onto the
+    # transport (closing the DNS-rebinding window) instead of only re-validating.
+    modulo.connectors.github -> modulo.core.ssrf
+    modulo.connectors.linear -> modulo.core.ssrf
+    modulo.connectors.rest -> modulo.core.ssrf
+    modulo.connectors.slack -> modulo.core.ssrf
     # The GitLab CI runner takes its base_url from tenant connector config
     # (connector_hub passes config['base_url'] straight through), so it is on the
     # same external trust boundary as the connectors above and needs the guard.

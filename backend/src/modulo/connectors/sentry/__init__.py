@@ -15,6 +15,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.core.ssrf import validate_outbound_url
 
 
@@ -23,6 +24,7 @@ class SentryConnector(ConnectorBase):
         self._token = token
         self._organization = organization
         self._base = f"{base_url.rstrip('/')}/api/0"
+        self._redactor = CredentialRedactor([token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -46,12 +48,15 @@ class SentryConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Sentry API token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Sentry auth token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:
             match q.resource:
@@ -70,6 +75,7 @@ class SentryConnector(ConnectorBase):
                 case _:
                     raise ValueError(f"Unsupported Sentry resource: {q.resource!r}")
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as c:
             match payload.resource:

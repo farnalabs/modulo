@@ -33,7 +33,8 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.core.ssrf import validate_outbound_url
+from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _GITLAB_API = "https://gitlab.com/api/v4"
 
@@ -355,6 +356,7 @@ class GitLabConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._scope_cache: tuple[float, frozenset[str]] | None = None
+        self._redactor = CredentialRedactor([token])
 
     @staticmethod
     def _jitter(delay: float, *, tight: bool = False) -> float:
@@ -421,7 +423,7 @@ class GitLabConnector(ConnectorBase):
                 if _should_retry_status(exc.response.status_code, attempt):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                raise ValueError(_http_error_message(exc)) from exc
+                raise ValueError(self._redactor.redact(_http_error_message(exc))) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if _should_retry_attempt(attempt):
@@ -439,7 +441,7 @@ class GitLabConnector(ConnectorBase):
                 if _should_retry_attempt(attempt):
                     await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
                     continue
-                raise ValueError(f"GitLab API HTTP error: {exc}") from exc
+                raise ValueError(self._redactor.redact(f"GitLab API HTTP error: {exc}")) from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
 
     @staticmethod
@@ -479,8 +481,16 @@ class GitLabConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        validate_outbound_url(self._base_url)
-        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). ``trust_env=False``
+        # stops a proxy from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
+            base_url=self._base_url,
+            headers=self._headers(),
+            timeout=30,
+        )
 
     async def _declared_effective_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
         """Return the token's declared scopes, expanded through superset relations.
@@ -588,36 +598,29 @@ class GitLabConnector(ConnectorBase):
             metadata={"rate_limit": _rate_limit_metadata(response)},
         )
 
-    @staticmethod
-    def _user_health_result(r: httpx.Response) -> HealthResult | None:
+    def _user_health_result(self, r: httpx.Response) -> HealthResult | None:
         """Map a ``/user`` response to a failure HealthResult, or ``None`` when healthy."""
         if r.status_code == 401:
-            return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
-        if r.status_code == 403:
-            return HealthResult(
-                ok=False,
-                detail=("Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)),
-            )
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {_error_detail(r)}")
-        return None
+            detail = f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}"
+        elif r.status_code == 403:
+            detail = "Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)
+        elif r.status_code != 200:
+            detail = f"HTTP {r.status_code}: {_error_detail(r)}"
+        else:
+            return None
+        return HealthResult(ok=False, detail=self._redactor.redact(detail))
 
-    @staticmethod
-    def _projects_health_result(r: httpx.Response) -> HealthResult | None:
+    def _projects_health_result(self, r: httpx.Response) -> HealthResult | None:
         """Map a ``/projects`` response to a failure HealthResult, or ``None`` when healthy."""
         if r.status_code == 401:
-            return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
-        if r.status_code == 403:
-            return HealthResult(
-                ok=False,
-                detail=("Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(r)),
-            )
-        if not r.is_success:
-            return HealthResult(
-                ok=False,
-                detail=f"Projects API returned HTTP {r.status_code}: {_error_detail(r)}",
-            )
-        return None
+            detail = f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}"
+        elif r.status_code == 403:
+            detail = "Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(r)
+        elif not r.is_success:
+            detail = f"Projects API returned HTTP {r.status_code}: {_error_detail(r)}"
+        else:
+            return None
+        return HealthResult(ok=False, detail=self._redactor.redact(detail))
 
     @staticmethod
     def _scope_missing_result(declared_scopes: frozenset[str]) -> HealthResult | None:
@@ -654,6 +657,7 @@ class GitLabConnector(ConnectorBase):
             pass
         return None
 
+    @redacting
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:
@@ -665,7 +669,9 @@ class GitLabConnector(ConnectorBase):
                 try:
                     user_info = r.json()
                 except json.JSONDecodeError:
-                    return HealthResult(ok=False, detail=f"Invalid JSON in /user response: {r.text[:200]}")
+                    return HealthResult(
+                        ok=False, detail=self._redactor.redact(f"Invalid JSON in /user response: {r.text[:200]}")
+                    )
                 username = user_info.get("username", "")
 
                 projects_r = await client.get("/projects", params={"per_page": 1})
@@ -696,13 +702,14 @@ class GitLabConnector(ConnectorBase):
                 detail = f"{username} (GitLab {version})"
             return HealthResult(ok=True, detail=detail)
         except httpx.RequestError as e:
-            return HealthResult(ok=False, detail=str(e))
+            return HealthResult(ok=False, detail=self._redactor.redact(str(e)))
         except ValueError as e:
             # The outbound SSRF guard in ``_client`` rejects a private/internal
             # base_url by raising. A health check must REPORT that as unhealthy
             # (with the remediation text the guard produced), never propagate it.
-            return HealthResult(ok=False, detail=str(e)[:200])
+            return HealthResult(ok=False, detail=self._redactor.redact(str(e))[:200])
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "projects":
@@ -989,6 +996,7 @@ class GitLabConnector(ConnectorBase):
         jobs = _safe_json(r)
         return self._result(jobs, r)
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         await self._ensure_write_scope(payload.resource)
         match payload.resource:

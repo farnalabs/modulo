@@ -4,6 +4,14 @@ Each dict provides the metadata, default configuration, credential
 field descriptions, and tool-group classification needed to register
 a :class:`~modulo.db.models.library_primitive.LibraryPrimitive` with
 ``primitive_type='integration'``.
+
+``credential_fields`` is the single source of truth for the credential keys a
+connector type consumes: ``_build_connector`` in ``modulo.core.connector_hub``
+must read exactly these keys via ``_get_cred``. The parity guard in
+``tests/unit/connector_hub/test_definitions_credential_parity.py`` enforces this
+for every type that has a direct hub read. A key declared here but read under a
+different name in the hub means a connector configured via its definition is
+silently skipped at ``initialise()``.
 """
 
 from __future__ import annotations
@@ -63,14 +71,9 @@ BITBUCKET_INTEGRATION: dict[str, Any] = {
         "default_branch": "main",
     },
     "credential_fields": {
-        "app_password": {
+        "token": {
             "type": "string",
-            "description": "Bitbucket app password with repo and PR permissions",
-            "required": True,
-        },
-        "username": {
-            "type": "string",
-            "description": "Bitbucket account username",
+            "description": "Bitbucket app password or OAuth 2.0 bearer token with repo and PR permissions",
             "required": True,
         },
     },
@@ -148,6 +151,12 @@ PROMETHEUS_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # 5. datadog
 # ---------------------------------------------------------------------------
+# FAR-515 compat note: the credential key for the application key is
+# ``application_key`` (NOT ``app_key``, which ``_build_connector`` used to read).
+# Existing stored credentials keyed as ``app_key`` will no longer resolve at the
+# hub — those rows must be re-credentialed under ``application_key``. We do NOT
+# migrate stored credentials in this change; any affected connector is skipped at
+# ``initialise()`` until re-credentialed.
 DATADOG_INTEGRATION: dict[str, Any] = {
     "name": "Datadog",
     "description": (
@@ -296,11 +305,6 @@ SLACK_INTEGRATION: dict[str, Any] = {
             "description": "Slack bot token (xoxb-...) with chat:write and channels:read scopes",
             "required": True,
         },
-        "signing_secret": {
-            "type": "string",
-            "description": "Slack signing secret for request verification",
-            "required": False,
-        },
     },
     "tool_group": "messaging",
 }
@@ -357,7 +361,7 @@ NOTION_INTEGRATION: dict[str, Any] = {
         "database_id": "",
     },
     "credential_fields": {
-        "internal_integration_secret": {
+        "token": {
             "type": "string",
             "description": "Notion internal integration token (secret_...)",
             "required": True,
@@ -523,20 +527,10 @@ TEAMS_INTEGRATION: dict[str, Any] = {
         "notification_style": "adaptive_card",
     },
     "credential_fields": {
-        "webhook_url": {
+        "token": {
             "type": "string",
-            "description": "Teams incoming webhook URL",
-            "required": False,
-        },
-        "bot_app_id": {
-            "type": "string",
-            "description": "Teams bot application ID (for proactive messaging)",
-            "required": False,
-        },
-        "bot_app_password": {
-            "type": "string",
-            "description": "Teams bot application password",
-            "required": False,
+            "description": "Teams bot application token (for Microsoft Graph API access)",
+            "required": True,
         },
     },
     "tool_group": "messaging",
@@ -560,20 +554,10 @@ DISCORD_INTEGRATION: dict[str, Any] = {
         "default_channel_id": "",
     },
     "credential_fields": {
-        "bot_token": {
+        "token": {
             "type": "string",
             "description": "Discord bot token",
             "required": True,
-        },
-        "webhook_id": {
-            "type": "string",
-            "description": "Discord webhook ID (for simple posting without bot)",
-            "required": False,
-        },
-        "webhook_token": {
-            "type": "string",
-            "description": "Discord webhook token",
-            "required": False,
         },
     },
     "tool_group": "messaging",
@@ -605,7 +589,7 @@ JENKINS_INTEGRATION: dict[str, Any] = {
             "description": "Jenkins username",
             "required": True,
         },
-        "api_token": {
+        "token": {
             "type": "string",
             "description": "Jenkins API token (preferred over password)",
             "required": True,
@@ -668,7 +652,7 @@ SNYK_INTEGRATION: dict[str, Any] = {
         "severity_threshold": "medium",
     },
     "credential_fields": {
-        "api_token": {
+        "token": {
             "type": "string",
             "description": "Snyk API token",
             "required": True,
@@ -786,7 +770,7 @@ CIRCLECI_INTEGRATION: dict[str, Any] = {
         "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
-        "personal_api_token": {
+        "token": {
             "type": "string",
             "description": "CircleCI personal API token",
             "required": True,

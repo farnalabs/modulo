@@ -7,7 +7,7 @@ outage, not a bad key) while a genuine 4xx auth error still surfaces as
 ``openai.AuthenticationError``, and that the success path passes through.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import httpx
 import pytest
@@ -49,6 +49,7 @@ def test_constructor_uses_zen_gateway_base_url():
         model="opencode-go/deepseek-v4-flash",
         api_key="sk-test",
         base_url="https://opencode.ai/zen/go/v1",
+        http_async_client=ANY,
     )
 
 

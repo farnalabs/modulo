@@ -10,7 +10,7 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 
 | Code | Severity | Rule |
 |---|---|---|
-| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `join` |
+| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join` |
 | `agent_command` | Error | Sandbox agent nodes require a non-empty `agent_command` |
 | `template_id` | Error | Sandbox agent nodes require a `template_id` (e.g. `"opencode"`) |
 | `timeout_seconds` | Error | Per-node timeout must be between 60 and 604800 seconds if set |

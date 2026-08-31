@@ -33,7 +33,9 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
+from modulo.core.ssrf import pinned_async_client_sync
 
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
@@ -68,6 +70,7 @@ class LinearConnector(TicketTrackerBase):
         if not token:
             raise ValueError("LinearConnector requires a 'token' credential (Linear API key)")
         self._token = token
+        self._redactor = CredentialRedactor([token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -80,11 +83,18 @@ class LinearConnector(TicketTrackerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        # PINNED TRANSPORT (FAR-512): validate + resolve the GraphQL endpoint's
+        # host and pin the validated IP onto the transport so the connection
+        # never re-resolves at connect time (closes DNS-rebind).
+        # ``trust_env=False`` stops a proxy from re-resolving the destination
+        # and defeating the pin.
+        return pinned_async_client_sync(
+            _LINEAR_GRAPHQL_URL,
             headers=self._headers(),
             timeout=30,
         )
 
+    @redacting
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a GraphQL operation with minimal retry/backoff.
 
@@ -115,7 +125,7 @@ class LinearConnector(TicketTrackerBase):
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(attempt))
                 raise _RetrySignalError(exc) from exc
-            raise ValueError(f"Linear API transport error: {exc}") from exc
+            raise ValueError(self._redactor.redact(f"Linear API transport error: {exc}")) from exc
         if r.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
             await asyncio.sleep(_retry_delay(attempt))
             raise _RetrySignalError(None)
@@ -126,7 +136,7 @@ class LinearConnector(TicketTrackerBase):
                 await asyncio.sleep(_retry_delay(attempt))
                 raise _RetrySignalError(exc) from exc
             detail = exc.response.text[:200]
-            raise ValueError(f"Linear API HTTP {exc.response.status_code}: {detail}") from exc
+            raise ValueError(self._redactor.redact(f"Linear API HTTP {exc.response.status_code}: {detail}")) from exc
         body: dict[str, Any] = r.json()
         return body
 
@@ -139,7 +149,7 @@ class LinearConnector(TicketTrackerBase):
         if errors:
             first = errors[0] if isinstance(errors, list) and errors else errors
             message = first.get("message", "unknown GraphQL error") if isinstance(first, dict) else str(first)
-            raise ValueError(f"Linear API error: {message}")
+            raise ValueError(self._redactor.redact(f"Linear API error: {message}"))
         return body.get("data", {}) or {}
 
     @staticmethod
@@ -355,11 +365,11 @@ class LinearConnector(TicketTrackerBase):
             viewer = data.get("viewer") or {}
             return HealthResult(ok=True, detail=viewer.get("name") or "ok")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
         """Resolve an issue into the shared :class:`Ticket` shape (T1 surface)."""
@@ -377,6 +387,7 @@ class LinearConnector(TicketTrackerBase):
             raw=fact,
         )
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         """Thin read surface routed by resource name."""
         filters = q.filters or {}
@@ -400,6 +411,7 @@ class LinearConnector(TicketTrackerBase):
             case _:
                 raise ValueError(f"Unsupported Linear query resource: {q.resource!r}")
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Thin scoped-write surface routed by resource name."""
         data = payload.data

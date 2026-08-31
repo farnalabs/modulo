@@ -47,7 +47,7 @@
         data-testid="remy-providers"
       >
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
-          Loading provider status...
+          {{ $t('views.AdminRemyView.providers_loading') }}
         </div>
         <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
           <span
@@ -60,12 +60,12 @@
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
                   :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
                 >
-                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  <Check v-if="p.configured" aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
+                  <X v-else aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
                 </span>
                 <span class="text-sm font-medium">{{ p.label }}</span>
                 <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
-                  {{ p.configured ? 'Configured' : 'Not set' }}
+                  {{ p.configured ? $t('views.AdminRemyView.configured') : $t('views.AdminRemyView.not_set') }}
                 </span>
               </span>
         </div>
@@ -80,7 +80,7 @@
         data-testid="remy-custom-backends"
       >
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
-          Loading...
+          {{ $t('views.AdminRemyView.loading') }}
         </div>
         <div v-else class="space-y-2">
           <div
@@ -94,21 +94,21 @@
                 class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
                 :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
               >
-                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  <Check v-if="p.configured" aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
+                  <X v-else aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
               </span>
               <span class="text-sm font-medium">{{ p.label }}</span>
             </div>
             <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
-              {{ p.configured ? 'Configured' : 'Not set' }}
+              {{ p.configured ? $t('views.AdminRemyView.configured') : $t('views.AdminRemyView.not_set') }}
             </span>
           </div>
           <div v-if="customProviderStatus.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-            No custom backends configured.
+            {{ $t('views.AdminRemyView.no_custom_backends_configured') }}
           </div>
           <div class="mt-3 text-xs text-muted-foreground">
             <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">
-              Manage all backends in Model Backends ?
+              {{ $t('views.AdminRemyView.manage_all_backends_in_model_backends') }}
             </router-link>
           </div>
         </div>
@@ -156,7 +156,7 @@
                   :key="role"
                   for="adminremyview-field-13"
                   class="flex items-center gap-2 text-sm cursor-pointer"
-                  v-tooltip.top="role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access - can view but not edit, use Remy.'"
+                  v-tooltip.top="role === 'admin' ? $t('views.AdminRemyView.full_access_to_all_settings_and_remy_configuration') : role === 'operator' ? $t('views.AdminRemyView.can_create_and_manage_pipelines_use_remy') : role === 'runner' ? $t('views.AdminRemyView.can_execute_pipeline_runs_use_remy') : $t('views.AdminRemyView.readonly_access_can_view_but_not_edit_use_remy')"
                 >
                     <input id="adminremyview-field-13"
                       type="checkbox"
@@ -175,7 +175,7 @@
                   data-testid="remy-access-save"
                   @click="saveAccessList"
                  v-tooltip.top="tooltipSaveCurrentAccessList">
-                  {{ accessSaving ? 'Saving...' : 'Save Access List' }}
+                  {{ accessSaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_access_list') }}
                 </Button>
         </div>
       </SectionCard>
@@ -188,14 +188,14 @@
           <div>
             <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
             <Select
-                aria-label="Default Provider"
+                :aria-label="$t('views.AdminRemyView.default_provider')"
                 v-model="modelConfig.defaultProvider"
                 data-testid="remy-model-provider"
                 class="w-full"
                 :options="availableProviders.native.map((p) => ({ value: p.id, label: p.label }))"
                 option-label="label"
                 option-value="value"
-                placeholder="Select provider"
+                :placeholder="$t('views.AdminRemyView.select_provider')"
               />
           </div>
           <div>
@@ -204,7 +204,7 @@
               v-model="modelConfig.defaultModel"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="claude-sonnet-4-20250514"
+              :placeholder="$t('views.AdminRemyView.model_name_placeholder')"
               data-testid="remy-model-name"
             />
           </div>
@@ -216,7 +216,7 @@
               min="1024"
               step="1024"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="200000"
+              :placeholder="$t('views.AdminRemyView.context_window_placeholder')"
               data-testid="remy-model-context"
             />
           </div>
@@ -229,6 +229,8 @@
                 type="button"
                 class="rounded-full px-3 py-1 text-xs font-medium transition-all"
                 :class="modelConfig.allowedProviders.includes(provider) ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                :data-testid="'remy-allowed-provider-' + provider"
+                :aria-pressed="modelConfig.allowedProviders.includes(provider)"
                 @click="toggleAllowedProvider(provider)"
               >
                 {{ provider }}
@@ -251,7 +253,7 @@
                   data-testid="remy-model-save"
                   @click="saveModelConfig"
                  v-tooltip.top="tooltipSaveDefaultModelProvider">
-                  {{ modelSaving ? 'Saving...' : 'Save Model Config' }}
+                  {{ modelSaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_model_config') }}
                 </Button>
         </div>
       </SectionCard>
@@ -277,7 +279,7 @@
                   data-testid="remy-prompt-save"
                   @click="saveSystemPrompt"
                   v-tooltip.top="tooltipSaveBaseSystemPrompt">
-                  {{ promptSaving ? 'Saving...' : 'Save System Prompt' }}
+                  {{ promptSaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_system_prompt') }}
                 </Button>
         </div>
       </SectionCard>
@@ -303,27 +305,28 @@
                   data-testid="remy-guidance-save"
                   @click="saveGuidance"
                  v-tooltip.top="tooltipSaveExtraInstructions">
-                  {{ guidanceSaving ? 'Saving...' : 'Save Guidance' }}
+                  {{ guidanceSaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_guidance') }}
                 </Button>
         </div>
       </SectionCard>
       <!-- Tool Permissions -->
-      <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
+      <SectionCard :title="$t('views.AdminRemyView.tool_permissions')" :description="$t('views.AdminRemyView.tool_permissions_description')" data-testid="remy-tool-permissions">
         <div class="mb-6">
-          <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.permission_mode') }}</label>
+          <span class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.permission_mode') }}</span>
           <Select
-            aria-label="Permission Mode"
+            :aria-label="$t('views.AdminRemyView.permission_mode')"
             v-model="toolPermMode"
+            data-testid="remy-tool-perm-mode"
             class="w-full"
             :options="[
-              { value: 'safe', label: 'Safe – read ops auto-allowed, destructive actions require approval (recommended)' },
-              { value: 'full_auto', label: 'Full Auto – all actions auto-allowed (with destructive override)' },
-              { value: 'locked_down', label: 'Locked Down – all write actions require approval' },
-              { value: 'custom', label: 'Custom – manual per-tool configuration' },
+              { value: 'safe', label: $t('views.AdminRemyView.mode_safe') },
+              { value: 'full_auto', label: $t('views.AdminRemyView.mode_full_auto') },
+              { value: 'locked_down', label: $t('views.AdminRemyView.mode_locked_down') },
+              { value: 'custom', label: $t('views.AdminRemyView.mode_custom') },
             ]"
             option-label="label"
             option-value="value"
-            placeholder="Select mode"
+            :placeholder="$t('views.AdminRemyView.select_mode')"
             @update:model-value="applyModePreset"
           />
         </div>
@@ -339,10 +342,10 @@
             <tbody class="divide-y">
               <tr v-for="(info, toolName) in uiTools" :key="toolName">
                 <td class="table-cell font-mono text-xs">{{ toolName }}</td>
-                <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
+                <td class="table-cell text-muted-foreground text-xs">{{ $t(info.descKey) }}</td>
                 <td class="table-cell">
                   <Select
-                    aria-label="Tool permission"
+                    :aria-label="$t('views.AdminRemyView.tool_permission')"
                     v-model="toolPerms[toolName]"
                     :disabled="toolPermMode !== 'custom'"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
@@ -353,7 +356,7 @@
                     ]"
                     option-label="label"
                     option-value="value"
-                    placeholder="Select"
+                    :placeholder="$t('views.AdminRemyView.select')"
                   />
                 </td>
               </tr>
@@ -361,12 +364,12 @@
           </table>
         </div>
         <div v-if="toolPermError" class="mt-2 text-sm text-destructive">{{ toolPermError }}</div>
-        <Button :disabled="toolPermSaving" class="mt-4" @click="saveToolPerms">
-          {{ toolPermSaving ? 'Saving...' : 'Save Tool Permissions' }}
+        <Button :disabled="toolPermSaving" class="mt-4" data-testid="remy-tool-perms-save" @click="saveToolPerms">
+          {{ toolPermSaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_tool_permissions') }}
         </Button>
       </SectionCard>
       <!-- Safety & Limits -->
-      <SectionCard title="Safety &amp; Limits" description="Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.">
+      <SectionCard :title="$t('views.AdminRemyView.safety_and_limits')" :description="$t('views.AdminRemyView.safety_and_limits_description')" data-testid="remy-safety-limits">
         <div class="space-y-4">
           <div>
             <label for="adminremyview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.max_actions_per_minute') }}</label>
@@ -377,7 +380,7 @@
               min="1"
               max="120"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="30"
+              :placeholder="$t('views.AdminRemyView.rate_limit_max_actions_placeholder')"
               data-testid="remy-rate-limit-max-actions"
             />
           </div>
@@ -390,13 +393,13 @@
               min="1"
               max="3600"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="60"
+              :placeholder="$t('views.AdminRemyView.rate_limit_window_seconds_placeholder')"
               data-testid="remy-rate-limit-window"
             />
           </div>
           <div>
             <label for="adminremyview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.auto_execute_confidence_threshold') }}</label>
-            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0–1.0) required for Remy to auto-execute an action without approval.</p>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.auto_execute_threshold_description') }}</p>
             <div class="flex items-center gap-3">
               <input id="adminremyview-field-5"
                 v-model.number="safetyConfig.autoExecuteThreshold"
@@ -406,7 +409,7 @@
                 step="0.05"
                 class="flex-1"
                 data-testid="remy-auto-execute-threshold"
-                aria-label="Auto-execute confidence threshold"
+                :aria-label="$t('views.AdminRemyView.auto_execute_confidence_threshold')"
               />
               <span class="text-sm font-mono w-12 text-right">{{ safetyConfig.autoExecuteThreshold.toFixed(2) }}</span>
             </div>
@@ -418,7 +421,7 @@
               v-model="safetyConfig.nogoPagePatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="/admin/settings/billing, /security*"
+              :placeholder="$t('views.AdminRemyView.nogo_page_patterns_placeholder')"
               data-testid="remy-nogo-page-patterns"
             />
           </div>
@@ -429,7 +432,7 @@
               v-model="safetyConfig.nogoSelectorPatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="[data-testid=delete-account], .danger-zone button"
+              :placeholder="$t('views.AdminRemyView.nogo_selector_patterns_placeholder')"
               data-testid="remy-nogo-selector-patterns"
             />
           </div>
@@ -440,7 +443,7 @@
               v-model="safetyConfig.allowedSelectors"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="[data-testid=pipeline-], .btn-primary"
+              :placeholder="$t('views.AdminRemyView.allowed_selectors_placeholder')"
               data-testid="remy-allowed-selectors"
             />
           </div>
@@ -451,7 +454,7 @@
               v-model="safetyConfig.allowedPagePatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="/admin/pipelines, /admin/schemas"
+              :placeholder="$t('views.AdminRemyView.allowed_page_url_patterns_placeholder')"
               data-testid="remy-allowed-page-patterns"
             />
           </div>
@@ -461,19 +464,19 @@
                 data-testid="remy-safety-save"
                 @click="saveSafetyConfig"
                v-tooltip.top="tooltipSaveRateLimits">
-                {{ safetySaving ? 'Saving...' : 'Save Safety Config' }}
+                {{ safetySaving ? $t('views.AdminRemyView.saving') : $t('views.AdminRemyView.save_safety_config') }}
               </Button>
         </div>
       </SectionCard>
       <!-- Skills Manager -->
-      <SectionCard title="Skills" :description="$t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use')">
+      <SectionCard :title="$t('views.AdminRemyView.skills')" :description="$t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use')" data-testid="remy-skills">
         <template #header>
           <Button
             class="border border-primary/30"
             data-testid="remy-skills-add"
             @click="skillDialogRef?.openCreate()"
           >
-            Add Skill
+            {{ $t('views.AdminRemyView.add_skill') }}
           </Button>
         </template>
         <div v-if="skills.length === 0" class="py-8 text-center">
@@ -517,13 +520,15 @@
                     class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
                     :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
                     :disabled="skillToggling[skill.id]"
+                    data-testid="remy-skill-toggle"
+                    :aria-pressed="skill.active"
                     @click="toggleSkillActive(skill)"
                   >
                     <span
                       class="h-1.5 w-1.5 rounded-full"
                       :class="skill.active ? 'bg-success' : 'bg-muted-foreground'"
                     />
-                    {{ skillToggling[skill.id] ? '...' : (skill.active ? 'Active' : 'Inactive') }}
+                    {{ skillToggling[skill.id] ? '...' : (skill.active ? $t('views.AdminRemyView.active') : $t('views.AdminRemyView.inactive')) }}
                   </button>
                 </td>
                 <td class="table-cell-numeric">
@@ -532,21 +537,19 @@
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
                       :aria-label="$t('views.AdminRemyView.edit_skill')"
                       :title="$t('views.AdminRemyView.edit_skill')"
+                      data-testid="remy-skill-edit"
                       @click="skillDialogRef?.openEdit(skill)"
                     >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
+                      <Pencil class="h-4 w-4" />
                     </button>
                     <button type="button"
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
                       :aria-label="$t('views.AdminRemyView.delete_skill')"
                       :title="$t('components.remy.RemySkillDialog.delete_skill')"
+                      data-testid="remy-skill-delete"
                       @click="skillDialogRef?.openDelete(skill)"
                     >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      </svg>
+                      <Trash2 class="h-4 w-4" />
                     </button>
                   </div>
                 </td>
@@ -558,8 +561,8 @@
       </SectionCard>
       <RemySkillDialog
         ref="skillDialogRef"
-        create-description="Create a new organisation-level skill for Remy."
-        edit-description="Update the skill configuration."
+        :create-description="$t('views.AdminRemyView.create_skill_description')"
+        :edit-description="$t('views.AdminRemyView.edit_skill_description')"
         @saved="loadSkills"
       />
       <!-- Knowledge Sources -->
@@ -580,11 +583,11 @@
             <tbody class="divide-y">
               <tr v-for="src in contextSourceDefs" :key="src.key" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell">
-                  <span class="font-medium cursor-help" v-tooltip.top="src.label">{{ src.label }}</span>
+                  <span class="font-medium cursor-help" v-tooltip.top="$t(src.labelKey)">{{ $t(src.labelKey) }}</span>
                 </td>
                 <td class="table-cell">
                   <Select
-                    aria-label="Context source mode"
+                    :aria-label="$t('views.AdminRemyView.context_source_mode')"
                     v-model="contextSources[src.key]"
                     :disabled="contextSaving"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
@@ -595,7 +598,7 @@
                     ]"
                     option-label="label"
                     option-value="value"
-                    placeholder="Select"
+                    :placeholder="$t('views.AdminRemyView.select')"
                     @update:model-value="saveContextSource(src.key)"
                   />
                 </td>
@@ -628,7 +631,7 @@
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell">
                   <Select
-                    aria-label="Skill knowledge mode"
+                    :aria-label="$t('views.AdminRemyView.skill_knowledge_mode')"
                     v-model="skillModes[skill.id]"
                     :disabled="skillModeSaving[skill.id]"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
@@ -639,7 +642,7 @@
                     ]"
                     option-label="label"
                     option-value="value"
-                    placeholder="Select"
+                    :placeholder="$t('views.AdminRemyView.select')"
                     @update:model-value="saveSkillSourceMode(skill)"
                   />
                 </td>
@@ -656,9 +659,10 @@
         <div class="flex items-center gap-3">
           <Button
             :disabled="primerSaving"
+            data-testid="remy-primer-regenerate"
             @click="regeneratePrimer"
           >
-            {{ primerSaving ? 'Regenerating...' : $t('views.AdminRemyView.regenerate_primer') }}
+            {{ primerSaving ? $t('views.AdminRemyView.regenerating') : $t('views.AdminRemyView.regenerate_primer') }}
           </Button>
           <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
         </div>
@@ -671,6 +675,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, reactive, computed, watch, onUnmounted } from 'vue'
+import { Check, X, Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -696,11 +701,13 @@ const tooltipUsersWithSelectedRoles = computed(() => t('views.AdminRemyView.user
 const tooltipSaveCurrentAccessList = computed(() => t('views.AdminRemyView.save_the_current_access_list_configuration'))
 
 function providerTooltip(p: ProviderStatus): string {
-  const base = p.configured ? `Remy can route to ${p.label}` : `No API key for ${p.label}`
+  const base = p.configured
+    ? `${t('views.AdminRemyView.api_key_configured_remy_can_route_to')} ${p.label}`
+    : `${t('views.AdminRemyView.no_api_key_set_remy_will_skip')} ${p.label}`
   return p.configured ? base : `${base}. ${tooltipAddOneInModelBackends.value}`
 }
 
-const tooltipSaveBaseSystemPrompt = computed(() => 'Save the base system prompt that guides Remy\'s behaviour.')
+const tooltipSaveBaseSystemPrompt = computed(() => t('views.AdminRemyView.save_the_base_system_prompt_that_guides_remys_behaviour'))
 const tooltipSaveDefaultModelProvider = computed(() => t('views.AdminRemyView.save_the_default_model_provider_and_allowed_model_configuration'))
 const tooltipSaveExtraInstructions = computed(() => t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt'))
 const tooltipSaveRateLimits = computed(() => t('views.AdminRemyView.save_rate_limits_threshold_no_go_patterns_and_allowlist'))
@@ -743,13 +750,13 @@ watch(() => configData.value, (cfg) => {
 })
 
 const contextSourceDefs = [
-  { key: 'product_primer', label: 'Product Primer', descKey: 'product_primer_description', tokens: '~700' },
-  { key: 'page_context', label: 'Page Context', descKey: 'page_context_description', tokens: '~100' },
-  { key: 'user_profile', label: 'User Profile', descKey: 'user_profile_description', tokens: '~150' },
-  { key: 'product_docs', label: 'Product Docs', descKey: 'product_docs_description', toolCall: 'search_documentation()' },
-  { key: 'integration_status', label: 'Integration Status', descKey: 'integration_status_description', toolCall: 'get_integration_status()' },
-  { key: 'org_config', label: 'Org Config', descKey: 'org_config_description', toolCall: 'get_org_config()' },
-  { key: 'feature_overview', label: 'Feature Overview', descKey: 'feature_overview_description', toolCall: 'get_available_features()' },
+  { key: 'product_primer', labelKey: 'views.AdminRemyView.context_source_primer_label', descKey: 'product_primer_description', tokens: '~700' },
+  { key: 'page_context', labelKey: 'views.AdminRemyView.context_source_page_label', descKey: 'page_context_description', tokens: '~100' },
+  { key: 'user_profile', labelKey: 'views.AdminRemyView.context_source_user_profile_label', descKey: 'user_profile_description', tokens: '~150' },
+  { key: 'product_docs', labelKey: 'views.AdminRemyView.context_source_product_docs_label', descKey: 'product_docs_description', toolCall: 'search_documentation()' },
+  { key: 'integration_status', labelKey: 'views.AdminRemyView.context_source_integration_status_label', descKey: 'integration_status_description', toolCall: 'get_integration_status()' },
+  { key: 'org_config', labelKey: 'views.AdminRemyView.context_source_org_config_label', descKey: 'org_config_description', toolCall: 'get_org_config()' },
+  { key: 'feature_overview', labelKey: 'views.AdminRemyView.context_source_feature_overview_label', descKey: 'feature_overview_description', toolCall: 'get_available_features()' },
 ]
 
 const contextSources = ref<Record<string, string>>({})
@@ -826,7 +833,7 @@ async function saveAccessList() {
   const err = await putConfig({
     access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
   })
-  if (err) accessError.value = `Failed to save access list: ${formatApiError(err)}`
+  if (err) accessError.value = `${t('views.AdminRemyView.failed_to_save_access_list')} ${formatApiError(err)}`
   accessSaving.value = false
   configSaving.value = false
 }
@@ -861,7 +868,7 @@ async function saveModelConfig() {
     allowed_providers: modelConfig.allowedProviders,
     allowed_models: allowedModels,
   })
-  if (err) modelError.value = `Failed to save model config: ${formatApiError(err)}`
+  if (err) modelError.value = `${t('views.AdminRemyView.failed_to_save_model_config')} ${formatApiError(err)}`
   modelSaving.value = false
   configSaving.value = false
 }
@@ -877,7 +884,7 @@ async function saveSystemPrompt() {
   promptSaving.value = true
   promptError.value = null
   const err = await putConfig({ system_prompt: systemPrompt.value })
-  if (err) promptError.value = `Failed to save system prompt: ${formatApiError(err)}`
+  if (err) promptError.value = `${t('views.AdminRemyView.failed_to_save_system_prompt')} ${formatApiError(err)}`
   promptSaving.value = false
   configSaving.value = false
 }
@@ -888,18 +895,18 @@ const toolPerms = ref<Record<string, string>>({})
 const toolPermSaving = ref(false)
 const toolPermError = ref<string | null>(null)
 
-const uiTools: Record<string, { description: string }> = {
-  navigate: { description: 'Navigate to a page' },
-  click: { description: 'Click a button or link' },
-  fill: { description: 'Type into a form field' },
-  select: { description: 'Choose a dropdown option' },
-  extract: { description: 'Read text from the page' },
-  extract_all: { description: 'Read text from all matching elements' },
-  get_page_interactables: { description: 'Discover clickable elements on the page' },
-  wait: { description: 'Pause or wait for an element' },
-  go_back: { description: 'Go back to previous page' },
-  get_url: { description: 'Get current page URL' },
-  press: { description: 'Press a keyboard key (Enter, Escape)' },
+const uiTools: Record<string, { descKey: string }> = {
+  navigate: { descKey: 'views.AdminRemyView.tool_navigate' },
+  click: { descKey: 'views.AdminRemyView.tool_click' },
+  fill: { descKey: 'views.AdminRemyView.tool_fill' },
+  select: { descKey: 'views.AdminRemyView.tool_select' },
+  extract: { descKey: 'views.AdminRemyView.tool_extract' },
+  extract_all: { descKey: 'views.AdminRemyView.tool_extract_all' },
+  get_page_interactables: { descKey: 'views.AdminRemyView.tool_get_page_interactables' },
+  wait: { descKey: 'views.AdminRemyView.tool_wait' },
+  go_back: { descKey: 'views.AdminRemyView.tool_go_back' },
+  get_url: { descKey: 'views.AdminRemyView.tool_get_url' },
+  press: { descKey: 'views.AdminRemyView.tool_press' },
 }
 
 function getDefaultPerms(): Record<string, string> {
@@ -932,7 +939,7 @@ async function saveToolPerms() {
     permission_mode: toolPermMode.value,
     tool_permissions: toolPerms.value,
   })
-  if (err) toolPermError.value = `Failed to save: ${formatApiError(err)}`
+  if (err) toolPermError.value = `${t('views.AdminRemyView.failed_to_save')} ${formatApiError(err)}`
   toolPermSaving.value = false
   configSaving.value = false
 }
@@ -983,7 +990,7 @@ async function saveSafetyConfig() {
     allowed_selectors: allowedSelectors,
     allowed_page_patterns: allowedPagePatterns,
   })
-  if (err) safetyError.value = `Failed to save safety config: ${formatApiError(err)}`
+  if (err) safetyError.value = `${t('views.AdminRemyView.failed_to_save_safety_config')} ${formatApiError(err)}`
   safetySaving.value = false
   configSaving.value = false
 }
@@ -999,7 +1006,7 @@ async function saveGuidance() {
   guidanceSaving.value = true
   guidanceError.value = null
   const err = await putConfig({ additional_guidance: guidance.value })
-  if (err) guidanceError.value = `Failed to save guidance: ${formatApiError(err)}`
+  if (err) guidanceError.value = `${t('views.AdminRemyView.failed_to_save_guidance')} ${formatApiError(err)}`
   guidanceSaving.value = false
   configSaving.value = false
 }
@@ -1016,10 +1023,10 @@ async function saveContextSource(sourceKey: string) {
       body: { source_mode: mode },
     })
     if (err) {
-      contextError.value = `Failed to save source: ${formatApiError(err)}`
+      contextError.value = `${t('views.AdminRemyView.failed_to_save_source')} ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    contextError.value = `Failed to save source: ${formatApiError(e)}`
+    contextError.value = `${t('views.AdminRemyView.failed_to_save_source')} ${formatApiError(e)}`
   } finally {
     contextSaving.value = false
     configSaving.value = false
@@ -1037,10 +1044,10 @@ async function saveSkillSourceMode(skill: SkillItem) {
       body: { source_mode: mode },
     })
     if (err) {
-      contextError.value = `Failed to save skill source mode: ${formatApiError(err)}`
+      contextError.value = `${t('views.AdminRemyView.failed_to_save_skill_source_mode')} ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    contextError.value = `Failed to save skill source mode: ${formatApiError(e)}`
+    contextError.value = `${t('views.AdminRemyView.failed_to_save_skill_source_mode')} ${formatApiError(e)}`
   } finally {
     skillModeSaving.value[skill.id] = false
     configSaving.value = false
@@ -1053,12 +1060,12 @@ async function regeneratePrimer() {
   try {
     const { error: err } = await (api as any).POST('/api/v1/admin/remy/primer/regenerate')
     if (err) {
-      primerMessage.value = `Failed: ${formatApiError(err)}`
+      primerMessage.value = `${t('views.AdminRemyView.failed')}: ${formatApiError(err)}`
     } else {
-      primerMessage.value = 'Primer regenerated.'
+      primerMessage.value = t('views.AdminRemyView.primer_regenerated')
     }
   } catch (e: unknown) {
-    primerMessage.value = `Failed: ${formatApiError(e)}`
+    primerMessage.value = `${t('views.AdminRemyView.failed')}: ${formatApiError(e)}`
   } finally {
     primerSaving.value = false
     if (primerTimer) clearTimeout(primerTimer)
@@ -1088,9 +1095,9 @@ watch(() => teamsResp.value, (data) => {
   if (data) {
     const raw = data as { items: Array<{ id: string; name: string; member_count: number }> }
     const items = raw.items || []
-    teams.value = items.map(t => ({
-      ...t,
-      member_count_label: `${t.member_count ?? 0} member${(t.member_count ?? 0) !== 1 ? 's' : ''}`,
+    teams.value = items.map(team => ({
+      ...team,
+      member_count_label: t('views.AdminRemyView.member_count', { count: team.member_count ?? 0 }),
     }))
     teams.value.sort((a, b) => a.name.localeCompare(b.name))
   }
@@ -1111,12 +1118,12 @@ async function toggleSkillActive(skill: SkillItem) {
       body: { active: !skill.active },
     })
     if (err) {
-      skillError.value = `Failed to toggle skill: ${formatApiError(err)}`
+      skillError.value = `${t('views.AdminRemyView.failed_to_toggle_skill')} ${formatApiError(err)}`
       return
     }
     await loadSkills()
   } catch (e: unknown) {
-    skillError.value = `Failed to toggle skill: ${formatApiError(e)}`
+    skillError.value = `${t('views.AdminRemyView.failed_to_toggle_skill')} ${formatApiError(e)}`
   } finally {
     skillToggling.value[skill.id] = false
   }

@@ -624,6 +624,16 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"secret_[A-Za-z0-9]{16,}"),
     re.compile(r"npm_[A-Za-z0-9]{20,}"),
     GITHUB_PAT_PATTERN,
+    # Vendor connector credential formats (FAR-513 defense-in-depth). These
+    # mirror the credential values the vendor connectors hold so a token that
+    # escapes a connector boundary is still caught by the sanitizer even when
+    # the value-based connector redaction was not applied.
+    re.compile(r"lin_api_[A-Za-z0-9]{20,}"),
+    re.compile(r"(?:DD-API-KEY|DD-APPLICATION-KEY)[\s:=]+[0-9A-Fa-f]{32}"),
+    re.compile(r"(?i)n8n[\s_-]*(?:api[\s_-]*)?(?:key|token)[\s:=]+[A-Za-z0-9]{20,}"),
+    re.compile(r"u\+[0-9A-Fa-f]{20,}"),
+    re.compile(r"xapp-[A-Za-z0-9-]{10,}"),
+    re.compile(r"(?i)sentry[_-]?(?:auth[_-]?token|token|dsn)[\s:=]+[A-Za-z0-9]{32,}"),
 )
 
 # Hard control characters (NUL, bell, vertical tab, form feed, C0 except
