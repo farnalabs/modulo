@@ -124,6 +124,23 @@ def _edge_target_port(edge: dict[str, Any]) -> str:
     return str(edge.get("target_port") or DEFAULT_INPUT_PORT)
 
 
+def _edge_declares_ports(edge: dict[str, Any]) -> bool:
+    """True when an edge carries NON-DEFAULT explicit port metadata.
+
+    Key presence cannot discriminate: every persisted edge carries
+    ``source_port``/``target_port`` (DB NOT NULL defaults ``'out'``/``'in'``,
+    migration 0141) and the API's validator-edge serializer always emits
+    them, so a legacy graph's edges would all "declare" ports and flip strict
+    fan-in enforcement on — the serializer-defaults sibling of the FAR-480
+    serializer-nulls bug. Value-based default-equivalent semantics are used,
+    matching the normalization ``compute_port_topology_hash`` applies
+    (an explicitly-set default value is backfill-equivalent, not a declaration).
+    """
+    source = edge.get("source_port") or DEFAULT_OUTPUT_PORT
+    target = edge.get("target_port") or DEFAULT_INPUT_PORT
+    return source != DEFAULT_OUTPUT_PORT or target != DEFAULT_INPUT_PORT
+
+
 def compute_port_topology_hash(graph_json: dict[str, Any]) -> str:
     """Deterministic structural hash covering port topology + node types.
 
@@ -161,8 +178,10 @@ def validate_port_topology(graph_json: dict[str, Any], result: Any) -> None:
     Rules:
       * Fan-in safety: a non-join target port accepts AT MOST ONE incoming
         edge. Enforced only when the target node declares ports OR the incoming
-        edge declares explicit port metadata — fully-legacy graphs keep their
-        backward-compatible last-write-wins fan-in behaviour (zero-break).
+        edge carries non-default port metadata (an explicitly-set default
+        value is backfill-equivalent — see :func:`_edge_declares_ports`) —
+        fully-legacy graphs keep their backward-compatible last-write-wins
+        fan-in behaviour (zero-break).
       * Port-type validation: when BOTH the source output port and the target
         input port declare a ``schema_ref``, the refs must match. This is the
         typed ``PortMismatchError``. When either is absent (the common P2 case)
@@ -188,7 +207,7 @@ def validate_port_topology(graph_json: dict[str, Any], result: Any) -> None:
             continue  # join nodes legitimately collect many incoming edges
         # Enforce only when the topology is explicitly port-addressed.
         target_declares = declares_ports_by_id.get(tgt, False)
-        any_edge_declares = any(("source_port" in e) or ("target_port" in e) for e in es)
+        any_edge_declares = any(_edge_declares_ports(e) for e in es)
         if not (target_declares or any_edge_declares):
             continue  # legacy fan-in: keep backward-compatible behaviour
         srcs = sorted(_edge_source(e) for e in es)

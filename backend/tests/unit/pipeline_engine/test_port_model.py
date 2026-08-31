@@ -137,6 +137,47 @@ def test_fan_in_legacy_graph_not_rejected():
     assert not any(i.code == PORT_FAN_IN_ERROR for i in result.issues)
 
 
+def test_fan_in_legacy_graph_with_default_edge_ports_not_rejected():
+    # Sibling of the FAR-480 fix (the edge half): every persisted edge carries
+    # source_port='out' / target_port='in' (DB NOT NULL defaults, migration
+    # 0141) and the save-time validator-edge serializer always emits them, so
+    # KEY PRESENCE would declare ports on every legacy edge. Default-equivalent
+    # values must NOT flip strict fan-in on — the FAR-480 production shape
+    # (null-port nodes, 2-edge fan-in target, default-valued edge ports)
+    # stays legacy last-write-wins.
+    graph = {
+        "nodes": [
+            _node("a", inputs=None, outputs=None),
+            _node("c", inputs=None, outputs=None),
+            _node("b", inputs=None, outputs=None),
+        ],
+        "edges": [
+            _edge("a", "b", source_port="out", target_port="in"),
+            _edge("c", "b", source_port="out", target_port="in"),
+        ],
+    }
+    result = ValidationResult()
+    validate_port_topology(graph, result)
+    assert not any(i.code == PORT_FAN_IN_ERROR for i in result.issues)
+
+
+def test_fan_in_nondefault_edge_port_still_rejected():
+    # An edge pointing at a NON-default port IS explicit port topology even
+    # when the target node declares no ports of its own.
+    graph = {
+        "nodes": [_node("a"), _node("c"), _node("b")],
+        "edges": [
+            _edge("a", "b", target_port="data"),
+            _edge("c", "b", target_port="data"),
+        ],
+    }
+    result = ValidationResult()
+    validate_port_topology(graph, result)
+    fan_in = [i for i in result.issues if i.code == PORT_FAN_IN_ERROR]
+    assert len(fan_in) == 1
+    assert fan_in[0].node_id == "b"
+
+
 def test_fan_in_null_port_keys_api_round_trip_not_rejected():
     # FAR-480 regression (the exact production failure): every node round-tripped
     # through the API carries inputs/outputs = null, and a 2-edge fan-in target
