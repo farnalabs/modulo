@@ -456,3 +456,33 @@ def test_delete_connector_foreign_org_returns_404(client: TestClient) -> None:
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 404
+
+
+def test_update_connector_null_credentials_returns_422(client: TestClient) -> None:
+    """FAR-495 QA regression: PATCH {"credentials": null} must return 422, not a
+    500. Without the ``new_credentials is None`` guard, ``_encrypt(None, ...)``
+    raised ``AttributeError`` on ``None.encode()`` (unhandled 500)."""
+    resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": None})
+    assert resp.status_code == 422
+    assert "credentials" in resp.json()["detail"].lower()
+
+
+def test_connector_response_surfaces_degraded_markers(client: TestClient) -> None:
+    """FAR-495 read path: degraded_at / last_skip_error written by
+    ``mark_instances_degraded`` must be surfaced on the GET connector response
+    (operators can see broken connectors), not left as write-only columns."""
+    degraded = _make_connector()
+    degraded.degraded_at = _NOW
+    degraded.last_skip_error = "ValueError: Missing credential key 'token'"
+
+    with patch(
+        "modulo.api.routes.connectors.get_connector_instance",
+        return_value=degraded,
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["degraded_at"] is not None
+    assert body["degraded_at"].startswith("2025-01-01T00:00:00")
+    assert body["last_skip_error"] == "ValueError: Missing credential key 'token'"
