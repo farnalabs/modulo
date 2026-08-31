@@ -238,6 +238,7 @@ class ConnectorHub:
         org_id: str | None = None,
         runtime_provider: Any = None,
         runtime_provider_hub: Any = None,
+        request_visibility: str | None = None,
     ) -> None:
         self._secrets_backend = secrets_backend
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
@@ -246,6 +247,13 @@ class ConnectorHub:
         self._org_id = org_id
         self._runtime_provider = runtime_provider
         self._runtime_provider_hub = runtime_provider_hub
+        # The visibility scope of the CALLER that drives this hub (FAR-516).
+        # "team" for a team-scoped run/node invocation, "org" for an org-scoped
+        # one, None for a non-tenant probe (health-check, schema-inference) or
+        # a caller that does not scope. Threaded into every ACL check so an
+        # org-only connector (visibility == "org") is fail-closed rejected for a
+        # team-scoped invocation at the connector-invocation gate.
+        self._request_visibility = request_visibility
         self._initialised = False
         self._init_lock = asyncio.Lock()
         # Lazily-built shared Redis client used to wire the REST connector's
@@ -467,6 +475,7 @@ class ConnectorHub:
                         tracer=self._tracer,
                         org_id=self._org_id,
                         acl=acl,
+                        request_visibility=self._request_visibility,
                     )
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
@@ -528,7 +537,7 @@ class ConnectorHub:
         """
         connector = self._get_or_raise(connector_id)
         if operation is not None:
-            self._acls[connector_id].check(operation)
+            self._acls[connector_id].check(operation, request_visibility=self._request_visibility)
         return connector
 
     def acl(self, connector_id: uuid.UUID) -> ConnectorACL:
@@ -576,10 +585,12 @@ class _TracedConnector(ConnectorBase):
         tracer: trace.Tracer,
         org_id: str | None = None,
         acl: ConnectorACL | None = None,
+        request_visibility: str | None = None,
     ) -> None:
         self._inner = inner
         self._tracer = tracer
         self._acl = acl
+        self._request_visibility = request_visibility
         self._base_attrs: dict[str, str] = {}
         if org_id is not None:
             self._base_attrs["connector.org_id"] = org_id
@@ -593,7 +604,7 @@ class _TracedConnector(ConnectorBase):
 
     def _enforce_acl(self, operation: str) -> None:
         if self._acl is not None:
-            self._acl.check(operation)
+            self._acl.check(operation, request_visibility=self._request_visibility)
 
     async def _run_with_tracing(
         self,

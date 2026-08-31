@@ -1956,8 +1956,14 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         *,
         graph_json: dict[str, Any] | None = None,
+        request_visibility: str | None = None,
     ) -> Any | None:
         """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
+
+        *request_visibility* (FAR-516) is the run's scoping axis: ``"team"`` when
+        the run belongs to a team, ``"org"`` when it is org-scoped. It is threaded
+        into every ACL check so an org-only connector (``visibility == "org"``) is
+        fail-closed rejected for a team-scoped invocation at the connector gate.
 
         Sets the hub on the current ContextVar so make_connector_fn can access it.
         Returns the hub (or None if no connectors are configured).
@@ -2068,6 +2074,7 @@ class PipelineExecutor:
                         secrets_backend=secrets_backend,
                         runtime_provider=runtime_hub,
                         org_id=str(org_id),
+                        request_visibility=request_visibility,
                     )
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
@@ -3112,11 +3119,18 @@ class PipelineExecutor:
         # when the stream never started (compile/pre-stream failure) — a run with
         # no executed nodes is never work-intact.
         node_ids: set[str] = set()
+        # FAR-516: the run's scoping axis determines whether an org-only connector
+        # is permitted. A run that belongs to a team (owner_team_id set) is
+        # team-scoped: any org-visibility connector it invokes is fail-closed
+        # rejected at the connector gate. Org-scoped runs (no team) may use
+        # org-only connectors.
+        request_visibility = "team" if getattr(run, "owner_team_id", None) is not None else "org"
         model_backend_hub, connector_hub, broker, single_sandbox_node = await self._init_run_environment(
             org_id=org_id,
             run_id=run_id,
             pipeline_id=pipeline_id,
             graph_json=graph_json,
+            request_visibility=request_visibility,
         )
         # FAR-295: computed ONCE per run — a graph containing ANY node declared
         # non-idempotent (idempotent=false) suppresses every retry path below
@@ -3580,10 +3594,15 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         graph_json: dict[str, Any],
+        request_visibility: str | None = None,
     ) -> tuple[ModelBackendHub | None, Any | None, RunEventBroker, bool]:
         """Set up the run-scoped execution environment (broker + hubs + otel).
 
         Returns ``(model_backend_hub, connector_hub, broker, single_sandbox_node)``.
+
+        *request_visibility* (FAR-516) is the run's scoping axis — ``"team"`` or
+        ``"org"`` — threaded into the connector hub so an org-only connector is
+        fail-closed rejected for a team-scoped invocation.
         """
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
@@ -3605,7 +3624,9 @@ class PipelineExecutor:
         # fetch-everything behaviour survives ONLY for fully-unrestricted runs
         # (no node contributes any connector), where the union is empty → None.
         try:
-            connector_hub = await self._init_connector_hub(org_id, graph_json=graph_json)
+            connector_hub = await self._init_connector_hub(
+                org_id, graph_json=graph_json, request_visibility=request_visibility
+            )
         except (Exception, asyncio.CancelledError):
             # FAR-439: a configured-path connector-hub failure RAISES (fail closed).
             # Catch the run-abort paths (Exception + asyncio.CancelledError) but not
