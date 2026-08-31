@@ -712,8 +712,8 @@ class TestOidcProcessCallback:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_disc.return_value = {
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "token_endpoint": "https://accounts.google.com/token",
+                "jwks_uri": "https://accounts.google.com/certs",
                 "issuer": "https://accounts.google.com",
             }
             mock_ex.return_value = {"id_token": id_token}
@@ -1184,8 +1184,8 @@ class TestOidcCallbackEndpointExtended:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_disc.return_value = {
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "token_endpoint": "https://accounts.google.com/token",
+                "jwks_uri": "https://accounts.google.com/certs",
                 "issuer": "https://accounts.google.com",
             }
             mock_ex.return_value = {"id_token": id_token}
@@ -1276,8 +1276,8 @@ class TestOidcProcessCallbackDb:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_disc.return_value = {
-                "token_endpoint": "https://oauth2.example.com/token",
-                "jwks_uri": "https://oauth2.example.com/certs",
+                "token_endpoint": "https://example.auth0.com/token",
+                "jwks_uri": "https://example.auth0.com/certs",
                 "issuer": "https://example.auth0.com",
             }
             mock_ex.return_value = {"id_token": id_token}
@@ -1299,7 +1299,7 @@ class TestOidcProcessCallbackDb:
 
             assert result["access_token"] == "at-db"
             mock_ex.assert_awaited_once_with(
-                "https://oauth2.example.com/token",
+                "https://example.auth0.com/token",
                 "db-client-id",
                 "db-client-secret",
                 "auth-code",
@@ -1429,8 +1429,8 @@ class TestSystemSessionProviderResolution:
             patch("modulo.auth.sso.set_rls_org", new_callable=AsyncMock) as mock_set_rls,
         ):
             mock_disc.return_value = {
-                "token_endpoint": "https://oauth2.example.com/token",
-                "jwks_uri": "https://oauth2.example.com/certs",
+                "token_endpoint": "https://example.auth0.com/token",
+                "jwks_uri": "https://example.auth0.com/certs",
                 "issuer": "https://example.auth0.com",
             }
             mock_ex.return_value = {"id_token": id_token}
@@ -1484,3 +1484,352 @@ class TestSystemSessionProviderResolution:
 
         assert db_provider is provider
         mock_default_org.assert_awaited_once_with(app_session)
+
+
+# ---------------------------------------------------------------------------
+# FAR-506: OIDC derived-endpoint host allowlist (SSRF + client_secret disclosure)
+# ---------------------------------------------------------------------------
+
+
+class TestOidcEndpointHostAllowlist:
+    """A compromised/malicious discovery document must NOT be able to point a
+    derived endpoint at an internal/cloud-metadata host (the **pinned client** is
+    the real SSRF boundary — it blocks metadata/loopback and never POSTs
+    ``client_secret`` to a hostile host). The exact-host allowlist is
+    defense-in-depth only: multi-host IdPs (Google: ``token_endpoint`` on
+    oauth2.googleapis.com, ``jwks_uri`` on www.googleapis.com) are legitimate
+    and must NOT be rejected (FAR-506)."""
+
+    _DISCOVERY = "https://issuer.example/.well-known/openid-configuration"
+    _ISSUER = "https://issuer.example"
+
+    async def test_callback_accepts_cross_host_token_endpoint_and_exchanges(self) -> None:
+        """FAR-506: a sibling-host token endpoint (Google) is allowed — the code
+        exchange proceeds and the ``client_secret`` goes only to the pinned,
+        publicly-validated host."""
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:state", settings.secret_key)
+
+        with (
+            patch(
+                "modulo.auth.sso._resolve_oidc_provider",
+                new_callable=AsyncMock,
+                return_value=("cid", "client-secret", self._DISCOVERY, None, None),
+            ),
+            patch(
+                "modulo.auth.sso._fetch_discovery",
+                new_callable=AsyncMock,
+                return_value={
+                    "token_endpoint": "https://oauth2.googleapis.com/token",
+                    "jwks_uri": "https://issuer.example/jwks",
+                    "issuer": self._ISSUER,
+                },
+            ),
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_ex.return_value = {"id_token": "jwt"}
+            mock_verify.return_value = {"email": "u@e.z", "sub": "s"}
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+
+        assert result["access_token"] == "at"
+        mock_ex.assert_awaited_once()
+        mock_verify.assert_awaited_once()
+
+    async def test_callback_rejects_internal_token_endpoint_no_exchange(self) -> None:
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:state", settings.secret_key)
+
+        with (
+            patch(
+                "modulo.auth.sso._resolve_oidc_provider",
+                new_callable=AsyncMock,
+                return_value=("cid", "client-secret", self._DISCOVERY, None, None),
+            ),
+            patch(
+                "modulo.auth.sso._fetch_discovery",
+                new_callable=AsyncMock,
+                return_value={
+                    "token_endpoint": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
+                    "jwks_uri": "https://issuer.example/jwks",
+                    "issuer": self._ISSUER,
+                },
+            ),
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            pytest.raises(ValueError, match="Rejected OIDC token endpoint"),
+        ):
+            await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+
+        mock_ex.assert_not_called()
+
+    async def test_callback_accepts_cross_host_jwks_uri_and_verifies(self) -> None:
+        """FAR-506: a sibling-host ``jwks_uri`` (Google's www.googleapis.com) is
+        allowed — the ID-token signature verification proceeds rather than being
+        rejected before the JWKS fetch."""
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:state", settings.secret_key)
+
+        with (
+            patch(
+                "modulo.auth.sso._resolve_oidc_provider",
+                new_callable=AsyncMock,
+                return_value=("cid", "client-secret", self._DISCOVERY, None, None),
+            ),
+            patch(
+                "modulo.auth.sso._fetch_discovery",
+                new_callable=AsyncMock,
+                return_value={
+                    "token_endpoint": "https://issuer.example/token",
+                    "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                    "issuer": self._ISSUER,
+                },
+            ),
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "jwt"}),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_verify.return_value = {"email": "u@e.z", "sub": "s"}
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+
+        assert result["access_token"] == "at"
+        mock_verify.assert_awaited_once()
+
+    async def test_authorize_accepts_cross_host_authorization_endpoint(self) -> None:
+        """FAR-506: a sibling-host ``authorization_endpoint`` is allowed (Google
+        redirects to accounts.google.com/auth while discovery hosts differ)."""
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        settings = _override()
+        session = _mock_session()
+        with patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
+            mock_disc.return_value = {
+                "authorization_endpoint": "https://oauth2.googleapis.com/authorize",
+                "issuer": self._ISSUER,
+            }
+            url, _ = await oidc_get_authorize_url("google", settings, "http://cb", session, session)
+
+        assert url.startswith("https://oauth2.googleapis.com/authorize")
+
+    async def test_callback_same_host_path_works(self) -> None:
+        """The legit same-host path still reaches the token exchange (mocked)."""
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:state", settings.secret_key)
+
+        with (
+            patch(
+                "modulo.auth.sso._resolve_oidc_provider",
+                new_callable=AsyncMock,
+                return_value=("cid", "client-secret", self._DISCOVERY, None, None),
+            ),
+            patch(
+                "modulo.auth.sso._fetch_discovery",
+                new_callable=AsyncMock,
+                return_value={
+                    "token_endpoint": "https://issuer.example/token",
+                    "jwks_uri": "https://issuer.example/jwks",
+                    "issuer": self._ISSUER,
+                },
+            ),
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_ex.return_value = {"id_token": "jwt"}
+            mock_verify.return_value = {"email": "u@e.z", "sub": "s"}
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+
+        assert result["access_token"] == "at"
+        mock_ex.assert_awaited_once_with("https://issuer.example/token", "cid", "client-secret", "code", "http://cb")
+        mock_verify.assert_awaited_once()
+
+
+class TestEnforceOidcEndpointHost:
+    def test_accepts_cross_host_sibling(self) -> None:
+        """FAR-506: a sibling-host endpoint (Google's token endpoint on
+        oauth2.googleapis.com, not accounts.google.com) is NEWLY allowed. The
+        exact-host allowlist is now a preferred-log nicety, not a hard gate."""
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        assert (
+            _enforce_oidc_endpoint_host(
+                "https://oauth2.googleapis.com/token",
+                "https://accounts.google.com/.well-known/openid-configuration",
+                "https://accounts.google.com",
+                "token",
+            )
+            is None
+        )
+
+    def test_rejects_metadata_address(self) -> None:
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        with pytest.raises(ValueError, match="Rejected OIDC jwks endpoint"):
+            _enforce_oidc_endpoint_host(
+                "http://169.254.169.254/jwks",
+                "https://issuer.example/.well-known/openid-configuration",
+                "https://issuer.example",
+                "jwks",
+            )
+
+    def test_rejects_https_internal_literal(self) -> None:
+        """A HTTPS internal/metadata literal is still blocked by the SSRF preflight."""
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        with pytest.raises(ValueError, match="Rejected OIDC token endpoint"):
+            _enforce_oidc_endpoint_host(
+                "https://169.254.169.254/latest/meta-data/credentials",
+                "https://issuer.example/.well-known/openid-configuration",
+                "https://issuer.example",
+                "token",
+            )
+
+    def test_accepts_same_host(self) -> None:
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        assert (
+            _enforce_oidc_endpoint_host(
+                "https://issuer.example/token",
+                "https://issuer.example/.well-known/openid-configuration",
+                "https://issuer.example",
+                "token",
+            )
+            is None
+        )
+
+    def test_issuer_host_also_allowed(self) -> None:
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        # The jwks_uri may target the issuer host even when it differs (in path)
+        # from the discovery URL host — the issuer is an OIDC trust anchor.
+        assert (
+            _enforce_oidc_endpoint_host(
+                "https://issuer.example/jwks",
+                "https://issuer.example/.well-known/openid-configuration",
+                "https://issuer.example",
+                "jwks",
+            )
+            is None
+        )
+
+    def test_rejects_non_http_scheme(self) -> None:
+        from modulo.auth.sso import _enforce_oidc_endpoint_host
+
+        with pytest.raises(ValueError, match="Rejected OIDC token endpoint"):
+            _enforce_oidc_endpoint_host(
+                "file:///etc/passwd",
+                "https://issuer.example/.well-known/openid-configuration",
+                "https://issuer.example",
+                "token",
+            )
+
+
+# ---------------------------------------------------------------------------
+# FAR-506: multi-host IdP (Google) regression — relaxed endpoint host guard
+# ---------------------------------------------------------------------------
+
+
+class TestOidcMultiHostIdp:
+    """FAR-506 regression: Google's real discovery document returns sibling hosts
+    (token_endpoint on oauth2.googleapis.com, jwks_uri on www.googleapis.com)
+    that are NOT the discovery/issuer host (accounts.google.com). The relaxed
+    endpoint guard must let the flow proceed, while an internal/metadata or
+    non-HTTPS endpoint is still rejected before the code exchange — the
+    client_secret is never sent to a hostile host."""
+
+    async def test_google_multi_host_endpoints_proceed(self) -> None:
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:multi-host", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "issuer": "https://accounts.google.com",
+            }
+            mock_ex.return_value = {"id_token": "header.payload.signature"}
+            mock_verify.return_value = {"email": "user@example.com", "name": "Test User", "sub": "abc123"}
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
+            result = await oidc_process_callback(
+                "auth-code", signed, settings, session, session, "http://localhost/callback"
+            )
+
+            assert result["access_token"] == "at"
+            mock_ex.assert_awaited_once()  # token exchange was reached — no cross-host rejection
+
+    async def test_metadata_token_endpoint_rejected_before_exchange(self) -> None:
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:meta", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        ):
+            mock_disc.return_value = {
+                "token_endpoint": "https://169.254.169.254/latest/meta-data/credentials",
+                "issuer": "https://accounts.google.com",
+            }
+            with pytest.raises(ValueError, match="Rejected OIDC token endpoint"):
+                await oidc_process_callback(
+                    "auth-code", signed, settings, session, session, "http://localhost/callback"
+                )
+            mock_ex.assert_not_awaited()  # client_secret never POSTed to the metadata host
+
+    async def test_non_https_token_endpoint_rejected_before_exchange(self) -> None:
+        from modulo.auth.sso import oidc_process_callback
+
+        settings = _override()
+        session = _mock_session()
+        signed = sign_state("google:http", settings.secret_key)
+
+        with (
+            patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+            patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        ):
+            mock_disc.return_value = {
+                "token_endpoint": "http://oauth2.googleapis.com/token",
+                "issuer": "https://accounts.google.com",
+            }
+            with pytest.raises(ValueError, match="must use https:// scheme"):
+                await oidc_process_callback(
+                    "auth-code", signed, settings, session, session, "http://localhost/callback"
+                )
+            mock_ex.assert_not_awaited()

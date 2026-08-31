@@ -94,6 +94,27 @@ _LOCALHOST_5678: str = "http://localhost:5678"
 _LOCALHOST_8111: str = "http://localhost:8111"
 _LOCALHOST_9000: str = "http://localhost:9000"
 
+# FAR-496 read-side heal: the REST create/update endpoints store `credentials`
+# as a bare string, Fernet-encrypted into `credentials_ciphertext`. Token-keyed
+# connector types below read a DIFFERENT credential key in ``_build_connector``,
+# so legacy bare-token ciphertext rows for those types always failed
+# instantiation with "Missing credential key 'token'". The bare-scalar fallback
+# wrap in ``initialise()`` therefore wraps a decrypted bare scalar under the
+# connector type's OWN single credential key (see ``_bare_credential_key``),
+# healing legacy rows at read time — no write-side migration needed. Multi-key
+# types (jira, trello, jenkins, confluence, datadog, rest, ticket-tracker)
+# require JSON-dict credentials and keep the legacy "api_key" default, as do
+# plugin types.
+
+# Process-lifetime dedup for connector skip-warnings (FAR-465): a fresh hub is
+# built per run/request, so one persistently misconfigured connector used to
+# re-log its FULL traceback on every initialise() and flood worker logs. The
+# first sighting of a (instance, type, "ExcType: message") key logs the full
+# traceback; later sightings log a concise repeat line. The key space is
+# bounded by the number of connector instances in the deployment, so the set
+# cannot grow unbounded within a process.
+_SKIP_WARN_SEEN: set[tuple[str, str, str]] = set()
+
 
 class ConnectorNotFoundError(KeyError):
     """Raised when hub.get() is called with an unregistered connector ID."""
@@ -408,8 +429,11 @@ class ConnectorHub:
                                 plaintext = f.decrypt(ciphertext).decode("utf-8")
                                 # Multi-field creds round-trip: a JSON dict in the
                                 # ciphertext is used as-is (REST auth_mode/token/
-                                # api_key/...); a bare scalar falls back to the
-                                # legacy single api_key wrapper.
+                                # api_key/...); a bare scalar is wrapped under the
+                                # connector type's own single credential key
+                                # (FAR-496 read-side heal — see
+                                # _bare_credential_key), falling back to the
+                                # legacy single api_key wrapper for unlisted types.
                                 try:
                                     parsed_plain = json.loads(plaintext)
                                 except json.JSONDecodeError:
@@ -481,12 +505,25 @@ class ConnectorHub:
                     OSError,
                 ) as exc:
                     self._record_skip(ci, exc)
-                    logger.warning(
-                        "Skipping connector %s (%s)",
-                        ci.id,
-                        ci.connector_type_id,
-                        exc_info=True,
-                    )
+                    # Skip-warn dedup (FAR-465): full traceback once per
+                    # (instance, error) per process, concise repeat afterwards.
+                    # Check-and-add is synchronous (no await between) so it is
+                    # race-free under asyncio.
+                    skip_key = (str(ci.id), ci.connector_type_id, type(exc).__name__ + ": " + str(exc))
+                    if skip_key in _SKIP_WARN_SEEN:
+                        logger.warning(
+                            "Skipping connector %s (%s) (repeat; full traceback logged earlier)",
+                            ci.id,
+                            ci.connector_type_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Skipping connector %s (%s)",
+                            ci.id,
+                            ci.connector_type_id,
+                            exc_info=True,
+                        )
+                        _SKIP_WARN_SEEN.add(skip_key)
                 except SharedBudgetUnavailableError:
                     # A configured-but-unconstructable shared Redis client is a
                     # hard config error (FAR-439): degrade to the local bucket

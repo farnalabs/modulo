@@ -62,3 +62,7 @@ Rules:
 3. The only reliable pure-SQL detection is an exception-safe per-row cast test: for each candidate row, `BEGIN; PERFORM col::jsonb; EXCEPTION WHEN others THEN UPDATE ... SET col = NULL; END;` keyed on `ctid`, with `quote_ident()` for identifiers (the DO-block pattern used in the 2026-08-26 prod cleanup).
 4. `ALTER ... TYPE jsonb USING col::jsonb` is NOT lossless on populated databases. Before shipping any json-to-jsonb migration, run the exception-safe scan against every target column (all 74 json columns were checked in the incident) and clean NUL rows first.
 5. NUL-byte test data must be inserted via psycopg/Python (parameter binding), never a SQL literal — a test that tries to INSERT `'\x00'` via SQL either errors or inserts the wrong bytes.
+
+### Sandbox node timeout_seconds must stay under the E2B 1-hour cap (2026-08-31)
+
+The e2b SDK upgrade shipped in the Aug 30 deploy (Python 3.14) began enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with timeout_seconds=3600 now fails provisioning with `400: Timeout cannot be greater than 1 hours` (previously accepted). GraphValidator rejects >3300 at save time (headroom for provisioning). A sandbox-provisioning failure must never be maskable as a completed run - the Prompt-to-PR pipeline's blocking output-contract eval is the reference mitigation; the failure envelope now carries the provider error.

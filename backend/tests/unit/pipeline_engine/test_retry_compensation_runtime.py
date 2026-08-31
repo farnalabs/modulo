@@ -607,7 +607,7 @@ async def test_cancelled_error_is_never_retried() -> None:
     async def node(state: dict[str, Any]) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     node_def = {"id": "n1", "retry": {"max_attempts": 3, "backoff": 0.0, "on": ["error"]}}
     wrapped = make_retrying_node_fn(node, node_id="n1", node_def=node_def, pipeline_retry_policy={})

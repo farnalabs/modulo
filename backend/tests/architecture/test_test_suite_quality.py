@@ -804,6 +804,14 @@ regression that silently weakens the suite:
   form *creates* a class and is left alone), the ``is``/``is not`` exact-type
   spellings are blessed and left alone, and ``type(a) == type(b)`` is
   covered (prefer ``type(a) is type(b)``)
+- ``isinstance``/``issubclass`` checks whose types argument fixes the verdict
+  at source time — the bare ``object`` class (ALWAYS True: every object is an
+  instance of ``object``, and every class a subclass of it), an empty types
+  tuple ``isinstance(x, ())`` (ALWAYS False: nothing to match), or a types
+  tuple containing ``object`` alongside other types (the tuple is a
+  disjunction, so the ``object`` element alone forces the whole check ALWAYS
+  True). A check that can never change its outcome is dead assertion code —
+  assert against a specific type or drop the check entirely
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -11344,3 +11352,136 @@ def test_type_equality_lens_flags_fragile_exact_type_checks():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _type_equality_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _noop_typecheck_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``isinstance``/``issubclass``
+    call whose types argument makes the check a fixed outcome.
+
+    ``isinstance(x, object)`` is ALWAYS True — every object in the language is
+    an instance of ``object`` — and ``isinstance(x, ())`` is ALWAYS False — an
+    empty types tuple matches nothing. ``issubclass`` is the mirror image on the
+    class side: every class (``object`` itself included) is a subclass of
+    ``object``, and ``issubclass(X, ())`` always fails. A types *tuple* that
+    contains a bare ``object`` element (``(int, object)``) is the disjunction of
+    its elements, so the ``object`` element alone forces the whole check to
+    ALWAYS be True. Written inside an assertion, a fixed-outcome check is dead
+    code: the verdict is decided at source time, so the assert passes (or
+    fails) no matter how broken the behaviour under test is. Only the bare
+    ``object`` *name* is matched — an attribute spelling such as
+    ``builtins.object`` is not, mirroring how the type-equality lens only
+    matches the builtin ``type`` name."""
+    found: list[tuple[int, str]] = []
+
+    def _is_object_name(node: ast.AST) -> bool:
+        return isinstance(node, ast.Name) and node.id == "object"
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id not in ("isinstance", "issubclass"):
+            continue
+        if len(node.args) != 2 or node.keywords:
+            continue
+        types = node.args[1]
+        verdict: str | None = None
+        why: str | None = None
+        if _is_object_name(types):
+            verdict = "ALWAYS True"
+            why = (
+                "every object is an instance of object"
+                if node.func.id == "isinstance"
+                else "every class is a subclass of object"
+            )
+        elif isinstance(types, ast.Tuple) and not types.elts:
+            verdict = "ALWAYS False"
+            why = (
+                "an empty types tuple matches nothing"
+                if node.func.id == "isinstance"
+                else "an empty types tuple has no subclass"
+            )
+        elif isinstance(types, ast.Tuple) and any(_is_object_name(elt) for elt in types.elts):
+            verdict = "ALWAYS True"
+            why = "a types tuple is a disjunction and object matches every object"
+        if verdict is None:
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"{node.func.id}({ast.unparse(node.args[0])}, {ast.unparse(types)}) — {verdict} "
+                f"({why}); the outcome is fixed at source time, so the assert is dead code — "
+                "assert against a specific type or drop the check",
+            )
+        )
+    return found
+
+
+def test_no_noop_typecheck_tautologies():
+    """``isinstance``/``issubclass`` against a types argument that fixes the
+    verdict at source time — the bare ``object`` class (ALWAYS True: every
+    object is an instance of ``object``, and every class a subclass of it), an
+    empty types tuple ``()`` (ALWAYS False: nothing to match), or a types tuple
+    containing ``object`` alongside other types (the tuple is a disjunction, so
+    ``object`` alone forces the check ALWAYS True). A check that can never
+    change its outcome is dead assertion code — assert against a specific type
+    or drop the check entirely."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _noop_typecheck_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} isinstance/issubclass check(s) with a fixed source-time verdict.\n"
+        "isinstance(x, object) ALWAYS passes and isinstance(x, ()) ALWAYS fails, and a types tuple\n"
+        "containing object always passes because object matches every object. Each is dead assertion\n"
+        "code: assert against a specific type or drop the check.\n" + "\n".join(violations)
+    )
+
+
+def test_noop_typecheck_lens_flags_fixed_verdicts():
+    """Synthetic positive/negative control for the no-op typecheck lens: it must
+    flag the bare ``object`` class and the empty or object-containing types
+    tuple — in ``isinstance`` and ``issubclass`` calls, in assert and in helper
+    code — and ignore spelled-out ``object`` attribute forms, captured names,
+    and every concrete type or multi-type tuple that leaves room for a real
+    outcome."""
+    positive_sources = [
+        "def test_foo():\n    assert isinstance(result, object)\n",
+        "def test_foo():\n    assert not isinstance(err, object)\n",
+        "def test_foo():\n    assert issubclass(Child, object)\n",
+        "def test_foo():\n    assert isinstance(value, ())\n",
+        "def test_foo():\n    assert not isinstance(x, ())\n",
+        "def test_foo():\n    assert issubclass(Sub, ())\n",
+        "def test_foo():\n    assert isinstance(x, (int, object))\n",
+        "def test_foo():\n    assert isinstance(model, (object, models.BaseModel))\n",
+        "def test_foo():\n    assert isinstance(x, (object,))\n",
+        "def test_foo():\n    assert issubclass(SomeClass, (object, Other))\n",
+        "def _is_ok(v):\n    return isinstance(v, object)\n",
+        "def _helper(v):\n    return issubclass(v, ())\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _noop_typecheck_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert isinstance(result, dict)\n",
+        "def test_foo():\n    assert isinstance(value, (str, bytes))\n",
+        "def test_foo():\n    assert not isinstance(x, (int, float))\n",
+        "def test_foo():\n    assert issubclass(A, B)\n",
+        "def test_foo():\n    assert issubclass(models.Model, DeclarativeBase)\n",
+        "def test_foo():\n    assert isinstance(x, module.object)\n",
+        "def test_foo():\n    assert isinstance(x, builtins.object)\n",
+        "def test_foo():\n    cls = object\n    assert isinstance(x, cls)\n",
+        "def test_foo():\n    assert isinstance(x, X.object)\n",
+        "def test_foo():\n    assert issubclass(object, cls)\n",
+        "def test_foo():\n    assert isinstance(x, SomeObject)\n",
+        "def test_foo():\n    types = (int, str)\n    assert isinstance(x, types)\n",
+        "def test_foo():\n    assert x.__class__ is object\n",
+        "def test_foo():\n    assert isinstance(x, Any)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _noop_typecheck_violations(tree), f"lens should NOT flag:\n{source}"

@@ -16,12 +16,20 @@ import base64
 import json
 import logging
 import time
+import urllib.parse
 from typing import Any
 
 import httpx
 import jwt
 from jwt import InvalidTokenError as JWTError
 from jwt import PyJWK, PyJWKError
+
+from modulo.core.ssrf import (
+    derive_oidc_allowed_hosts,
+    pinned_async_client,
+    require_url_host_in_allowlist,
+    validate_outbound_url_preflight,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -79,9 +87,14 @@ def _cache_set(jwks_uri: str, keys: list[dict[str, Any]]) -> None:
 
 
 async def _fetch_discovery_document(discovery_url: str) -> dict[str, Any]:
-    """Fetch and validate the provider's OpenID discovery document."""
+    """Fetch and validate the provider's OpenID discovery document.
+
+    The connect is pinned to the validated address (via :func:`pinned_async_client`),
+    so the SSRF validation and DNS-rebinding protection are applied to the base
+    discovery fetch — never a plain httpx client for a remote-supplied URL.
+    """
     try:
-        async with httpx.AsyncClient() as client:
+        async with await pinned_async_client(discovery_url) as client:
             resp = await client.get(discovery_url, timeout=10)
             resp.raise_for_status()
             disc: dict[str, Any] = resp.json()
@@ -93,13 +106,18 @@ async def _fetch_discovery_document(discovery_url: str) -> dict[str, Any]:
 
 
 async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
-    """Fetch the JWKS, using a cached copy within the TTL window."""
+    """Fetch the JWKS, using a cached copy within the TTL window.
+
+    The connect is pinned to the validated address (via :func:`pinned_async_client`),
+    so a remote-supplied ``jwks_uri`` cannot target an internal/metadata address
+    and the DNS-rebinding window is closed.
+    """
     cached = _cache_get(jwks_uri)
     if cached is not None:
         return cached
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with await pinned_async_client(jwks_uri) as client:
             resp = await client.get(jwks_uri, timeout=10)
             resp.raise_for_status()
             data = resp.json()
@@ -193,6 +211,10 @@ async def verify_id_token(
     if alg not in _ACCEPTABLE_JWT_ALGORITHMS:
         raise OidcVerifyError(f"Unsupported JWT algorithm '{alg}' — rejected")
 
+    # ``jwks_uri`` is fetched (and pinned) below. Its host-allowlist check is
+    # enforced by callers that derive it from a remote discovery document
+    # (``verify_id_token_with_discovery`` and the SSO callback); a direct,
+    # admin-supplied ``jwks_uri`` is already a trusted config value.
     jwks = await _fetch_jwks(jwks_uri)
 
     try:
@@ -226,6 +248,23 @@ async def verify_id_token_with_discovery(
     issuer = disc.get("issuer", "")
     if not issuer:
         raise OidcVerifyError("No issuer in discovery document")
+
+    # FAR-506: the exact-host allowlist was an over-restrictive secondary boundary
+    # that broke multi-host IdPs (Google's ``jwks_uri`` on www.googleapis.com).
+    # The pinned client is the real SSRF boundary — it pins the validated
+    # non-internal IP and closes the DNS-rebinding window — so this check is
+    # defense-in-depth only: reject a non-HTTPS / userinfo / internal-literal
+    # target, and WARN (never reject) on a sibling host.
+    if urllib.parse.urlparse(jwks_uri).scheme != "https":
+        raise OidcVerifyError("jwks_uri must use the https:// scheme")
+    try:
+        validate_outbound_url_preflight(jwks_uri)
+    except ValueError as exc:
+        raise OidcVerifyError(str(exc)) from None
+    try:
+        require_url_host_in_allowlist(jwks_uri, derive_oidc_allowed_hosts(discovery_url, issuer))
+    except ValueError:
+        _log.warning("oidc_verify.jwks_cross_host", extra={"jwks_uri": jwks_uri})
 
     return await verify_id_token(id_token, jwks_uri, client_id, issuer)
 

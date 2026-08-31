@@ -37,6 +37,32 @@ def _encrypt(payload: dict[str, Any]) -> bytes:
     return Fernet(_KEY.encode()).encrypt(json.dumps(payload).encode())
 
 
+@pytest.fixture(autouse=True)
+def _reset_skip_warn_registry():
+    """Keep the module-level skip-warning dedup registry isolated between tests (FAR-465)."""
+    from modulo.core.connector_hub import _SKIP_WARN_SEEN
+
+    _SKIP_WARN_SEEN.clear()
+    yield
+    _SKIP_WARN_SEEN.clear()
+
+
+def _encrypt_raw(payload: str) -> bytes:
+    """Encrypt a raw (non-JSON) string — how legacy bare-token credentials rows look."""
+    return Fernet(_KEY.encode()).encrypt(payload.encode())
+
+
+def _creds_capture_patch(captured: list[tuple[str, dict[str, Any]]]) -> Any:
+    """Patch _build_connector to record (type_id, creds) per call, still building for real."""
+    from modulo.core.connector_hub import _build_connector as real_build
+
+    def _wrapper(type_id: str, config: dict[str, Any] | None, creds: dict[str, Any], **kwargs: Any) -> Any:
+        captured.append((type_id, dict(creds)))
+        return real_build(type_id, config, creds, **kwargs)
+
+    return patch("modulo.core.connector_hub._build_connector", _wrapper)
+
+
 @dataclass
 class _FakeCI:
     """Minimal stand-in for ConnectorInstance (no DB needed)."""
@@ -639,6 +665,74 @@ async def test_close_clears_skipped_and_healthy(tmp_path):
     assert not hub.healthy
 
 
+# ---------------------------------------------------------------------------
+# Skip-warning dedup (FAR-465)
+# ---------------------------------------------------------------------------
+
+
+async def test_skip_warning_dedup_full_traceback_once_per_process(caplog):
+    """The first initialise of a misconfigured connector logs the full traceback;
+    a second hub in the same process logs a concise repeat instead (FAR-465)."""
+    import logging
+
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt({}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        patch.object(backend, "get_secret", return_value="{}"),
+    ):
+        hub1 = ConnectorHub(secrets_backend=backend)
+        await hub1.initialise([ci])
+        hub2 = ConnectorHub(secrets_backend=backend)
+        await hub2.initialise([ci])
+
+    skips = [rec for rec in caplog.records if "Skipping connector" in rec.message]
+    assert len(skips) == 2
+    assert skips[0].exc_info is not None
+    assert "Missing credential key" in str(skips[0].exc_info[1])
+    assert skips[1].exc_info is None
+    assert "(repeat; full traceback logged earlier)" in skips[1].message
+    assert not hub1.connector_ids
+    assert not hub2.connector_ids
+
+
+async def test_skip_warning_dedup_different_instance_id_logs_traceback(caplog):
+    """A different instance id with the same problem logs its own full traceback
+    on first sighting — dedup is keyed per instance, not per connector type."""
+    import logging
+
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        patch.object(backend, "get_secret", return_value="{}"),
+    ):
+        ci_a = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        hub_a = ConnectorHub(secrets_backend=backend)
+        await hub_a.initialise([ci_a])
+
+        ci_b = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        hub_b = ConnectorHub(secrets_backend=backend)
+        await hub_b.initialise([ci_b])
+
+    skips = [rec for rec in caplog.records if "Skipping connector" in rec.message]
+    assert len(skips) == 2
+    for rec in skips:
+        assert rec.exc_info is not None
+        assert "Missing credential key" in str(rec.exc_info[1])
+        assert "(repeat; full traceback logged earlier)" not in rec.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# ConnectorHub API surface
+# ---------------------------------------------------------------------------
+
+
 async def test_acl_returns_acl_for_connector(tmp_path):
     """acl() returns the stored ACL for a registered connector."""
     ci = _FakeCI(
@@ -835,3 +929,139 @@ async def test_initialise_shell_no_runtime_provider_creates_connector():
     assert connector.connector_type == ConnectorType.SHELL
     with pytest.raises(ValueError, match="Runtime provider not configured"):
         await connector.query(ConnectorQuery(resource="directory"))
+
+
+# ---------------------------------------------------------------------------
+# FAR-496: bare-token credentials_ciphertext read-side heal
+# ---------------------------------------------------------------------------
+
+
+async def test_initialise_bare_token_ciphertext_wraps_under_type_key_github():
+    """FAR-496: a github instance whose ciphertext decrypts to a bare token
+    string instantiates successfully — the bare scalar is wrapped under the
+    type's own 'token' key (previously 'api_key', so instantiation always
+    failed with "Missing credential key 'token'")."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt_raw("ghp_bare_token_123"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.GITHUB
+    assert captured == [("github", {"token": "ghp_bare_token_123"})]
+
+
+async def test_initialise_bare_token_ciphertext_rest_keeps_api_key_wrap():
+    """FAR-496: rest is a multi-key (JSON-dict credentials) type — a bare
+    scalar still wraps under the legacy 'api_key' key (unchanged)."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="rest",
+        config_json={"base_url": "https://api.example.com"},
+        credentials_ciphertext=_encrypt_raw("rest_bare_api_key"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert captured == [("rest", {"api_key": "rest_bare_api_key"})]
+
+
+async def test_initialise_bare_token_ciphertext_jira_keeps_api_key_wrap():
+    """FAR-496: jira requires multi-key JSON-dict credentials — a bare scalar
+    still wraps under the legacy 'api_key' key (unchanged)."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="jira",
+        config_json={"instance": "test.atlassian.net"},
+        credentials_ciphertext=_encrypt_raw("jira_bare_token"),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert captured == [("jira", {"api_key": "jira_bare_token"})]
+
+
+async def test_initialise_json_dict_ciphertext_used_as_is_for_token_keyed_type():
+    """FAR-496: a JSON-dict ciphertext is still used as-is — no re-wrapping
+    happens for token-keyed types when the plaintext is already a dict."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="github",
+        credentials_ciphertext=_encrypt({"token": "ghp_dict_token"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.GITHUB
+    assert captured == [("github", {"token": "ghp_dict_token"})]
+
+
+@pytest.mark.parametrize(
+    ("connector_type_id", "bare_token", "expected_key"),
+    [
+        ("slack", "xoxb_bare_token", "bot_token"),
+        ("asana", "asana_pat_bare", "personal_access_token"),
+        ("monday", "monday_key_bare", "api_key"),
+    ],
+)
+async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
+    connector_type_id, bare_token, expected_key
+):
+    """FAR-496: types with a non-'token' credential key (slack bot_token,
+    asana personal_access_token) and single-'api_key' types (monday) wrap
+    bare scalars under their own key."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id=connector_type_id,
+        credentials_ciphertext=_encrypt_raw(bare_token),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    captured: list[tuple[str, dict[str, Any]]] = []
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+        _creds_capture_patch(captured),
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == connector_type_id
+    assert captured == [(connector_type_id, {expected_key: bare_token})]
