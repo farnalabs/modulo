@@ -81,8 +81,10 @@
                 {{ $t('views.variantCreator.advanced_overrides_note') }}
               </p>
             <div class="flex items-center gap-3">
+              <span class="sr-only" id="variant-builder-headroom-label">{{ $t('views.variantCreator.variants_title') }}</span>
               <output
                 data-testid="variant-builder-headroom"
+                aria-labelledby="variant-builder-headroom-label"
                 class="text-xs text-muted-foreground"
               >
                 {{ $t('views.variantCreator.headroom', { used: variants.length, max: MAX_VARIANTS }) }}
@@ -207,8 +209,10 @@
           <output
             v-if="variants.length < 2"
             data-testid="variant-builder-min-two"
+            aria-labelledby="variant-builder-min-two-label"
             class="text-sm text-muted-foreground"
           >
+            <span class="sr-only" id="variant-builder-min-two-label">{{ $t('views.variantCreator.aria_min_variants') }}</span>
             {{ $t('views.variantCreator.min_two_hint') }}
           </output>
 
