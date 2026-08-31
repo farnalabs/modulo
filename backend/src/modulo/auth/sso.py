@@ -17,7 +17,13 @@ from modulo.auth.jwt import create_access_token, create_refresh_token
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
-from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
+from modulo.core.ssrf import (
+    derive_oidc_allowed_hosts,
+    pinned_async_client,
+    require_url_host_in_allowlist,
+    validate_outbound_url_async,
+    validate_outbound_url_preflight,
+)
 from modulo.db.crud.account import create_account, get_account_by_email, update_last_login
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.sso_provider import get_enabled_saml_provider, get_provider_by_provider_id
@@ -354,6 +360,9 @@ async def oidc_get_authorize_url(
     auth_endpoint = disc.get("authorization_endpoint")
     if not isinstance(auth_endpoint, str) or not auth_endpoint:
         raise ValueError("No authorization_endpoint in discovery document")
+    raw_issuer = disc.get("issuer")
+    issuer_for_hosts = raw_issuer if isinstance(raw_issuer, str) else None
+    _enforce_oidc_endpoint_host(auth_endpoint, discovery_url, issuer_for_hosts, "authorization")
 
     raw_state = str(uuid.uuid4())
     signed = sign_state(f"{provider_id}:{raw_state}", settings.secret_key)
@@ -420,6 +429,9 @@ async def oidc_process_callback(
     token_endpoint = disc.get("token_endpoint")
     if not isinstance(token_endpoint, str) or not token_endpoint:
         raise ValueError("No token_endpoint in discovery document")
+    raw_issuer = disc.get("issuer")
+    issuer_for_hosts = raw_issuer if isinstance(raw_issuer, str) else None
+    _enforce_oidc_endpoint_host(token_endpoint, discovery_url, issuer_for_hosts, "token")
 
     try:
         token_data = await _exchange_code(
@@ -443,6 +455,7 @@ async def oidc_process_callback(
             "OIDC provider discovery document is missing jwks_uri or issuer — "
             "cannot verify ID token signature. Check provider configuration."
         )
+    _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
 
     try:
         claims = await verify_id_token(id_token, jwks_uri, client_id, issuer)
@@ -528,7 +541,9 @@ def _require_json_object(value: object, context: str) -> dict[str, object]:
 
 
 async def _fetch_discovery(discovery_url: str) -> dict[str, object]:
-    async with httpx.AsyncClient() as client:
+    # Pinned client: SSRF-validates + pins the connect so the base discovery
+    # fetch on the env-var path is protected exactly like the DB-provider path.
+    async with await pinned_async_client(discovery_url) as client:
         resp = await client.get(discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
         resp.raise_for_status()
         try:
@@ -549,6 +564,37 @@ async def _fetch_discovery_pinned(discovery_url: str) -> dict[str, object]:
         return _require_json_object(decoded, "OIDC discovery document")
 
 
+def _enforce_oidc_endpoint_host(url: str, discovery_url: str, issuer: str | None, purpose: str) -> None:
+    """Reject a remote-supplied OIDC endpoint that points at an unsafe host.
+
+    NOTE (FAR-506): the exact-host allowlist was an over-restrictive secondary
+    boundary that broke legitimate multi-host IdPs. Google's real discovery
+    document returns ``token_endpoint`` on oauth2.googleapis.com and
+    ``jwks_uri`` on www.googleapis.com — sibling hosts of the discovery/issuer
+    host (accounts.google.com). The **pinned client** is the real SSRF boundary:
+    it pins the validated non-internal IP, closes the DNS-rebinding window, and
+    blocks metadata/loopback. This check is therefore defense-in-depth only and
+    rejects what a pinned client could never safely reach anyway — a non-HTTPS
+    URL, an embedded-userinfo URL, or a literal-IP internal/loopback/metadata
+    host. The discovery/issuer-host allowlist is kept as a preferred-log nicety:
+    a cross-host (multi-host IdP) endpoint is logged as a warning, never
+    rejected.
+    """
+    if urllib.parse.urlparse(url).scheme != "https":
+        raise ValueError(f"Rejected OIDC {purpose} endpoint: URL must use https:// scheme")
+    try:
+        validate_outbound_url_preflight(url)
+    except ValueError as exc:
+        raise ValueError(f"Rejected OIDC {purpose} endpoint: {exc}") from None
+
+    # Preferred-log nicety: warn (but do NOT reject) when a derived endpoint lives
+    # on a sibling host. Legitimate for multi-host IdPs (Google etc.).
+    try:
+        require_url_host_in_allowlist(url, derive_oidc_allowed_hosts(discovery_url, issuer))
+    except ValueError:
+        _log.warning("sso.oidc_endpoint_cross_host", extra={"purpose": purpose, "url": url})
+
+
 async def _exchange_code(
     token_endpoint: str,
     client_id: str,
@@ -556,7 +602,12 @@ async def _exchange_code(
     code: str,
     redirect_uri: str,
 ) -> dict[str, object]:
-    async with httpx.AsyncClient() as client:
+    # Pinned client: the token endpoint is a remote-supplied URL. Pinning
+    # validates + pins the connect so the ``client_secret`` in the POST body is
+    # only ever disclosed to a validated, allowlisted host — never a hostile or
+    # internal/metadata target. The caller enforces the host allowlist before
+    # calling here.
+    async with await pinned_async_client(token_endpoint) as client:
         resp = await client.post(
             token_endpoint,
             data={

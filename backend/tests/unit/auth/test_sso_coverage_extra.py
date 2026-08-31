@@ -285,7 +285,7 @@ async def test_callback_missing_id_token() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t", "jwks_uri": "j", "issuer": "i"},
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={}),
         pytest.raises(ValueError, match="missing a valid id_token"),
@@ -306,7 +306,7 @@ async def test_callback_missing_jwks_or_issuer() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t"},
+            return_value={"token_endpoint": "https://d/token"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         pytest.raises(ValueError, match="missing jwks_uri or issuer"),
@@ -327,7 +327,7 @@ async def test_callback_missing_email() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t", "jwks_uri": "j", "issuer": "i"},
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock, return_value={}),
@@ -349,7 +349,7 @@ async def test_callback_no_app_session() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t", "jwks_uri": "j", "issuer": "i"},
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
@@ -375,7 +375,7 @@ async def test_callback_groups_not_a_list() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t", "jwks_uri": "j", "issuer": "i"},
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
@@ -412,7 +412,7 @@ async def test_callback_applies_group_mappings() -> None:
         patch(
             "modulo.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
-            return_value={"token_endpoint": "t", "jwks_uri": "j", "issuer": "i"},
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
