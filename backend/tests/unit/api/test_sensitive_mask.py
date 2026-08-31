@@ -18,6 +18,7 @@ from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key,
     mask_config_json,
     mask_sensitive_value,
+    merge_masked_config_json,
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -194,8 +195,90 @@ class TestMaskConfigJson:
         result = mask_config_json(config)
         assert result == config
 
+    def test_masks_nested_header_token(self) -> None:
+        """A secret in a nested ``headers.Authorization`` header key is masked.
+
+        ``Authorization`` is not a sensitive key-name, but its value is a Bearer
+        secret, so it must be masked by VALUE (``mask_secret_values_in_text``);
+        a sibling ``token`` key is masked by KEY.
+        """
+        config = {"headers": {"Authorization": "Bearer github_pat_abc", "token": "abc123"}}
+        result = mask_config_json(config)
+        assert result["headers"]["Authorization"] == f"Bearer {SENSITIVE_VALUE_MASK}"
+        assert result["headers"]["token"] == SENSITIVE_VALUE_MASK
+
+    def test_masks_base_url_and_path_embedded_token(self) -> None:
+        """A token embedded in a ``base_url`` / ``path`` string is value-masked."""
+        config = {
+            "base_url": "https://user:pass@example.com",
+            "path": "https://user:pass@example.com/api",
+        }
+        result = mask_config_json(config)
+        assert result["base_url"] == f"https://user:{SENSITIVE_VALUE_MASK}@example.com"
+        assert result["path"] == f"https://user:{SENSITIVE_VALUE_MASK}@example.com/api"
+
+    def test_masks_nested_operations_param(self) -> None:
+        """A per-resource ``operations`` param key is masked at depth."""
+        config = {"operations": {"get": {"params": {"api_key": "sk-123", "offset": "0"}}}}
+        result = mask_config_json(config)
+        assert result["operations"]["get"]["params"]["api_key"] == SENSITIVE_VALUE_MASK
+        assert result["operations"]["get"]["params"]["offset"] == "0"
+
+    def test_masks_list_under_sensitive_key(self) -> None:
+        """A list under a sensitive key has every element masked."""
+        config = {"tokens": ["abc", "def"], "hosts": ["a.example.com", "b.example.com"]}
+        result = mask_config_json(config)
+        assert result["tokens"] == [SENSITIVE_VALUE_MASK, SENSITIVE_VALUE_MASK]
+        assert result["hosts"] == ["a.example.com", "b.example.com"]
+
     def test_empty_dict(self) -> None:
         assert not mask_config_json({})
+
+
+# ---------------------------------------------------------------------------
+# Unit: merge_masked_config_json (PATCH read-modify-write round-trip)
+# ---------------------------------------------------------------------------
+
+
+class TestMergeMaskedConfigJson:
+    def test_patch_of_masked_list_does_not_overwrite_stored_secrets(self) -> None:
+        """A PATCH of a masked ``tokens`` list must NOT clobber the stored list.
+
+        Regression for the critical finding: ``_deep_merge`` used to hit the
+        dict-branch ``else: merged[k] = v`` for a list value, wholesale-replacing
+        the stored list with the incoming masked list, so the real secrets were
+        lost after a GET->PATCH-back round-trip.
+        """
+        stored = {"tokens": ["real-A", "real-B"]}
+        incoming = {"tokens": [SENSITIVE_VALUE_MASK, SENSITIVE_VALUE_MASK]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["tokens"] == ["real-A", "real-B"]
+
+    def test_patch_of_list_of_dicts_preserves_real_nested_secret(self) -> None:
+        """A list-of-dicts (``operations``) round-trip preserves the nested secret.
+
+        Each dict element is merged recursively, so a masked ``params.api_key``
+        inside a dict element is skipped while the real value is kept.
+        """
+        stored = {"operations": [{"name": "get", "params": {"api_key": "real-key", "offset": "0"}}]}
+        incoming = {"operations": [{"name": "get", "params": {"api_key": SENSITIVE_VALUE_MASK, "offset": "0"}}]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["operations"][0] == {"name": "get", "params": {"api_key": "real-key", "offset": "0"}}
+
+    def test_patch_of_masked_list_preserves_non_secret_siblings(self) -> None:
+        """Sibling keys and non-masked list elements still merge as expected."""
+        stored = {"tokens": ["real-A"], "name": "connector"}
+        incoming = {"tokens": [SENSITIVE_VALUE_MASK], "name": "renamed"}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["tokens"] == ["real-A"]
+        assert result["name"] == "renamed"
+
+    def test_patch_of_real_new_list_entries_replaces_stored(self) -> None:
+        """A genuinely new (non-masked) list entry still replaces the stored one."""
+        stored = {"refs": [".agents"]}
+        incoming = {"refs": ["backend", "frontend"]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["refs"] == ["backend", "frontend"]
 
 
 # ---------------------------------------------------------------------------

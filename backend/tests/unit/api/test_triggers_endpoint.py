@@ -1234,7 +1234,10 @@ def test_update_ongoing_merges_config_json(client: TestClient) -> None:
     body = resp.json()
     merged = body["config_json"]
     assert merged["scan_interval_seconds"] == 300, "PUT must merge config, never wipe the cadence"
-    assert merged["input_template"] == {"b": 2}
+    # The trigger PUT merges config via merge_masked_config_json (recursive), so
+    # nested dicts are deep-merged rather than wholesale-replaced — a masked GET
+    # round-trip must never clobber stored secrets at depth. expect a:1 retained.
+    assert merged["input_template"] == {"a": 1, "b": 2}
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 

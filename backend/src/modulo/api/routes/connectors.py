@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json, merge_masked_config_json
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
@@ -526,21 +526,6 @@ async def update_connector_endpoint(
     new_credentials: str | None = None
     if credentials_updated:
         new_credentials = updates.pop("credentials")
-        if new_credentials is None:
-            # ``min_length`` only constrains str values — an explicit
-            # ``"credentials": null`` (e.g. an empty config textarea on a
-            # name-only edit) would otherwise reach _encrypt(None, ...) and raise
-            # AttributeError → unhandled 500 (FAR-495 QA). Treat it as "no
-            # credential change": skip the credential write entirely and leave
-            # the stored secret intact. The later block re-affirms this.
-            credentials_updated = False
-        else:
-            ct = _encrypt(new_credentials, settings.fernet_key)
-            updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
-            # Fresh credentials clear the degraded marker (FAR-495) — the stored
-            # skip error described the OLD credentials, not the new ones.
-            updates["degraded_at"] = None
-            updates["last_skip_error"] = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -550,20 +535,18 @@ async def update_connector_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
             if existing is not None and "config_json" in updates and updates["config_json"] is not None:
                 current_cfg = existing.config_json or {}
-                merged_cfg = dict(current_cfg)
-                for k, v in updates["config_json"].items():
-                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                        # A masked placeholder must never clobber the stored secret
-                        # (read-modify-write round-trip guard). Keep the existing value.
-                        continue
-                    if v is None:
-                        merged_cfg.pop(k, None)
-                    else:
-                        merged_cfg[k] = v
-                updates["config_json"] = merged_cfg
+                updates["config_json"] = merge_masked_config_json(current_cfg, updates["config_json"])
             if credentials_updated and existing is not None:
-                assert new_credentials is not None
-                if existing.connector_type_id == "rest":
+                if new_credentials is None:
+                    # No credential change supplied (e.g. an empty config textarea
+                    # posts credentials: null) — skip the credential write. Never
+                    # 500 on a null credentials payload.
+                    credentials_updated = False
+                elif existing.connector_type_id == "rest":
+                    # Fresh credentials clear the degraded marker (FAR-495) — the
+                    # stored skip error described the OLD credentials, not the new ones.
+                    updates["degraded_at"] = None
+                    updates["last_skip_error"] = None
                     # Partial credential update (FAR-466) — REST connector only.
                     # The connector reads auth identity (auth_mode, in,
                     # header_name, query_param_name) from the DECRYPTED credential
@@ -618,6 +601,9 @@ async def update_connector_endpoint(
                             detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
                         )
                 else:
+                    # Fresh credentials clear the degraded marker (FAR-495).
+                    updates["degraded_at"] = None
+                    updates["last_skip_error"] = None
                     # Non-REST connector: historical FULL-REPLACE (no overlay) —
                     # whatever credential payload is supplied replaces the stored
                     # credential outright.
