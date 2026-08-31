@@ -94,4 +94,4 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   previously absent from the feature graph). Behaviours verified against
   `api/mcp_server.py`, `api/mcp_tool_registry.py`, `core/mcp/scope_validator.py`,
   the OAuth + setup-handoff routes, the `tests/unit/mcp/*` scope/tenant/team
-  suites, and the registered `mcp/` BDD features. Status: covered.
+  suites, and the `mcp/` BDD features. Status: covered.

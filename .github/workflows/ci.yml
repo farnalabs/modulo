@@ -157,7 +157,19 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            BASE="origin/$GITHUB_BASE_REF"
+            # actions/checkout checks out the GitHub merge commit for the PR
+            # (refs/pull/N/merge); its first parent IS the base branch, so diff
+            # against that directly. Do NOT use a remote-tracking origin/<base>
+            # ref here: actions/checkout does not always fetch it, and
+            # `git diff origin/main HEAD` then errors (suppressed by `|| true`)
+            # yielding an empty list and silently skipping every integration
+            # test (PR #2190). Fall back to origin/<base> only when HEAD is not
+            # a merge commit.
+            if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
+              BASE="HEAD^"
+            else
+              BASE="origin/$GITHUB_BASE_REF"
+            fi
           else
             BASE="HEAD^"
           fi

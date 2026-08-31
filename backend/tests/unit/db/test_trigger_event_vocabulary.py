@@ -50,7 +50,7 @@ _MIGRATION_PATH = (
 # hardening migration (0117), and the batch-scoped variants migration (0118),
 # the metrics_staging migration (0121), and the FAR-363 library_sync_state
 # (0122) + relax_registry_signature_check (0123) migrations.
-_CHAIN_HEAD_MIGRATION_NAME = "0163_rls_strict_oauth_auth_codes_token_families"
+_CHAIN_HEAD_MIGRATION_NAME = "0167_add_hot_query_indexes"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

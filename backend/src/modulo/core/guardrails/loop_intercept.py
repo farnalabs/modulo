@@ -693,12 +693,9 @@ class LoopInterceptCallbackServer:
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:
-    if value is None:
-        return None
-    try:
-        return uuid.UUID(str(value))
-    except (TypeError, ValueError):
-        return None
+    from modulo.utils.uuid import coerce_uuid
+
+    return coerce_uuid(value)
 
 
 async def load_loop_intercept_guardrails(

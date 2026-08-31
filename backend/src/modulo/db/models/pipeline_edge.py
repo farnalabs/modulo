@@ -30,8 +30,12 @@ class PipelineEdge(OrgScoped):
         nullable=False,
         index=True,
     )
-    source_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
-    target_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+    source_node_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_node_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False
+    )
     edge_type: Mapped[str] = mapped_column(String(15), nullable=False, server_default="normal")
     # FAR-416 (FAR-402 F1): port addressing over the flat run_context/artifact
     # dict. Defaults mirror the pre-port flat-state keys so legacy edges route

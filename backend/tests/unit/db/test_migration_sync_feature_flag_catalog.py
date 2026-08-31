@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_HEAD_MIGRATION_NAME = "0163_rls_strict_oauth_auth_codes_token_families"
+_HEAD_MIGRATION_NAME = "0167_add_hot_query_indexes"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
