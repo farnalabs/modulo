@@ -200,34 +200,6 @@ class TestDeterminationOuterHandlerOrdering:
     errors from run_scan returned 503. This test would fail on the old order.
     """
 
-    def _run(self, client: TestClient, method: str, error_type: type) -> None:
-        session = _make_outer_session()
-        _override_session(client, session)
-        exc = _make_exc(error_type)
-
-        empty_page = PageResult(items=[], total=0, page=1, page_size=100)
-        hub = AsyncMock()
-        hub.initialise = AsyncMock(return_value=None)
-
-        class _MockHubCM:
-            async def __aenter__(self):
-                return hub
-
-            async def __aexit__(self, *args: object) -> None:
-                pass
-
-        with (
-            patch("modulo.api.routes.determination.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
-            patch("modulo.api.routes.determination.create_secrets_backend", MagicMock()),
-            patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
-            patch("modulo.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
-        ):
-            url = "/api/v1/determination" if method == "GET" else "/api/v1/determination/draft"
-            resp = client.get(url) if method == "GET" else client.post(url, json={})
-
-        assert resp.status_code == 501 if isinstance(exc, ProgrammingError) else resp.status_code == 503
-
     def test_get_programming_error_returns_501(self, client: TestClient) -> None:
         # Regression: pre-#922 this returned 503 (dead-code ordering bug).
         session = _make_outer_session()
