@@ -60,6 +60,7 @@ _MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE = "Schema management is temporari
 _CODE_SCHEMA_CREATE = "schema.create"
 _MSG_SCHEMA_NOT_FOUND = "Schema not found"
 _CODE_SCHEMA_UPDATE = "schema.update"
+_SCHEMA_ID_PATH = "/{schema_id}"
 
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,7 @@ async def create_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.get("/{schema_id}")
+@router.get(_SCHEMA_ID_PATH)
 @handle_db_errors("schemas.get_schema_endpoint")
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
@@ -358,7 +359,7 @@ async def get_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.patch("/{schema_id}")
+@router.patch(_SCHEMA_ID_PATH)
 @handle_db_errors("schemas.update_schema_endpoint")
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
@@ -489,7 +490,7 @@ async def move_schema_to_folder_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(_SCHEMA_ID_PATH, status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("schemas.delete_schema_endpoint")
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
