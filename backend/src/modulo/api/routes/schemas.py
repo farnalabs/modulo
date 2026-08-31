@@ -866,6 +866,8 @@ async def _resolve_model_backend(
     mbs: Any,
     secrets_backend: Any,
     *,
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
     init_log: str,
     init_detail: str,
     empty_detail: str,
@@ -876,9 +878,17 @@ async def _resolve_model_backend(
 
     Maps initialisation and selection failures to informative HTTP errors so
     schema inference and generation routes stay thin.
+
+    The model-backend API keys live in the secrets table and are decrypted with
+    the org-scoped RLS context, so ``mh.initialise`` must run inside a DB
+    transaction with ``app.organisation_id`` set — otherwise ``get_secret``
+    raises ``RuntimeError('no DB session')`` before the credentials fallback
+    can apply (turning every model-backend init into a blanket 502).
     """
     try:
-        await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        async with session.begin():
+            await set_rls_org(session, organisation_id)
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -911,14 +921,19 @@ async def _infer_definition(
     mbs: Any,
     records: list[dict[str, Any]],
     connector_type: str,
+    *,
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
 ) -> tuple[dict[str, Any], uuid.UUID]:
     """Run LLM schema inference and return ``(definition_json, backend_id)``."""
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ModelBackendHub() as mh:
         backend, first_backend_id = await _resolve_model_backend(
             mh,
             mbs,
             secrets_backend,
+            session=session,
+            organisation_id=organisation_id,
             init_log="schemas.infer.backend_init_failed",
             init_detail="Failed to initialise model backend for inference.",
             empty_detail="No model backends available for inference.",
@@ -1020,7 +1035,12 @@ async def infer_schema_endpoint(
 
     records = await _sample_connector_records(settings, ci, req, session)
     definition_json, first_backend_id = await _infer_definition(
-        settings, mbs, records, connector_type=ci.connector_type_id
+        settings,
+        mbs,
+        records,
+        connector_type=ci.connector_type_id,
+        session=session,
+        organisation_id=principal.organisation_id,
     )
 
     await append_audit_event_isolated(
@@ -1068,14 +1088,19 @@ async def _generate_schema(
     settings: Settings,
     mbs: Any,
     req: SchemaGenerateRequest,
+    *,
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
 ) -> tuple[dict[str, Any], uuid.UUID]:
     """Run LLM schema generation and return ``(definition_json, backend_id)``."""
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ModelBackendHub() as mh:
         backend, first_backend_id = await _resolve_model_backend(
             mh,
             mbs,
             secrets_backend,
+            session=session,
+            organisation_id=organisation_id,
             init_log="schemas.generate.backend_init_failed",
             init_detail="Failed to initialise model backend for generation.",
             empty_detail="No model backends available for generation.",
@@ -1151,7 +1176,13 @@ async def generate_schema_endpoint(
             detail="Schema generation failed due to an unexpected error.",
         ) from None
 
-    definition_json, first_backend_id = await _generate_schema(settings, mbs, req)
+    definition_json, first_backend_id = await _generate_schema(
+        settings,
+        mbs,
+        req,
+        session=session,
+        organisation_id=principal.organisation_id,
+    )
 
     await append_audit_event_isolated(
         session,
