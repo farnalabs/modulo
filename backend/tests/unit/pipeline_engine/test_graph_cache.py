@@ -12,8 +12,10 @@ from modulo.core.pipeline_engine.graph_cache import (
     _MAX_SIZE,
     _make_gate_kickback_router,
     build_graph_from_json,
+    compute_eval_defs_hash,
     evict,
     get_or_compile,
+    struct_hash_with_eval_defs,
 )
 
 
@@ -757,3 +759,86 @@ def test_gate_with_reject_edge_type_compiles():
     }
     compiled = build_graph_from_json(graph)
     assert compiled is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-502: eval-defs cache-key folding (replay/resume eval staleness)
+# ---------------------------------------------------------------------------
+
+
+def _eval_def(
+    config: dict[str, Any] | None = None,
+    eval_id: uuid.UUID | None = None,
+    org_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
+) -> Any:
+    from modulo.core.eval_engine import EvalDefinition, EvalType
+
+    return EvalDefinition(
+        id=eval_id or uuid.uuid4(),
+        org_id=org_id or uuid.uuid4(),
+        pipeline_id=pipeline_id or uuid.uuid4(),
+        node_id="A",
+        name="gate-eval",
+        eval_type=EvalType.REGEX,
+        config=config or {"pattern": "v1"},
+        failure_behaviour="warn",
+        version=1,
+    )
+
+
+def test_compute_eval_defs_hash_stable_and_sensitive():
+    shared_org, shared_pipeline, shared_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    e1 = _eval_def(eval_id=shared_id, org_id=shared_org, pipeline_id=shared_pipeline)
+    # Same content -> same hash (deterministic).
+    assert compute_eval_defs_hash({"A": [e1]}) == compute_eval_defs_hash({"A": [e1]})
+    # created_at is excluded: the DTO stamps datetime.now() on every load, so
+    # two loads of identical eval rows must hash identically.
+    e1_reloaded = _eval_def(config=dict(e1.config), eval_id=shared_id, org_id=shared_org, pipeline_id=shared_pipeline)
+    assert compute_eval_defs_hash({"A": [e1]}) == compute_eval_defs_hash({"A": [e1_reloaded]})
+    # A content change -> different hash.
+    e2 = _eval_def(config={"pattern": "v2"}, eval_id=shared_id, org_id=shared_org, pipeline_id=shared_pipeline)
+    assert compute_eval_defs_hash({"A": [e1]}) != compute_eval_defs_hash({"A": [e2]})
+    # Per-node list order (DB return order) does not affect the hash.
+    assert compute_eval_defs_hash({"A": [e1, e2]}) == compute_eval_defs_hash({"A": [e2, e1]})
+    # No eval defs -> empty hash (call site leaves the struct hash unchanged).
+    assert not compute_eval_defs_hash(None)
+    assert not compute_eval_defs_hash({})
+
+
+def test_struct_hash_with_eval_defs_folds_and_preserves_base():
+    base = "topo-hash"
+    shared_org, shared_pipeline, shared_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    defs = {"A": [_eval_def(eval_id=shared_id, org_id=shared_org, pipeline_id=shared_pipeline)]}
+    folded = struct_hash_with_eval_defs(base, defs)
+    assert folded != base
+    assert folded.startswith(f"{base}:")
+    # No eval defs -> unchanged base hash (graphs without evals share a key).
+    assert struct_hash_with_eval_defs(base, None) == base
+    assert struct_hash_with_eval_defs(base, {}) == base
+    # Changed eval definitions change the folded hash.
+    changed = struct_hash_with_eval_defs(
+        base,
+        {"A": [_eval_def(config={"pattern": "v2"}, eval_id=shared_id, org_id=shared_org, pipeline_id=shared_pipeline)]},
+    )
+    assert changed != folded
+
+
+def test_get_or_compile_recompiles_when_eval_defs_change():
+    """FAR-502 core mechanism: same (pipeline, snapshot, timeout) with CHANGED
+    eval definitions folded into struct_hash -> cache miss -> recompile, while
+    unchanged eval definitions keep hitting the cached graph."""
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    e1 = _eval_def(config={"pattern": "v1"})
+    e2 = _eval_def(config={"pattern": "v2"})
+    h1 = struct_hash_with_eval_defs("topo", {"A": [e1]})
+    h2 = struct_hash_with_eval_defs("topo", {"A": [e2]})
+    assert h1 != h2
+
+    compiled1 = get_or_compile(pid, sid, lambda: "graph-e1", graph_struct_hash=h1)
+    # Replay with CHANGED eval defs: different key -> fresh compile with E2.
+    compiled2 = get_or_compile(pid, sid, lambda: "graph-e2", graph_struct_hash=h2)
+    assert compiled2 == "graph-e2"
+    assert compiled2 != compiled1
+    # Replay with UNCHANGED eval defs: same key -> cached graph.
+    assert get_or_compile(pid, sid, lambda: "should-not-run", graph_struct_hash=h1) is compiled1

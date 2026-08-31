@@ -16,6 +16,8 @@ kept for correctness if compilation becomes async in the future.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import threading
 import uuid
 from collections import OrderedDict, defaultdict
@@ -54,7 +56,11 @@ from modulo.core.pipeline_engine.scatter_join import (
 # LRU eviction/restart. The fourth element is a deterministic structural hash of
 # the graph's port topology (FAR-416 / F1): it forces a recompile when ports or
 # node types change, even though the (pipeline_id, snapshot_id, timeout) triple
-# is unchanged.
+# is unchanged. The executor further folds content hashes into that fourth
+# element via ``struct_hash_with_eval_defs`` — the pipeline retry policy
+# (FAR-402 P5) and the node-scoped eval definitions (FAR-502) are baked into
+# node/gate closures at compile time, so a change to either must miss the cache
+# and recompile rather than serve a stale graph to a replay/resume.
 CacheKey = tuple[uuid.UUID, uuid.UUID, int, str]
 
 # OrderedDict-based LRU cache. Accessing an entry moves it to the end;
@@ -101,6 +107,48 @@ def get_or_compile(
         result = factory()
         _CACHE[key] = result
     return result
+
+
+def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefinition]] | None) -> str:
+    """Deterministic content hash of the node-scoped eval definitions (FAR-502).
+
+    ``build_graph_from_json`` bakes ``eval_definitions_by_node`` into the HITL
+    gate closures (eval-before-interrupt). Replays / variant runs / resumes
+    reuse a snapshot_id, so on those paths the compiled graph is served from
+    this cache even though the executor loads eval definitions FRESH per run —
+    the closures would silently keep the FIRST run's definitions. The executor
+    folds this hash into ``graph_struct_hash`` so changed eval definitions miss
+    the cache and force a recompile with the fresh definitions.
+
+    Canonicalisation: per-node lists are sorted by eval id (DB result order is
+    not guaranteed) and serialised with sorted JSON keys. ``created_at`` is
+    excluded — the ``EvalDefinition`` DTO stamps ``datetime.now()`` on every
+    load, so including it would force a spurious recompile on every run.
+    """
+    if not eval_defs_by_node:
+        return ""
+    canonical: dict[str, list[dict[str, Any]]] = {
+        node: sorted(
+            (d.model_dump(mode="json", exclude={"created_at"}) for d in defs),
+            key=lambda d: json.dumps(d, sort_keys=True, default=str),
+        )
+        for node, defs in eval_defs_by_node.items()
+    }
+    payload = json.dumps(canonical, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def struct_hash_with_eval_defs(
+    struct_hash: str,
+    eval_defs_by_node: dict[str, list[EvalDefinition]] | None,
+) -> str:
+    """Fold :func:`compute_eval_defs_hash` into a compile-cache struct hash.
+
+    Empty / None eval defs leave *struct_hash* unchanged so graphs compiled
+    without eval defs keep sharing one cache entry.
+    """
+    evals_hash = compute_eval_defs_hash(eval_defs_by_node)
+    return f"{struct_hash}:{evals_hash}" if evals_hash else struct_hash
 
 
 def _get_edge_val(edge: dict[str, Any], canonical: str, persisted: str) -> str:
