@@ -14426,6 +14426,8 @@ export interface components {
             pipeline_name?: string | null;
             /** Langgraph Thread Id */
             langgraph_thread_id: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Error Code */

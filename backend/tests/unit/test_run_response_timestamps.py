@@ -11,10 +11,15 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from modulo.api.routes.runs import _build_run_response
+from modulo.api.routes.runs import (
+    _build_list_item,
+    _build_run_response,
+    _ListPageContext,
+)
 
 _RUN_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
+_SNAPSHOT_ID = uuid.uuid4()
 
 
 def _make_run(**overrides: object) -> MagicMock:
@@ -25,6 +30,7 @@ def _make_run(**overrides: object) -> MagicMock:
     run.pipeline = None
     run.run_number = 1
     run.langgraph_thread_id = "thread-1"
+    run.snapshot_id = _SNAPSHOT_ID
     run.error_detail = None
     run.error_code = None
     run.total_cost_usd = None
@@ -58,3 +64,41 @@ def test_run_response_timestamps_none_when_absent() -> None:
     assert resp.created_at is None
     assert resp.started_at is None
     assert resp.completed_at is None
+
+
+def test_run_response_carries_snapshot_id_when_present() -> None:
+    resp = _build_run_response(_make_run())
+
+    assert resp.snapshot_id == _SNAPSHOT_ID
+
+
+def test_run_response_snapshot_id_none_when_absent() -> None:
+    resp = _build_run_response(_make_run(snapshot_id=None))
+
+    assert resp.snapshot_id is None
+
+
+def test_list_item_carries_snapshot_id() -> None:
+    ctx = _ListPageContext(
+        child_rollup={},
+        account_labels={},
+        trigger_labels={},
+        active_count=0,
+        concurrency_limit=None,
+    )
+    item = _build_list_item(_make_run(input_payload=None), ctx)
+
+    assert item["snapshot_id"] == str(_SNAPSHOT_ID)
+
+
+def test_list_item_snapshot_id_none_when_absent() -> None:
+    ctx = _ListPageContext(
+        child_rollup={},
+        account_labels={},
+        trigger_labels={},
+        active_count=0,
+        concurrency_limit=None,
+    )
+    item = _build_list_item(_make_run(snapshot_id=None, input_payload=None), ctx)
+
+    assert item["snapshot_id"] is None

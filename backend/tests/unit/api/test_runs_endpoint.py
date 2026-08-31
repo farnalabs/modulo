@@ -118,6 +118,8 @@ def _make_run(
     r.heartbeat_at = None
     r.work_item_refs = None
     r.parent_run_id = None
+    # FAR-490 run→snapshot linkage
+    r.snapshot_id = None
     return r
 
 
@@ -1972,6 +1974,23 @@ class TestGetRunObservability:
         assert body["work_item_refs"] is None
         assert body["child_runs"] is None
         assert body["capacity"] is None
+
+    def test_detail_exposes_snapshot_id(self, client: TestClient) -> None:
+        """FAR-490: the run→snapshot link is on the detail body."""
+        run = _make_run(status="complete")
+        run.snapshot_id = uuid.uuid4()
+
+        with (
+            patch("modulo.api.routes.runs._do_get_run", return_value=run),
+            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch("modulo.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["snapshot_id"] == str(run.snapshot_id)
 
 
 class TestResolveCapacityAdmissionGate:
