@@ -527,19 +527,26 @@ async def update_connector_endpoint(
     if credentials_updated:
         new_credentials = updates.pop("credentials")
         if new_credentials is None:
-            # ``min_length`` only constrains str values — an explicit
-            # ``"credentials": null`` would otherwise reach _encrypt(None, ...)
-            # and raise AttributeError → unhandled 500 (FAR-495 QA).
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="'credentials' must be a non-empty string",
-            )
-        ct = _encrypt(new_credentials, settings.fernet_key)
-        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
-        # Fresh credentials clear the degraded marker (FAR-495) — the stored
-        # skip error described the OLD credentials, not the new ones.
-        updates["degraded_at"] = None
-        updates["last_skip_error"] = None
+            # An explicit ``"credentials": null`` is only an error when it is the
+            # sole field in the PATCH — there is nothing else to do and clearing
+            # credentials via null is unsupported. This guards ``_encrypt(None,
+            # ...)`` raising AttributeError → unhandled 500 (FAR-495 QA). When
+            # other fields (e.g. ``name``) are being updated, the empty config
+            # textarea just means "no credential change" — skip the credential
+            # write and proceed with the rest of the update.
+            if not any(k for k in updates if k != "credentials"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="'credentials' must be a non-empty string",
+                )
+            credentials_updated = False
+        if new_credentials is not None:
+            ct = _encrypt(new_credentials, settings.fernet_key)
+            updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
+            # Fresh credentials clear the degraded marker (FAR-495) — the stored
+            # skip error described the OLD credentials, not the new ones.
+            updates["degraded_at"] = None
+            updates["last_skip_error"] = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
