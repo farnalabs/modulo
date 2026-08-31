@@ -8,9 +8,12 @@ layers import, with a focus on the S5145 log-injection fix
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from modulo.util import is_valid_http_url, sanitise_log_value
+from modulo.utils.uuid import coerce_uuid
 
 
 class TestSanitiseLogValue:
@@ -66,3 +69,24 @@ class TestIsValidHttpUrl:
     )
     def test_bogus_or_schemeless_rejected(self, url: str) -> None:
         assert is_valid_http_url(url) is False
+
+
+class TestCoerceUuid:
+    def test_well_formed_string_passthrough(self) -> None:
+        value = "12345678-1234-5678-1234-567812345678"
+        assert coerce_uuid(value) == uuid.UUID(value)
+
+    def test_already_uuid_passthrough(self) -> None:
+        u = uuid.uuid4()
+        assert coerce_uuid(u) is u
+
+    def test_malformed_string_returns_none(self) -> None:
+        assert coerce_uuid("node-a") is None
+        assert coerce_uuid("not-a-uuid") is None
+
+    def test_none_returns_none(self) -> None:
+        assert coerce_uuid(None) is None
+
+    def test_int_form_accepted(self) -> None:
+        u = uuid.UUID(int=0)
+        assert coerce_uuid(0) == u

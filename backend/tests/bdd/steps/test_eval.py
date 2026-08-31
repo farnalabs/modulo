@@ -551,7 +551,7 @@ def step_feedback_human_provides(ctx, request):
                 account_id=USER_ID,
                 rejection_reason="Output contained hallucination",
                 rejected_output={"text": "Incorrect data"},
-                producing_node_id="node-generate",
+                producing_node_id=str(uuid.UUID("00000000-0000-0000-0000-0000000000aa")),
                 feedback_handler_type="human",
             )
         )

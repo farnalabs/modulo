@@ -16,6 +16,7 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.agent import Agent
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.utils.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ async def create_agent(
         max_input_length=max_input_length,
         library_id=library_id,
         prompt_always_visible=prompt_always_visible,
-        template_id=template_id,
+        template_id=coerce_uuid(template_id),
         agent_command=agent_command,
         required_environment_capabilities=required_environment_capabilities or [],
     )

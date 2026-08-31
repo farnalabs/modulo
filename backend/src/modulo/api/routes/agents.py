@@ -141,7 +141,7 @@ class AgentResponse(BaseModel):
     library_id: uuid.UUID | None
     prompt_always_visible: bool
     required_environment_capabilities: list[str]
-    template_id: str | None
+    template_id: uuid.UUID | None
     agent_command: str | None
     agent_commands: list[str] | None
     created_by: uuid.UUID = Field(validation_alias="account_id")

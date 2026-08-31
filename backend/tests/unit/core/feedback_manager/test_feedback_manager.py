@@ -20,6 +20,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _RUN_ID = uuid.uuid4()
 _GATE_ID = "gate-1"
+_PRODUCING_NODE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 
 
 @pytest.fixture
@@ -53,7 +54,7 @@ def sample_record() -> FeedbackRecord:
     r.account_id = _USER_ID
     r.rejection_reason = "Output did not match requirements"
     r.rejected_output = {"result": "wrong answer"}
-    r.producing_node_id = "node-b"
+    r.producing_node_id = _PRODUCING_NODE_ID
     r.producing_agent_id = uuid.uuid4()
     r.feedback_status = "pending"
     r.feedback_handler_type = "human"
@@ -83,7 +84,7 @@ class TestCreateFeedbackRecord:
             account_id=_USER_ID,
             rejection_reason="Wrong output",
             rejected_output={"result": "bad"},
-            producing_node_id="node-b",
+            producing_node_id=str(_PRODUCING_NODE_ID),
             producing_agent_id=uuid.uuid4(),
             feedback_handler_type="human",
         )
@@ -100,7 +101,7 @@ class TestCreateFeedbackRecord:
         assert added.account_id == _USER_ID
         assert added.rejection_reason == "Wrong output"
         assert added.rejected_output == {"result": "bad"}
-        assert added.producing_node_id == "node-b"
+        assert added.producing_node_id == _PRODUCING_NODE_ID
         assert added.feedback_status == "pending"
         assert added.feedback_handler_type == "human"
         mock_session.flush.assert_called_once()
@@ -123,7 +124,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="Bad output",
                 rejected_output={},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type=handler_type,
             )
         assert record.feedback_handler_type == handler_type
@@ -146,7 +147,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="Auto-fix this",
                 rejected_output={"result": "bad"},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type=handler_type,
             )
 
@@ -164,7 +165,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason=reason,
                 rejected_output={},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type="human",
             )
 
@@ -176,7 +177,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="x" * 5001,
                 rejected_output={},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type="human",
             )
 
@@ -188,7 +189,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="bad output",
                 rejected_output={"data": "x" * 200_000},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type="human",
             )
 
@@ -203,7 +204,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="bad output",
                 rejected_output={},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type=handler_type,
             )
 
@@ -221,7 +222,7 @@ class TestCreateFeedbackRecord:
                 account_id=_USER_ID,
                 rejection_reason="Manual review",
                 rejected_output={"result": "bad"},
-                producing_node_id="node-b",
+                producing_node_id=str(_PRODUCING_NODE_ID),
                 feedback_handler_type="human",
             )
 
@@ -1077,7 +1078,7 @@ class TestRunPostCorrectionEval:
         r.account_id = _USER_ID
         r.rejection_reason = "bad output"
         r.rejected_output = {"result": "bad"}
-        r.producing_node_id = "node-b"
+        r.producing_node_id = _PRODUCING_NODE_ID
         r.feedback_status = "correcting"
         r.feedback_handler_type = "ai_correction"
         r.correction_run_id = uuid.uuid4()

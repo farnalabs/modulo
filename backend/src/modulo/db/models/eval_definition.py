@@ -28,7 +28,7 @@ class EvalDefinition(OrgScoped):
         nullable=False,
         index=True,
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

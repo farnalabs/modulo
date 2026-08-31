@@ -421,7 +421,7 @@ async def list_eval_proposals(
         ) from None
 
     return {
-        "items": [_serialise_record(r, producing_node_name=node_name_map.get(r.producing_node_id)) for r in items],
+        "items": [_serialise_record(r, producing_node_name=node_name_map.get(str(r.producing_node_id))) for r in items],
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],

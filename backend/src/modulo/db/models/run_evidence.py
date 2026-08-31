@@ -44,7 +44,7 @@ class RunEvidence(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    node_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     evidence_written_at: Mapped[datetime] = mapped_column(

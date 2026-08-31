@@ -40,6 +40,11 @@ from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
+# ``run_evidence.node_id`` is a native ``Uuid`` (FK to ``nodes.id``), promoted by
+# migration 0160, so every node id written through ``write_evidence_row`` must be
+# a well-formed UUID — not an arbitrary langgraph-style string like "node-a".
+_NODE_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
 
 @dataclass(frozen=True)
 class _EvidenceTenant:
@@ -156,7 +161,7 @@ async def test_omitted_org_resolves_from_parent_run_and_persists(
         await write_evidence_row(
             rls_app_session,
             run_id=run_id,
-            node_id="node-a",
+            node_id=str(_NODE_A),
             evidence_state="verified_empty",
             evidence_detail="probe found no diff",
         )
@@ -182,7 +187,7 @@ async def test_missing_parent_run_skips_write_without_raising(
         await write_evidence_row(
             rls_app_session,
             run_id=orphan_run_id,
-            node_id="node-a",
+            node_id=str(_NODE_A),
             evidence_state="verified_empty",
             evidence_detail=None,
         )
@@ -216,7 +221,7 @@ async def test_fabricated_tenant_anchor_never_persists(
             await write_evidence_row(
                 rls_app_session,
                 run_id=run_id,
-                node_id="node-a",
+                node_id=str(_NODE_A),
                 evidence_state="verified_empty",
                 evidence_detail=None,
                 organisation_id=fabricated_org,
