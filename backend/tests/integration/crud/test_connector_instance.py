@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from modulo.db.crud.connector_instance import (
+    clear_degraded_markers,
     create_connector_instance,
     delete_connector_instance,
     get_connector_instance,
     list_connector_instances,
+    mark_instances_degraded,
     update_connector_instance,
 )
 from modulo.db.rls import set_rls_org
@@ -116,6 +118,88 @@ async def test_delete_connector_instance_unknown_returns_false(
     rls_session: AsyncSession,
 ) -> None:
     assert await delete_connector_instance(rls_session, uuid.uuid4()) is False
+
+
+async def test_mark_instances_degraded_persists_marker(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: mark_instances_degraded writes degraded_at/last_skip_error."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-degraded"))
+    await mark_instances_degraded(rls_session, {ci.id: "ValueError: Missing credential key 'token'"})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is not None
+    assert fetched.last_skip_error == "ValueError: Missing credential key 'token'"
+
+
+async def test_mark_instances_degraded_sanitizes_overlong_and_nul_summary(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-498: the writer sanitizes summaries itself (NUL-strip + truncate to 2000).
+
+    Defense-in-depth: the hub sanitizes what it records, but a future caller
+    could bypass it. Postgres rejects NUL bytes in SQL text (a NUL in any
+    batched summary fails the WHOLE UPDATE so no instance gets marked) and the
+    column is String(2000).
+    """
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-sanitized"))
+    summary = f"RuntimeError: bad\x00summary{'x' * 3000}"
+    await mark_instances_degraded(rls_session, {ci.id: summary})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is not None
+    assert fetched.last_skip_error is not None
+    assert "\x00" not in fetched.last_skip_error
+    assert len(fetched.last_skip_error) == 2000
+    assert fetched.last_skip_error.startswith("RuntimeError: badsummary")
+
+
+async def test_mark_instances_degraded_empty_dict_is_noop(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: an empty skipped dict leaves rows untouched."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-noop"))
+    await mark_instances_degraded(rls_session, {})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is None
+    assert fetched.last_skip_error is None
+
+
+async def test_clear_degraded_markers_persists_nulls(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: clear_degraded_markers resets degraded_at/last_skip_error to NULL."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-cleared"))
+    await mark_instances_degraded(rls_session, {ci.id: "ValueError: Missing credential key 'token'"})
+    await clear_degraded_markers(rls_session, {ci.id})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is None
+    assert fetched.last_skip_error is None
+
+
+async def test_clear_degraded_markers_empty_collection_is_noop(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-495: an empty instance-id collection leaves existing markers untouched."""
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-clear-noop"))
+    await mark_instances_degraded(rls_session, {ci.id: "ValueError: boom"})
+    await clear_degraded_markers(rls_session, set())
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is not None
+    assert fetched.last_skip_error == "ValueError: boom"
 
 
 class TestListConnectorInstancesTierFiltering:

@@ -140,6 +140,10 @@ class TestCredentialsMaskedInApiResponse:
         mock_connector.tier = "community"
         mock_connector.created_at = datetime(2025, 1, 1, tzinfo=UTC)
         mock_connector.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+        # Nullable degraded markers: a bare MagicMock would auto-create these as
+        # non-serialisable mocks, so mirror a healthy ORM row explicitly.
+        mock_connector.degraded_at = None
+        mock_connector.last_skip_error = None
         return mock_connector
 
     def test_api_key_is_masked(self, client: TestClient) -> None:
