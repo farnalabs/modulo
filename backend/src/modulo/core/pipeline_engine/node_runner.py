@@ -370,7 +370,7 @@ async def _resolve_egress_allowlist(
         host = entry.get("host")
         if not isinstance(host, str) or not host:
             return entry
-        if _re.match(r"^[0-9.]+$", host) or ":" in host:
+        if _re.match(r"^[\d.]+$", host) or ":" in host:
             return entry
         try:
             infos = await asyncio.wait_for(
