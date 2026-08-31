@@ -817,7 +817,7 @@ def _build_no_output_message(
     return "\n".join(parts)
 
 
-_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
+_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
 
 # Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
 # commands run with OPENCODE_API_KEY and GITHUB_TOKEN (a PAT) injected, and
