@@ -2062,6 +2062,10 @@ class PipelineExecutor:
                     from modulo.core.pipeline_engine.decorator import set_connector_hub
                     from modulo.core.runtime_provider import create_default_hub
                     from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.db.crud.connector_instance import (
+                        clear_degraded_markers,
+                        mark_instances_degraded,
+                    )
                     from modulo.settings import get_settings
 
                     _settings = get_settings()
@@ -2078,6 +2082,33 @@ class PipelineExecutor:
                     )
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
+                    if hub.skipped or hub.healthy:
+                        # FAR-495: persist a degraded marker for the skipped
+                        # instances and clear stale markers for instances that
+                        # initialised successfully (a connector fixed via a
+                        # config/plugin change stops being flagged degraded),
+                        # best-effort inside its own savepoint so a failure here
+                        # can NEVER fail or roll back the run-start transaction
+                        # (the hub itself already logged the skips). Only
+                        # instances actually attempted this run appear in
+                        # ``hub.skipped``/``hub.healthy``, so out-of-scope
+                        # instances are never touched.
+                        try:
+                            async with session.begin_nested():
+                                if hub.skipped:
+                                    await mark_instances_degraded(session, hub.skipped)
+                                if hub.healthy:
+                                    await clear_degraded_markers(session, hub.healthy)
+                        except Exception:
+                            # No run id in scope here (_init_connector_hub is
+                            # org-scoped); the instance ids are the correlatable
+                            # identifiers.
+                            _log.warning(
+                                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
+                                sorted(str(i) for i in hub.skipped),
+                                sorted(str(i) for i in hub.healthy),
+                                exc_info=True,
+                            )
                     set_connector_hub(hub)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no

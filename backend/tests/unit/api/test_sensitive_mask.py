@@ -436,6 +436,10 @@ def test_connector_response_masks_config_json(client: TestClient) -> None:
     mock_connector.owner_team_id = None
     mock_connector.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     mock_connector.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    # Nullable degraded markers: a bare MagicMock would auto-create these as
+    # non-serialisable mocks, so mirror a healthy ORM row explicitly.
+    mock_connector.degraded_at = None
+    mock_connector.last_skip_error = None
 
     with (
         patch("modulo.api.routes.connectors.get_connector_instance", return_value=mock_connector),

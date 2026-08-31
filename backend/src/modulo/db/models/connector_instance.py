@@ -41,4 +41,6 @@ class ConnectorInstance(OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
+    degraded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_skip_error: Mapped[str | None] = mapped_column(String(2000))
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
