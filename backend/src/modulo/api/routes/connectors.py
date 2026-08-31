@@ -141,6 +141,38 @@ def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> d
     return merged
 
 
+def _validate_rest_auth(creds: dict[str, Any]) -> None:
+    """Validate a REST credential dict against the connector's auth contract.
+
+    Mirrors ``RestConnector._normalise_auth`` so the API enforces the same
+    invariant the connector enforces at run time: ``bearer`` requires
+    ``token``, ``basic`` requires ``username``+``password``, and ``api_key``
+    requires ``api_key`` (with ``in`` limited to ``header``/``query``). Raises
+    ``ValueError`` with a clear message when the declared ``auth_mode`` is
+    missing a required secret — so a broken credential is rejected at the API
+    boundary (422) instead of being saved and blowing up on the first run.
+    Only the JSON-overlay credential path is validated; the raw non-JSON token
+    path (GitHub-style) keeps its historical semantics.
+    """
+    mode = str(creds.get("auth_mode", "")).strip().lower()
+    if mode not in {"bearer", "api_key", "basic"}:
+        raise ValueError(
+            f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
+        )
+    if mode == "bearer":
+        if not creds.get("token"):
+            raise ValueError("REST bearer auth requires creds['token']")
+    elif mode == "basic":
+        if not creds.get("username") or not creds.get("password"):
+            raise ValueError("REST basic auth requires creds['username'] and creds['password']")
+    else:  # api_key
+        if not creds.get("api_key"):
+            raise ValueError("REST api_key auth requires creds['api_key']")
+        auth_in = creds.get("in")
+        if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
+            raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth_in!r}")
+
+
 class ConnectorCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
@@ -515,6 +547,20 @@ async def update_connector_endpoint(
                         parsed = None
                     if isinstance(parsed, dict):
                         incoming = _credential_overlay(stored, parsed)
+                        # FAR-466: enforce the connector's auth contract at the API
+                        # boundary so a direct PATCH cannot save a credential the
+                        # connector will reject at run time (e.g. overlaying
+                        # auth_mode=bearer onto an api_key connector, preserving the
+                        # key but supplying no token — the UI blocks this, the API
+                        # must not silently save a broken credential). The raw
+                        # non-JSON token path below keeps its historical semantics.
+                        try:
+                            _validate_rest_auth(incoming)
+                        except ValueError as exc:
+                            raise HTTPException(
+                                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail=f"Invalid REST credentials: {exc}",
+                            ) from None
                     if incoming is not None:
                         updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
                             json.dumps(incoming), settings.fernet_key
