@@ -264,7 +264,7 @@ async def test_get_propagates_audit_logger_cancellation(
     hub._fallbacks[primary] = [fallback]
 
     async def _cancel(_event: dict) -> None:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
         await hub.get(primary, audit_logger=_cancel)
