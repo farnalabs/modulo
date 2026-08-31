@@ -719,8 +719,17 @@ class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         # — the whole point of pinning is defeated. Safe by default.
         # ``limits`` (when supplied) flows into the underlying httpcore pool so a
         # connector that configures max_connections / max_keepalive keeps its
-        # pooling budget even though it now owns the transport explicitly.
-        super().__init__(verify=verify, http2=http2, trust_env=trust_env, limits=limits or httpx.Limits())
+        # pooling budget even though it now owns the transport explicitly. When
+        # the caller does not pass ``limits`` we forward httpx's default pool cap
+        # (Limits(100/20)) — NOT an empty ``httpx.Limits()`` (which httpcore
+        # substitutes with sys.maxsize, i.e. an unbounded pool) — so a pinned
+        # transport keeps the same connection cap as a stock httpx client.
+        super().__init__(
+            verify=verify,
+            http2=http2,
+            trust_env=trust_env,
+            limits=limits if limits is not None else httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        )
         _warn_if_proxied(trust_env)
         # HTTPCORE SEAM: the pin is installed by overriding httpcore's PRIVATE
         # `_pool._network_backend` attribute. httpcore (httpx 0.28.x / httpcore
@@ -904,8 +913,14 @@ def pinned_async_client_sync(
     pinned client. ``**client_kwargs`` (``base_url``, ``headers``, ``timeout``,
     ``auth``, ``limits``, …) are forwarded to :class:`httpx.AsyncClient`.
     ``trust_env`` defaults to ``False`` (safe-by-default; a proxy defeats
-    pinning).
+    pinning). A caller-supplied ``transport`` key is rejected so it cannot
+    silently bypass the pinned transport.
     """
+    if "transport" in client_kwargs:
+        raise ValueError(
+            "pinned_async_client_sync: 'transport' must not be passed via client_kwargs "
+            "— it would bypass the pinned transport. Use the pinned transport built here."
+        )
     transport = pinned_async_transport_sync(
         url,
         allow_networks=allow_networks,

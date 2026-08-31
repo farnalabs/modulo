@@ -15,7 +15,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import pinned_async_client_sync
 
 
 def _safe_top_level_records(body: Any) -> list[dict[str, Any]]:
@@ -61,8 +61,13 @@ class YouTrackConnector(ConnectorBase):
         return ConnectorType.YOUTRACK
 
     def _client(self) -> httpx.AsyncClient:
-        validate_outbound_url(self._base_url)
-        return httpx.AsyncClient(
+        # PINNED TRANSPORT (FAR-520): validate + resolve the base_url's host
+        # synchronously and pin the validated IP onto the transport, so the
+        # connection never re-resolves the host at connect time (closes the
+        # DNS-rebinding window). ``trust_env=False`` stops a proxy from
+        # re-resolving the destination server-side and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
             base_url=self._base_url,
             headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
             timeout=30,
