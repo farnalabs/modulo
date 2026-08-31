@@ -3501,6 +3501,8 @@ export default {
       "records_path_placeholder": "data.items",
       "allowed_hosts_help": "Comma-separated hostnames allowed in rendered URLs (SSRF/egress allowlist).",
       "allowed_hosts_placeholder": "api.example.com,cdn.example.com",
+      "records_path_help": "JMESPath expression locating the records list (e.g. data.items).",
+      "allowed_hosts_help": "Comma-separated hostnames allowed in rendered URLs (SSRF/egress allowlist).",
       "verify_tls_help": "Verify the TLS certificate of the target endpoint.",
       "api_key_in": "Send API key",
       "advanced_json": "Advanced configuration (JSON)",

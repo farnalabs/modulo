@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -722,6 +723,116 @@ def test_connector_health_check_keeps_org_scope_active_at_decrypt_time(client: T
     # org must still be present at decrypt time — i.e. the decrypt ran inside the
     # org-scoping transaction. The pre-fix code read org=None here and 502'd.
     assert backend.seen_orgs == [_ORG_ID]
+def _nested_secret_config() -> dict[str, object]:
+    return {
+        "headers": {"Authorization": "Bearer github_pat_1111111111111111111111", "token": "abc123"},
+        "base_url": "https://user:pass@example.com",
+        "operations": {"get": {"params": {"api_key": "sk-123456"}}},
+    }
+
+
+def test_get_connector_masks_nested_config_json(client: TestClient) -> None:
+    """GET must mask a secret buried in a nested header / base_url / operation."""
+    connector = _make_connector()
+    connector.config_json = _nested_secret_config()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 200
+    cfg = resp.json()["config_json"]
+    assert cfg["headers"]["Authorization"] == f"Bearer {SENSITIVE_VALUE_MASK}"
+    assert cfg["headers"]["token"] == SENSITIVE_VALUE_MASK
+    assert cfg["base_url"] == f"https://user:{SENSITIVE_VALUE_MASK}@example.com"
+    assert cfg["operations"]["get"]["params"]["api_key"] == SENSITIVE_VALUE_MASK
+
+
+def test_list_connectors_masks_nested_config_json(client: TestClient) -> None:
+    """The low-privilege connector.list surface must not leak nested secrets."""
+    connector = _make_connector()
+    connector.config_json = _nested_secret_config()
+    page_result = MagicMock(items=[connector], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 200
+    cfg = resp.json()["items"][0]["config_json"]
+    assert cfg["headers"]["Authorization"] == f"Bearer {SENSITIVE_VALUE_MASK}"
+    assert cfg["base_url"] == f"https://user:{SENSITIVE_VALUE_MASK}@example.com"
+    assert cfg["operations"]["get"]["params"]["api_key"] == SENSITIVE_VALUE_MASK
+
+
+def test_patch_masked_nested_value_does_not_overwrite_secret(client: TestClient) -> None:
+    """A masked nested value read via GET must not clobber the stored secret
+    when PATCHed back (read-modify-write round-trip guard)."""
+    stored = _nested_secret_config()
+    connector = _make_connector()
+    connector.config_json = stored
+    captured: list[dict[str, object]] = []
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, object]) -> MagicMock:
+        captured.append(updates)
+        return connector
+
+    masked_payload = {
+        "config_json": {
+            "headers": {"Authorization": f"Bearer {SENSITIVE_VALUE_MASK}", "token": SENSITIVE_VALUE_MASK},
+            "base_url": f"https://user:{SENSITIVE_VALUE_MASK}@example.com",
+            "operations": {"get": {"params": {"api_key": SENSITIVE_VALUE_MASK}}},
+        }
+    }
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json=masked_payload)
+
+    assert resp.status_code == 200
+    assert captured, "update_connector_instance was not called"
+    merged = captured[0]["config_json"]
+    assert isinstance(merged, dict)
+    assert isinstance(merged["headers"], dict)
+    assert isinstance(merged["operations"], dict)
+    assert merged["headers"]["Authorization"] == "Bearer github_pat_1111111111111111111111"
+    assert merged["headers"]["token"] == "abc123"
+    assert merged["base_url"] == "https://user:pass@example.com"
+    assert isinstance(merged["operations"]["get"], dict)
+    assert isinstance(merged["operations"]["get"]["params"], dict)
+    assert merged["operations"]["get"]["params"]["api_key"] == "sk-123456"
+
+
+def test_patch_config_json_merges_top_level(client: TestClient) -> None:
+    """A non-masked PATCH still merges (does not replace) the stored config."""
+    connector = _make_connector()
+    connector.config_json = {"name": "Stored", "tokens": ["a"]}
+    captured: list[dict[str, object]] = []
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, object]) -> MagicMock:
+        captured.append(updates)
+        return connector
+
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"config_json": {"tokens": ["a", "b"]}})
+
+    assert resp.status_code == 200
+    assert captured
+    merged = captured[0]["config_json"]
+    assert merged["name"] == "Stored"
+    assert merged["tokens"] == ["a", "b"]
+
+
 def _make_rest_connector(credentials_ciphertext: bytes) -> MagicMock:
     ci = _make_connector(credentials_ciphertext=credentials_ciphertext)
     ci.connector_type_id = "rest"
