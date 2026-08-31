@@ -527,20 +527,20 @@ async def update_connector_endpoint(
     if credentials_updated:
         new_credentials = updates.pop("credentials")
         if new_credentials is None:
-            # A PATCH whose ONLY change is an explicit ``"credentials": null`` is
-            # ambiguous — there is no "clear credentials" operation — so reject it
-            # (422) rather than silently no-op'ing or 500'ing on
-            # ``_encrypt(None, ...)`` (FAR-495 QA). But a PATCH that edits OTHER
-            # fields (e.g. a name-only edit whose credential textarea was left
-            # empty posts ``credentials: null`` as a no-op) must NOT fail: leave
-            # ``credentials_updated`` set and let the later block skip the
-            # credential write while applying the other updates.
-            if not updates:
+            # An explicit ``"credentials": null`` is only an error when it is the
+            # sole field in the PATCH — there is nothing else to do and clearing
+            # credentials via null is unsupported. This guards ``_encrypt(None,
+            # ...)`` raising AttributeError → unhandled 500 (FAR-495 QA). When
+            # other fields (e.g. ``name``) are being updated, the empty config
+            # textarea just means "no credential change" — skip the credential
+            # write and proceed with the rest of the update.
+            if not any(k for k in updates if k != "credentials"):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="'credentials' must be a non-empty string",
                 )
-        else:
+            credentials_updated = False
+        if new_credentials is not None:
             ct = _encrypt(new_credentials, settings.fernet_key)
             updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
             # Fresh credentials clear the degraded marker (FAR-495) — the stored

@@ -504,11 +504,13 @@ class ConnectorHub:
                     KeyError,
                     OSError,
                 ) as exc:
+                    # FAR-495: record the degraded marker (skip) so callers can
+                    # persist it. FAR-465: dedup the skip-warning so one
+                    # misconfigured connector does not flood worker logs with full
+                    # tracebacks on every initialise(). Check-and-add is
+                    # synchronous (no await between) so it is race-free under
+                    # asyncio.
                     self._record_skip(ci, exc)
-                    # Skip-warn dedup (FAR-465): full traceback once per
-                    # (instance, error) per process, concise repeat afterwards.
-                    # Check-and-add is synchronous (no await between) so it is
-                    # race-free under asyncio.
                     skip_key = (str(ci.id), ci.connector_type_id, type(exc).__name__ + ": " + str(exc))
                     if skip_key in _SKIP_WARN_SEEN:
                         logger.warning(

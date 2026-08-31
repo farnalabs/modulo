@@ -697,11 +697,10 @@ def test_single_migration_head() -> None:
     # 0167_add_hot_query_indexes chains off 0166.
     chaining_off_0166 = [p for p in revisions if parents[p] == "0166_promote_uuid_fk_columns"]
     assert [_basename(p) for p in chaining_off_0166] == ["0167_add_hot_query_indexes.py"]
-    # 0168_add_soft_delete_org_indexes (main) chains off 0167.
+    # 0168_add_soft_delete_org_indexes (on main) chains off 0167.
     chaining_off_0167 = [p for p in revisions if parents[p] == "0167_add_hot_query_indexes"]
     assert [_basename(p) for p in chaining_off_0167] == ["0168_add_soft_delete_org_indexes.py"]
-    # 0169_connector_instance_degraded (FAR-495, this PR) chains off 0168 — renumbered
-    # from 0168 to 0169 because main already claims the 0168 prefix.
+    # 0169_connector_instance_degraded (FAR-495, this PR) chains off 0168 and is the head.
     chaining_off_0168 = [p for p in revisions if parents[p] == "0168_add_soft_delete_org_indexes"]
     assert [_basename(p) for p in chaining_off_0168] == ["0169_connector_instance_degraded.py"]
     # Nothing chains off 0169 -> it is the single head.
