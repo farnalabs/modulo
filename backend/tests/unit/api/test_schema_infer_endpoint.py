@@ -145,6 +145,50 @@ def test_infer_schema_returns_200(client: TestClient) -> None:
     assert "Inferred from" in data["suggestion_name"]
 
 
+def test_infer_schema_threads_session_into_secrets_backend(client: TestClient) -> None:
+    """Regression (FAR-519): connector sampling must decrypt credentials with a
+    secrets backend carrying the DB session, or the connector is silently
+    skipped and schema sampling 502s ("Failed to sample connector data")."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    captured_sessions: list[object] = []
+
+    def fake_create_backend(*args: object, **kwargs: object) -> object:
+        captured_sessions.append(kwargs.get("session"))
+        return MagicMock()
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1", "title": "Test"}]),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object"}),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend", fake_create_backend),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200
+    # The connector-sampling path (``_sample_connector_records``) must build the
+    # secrets backend with the DB session, or credentials never decrypt and the
+    # sample 502s.
+    assert any(s is not None for s in captured_sessions), "connector sampling secrets backend must carry the DB session"
+
+
 def test_infer_schema_forwards_filters_to_sampling(client: TestClient) -> None:
     """The request ``sample_query.filters`` must reach the connector sampling call."""
     ci = _make_mock_connector_instance()

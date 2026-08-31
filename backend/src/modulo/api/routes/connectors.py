@@ -364,28 +364,28 @@ async def connector_health_endpoint(
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         ci = await get_connector_instance(session, connector_id)
-    if ci is None or ci.organisation_id != principal.organisation_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-    try:
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        async with ConnectorHub(secrets_backend=secrets_backend) as hub:
-            await hub.initialise([ci])
-            connector = hub.get(connector_id)
-            result = await connector.health_check()
-    except ConnectorDecryptError:
-        logger.exception("connectors.connector_health_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to decrypt connector credentials.",
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Unexpected error checking connector health")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to check connector health.",
-        ) from None
+        if ci is None or ci.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        try:
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            async with ConnectorHub(secrets_backend=secrets_backend) as hub:
+                await hub.initialise([ci])
+                connector = hub.get(connector_id)
+                result = await connector.health_check()
+        except ConnectorDecryptError:
+            logger.exception("connectors.connector_health_endpoint")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to decrypt connector credentials.",
+            ) from None
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Unexpected error checking connector health")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to check connector health.",
+            ) from None
     return ConnectorHealthResponse(ok=result.ok, detail=result.detail)
 
 

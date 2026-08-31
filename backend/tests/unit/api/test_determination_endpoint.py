@@ -191,6 +191,37 @@ class TestRunDetermination:
         assert len(data["findings"]) == 1
         assert data["findings"][0]["category"] == "overview"
 
+    def test_determination_threads_session_into_secrets_backend(self, client: TestClient) -> None:
+        """Regression (FAR-519): the ConnectorHub must be built with a secrets
+        backend carrying the DB session so connector credentials actually
+        decrypt.
+
+        Without ``session=session`` ``FernetSecretsBackend`` raises
+        ``RuntimeError('no DB session')`` on ``get_secret`` and every connector
+        is silently skipped — producing a blank determination scan instead of a
+        real one."""
+        ci = _mock_connector_instance("github")
+        sample = _github_sample()
+        finding = _overview_finding()
+        captured: dict[str, object] = {}
+
+        def fake_create_backend(*args: object, **kwargs: object) -> object:
+            captured["session"] = kwargs.get("session")
+            return MagicMock()
+
+        with (
+            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("modulo.api.routes.determination.set_rls_org"),
+            patch("modulo.api.routes.determination.create_secrets_backend", fake_create_backend),
+            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
+            patch("modulo.api.routes.determination.infer", return_value=[finding]),
+        ):
+            resp = client.get("/api/v1/determination")
+
+        assert resp.status_code == 200
+        assert captured["session"] is not None, "secrets backend must be built with the DB session"
+
     def test_no_connectors_returns_empty_results(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([])),

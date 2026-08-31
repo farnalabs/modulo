@@ -823,20 +823,23 @@ async def _sample_connector_records(
     settings: Settings,
     ci: Any,
     req: SchemaInferRequest,
+    session: AsyncSession,
 ) -> list[dict[str, Any]]:
     """Sample connector data, failing open with informative HTTP errors."""
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
-        try:
-            await ch.initialise([ci])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.infer.connector_init_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to initialise connector for sampling.",
-            ) from None
+        async with session.begin():
+            await set_rls_org(session, ci.organisation_id)
+            try:
+                await ch.initialise([ci])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("schemas.infer.connector_init_failed")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to initialise connector for sampling.",
+                ) from None
         try:
             async with asyncio.timeout(30.0):
                 return await ch.sample(
@@ -1015,7 +1018,7 @@ async def infer_schema_endpoint(
             detail="Schema inference failed due to an unexpected error.",
         ) from None
 
-    records = await _sample_connector_records(settings, ci, req)
+    records = await _sample_connector_records(settings, ci, req, session)
     definition_json, first_backend_id = await _infer_definition(
         settings, mbs, records, connector_type=ci.connector_type_id
     )

@@ -152,14 +152,17 @@ async def run_determination(
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
         ]
 
-        async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
-            try:
-                await hub.initialise(relevant)
-            except ConnectorDecryptError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
-                ) from exc
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        async with ConnectorHub(secrets_backend=secrets_backend) as hub:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                try:
+                    await hub.initialise(relevant)
+                except ConnectorDecryptError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
+                    ) from exc
 
             samples = await run_scan(hub)
 
@@ -242,14 +245,17 @@ async def create_determination_draft(
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
         ]
 
-        async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
-            try:
-                await hub.initialise(relevant)
-            except ConnectorDecryptError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
-                ) from exc
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        async with ConnectorHub(secrets_backend=secrets_backend) as hub:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                try:
+                    await hub.initialise(relevant)
+                except ConnectorDecryptError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
+                    ) from exc
 
             samples = await run_scan(hub)
 

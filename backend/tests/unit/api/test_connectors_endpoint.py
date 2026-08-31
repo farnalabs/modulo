@@ -573,3 +573,146 @@ def test_connector_health_check_unhealthy_reports_ok_false_in_band(client: TestC
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is False
     assert resp.json()["detail"] == "connection refused"
+
+
+class _ScopedSession:
+    """Fake session that mimics asyncpg ``SET LOCAL`` (``set_config(... is_local=true)``)
+    semantics: the organisation context is ONLY visible inside an
+    ``async with session.begin():`` block and reverts at commit.
+
+    This is the Postgres behaviour that made the pre-fix health check a 502 —
+    the RLS org scope was set in block #1, committed, then the decrypt
+    (``get_secret``) ran in block #2 with no org scope. ``FernetSecretsBackend``
+    reads the org from ``current_setting`` / ``session.info``; when it is absent
+    it raises, the connector is skipped and the probe 502s.
+    """
+
+    def __init__(self) -> None:
+        self.info: dict[str, object] = {}
+        self._in_tx = False
+
+    def in_transaction(self) -> bool:
+        return self._in_tx
+
+    def get_bind(self) -> Any:
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+    def begin(self) -> "_ScopedTx":
+        return _ScopedTx(self)
+
+    async def execute(self, *_: Any, **__: Any) -> Any:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        result.scalar.return_value = None
+        result.scalar_one.return_value = None
+        result.first.return_value = None
+        result.all.return_value = []
+        result.scalars.return_value.all.return_value = []
+        return result
+
+
+class _ScopedTx:
+    def __init__(self, session: _ScopedSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _ScopedSession:
+        self._session._in_tx = True
+        return self._session
+
+    async def __aexit__(self, *_: object) -> bool:
+        self._session._in_tx = False
+        # SET LOCAL reverts at transaction end.
+        self._session.info.pop("org_id", None)
+        self._session.info.pop("user_id", None)
+        self._session.info.pop("org_role", None)
+        return False
+
+
+def test_connector_health_check_keeps_org_scope_active_at_decrypt_time(client: TestClient) -> None:
+    """Regression (FAR-519): the health-check decrypt must run in the SAME
+    transaction that set the RLS org scope.
+
+    On real Postgres ``set_rls_org`` uses ``SET LOCAL`` (is_local=true), which
+    reverts on commit. If the connector is built and its credentials decrypted
+    AFTER the ``async with session.begin():`` block that set the org has
+    committed, ``get_secret`` sees no org and raises RuntimeError — the
+    connector is skipped and the probe 502s. This test exercises the REAL
+    ``set_rls_org`` against a transaction-scoped fake session so the org is
+    present iff the decrypt runs inside the same org-scoped transaction. A
+    healthy 200 proves the fix; the pre-fix ordering would read org=None and
+    502.
+    """
+    scoped_session = _ScopedSession()
+    backend_holder: dict[str, object] = {}
+
+    async def override_session() -> AsyncGenerator[Any, None]:
+        yield scoped_session
+
+    app.dependency_overrides[get_db_session] = override_session
+
+    class _OrgAwareSecretsBackend:
+        def __init__(self, session: Any, **_: object) -> None:
+            self._session = session
+            self.seen_orgs: list[object] = []
+
+        async def get_secret(self, key: str) -> str:
+            org = self._session.info.get("org_id")
+            self.seen_orgs.append(org)
+            if org is None:
+                raise RuntimeError("RLS organisation context not set at decrypt time")
+            return '{"token": "secret123"}'
+
+        async def set_secret(self, key: str, value: str) -> None:
+            return None
+
+        async def delete_secret(self, key: str) -> None:
+            return None
+
+    class _FakeConnector:
+        async def health_check(self) -> SimpleNamespace:
+            return SimpleNamespace(ok=True, detail="connected")
+
+    class _FakeHub:
+        def __init__(self, secrets_backend: object, **_: object) -> None:
+            backend_holder["backend"] = secrets_backend
+            self._secrets_backend = secrets_backend
+            self._connector = _FakeConnector()
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> bool:
+            return False
+
+        async def initialise(self, instances: object, **_: object) -> None:
+            for inst in instances:  # type: ignore[union-attr]
+                await self._secrets_backend.get_secret(str(cast(Any, inst).id))
+
+        def get(self, connector_id: uuid.UUID) -> _FakeConnector:
+            return self._connector
+
+    def fake_create_secrets_backend(
+        *,
+        fernet_key: str | None = None,
+        session: object = None,
+        old_key: str | None = None,
+        backend_name: str | None = None,
+    ) -> _OrgAwareSecretsBackend:
+        return _OrgAwareSecretsBackend(session=session)
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["detail"] == "connected"
+    backend = backend_holder["backend"]
+    assert isinstance(backend, _OrgAwareSecretsBackend)
+    # The SAME session that scoped the org must be passed to the backend, AND the
+    # org must still be present at decrypt time — i.e. the decrypt ran inside the
+    # org-scoping transaction. The pre-fix code read org=None here and 502'd.
+    assert backend.seen_orgs == [_ORG_ID]
