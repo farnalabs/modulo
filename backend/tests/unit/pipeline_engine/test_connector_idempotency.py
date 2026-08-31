@@ -124,7 +124,9 @@ async def _run_gate(
 
 class TestConnectorPayloadHash:
     def test_same_data_same_hash(self) -> None:
-        assert _payload_hash({"name": "n1", "id": 1}) == _payload_hash({"name": "n1", "id": 1})
+        assert _payload_hash({"name": "n1", "id": 1}) == (
+            '{"data": {"id": 1, "name": "n1"}, "provider_ref": null, "resource": ""}'
+        )
 
     def test_changed_data_different_hash(self) -> None:
         assert _payload_hash({"name": "n1", "id": 1}) != _payload_hash({"name": "n2", "id": 1})
@@ -151,7 +153,7 @@ class TestConnectorPayloadHash:
 
 class TestConnectorMarkerAttemptKey:
     def test_stable_for_same_run_and_node(self) -> None:
-        assert _connector_marker_attempt_key("run-1", "node-a") == _connector_marker_attempt_key("run-1", "node-a")
+        assert _connector_marker_attempt_key("run-1", "node-a") == "run:run-1:node:node-a:connector"
 
     def test_differs_across_nodes(self) -> None:
         assert _connector_marker_attempt_key("run-1", "node-a") != _connector_marker_attempt_key("run-1", "node-b")
