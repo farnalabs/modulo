@@ -527,19 +527,26 @@ async def update_connector_endpoint(
     if credentials_updated:
         new_credentials = updates.pop("credentials")
         if new_credentials is None:
-            # ``min_length`` only constrains str values — an explicit
-            # ``"credentials": null`` would otherwise reach _encrypt(None, ...)
-            # and raise AttributeError → unhandled 500 (FAR-495 QA).
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="'credentials' must be a non-empty string",
-            )
-        ct = _encrypt(new_credentials, settings.fernet_key)
-        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
-        # Fresh credentials clear the degraded marker (FAR-495) — the stored
-        # skip error described the OLD credentials, not the new ones.
-        updates["degraded_at"] = None
-        updates["last_skip_error"] = None
+            # A PATCH whose ONLY change is an explicit ``"credentials": null`` is
+            # ambiguous — there is no "clear credentials" operation — so reject it
+            # (422) rather than silently no-op'ing or 500'ing on
+            # ``_encrypt(None, ...)`` (FAR-495 QA). But a PATCH that edits OTHER
+            # fields (e.g. a name-only edit whose credential textarea was left
+            # empty posts ``credentials: null`` as a no-op) must NOT fail: leave
+            # ``credentials_updated`` set and let the later block skip the
+            # credential write while applying the other updates.
+            if not updates:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="'credentials' must be a non-empty string",
+                )
+        else:
+            ct = _encrypt(new_credentials, settings.fernet_key)
+            updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
+            # Fresh credentials clear the degraded marker (FAR-495) — the stored
+            # skip error described the OLD credentials, not the new ones.
+            updates["degraded_at"] = None
+            updates["last_skip_error"] = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
