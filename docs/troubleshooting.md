@@ -71,7 +71,7 @@ Common issues, their causes, and resolutions.
 |---|---|---|---|
 | Webhook not firing | Endpoint auto-disabled after repeated failures | Re-enable the endpoint in notification settings; check endpoint availability | `Endpoint <url> disabled after <N> consecutive failures` |
 | HMAC validation failing | HMAC secret mismatch between sender and receiver | Rotate the HMAC secret in notification settings and update the receiver | `HMAC signature mismatch` |
-| Duplicate webhook calls | Retry mechanism delivering the same event multiple times | Check the delivery log for retry count; verify the endpoint handles idempotency via the `X-Modulo-Delivery-Id` header | Multiple delivery log entries with the same `delivery_id` |
+| Duplicate webhook calls | Retry mechanism delivering the same event multiple times | Check the delivery log for retry count; dedup is content-hash based (SHA-256 of the raw payload in `webhook_dedup_hashes`) so identical payloads collapse into one run | Multiple delivery log entries for the same payload hash |
 | `Flood protection triggered` | Too many identical webhooks in a short window | Check deduplication configuration; verify the webhook source is not sending duplicate payloads | `429: Flood protection – too many identical webhooks` |
 
 ---
