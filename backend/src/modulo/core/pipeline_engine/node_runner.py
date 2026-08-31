@@ -347,6 +347,22 @@ _SANDBOX_KILL_TIMEOUT = 15.0
 # allowlist (the iptables rules bind concrete IPs, never DNS names).
 _SANDBOX_EGRESS_RESOLVE_TIMEOUT = 5.0
 
+# FAR-510: the summary stamped on the sandbox_agent synthetic failure
+# envelopes (the generic-exception path and the schema-validation path RETURN
+# a failed envelope instead of raising). Kept as the human-readable failure
+# detail — the executor's downgrade predicate keys on the machine marker
+# below, never on this text. Single source of truth so runner and executor
+# cannot drift.
+SANDBOX_AGENT_FAILED_SUMMARY = "Sandbox agent execution failed"
+
+# FAR-510: machine marker stamped on BOTH sandbox_agent synthetic failure
+# envelopes (generic-exception + schema-validation). The executor's
+# finalize-time downgrade predicate requires ``status == "failed"`` AND this
+# field True — marker-based, so an agent-authored failure shape (which never
+# carries the runner's internal marker) can never collide. Single source of
+# truth so runner and executor cannot drift.
+MODULO_SYNTHETIC_FAILURE_MARKER = "modulo_synthetic_failure"
+
 
 async def _resolve_egress_allowlist(
     egress_allowlist: list[dict[str, Any]] | None,
@@ -3878,6 +3894,10 @@ class _SandboxNodeOutput(NamedTuple):
     error_message: Any = _UNSET
     sandbox_id: Any = _UNSET
     sandbox_log_tail: Any = _UNSET
+    # FAR-510: True ONLY on the runner's synthetic failure envelopes (the
+    # executor's downgrade predicate keys on this marker, never on summary
+    # text). Default False so honest envelopes carry no marker key at all.
+    modulo_synthetic_failure: bool = False
 
 
 def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | None = None) -> str:
@@ -3920,7 +3940,12 @@ def _build_sandbox_node_envelope(
     success path's ``changed_files``/``pr_url``, the generic-exception path's
     ``error_type``/``error_message``). Optional fields are omitted when left at
     the ``_UNSET`` sentinel so each path emits exactly the key set it did
-    before this extraction.
+    before this extraction. The FAR-510 synthetic-failure marker
+    (``MODULO_SYNTHETIC_FAILURE_MARKER``) is stamped into BOTH views only when
+    ``output.modulo_synthetic_failure`` is True — honest envelopes carry no
+    marker key at all, and the marker is deliberately NOT in
+    ``exclude_from_output`` so it survives into the persisted telemetry view
+    (and, after the P1b split, into ``node_telemetry_json``).
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -3956,6 +3981,8 @@ def _build_sandbox_node_envelope(
         inner["sandbox_id"] = output.sandbox_id
     if output.sandbox_log_tail is not _UNSET:
         inner["sandbox_log_tail"] = output.sandbox_log_tail
+    if output.modulo_synthetic_failure:
+        inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
     inner["attempt_key"] = output.attempt_key
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
     outer = {key: value for key, value in inner.items() if key not in excluded}
@@ -5174,6 +5201,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         stdout_length=_stdout_len,
                         stderr_length=_stderr_len,
                         attempt_key=attempt_key,
+                        modulo_synthetic_failure=True,
                     ),
                 )
 
@@ -5407,7 +5435,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             node_id=node_id,
             output=_SandboxNodeOutput(
                 status="failed",
-                summary="Sandbox agent execution failed",
+                summary=SANDBOX_AGENT_FAILED_SUMMARY,
                 exit_code=-1,
                 wall_clock_time_ms=int(elapsed * 1000),
                 cost_estimate_usd=_cost_estimate_usd,
@@ -5421,6 +5449,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 error_message=_exc_msg,
                 sandbox_id=_sandbox_id,
                 sandbox_log_tail=_exc_log_tail,
+                modulo_synthetic_failure=True,
             ),
             # FAR-511: stop hiding error_type/error_message. The node-failure
             # envelope now carries the provider error (e.g. the e2b 400 detail)
