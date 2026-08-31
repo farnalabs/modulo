@@ -4,6 +4,7 @@ import jmespath
 import pytest
 
 from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.pipeline_engine.executor import compute_retry_aware_topology_hash
 from modulo.core.pipeline_engine.port_resolver import (
     DEFAULT_INPUT_PORT,
     DEFAULT_OUTPUT_PORT,
@@ -248,6 +249,40 @@ def test_topology_hash_changes_when_source_port_set_on_edge():
     g3["edges"][0]["source_port"] = "custom"
     assert compute_port_topology_hash(g1) == compute_port_topology_hash(g2)
     assert compute_port_topology_hash(g1) != compute_port_topology_hash(g3)
+
+
+def test_retry_aware_hash_equals_base_hash_without_policy():
+    """No pipeline retry_policy -> hash is identical to the base port-topology hash."""
+    g = _base_graph()
+    assert compute_retry_aware_topology_hash(g, None) == compute_port_topology_hash(g)
+    assert compute_retry_aware_topology_hash(g, {}) == compute_port_topology_hash(g)
+
+
+def test_retry_aware_hash_folds_policy_into_hash():
+    """A present retry_policy changes the hash (forces recompile on policy PATCH)."""
+    g = _base_graph()
+    base = compute_port_topology_hash(g)
+    with_policy = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2})
+    assert with_policy != base
+    assert with_policy.startswith(base + ":")
+
+
+def test_retry_aware_hash_stable_for_same_policy():
+    """The same policy produces a deterministic hash across calls/orderings."""
+    g = _base_graph()
+    h1 = compute_retry_aware_topology_hash(g, {"max_retries": 2, "on": ["failure"]})
+    h2 = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2})
+    assert h1 == h2
+    assert h1 != compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 3})
+
+
+def test_retry_aware_hash_stable_across_key_order():
+    """A dict-default policy is key-order independent (json.dumps sort_keys)."""
+    g = _base_graph()
+    g["nodes"] = [g["nodes"][1], g["nodes"][0]]
+    h_a = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2})
+    h_b = compute_retry_aware_topology_hash(_base_graph(), {"max_retries": 2, "on": ["failure"]})
+    assert h_a == h_b
 
 
 # ---------------------------------------------------------------------------
