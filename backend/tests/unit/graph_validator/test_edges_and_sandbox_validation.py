@@ -261,6 +261,50 @@ def test_sandbox_timeout_too_high_warns():
     assert "SANDBOX_TIMEOUT_BOUNDS" in _codes(result)
 
 
+def test_sandbox_timeout_over_e2b_cap_is_error():
+    """FAR-511: a sandbox node whose timeout_seconds exceeds the E2B 1-hour cap
+    (3300 headroom) is rejected at save time — do not clamp."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=3600)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" in _codes(result)
+    assert not result.is_valid
+    # The message names the node id and the offending value for a clear save-time error.
+    msg = next(i.message for i in result.issues if i.code == "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP")
+    assert "3600" in msg
+    assert "3300" in msg
+
+
+def test_sandbox_timeout_at_e2b_cap_is_valid():
+    """FAR-511: timeout_seconds at the 3300 headroom ceiling saves fine."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=3300)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_timeout_just_over_cap_is_error():
+    """FAR-511: 3301 (one second over the 3300 headroom) is still rejected."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=3301)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" in _codes(result)
+    assert not result.is_valid
+
+
+def test_non_sandbox_node_timeout_over_cap_unaffected():
+    """FAR-511: the E2B cap only applies to sandbox_agent nodes; an agent node
+    with timeout_seconds=3600 must not be rejected by the sandbox check."""
+    nid = str(uuid.uuid4())
+    graph = {"nodes": [{"id": nid, "node_type": "agent", "agent_command": "", "timeout_seconds": 3600}], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" not in _codes(result)
+    # The non-sandbox node is skipped by the sandbox checks entirely.
+    assert all(i.node_id != nid or "SANDBOX" not in i.code for i in result.issues)
+
+
 def test_sandbox_timeout_invalid_warns():
     graph = {"nodes": [_sandbox_node(timeout_seconds="abc")], "edges": []}
     result = ValidationResult()

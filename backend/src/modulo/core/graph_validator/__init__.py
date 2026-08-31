@@ -553,6 +553,32 @@ def _check_sandbox_timeout(node: dict[str, Any], nid: str, result: ValidationRes
         )
 
 
+def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check: timeout_seconds must stay under the E2B 1-hour cap (FAR-511).
+
+    The e2b SDK upgrade shipped in the Aug 30 deploy (Python 3.14) began
+    enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with
+    ``timeout_seconds`` above the cap now fails provisioning with
+    ``400: Timeout cannot be greater than 1 hours`` (previously accepted).
+    Reject anything above 3300 at save time so there is provisioning headroom;
+    do NOT clamp — the author must pick a value explicitly.
+    """
+    timeout = node.get("timeout_seconds")
+    if timeout is None:
+        return
+    try:
+        t = int(timeout) if not isinstance(timeout, int) else timeout
+    except (ValueError, TypeError):
+        return
+    if t > 3300:
+        result.error(
+            "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox "
+            "cap (1 hour); use <= 3300 to leave provisioning headroom",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_stall_timeout(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 7: stall_timeout_seconds must be positive and not exceed timeout_seconds."""
     stall_timeout = node.get("stall_timeout_seconds")
@@ -2388,6 +2414,7 @@ class GraphValidator:
             _check_sandbox_jinja(node, nid, result)
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
+            _check_sandbox_timeout_e2b_cap(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)
             _check_sandbox_context_files(node, nid, result)
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)

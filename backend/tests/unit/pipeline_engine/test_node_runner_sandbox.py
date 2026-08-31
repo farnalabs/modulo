@@ -2401,3 +2401,70 @@ async def test_sandbox_lifetime_is_int():
     lifetime = create.await_args.kwargs["timeout"]
     assert isinstance(lifetime, int), f"lifetime must be int, got {type(lifetime).__name__}: {lifetime!r}"
     assert lifetime > 60
+
+
+# ---------------------------------------------------------------------------
+# FAR-511: sandbox-provisioning failures surface the provider error in the
+# node output (error_type / error_message), not a masked "execution failed".
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_generic_exception_envelope_includes_error_type_and_message():
+    """FAR-511: a sandbox provisioning failure (generic exception) returns a
+    failed-node envelope whose output carries error_type + error_message so the
+    failure is visible via get_run_output — the old envelope hid both."""
+    node_def = _base_node_def(timeout_seconds=60)
+    fn = make_sandbox_agent_fn(node_def)
+
+    class _BoomError(Exception):
+        pass
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_BoomError("connection reset"))),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    # The failure envelope must now carry the exception type and message.
+    inner = result["artifacts"][0]["output"]
+    assert inner["error_type"] == "_BoomError"
+    assert "connection reset" in inner["error_message"]
+    # And the reduced top-level output view must surface them too (not masked).
+    assert result["output"]["error_type"] == "_BoomError"
+    assert "connection reset" in result["output"]["error_message"]
+
+
+async def test_sandbox_provider_exception_message_visible_in_output():
+    """FAR-511: an e2b SandboxException's 400 detail (e.g. the 1-hour timeout
+    cap) is included in the node output so diagnosis does not require Fly logs."""
+    from e2b.exceptions import SandboxException
+
+    node_def = _base_node_def(timeout_seconds=3600)
+    fn = make_sandbox_agent_fn(node_def)
+
+    exc = SandboxException("400: Timeout cannot be greater than 1 hours")
+
+    class _ProviderResponse:
+        text = "Timeout cannot be greater than 1 hours"
+
+    exc.response = _ProviderResponse()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=exc)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+    ):
+        result = await fn(_run_state())
+
+    inner = result["artifacts"][0]["output"]
+    assert inner["error_type"] == "SandboxException"
+    # The provider error detail must be present in the output message.
+    assert "Timeout cannot be greater than 1 hours" in inner["error_message"]
+    assert result["output"]["error_type"] == "SandboxException"
+    assert "Timeout cannot be greater than 1 hours" in result["output"]["error_message"]

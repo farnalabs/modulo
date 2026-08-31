@@ -3880,6 +3880,31 @@ class _SandboxNodeOutput(NamedTuple):
     sandbox_log_tail: Any = _UNSET
 
 
+def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | None = None) -> str:
+    """Compose a run-output-safe error message, enriching provider exceptions.
+
+    FAR-511: a bare ``str(exc)`` for an e2b ``SandboxException`` already carries
+    the HTTP status (e.g. ``400: Timeout cannot be greater than 1 hours``), but
+    the provider's response body may carry extra detail. When ``provider_exc_type``
+    (e.g. ``e2b.exceptions.SandboxException``) is supplied and matches, append the
+    response body so ``get_run_output`` reveals the full provisioning failure
+    rather than a masked "Sandbox agent execution failed".
+    """
+    msg = str(exc)[:_MAX_ERROR_MSG]
+    if provider_exc_type is not None and isinstance(exc, provider_exc_type):
+        response = getattr(exc, "response", None)
+        if response is not None:
+            body = getattr(response, "text", None)
+            if not body and isinstance(response, (dict, list)):
+                try:
+                    body = json.dumps(response)
+                except (TypeError, ValueError):
+                    body = None
+            if body:
+                msg = f"{msg} — {body}"[:_MAX_ERROR_MSG]
+    return msg
+
+
 def _build_sandbox_node_envelope(
     *,
     node_id: str,
@@ -4090,7 +4115,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     single_sandbox_node = config.single_sandbox_node
 
     from e2b import AsyncSandbox
-    from e2b.exceptions import RateLimitException
+    from e2b.exceptions import RateLimitException, SandboxException
     from opentelemetry import trace as _otel_trace
 
     from modulo.core.guardrails.loop_intercept import (
@@ -5343,7 +5368,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     except Exception as _exc:
         elapsed = time.monotonic() - start_time
         _exc_type = type(_exc).__name__
-        _exc_msg = str(_exc)[:_MAX_ERROR_MSG]
+        # FAR-511: surface the provider error in the run output. The generic
+        # exception envelope previously excluded error_type/error_message, so a
+        # sandbox-provisioning failure (e.g. e2b ``400: Timeout cannot be greater
+        # than 1 hours``) was only visible in Fly logs as a bare
+        # "Sandbox agent execution failed". For an e2b SandboxException also pull
+        # the provider response body so the 400 detail is visible via get_run_output.
+        _exc_msg = _format_sandbox_provider_error(_exc, SandboxException)
         _log.exception(
             "sandbox_agent.execution_failed",
             extra={
@@ -5391,7 +5422,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 sandbox_id=_sandbox_id,
                 sandbox_log_tail=_exc_log_tail,
             ),
-            exclude_from_output=frozenset({"error_type", "error_message"}),
+            # FAR-511: stop hiding error_type/error_message. The node-failure
+            # envelope now carries the provider error (e.g. the e2b 400 detail)
+            # instead of masking it as a bare "Sandbox agent execution failed".
+            exclude_from_output=frozenset(),
         )
     finally:
         # FAR-211: stop the loop-interception callback server. Best-effort
