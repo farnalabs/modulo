@@ -34,7 +34,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import pinned_async_client_sync
 
 _GITLAB_API = "https://gitlab.com/api/v4"
 
@@ -481,8 +481,16 @@ class GitLabConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        validate_outbound_url(self._base_url)
-        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). ``trust_env=False``
+        # stops a proxy from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
+            base_url=self._base_url,
+            headers=self._headers(),
+            timeout=30,
+        )
 
     async def _declared_effective_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
         """Return the token's declared scopes, expanded through superset relations.

@@ -1,6 +1,6 @@
 """Unit tests for OpenRouterBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ def test_chat_openai_uses_openrouter_base_url():
             model="gpt-4o",
             api_key="sk-test",
             base_url="https://openrouter.ai/api/v1",
+            http_async_client=ANY,
         )
 
 

@@ -38,6 +38,7 @@ from modulo.connectors.base import (
     health_check_failure,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
@@ -549,7 +550,18 @@ class GitHubConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). The `_base_url` is
+        # tenant-configurable (GHES), so it is gated + pinned here just like the
+        # other base_url-bearing connectors. ``trust_env=False`` stops a proxy
+        # from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
+            base_url=self._base_url,
+            headers=self._headers(),
+            timeout=30,
+        )
 
     @staticmethod
     def _jitter(delay: float, *, tight: bool = False) -> float:

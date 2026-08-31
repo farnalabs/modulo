@@ -1,6 +1,6 @@
 """Unit tests for GrokBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ def test_chat_openai_uses_grok_base_url():
             model="grok-2",
             api_key="sk-test",
             base_url="https://api.x.ai/v1",
+            http_async_client=ANY,
         )
 
 

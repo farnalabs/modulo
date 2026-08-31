@@ -1,6 +1,6 @@
 """Unit tests for FireworksBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -27,4 +27,5 @@ def test_chat_openai_uses_fireworks_base_url():
             model="accounts/fireworks/models/llama-v3p1-8b",
             api_key="test-key",
             base_url=FIREWORKS_BASE_URL,
+            http_async_client=ANY,
         )

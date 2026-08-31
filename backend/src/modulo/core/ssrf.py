@@ -58,6 +58,7 @@ import socket
 import ssl
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 import httpcore
@@ -630,6 +631,31 @@ async def resolve_pinned_ip(url: str, *, allow_networks: Sequence[str] | None = 
     return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=ips[0])
 
 
+def _resolve_pinned_ip_sync(url: str, *, allow_networks: Sequence[str] | None = None) -> PinnedTarget:
+    """Synchronous :func:`resolve_pinned_ip` — for sync ``_client()`` builders.
+
+    Mirrors the async variant (including the fail-closed semantics and the
+    non-negotiable blocked floor) but resolves with the synchronous
+    ``_resolve_all_sync`` path so a connector's synchronous ``_client()`` can
+    pin its validated address without leaving the event loop. Connectors that
+    build clients synchronously (``httpx.AsyncClient`` in a ``def _client``)
+    use this + :func:`pinned_async_transport_sync` / :func:`pinned_async_client_sync`
+    so they do NOT re-resolve the host at connect time.
+    """
+    target = _parse_url_target(url)
+    extra = normalize_allow_networks(allow_networks)
+    if target.literal_ip is not None:
+        if _is_blocked_ip(target.literal_ip, extra):
+            raise ValueError(
+                f"URL targets a private/internal network address: {target.literal_ip}. "
+                f"{_remediation_hint(target.literal_ip)}"
+            )
+        return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=target.literal_ip)
+    ips = _resolve_all_sync(target.host)
+    _check_resolved(target.host, ips, extra)
+    return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=ips[0])
+
+
 class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
     """httpcore async backend that substitutes the pinned IP at connect time.
 
@@ -685,12 +711,16 @@ class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         verify: ssl.SSLContext | str | bool = True,
         http2: bool = False,
         trust_env: bool = False,
+        limits: httpx.Limits | None = None,
     ) -> None:
         # trust_env defaults to False: when httpcore honors a proxy (HTTP_PROXY /
         # HTTPS_PROXY / ALL_PROXY) it re-resolves the target server-side and
         # connect_tcp only ever sees the proxy host, which is not in the pin map
         # — the whole point of pinning is defeated. Safe by default.
-        super().__init__(verify=verify, http2=http2, trust_env=trust_env)
+        # ``limits`` (when supplied) flows into the underlying httpcore pool so a
+        # connector that configures max_connections / max_keepalive keeps its
+        # pooling budget even though it now owns the transport explicitly.
+        super().__init__(verify=verify, http2=http2, trust_env=trust_env, limits=limits or httpx.Limits())
         _warn_if_proxied(trust_env)
         # HTTPCORE SEAM: the pin is installed by overriding httpcore's PRIVATE
         # `_pool._network_backend` attribute. httpcore (httpx 0.28.x / httpcore
@@ -711,6 +741,7 @@ async def pinned_async_transport(
     verify: ssl.SSLContext | str | bool = True,
     http2: bool = False,
     trust_env: bool = False,
+    limits: httpx.Limits | None = None,
 ) -> httpx.AsyncHTTPTransport:
     """Build a pinned-IP async transport for ``url``.
 
@@ -730,6 +761,7 @@ async def pinned_async_transport(
         verify=verify,
         http2=http2,
         trust_env=trust_env,
+        limits=limits,
     )
 
 
@@ -741,6 +773,7 @@ async def pinned_async_client(
     http2: bool = False,
     trust_env: bool = False,
     follow_redirects: bool = False,
+    limits: httpx.Limits | None = None,
 ) -> httpx.AsyncClient:
     """Build a pinned-IP ``httpx.AsyncClient`` for ``url``.
 
@@ -760,6 +793,7 @@ async def pinned_async_client(
         verify=verify,
         http2=http2,
         trust_env=trust_env,
+        limits=limits,
     )
     return httpx.AsyncClient(
         transport=transport,
@@ -822,3 +856,69 @@ def require_url_host_in_allowlist(url: str, allowed_hosts: Iterable[str]) -> str
     if host not in allowed:
         raise ValueError(f"URL host '{host}' is not in the OIDC provider host allowlist (allowed: {sorted(allowed)})")
     return host
+
+
+def pinned_async_transport_sync(
+    url: str,
+    *,
+    allow_networks: Sequence[str] | None = None,
+    verify: ssl.SSLContext | str | bool = True,
+    http2: bool = False,
+    trust_env: bool = False,
+    limits: httpx.Limits | None = None,
+) -> httpx.AsyncHTTPTransport:
+    """Synchronous :func:`pinned_async_transport` for sync ``_client()`` builders.
+
+    Resolves + validates ``url`` synchronously and returns a
+    :class:`httpx.AsyncHTTPTransport` pinned to the validated address, so a
+    connector that constructs its client without awaiting does not re-resolve
+    the host at connect time (closing the DNS-rebinding window). ``trust_env``
+    defaults to ``False`` (safe-by-default; a proxy defeats pinning).
+    """
+    target = _resolve_pinned_ip_sync(url, allow_networks=allow_networks)
+    return PinnedAsyncHTTPTransport(
+        {target.host: target.ip},
+        verify=verify,
+        http2=http2,
+        trust_env=trust_env,
+        limits=limits,
+    )
+
+
+def pinned_async_client_sync(
+    url: str,
+    *,
+    allow_networks: Sequence[str] | None = None,
+    verify: ssl.SSLContext | str | bool = True,
+    http2: bool = False,
+    trust_env: bool = False,
+    follow_redirects: bool = False,
+    limits: httpx.Limits | None = None,
+    **client_kwargs: Any,
+) -> httpx.AsyncClient:
+    """Synchronous :func:`pinned_async_client` for sync ``_client()`` builders.
+
+    Builds a pinned-IP ``httpx.AsyncClient`` whose transport is pinned to the
+    validated address for ``url`` while SNI/cert use the original hostname.
+    Synchronous so a connector's ``def _client`` can return a ready-made
+    pinned client. ``**client_kwargs`` (``base_url``, ``headers``, ``timeout``,
+    ``auth``, ``limits``, …) are forwarded to :class:`httpx.AsyncClient`.
+    ``trust_env`` defaults to ``False`` (safe-by-default; a proxy defeats
+    pinning).
+    """
+    transport = pinned_async_transport_sync(
+        url,
+        allow_networks=allow_networks,
+        verify=verify,
+        http2=http2,
+        trust_env=trust_env,
+        limits=limits,
+    )
+    return httpx.AsyncClient(
+        transport=transport,
+        verify=verify,
+        http2=http2,
+        trust_env=trust_env,
+        follow_redirects=follow_redirects,
+        **client_kwargs,
+    )
