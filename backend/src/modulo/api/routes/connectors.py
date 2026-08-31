@@ -27,6 +27,7 @@ from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
+from modulo.connectors.rest import RestConnector
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import (
@@ -125,11 +126,19 @@ def _decrypt_credentials(ciphertext: bytes | None, fernet_key: str) -> dict[str,
 def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """Overlay an incoming credential dict onto the decrypted stored one.
 
-    Identity fields (non-secret) are always applied from ``incoming``, so an
-    identity-only edit takes effect. Secret fields are replaced only when the
-    request supplies a real, non-empty, non-masked value; otherwise the stored
-    secret is left intact. Keys outside both groups (legacy/unknown payloads)
-    are overlaid as-is, preserving the historical replace-all behaviour.
+    Contract (FAR-466 / FAR-504) — the write-only + partial-overlay model:
+
+    * **Secret fields** (``token``, ``api_key``, ``username``, ``password``)
+      are replaced ONLY when the request supplies a real, non-empty,
+      non-masked value; an empty or masked (``SENSITIVE_VALUE_MASK``) value
+      leaves the stored secret intact (case a).
+    * **Non-secret identity fields** are always applied from ``incoming``, so an
+      identity-only edit (``auth_mode`` / ``in`` / ``header_name`` /
+      ``query_param_name``) takes effect while the stored secret survives
+      (case c).
+    * **Unknown / legacy keys** (outside both groups) are overlaid as-is —
+      the overlay never drops a stored secret or an unknown key that the
+      incoming payload omits (case d); it only ever adds/updates.
     """
     merged = dict(previous)
     for key, value in incoming.items():
@@ -141,37 +150,15 @@ def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> d
     return merged
 
 
-def _validate_rest_auth(creds: dict[str, Any]) -> None:
-    """Validate a REST credential dict against the connector's auth contract.
-
-    Mirrors ``RestConnector._normalise_auth`` so the API enforces the same
-    invariant the connector enforces at run time: ``bearer`` requires
-    ``token``, ``basic`` requires ``username``+``password``, and ``api_key``
-    requires ``api_key`` (with ``in`` limited to ``header``/``query``). Raises
-    ``ValueError`` with a clear message when the declared ``auth_mode`` is
-    missing a required secret — so a broken credential is rejected at the API
-    boundary (422) instead of being saved and blowing up on the first run.
-    The JSON credential path is validated. Non-REST connectors retain the raw
-    token path; a REST connector with a non-JSON credential payload is rejected
-    (422) instead of being encrypted verbatim.
-    """
-    mode = str(creds.get("auth_mode", "")).strip().lower()
-    if mode not in {"bearer", "api_key", "basic"}:
-        raise ValueError(
-            f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
-        )
-    if mode == "bearer":
-        if not creds.get("token"):
-            raise ValueError("REST bearer auth requires creds['token']")
-    elif mode == "basic":
-        if not creds.get("username") or not creds.get("password"):
-            raise ValueError("REST basic auth requires creds['username'] and creds['password']")
-    else:  # api_key
-        if not creds.get("api_key"):
-            raise ValueError("REST api_key auth requires creds['api_key']")
-        auth_in = creds.get("in")
-        if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
-            raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth_in!r}")
+# Credential validation is CENTRALIZED on the connector (FAR-504): the REST
+# required-secret auth contract lives in ``RestConnector.validate_credentials``
+# (the single source of truth), and both the create and PATCH overlay boundaries
+# call it so the API never hand-mirrors the connector's run-time invariant.
+#
+# Known gap: only the REST connector validates credential SHAPE at the API
+# boundary today. Other connectors (github, filesystem, ...) accept a raw token /
+# opaque payload verbatim and rely on their own run-time behaviour; no generic
+# credential-shape hook exists yet.
 
 
 class ConnectorCreate(TeamVisibilityMixin):
@@ -357,7 +344,7 @@ async def create_connector_endpoint(
                 detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
             )
         try:
-            _validate_rest_auth(rest_creds)
+            RestConnector.validate_credentials(rest_creds)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -579,7 +566,7 @@ async def update_connector_endpoint(
                         # must not silently save a broken credential). The raw
                         # non-JSON token path below keeps its historical semantics.
                         try:
-                            _validate_rest_auth(incoming)
+                            RestConnector.validate_credentials(incoming)
                         except ValueError as exc:
                             raise HTTPException(
                                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

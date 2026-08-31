@@ -137,7 +137,26 @@ single ``api_key`` fallback. Read ``auth_mode`` + named fields from that dict:
     #            in: "header" (default) | "query" + query_param_name (default "api_key")
     # basic   -> username + password
 
-Templating uses the existing ``node_runner`` ``jinja2.sandbox.SandboxedEnvironment``;
+WRITE-ONLY / PARTIAL-OVERLAY CREDENTIAL MODEL (FAR-466 / FAR-504)
+-------------------------------------------------------------------
+Credentials are WRITE-ONLY at the API surface: the ciphertext is never exposed
+in a response (only a ``has_credentials`` boolean). A PATCH overlays the
+supplied credential dict onto the decrypted stored one (see
+``modulo.api.routes.connectors._credential_overlay``):
+
+* **Secret fields** (``token``, ``api_key``, ``username``, ``password``) are
+  replaced only when the request supplies a real, non-empty, non-masked value;
+  an empty/masked value leaves the stored secret intact.
+* **Non-secret identity fields** (``auth_mode``, ``in``, ``header_name``,
+  ``query_param_name``) are always overlaid, so an identity-only edit applies
+  while the stored secret survives.
+* **Unknown / legacy keys** are overlaid as-is; an overlay never drops a stored
+  secret.
+
+The connector reads auth identity from this DECRYPTED dict at run time via
+``_normalise_auth`` (validated by ``validate_credentials`` — the single source
+of truth for the required-secret contract). Templating uses the existing
+``node_runner`` ``jinja2.sandbox.SandboxedEnvironment``;
 the only runtime dependencies added here are ``httpx``, ``jinja2`` and
 ``jmespath``.
 
@@ -987,31 +1006,60 @@ class RestConnector(ConnectorBase):
 
     # ── Auth ───────────────────────────────────────────────────────────────
 
+    # FAR-504: the single source of truth for the REST credential auth contract.
+    # Every consumer that validates a REST credential dict — the connector's own
+    # ``_normalise_auth`` at run time AND the API boundary (create + PATCH
+    # overlay) — funnels through ``validate_credentials`` so the required-secret
+    # invariant never drifts between the two. The write-only/partial-overlay
+    # model is documented at the module and route level; this validator is the
+    # one place that defines "what makes a credential valid for a declared
+    # auth_mode".
     @staticmethod
-    def _normalise_auth(creds: dict[str, Any]) -> dict[str, Any]:
+    def validate_credentials(creds: dict[str, Any]) -> None:
+        """Validate a REST credential dict against the connector's auth contract.
+
+        Single source of truth for the required-secret invariant (FAR-504):
+        ``bearer`` requires ``token``; ``basic`` requires ``username`` +
+        ``password``; ``api_key`` requires ``api_key`` (with ``in`` limited to
+        ``header`` / ``query``). Raises ``ValueError`` with a clear message when
+        the declared ``auth_mode`` is missing a required secret or an invalid
+        ``auth_mode`` is supplied. Called by ``_normalise_auth`` (run-time) and
+        by the API boundary (create + PATCH overlay) so a broken credential is
+        rejected at the boundary (422) instead of saved and exploding on the
+        first run.
+        """
         mode = str(creds.get("auth_mode", "")).strip().lower()
         if mode not in {"bearer", "api_key", "basic"}:
             raise ValueError(
                 f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
             )
-        auth: dict[str, Any] = {"mode": mode}
         if mode == "bearer":
             if not creds.get("token"):
                 raise ValueError("REST bearer auth requires creds['token']")
-            auth["token"] = str(creds["token"])
         elif mode == "basic":
             if not creds.get("username") or not creds.get("password"):
                 raise ValueError("REST basic auth requires creds['username'] and creds['password']")
-            auth["username"] = str(creds["username"])
-            auth["password"] = str(creds["password"])
         else:  # api_key
             if not creds.get("api_key"):
                 raise ValueError("REST api_key auth requires creds['api_key']")
+            auth_in = creds.get("in")
+            if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
+                raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth_in!r}")
+
+    @staticmethod
+    def _normalise_auth(creds: dict[str, Any]) -> dict[str, Any]:
+        RestConnector.validate_credentials(creds)
+        mode = str(creds.get("auth_mode", "")).strip().lower()
+        auth: dict[str, Any] = {"mode": mode}
+        if mode == "bearer":
+            auth["token"] = str(creds["token"])
+        elif mode == "basic":
+            auth["username"] = str(creds["username"])
+            auth["password"] = str(creds["password"])
+        else:  # api_key — auth identity pre-validated by validate_credentials
             auth["api_key"] = str(creds["api_key"])
             auth_in = creds.get("in")
             auth["in"] = str(auth_in if auth_in is not None else "header").lower()
-            if auth["in"] not in {"header", "query"}:
-                raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth['in']!r}")
             if auth["in"] == "header":
                 header_name = creds.get("header_name")
                 auth["header_name"] = str(header_name) if header_name is not None else "X-API-Key"

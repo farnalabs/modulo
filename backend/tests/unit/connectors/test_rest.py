@@ -309,6 +309,52 @@ def test_auth_basic() -> None:
     assert captured["authorization"].startswith("Basic ")
 
 
+# ── Credential auth contract (FAR-504) ────────────────────────────────
+
+
+def test_validate_credentials_is_authoritative_auth_contract() -> None:
+    """``validate_credentials`` is the single source of truth for the REST
+    required-secret contract (FAR-504): rejected dicts must also be rejected by
+    ``_normalise_auth`` (and vice versa), so the API boundary and the run-time
+    connector never drift. bearer->token; basic->username+password;
+    api_key->api_key + in header/query."""
+    valid = [
+        {"auth_mode": "bearer", "token": "t"},
+        {"auth_mode": "api_key", "api_key": "k"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "header", "header_name": "X-Key"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "query", "query_param_name": "token"},
+        {"auth_mode": "basic", "username": "u", "password": "p"},
+    ]
+    invalid = [
+        {"auth_mode": "bearer"},  # missing token
+        {"auth_mode": "api_key"},  # missing api_key
+        {"auth_mode": "basic", "username": "u"},  # missing password
+        {"auth_mode": "basic", "password": "p"},  # missing username
+        {"auth_mode": "opaque"},  # unsupported mode
+        {"auth_mode": "api_key", "api_key": "k", "in": "cookie"},  # in must be header/query
+    ]
+    for creds in valid:
+        RestConnector.validate_credentials(creds)
+        RestConnector._normalise_auth(creds)
+    for creds in invalid:
+        with pytest.raises(ValueError):
+            RestConnector.validate_credentials(creds)
+        with pytest.raises(ValueError):
+            RestConnector._normalise_auth(creds)
+
+
+def test_validate_credentials_raises_on_missing_required_secret() -> None:
+    """Each auth_mode raises a specific ValueError naming the missing secret."""
+    with pytest.raises(ValueError, match="requires creds\\['token'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "bearer"})
+    with pytest.raises(ValueError, match="requires creds\\['username'\\] and creds\\['password'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "basic", "username": "u"})
+    with pytest.raises(ValueError, match="requires creds\\['api_key'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "api_key"})
+    with pytest.raises(ValueError, match=r"auth_mode.*one of 'bearer', 'api_key', 'basic'"):
+        RestConnector.validate_credentials({"auth_mode": "opaque"})
+
+
 # ── Injection guard ────────────────────────────────
 
 
