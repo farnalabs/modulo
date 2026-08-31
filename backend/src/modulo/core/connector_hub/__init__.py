@@ -946,7 +946,7 @@ def _build_connector(
         case "datadog":
             return DatadogConnector(
                 api_key=_get_cred(creds, "api_key", type_id),
-                app_key=_get_cred(creds, "app_key", type_id),
+                app_key=_get_cred(creds, "application_key", type_id),
                 site=config.get("site", "us"),
             )
         case "sentry":

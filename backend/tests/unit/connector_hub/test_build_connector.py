@@ -127,7 +127,7 @@ _BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase
         AzurePipelinesConnector,
         ConnectorType.AZURE_PIPELINES,
     ),
-    ("datadog", {}, {"api_key": "dd_key", "app_key": "dd_app"}, DatadogConnector, ConnectorType.DATADOG),
+    ("datadog", {}, {"api_key": "dd_key", "application_key": "dd_app"}, DatadogConnector, ConnectorType.DATADOG),
     ("sentry", {"organization": "acme"}, {"token": "sentry_token"}, SentryConnector, ConnectorType.SENTRY),
     ("pagerduty", {}, {"token": "pd_token"}, PagerDutyConnector, ConnectorType.PAGERDUTY),
     ("grafana", {}, {"token": "grafana_token"}, GrafanaConnector, ConnectorType.GRAFANA),
