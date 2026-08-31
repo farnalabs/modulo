@@ -578,61 +578,6 @@ async def update_connector_endpoint(
                     # posts credentials: null) — skip the credential write. Never
                     # 500 on a null credentials payload.
                     credentials_updated = False
-                elif existing.connector_type_id == "rest":
-                    # Fresh credentials clear the degraded marker (FAR-495) — the
-                    # stored skip error described the OLD credentials, not the new ones.
-                    updates["degraded_at"] = None
-                    updates["last_skip_error"] = None
-                    # Partial credential update (FAR-466) — REST connector only.
-                    # The connector reads auth identity (auth_mode, in,
-                    # header_name, query_param_name) from the DECRYPTED credential
-                    # payload, so an identity-only edit must reach the stored
-                    # credentials while preserving the secret. Overlay the supplied
-                    # identity/non-secret fields onto the stored credential so an
-                    # identity-only edit applies, while a secret field that is
-                    # absent/empty is left intact.
-                    try:
-                        stored = _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key)
-                    except StoredCredentialDecryptError:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Cannot update connector: stored credentials could not be decrypted.",
-                        ) from None
-                    incoming: dict[str, Any] | None = None
-                    try:
-                        parsed = json.loads(new_credentials)
-                    except (ValueError, TypeError):
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        incoming = _credential_overlay(stored, parsed)
-                        # FAR-466: enforce the connector's auth contract at the API
-                        # boundary so a direct PATCH cannot save a credential the
-                        # connector will reject at run time (e.g. overlaying
-                        # auth_mode=bearer onto an api_key connector, preserving the
-                        # key but supplying no token — the UI blocks this, the API
-                        # must not silently save a broken credential). The raw
-                        # non-JSON token path below keeps its historical semantics.
-                        try:
-                            _validate_rest_auth(incoming)
-                        except ValueError as exc:
-                            raise HTTPException(
-                                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                detail=f"Invalid REST credentials: {exc}",
-                            ) from None
-                    if incoming is not None:
-                        updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                            json.dumps(incoming), settings.fernet_key
-                        )
-                    else:
-                        merged_cfg[k] = v
-                updates["config_json"] = merged_cfg
-            if credentials_updated and existing is not None:
-                if new_credentials is None:
-                    # No credential change supplied (e.g. an empty config textarea
-                    # posts credentials: null) — skip the credential write. Never
-                    # 500 on a null credentials payload.
-                    credentials_updated = False
-                elif existing.connector_type_id == "rest":
                 # ``credentials_updated is True`` here implies ``new_credentials is
                 # not None``: the sole-field ``credentials: null`` case raised 422
                 # before this block, and the multi-field ``credentials: null`` case

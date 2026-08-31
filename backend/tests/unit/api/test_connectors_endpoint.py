@@ -10,7 +10,6 @@ from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Self, cast
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -723,6 +722,8 @@ def test_connector_health_check_keeps_org_scope_active_at_decrypt_time(client: T
     # org must still be present at decrypt time — i.e. the decrypt ran inside the
     # org-scoping transaction. The pre-fix code read org=None here and 502'd.
     assert backend.seen_orgs == [_ORG_ID]
+
+
 def _nested_secret_config() -> dict[str, object]:
     return {
         "headers": {"Authorization": "Bearer github_pat_1111111111111111111111", "token": "abc123"},
