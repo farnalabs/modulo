@@ -7,6 +7,8 @@ Only `has_credentials: true/false` is exposed.
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -456,3 +458,118 @@ def test_delete_connector_foreign_org_returns_404(client: TestClient) -> None:
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 404
+
+
+def test_connector_health_check_passes_db_session_and_reports_real_status(client: TestClient) -> None:
+    """Regression (FAR-519): the health check must build the secrets backend with
+    the DB session so the connector's stored credentials can actually be
+    decrypted — and it must report the REAL health status instead of a blanket
+    502.
+
+    Without ``session=session`` the FernetSecretsBackend raises
+    ``RuntimeError('no DB session')`` on ``get_secret``, so every health probe
+    errored into the 502 fallback. This test asserts the session is passed to
+    the backend factory AND that a healthy probe returns ``ok: true``.
+    """
+    captured: dict[str, object] = {}
+    backend_holder: dict[str, object] = {}
+
+    class _RecordingSecretsBackend:
+        def __init__(self, **kwargs: object) -> None:
+            captured["session"] = kwargs.get("session")
+            self.get_secret_keys: list[str] = []
+
+        async def get_secret(self, key: str) -> str:
+            self.get_secret_keys.append(key)
+            return '{"token": "secret123"}'
+
+        async def set_secret(self, key: str, value: str) -> None:
+            return None
+
+        async def delete_secret(self, key: str) -> None:
+            return None
+
+    class _FakeConnector:
+        async def health_check(self) -> SimpleNamespace:
+            return SimpleNamespace(ok=True, detail="connected")
+
+    class _FakeHub:
+        def __init__(self, secrets_backend: object, **kwargs: object) -> None:
+            backend_holder["backend"] = secrets_backend
+            self._secrets_backend = secrets_backend
+            self._connector = _FakeConnector()
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def initialise(self, instances: object, **kwargs: object) -> None:
+            for inst in instances:  # type: ignore[union-attr]
+                await self._secrets_backend.get_secret(str(cast(Any, inst).id))
+
+        def get(self, connector_id: uuid.UUID) -> _FakeConnector:
+            return self._connector
+
+    def fake_create_secrets_backend(
+        *,
+        fernet_key: str | None = None,
+        session: object = None,
+        old_key: str | None = None,
+        backend_name: str | None = None,
+    ) -> _RecordingSecretsBackend:
+        return _RecordingSecretsBackend(fernet_key=fernet_key, session=session)
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["detail"] == "connected"
+    assert captured["session"] is not None, "secrets backend must be built with the DB session"
+    assert isinstance(backend_holder["backend"], _RecordingSecretsBackend)
+    assert backend_holder["backend"].get_secret_keys == [str(_CONNECTOR_ID)]
+
+
+def test_connector_health_check_unhealthy_reports_ok_false_in_band(client: TestClient) -> None:
+    """A failing health check is reported in-band (``ok: false`` with detail),
+    NOT as an HTTP 502 — the probe outcome is a response, not a transport error."""
+
+    class _FakeConnector:
+        async def health_check(self) -> SimpleNamespace:
+            return SimpleNamespace(ok=False, detail="connection refused")
+
+    class _FakeHub:
+        def __init__(self, secrets_backend: object, **kwargs: object) -> None:
+            self._connector = _FakeConnector()
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def initialise(self, instances: object, **kwargs: object) -> None:
+            return None
+
+        def get(self, connector_id: uuid.UUID) -> _FakeConnector:
+            return self._connector
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is False
+    assert resp.json()["detail"] == "connection refused"

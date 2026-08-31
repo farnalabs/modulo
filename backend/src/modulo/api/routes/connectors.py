@@ -367,7 +367,7 @@ async def connector_health_endpoint(
     if ci is None or ci.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
     try:
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
         async with ConnectorHub(secrets_backend=secrets_backend) as hub:
             await hub.initialise([ci])
             connector = hub.get(connector_id)
