@@ -666,6 +666,39 @@ regression that silently weakens the suite:
    started``, ``abs(a) - b``) are deliberately left alone, as are wall-clock reads
    inside subtraction buried more than one level under the compare operand (the
    lens owns the top-level operand shape only)
+- a *fresh non-deterministic value* passed as the *expected* argument to a mock
+  call-assertion — ``<mock>.assert_called_with(id=uuid.uuid4())``,
+  ``assert_awaited_once_with(event_time=datetime.now(UTC))``,
+  ``assert_any_call(time.monotonic())`` — the expected-argument twin of the
+  fresh-value lens. Every UUID/secrets-token/wall-clock/`datetime.now()` call
+  mints a *new* value on each evaluation, so the recorded call (whatever the
+  code under test actually passed) can never equal the freshly-regenerated
+  expectation: for ``assert_called_with``/``assert_called_once_with`` and the
+  awaited twins the assertion ALWAYS FAILS, and for ``assert_any_call`` no
+  recorded call ever matches. These are almost always a broken attempt to
+  assert against a value the test re-generated at assert time instead of
+  capturing it in a variable, feeding it into the code under test, and
+  comparing against the same bound name. The recognised spellings are exactly
+  the fresh-value lens's set (bare UUID/token names, the ``uuid.``/``secrets.``
+  attribute paths, the ``time.*`` wall-clock reads, and ``datetime.now()``/
+  ``datetime.utcnow()``), and only *direct* positional/keyword argument
+  positions of the verify methods are checked — a fresh value nested inside a
+  container or ``call(...)`` wrapper is a less direct shape and is left alone,
+  mirroring the fresh-Mock-in-call-assertion lens
+- membership against an *empty-container builtin call* — ``assert x in set()``,
+  ``assert x not in list()``, ``assert x in dict()``, ``assert x in tuple()``.
+  A zero-argument ``set()``/``list()``/``dict()``/``tuple()``/``frozenset()``/
+  ``bytearray()`` always yields an *empty* container, and an empty container can
+  never contain anything, so ``in`` ALWAYS FAILS and ``not in`` ALWAYS PASSES no
+  matter what ``x`` evaluates to — the same dead assertion as ``assert x in []``,
+  but in the call spelling the empty-container *literal* membership lens and the
+  empty-builtin *equality* lens can provably miss. This is the membership twin
+  of the ``== set()``/``== list()`` equality lens. ``bytes()`` is deliberately
+  excluded: bytes ``in`` uses *substring* semantics, so ``assert b'' in bytes()``
+  is TRUE (an empty bytes contains itself) and the `empty_bytes_tautologies`
+  lens already owns the ``in b""`` shape. A bare-name other operand is left
+  alone (mirroring the sibling lenses), and literals on the other side are owned
+  by the literal-comparison lens
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -10006,3 +10039,241 @@ def test_wall_clock_elapsed_lens_flags_flaky_durations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _wall_clock_elapsed_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _fresh_value_call_assertion_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every fresh non-deterministic value
+    passed as an *expected* argument to a mock call-assertion
+    (``assert_called_with``, ``assert_called_once_with``, ``assert_any_call``,
+    and their awaited twins).
+
+    Every UUID/secrets-token/wall-clock/``datetime.now()`` call mints a *new*
+    value on each evaluation, so the recorded call — whatever the code under
+    test actually passed — can never equal the freshly-regenerated expectation:
+    the assertion is dead code that always FAILS (and ``assert_any_call`` can
+    never match any recorded call either). This is the expected-argument twin
+    of the assert-position fresh-value lens in ``_fresh_value_assert_violations``,
+    just as ``_fresh_mock_in_call_assertions`` is the expected-argument twin of
+    the Mock-constructor lens. Only direct positional/keyword argument
+    positions are checked, mirroring the fresh-Mock twin: a fresh value nested
+    inside a container or ``call(...)`` wrapper is a less direct shape and is
+    deliberately left alone."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
+            continue
+        for arg in node.args:
+            if _is_fresh_value_call(arg):
+                found.append(
+                    (
+                        arg.lineno,
+                        f"{ast.unparse(arg)} passed as an expected-call argument to "
+                        f"{node.func.attr}() — a fresh non-deterministic value is regenerated on "
+                        "every evaluation, so the recorded call can never equal it and the "
+                        "assertion always FAILS; capture the value in a variable first, feed it "
+                        "into the code under test, and assert against that bound name",
+                    )
+                )
+        for kw in node.keywords:
+            if kw.arg and _is_fresh_value_call(kw.value):
+                found.append(
+                    (
+                        kw.value.lineno,
+                        f"{kw.arg}={ast.unparse(kw.value)} passed as an expected-call argument to "
+                        f"{node.func.attr}() — a fresh non-deterministic value is regenerated on "
+                        "every evaluation, so the recorded call can never equal it and the "
+                        "assertion always FAILS; capture the value in a variable first, feed it "
+                        "into the code under test, and assert against that bound name",
+                    )
+                )
+    return found
+
+
+def test_no_fresh_value_in_call_assertions():
+    """``<mock>.assert_called_with(id=uuid.uuid4())`` (and ``assert_called_once_with``,
+    ``assert_any_call``, plus the awaited twins) declares a *fresh* non
+    deterministic value as the expected call argument. Every UUID, secrets
+    token, ``time.*`` read, and ``datetime.now()`` call returns a value unique
+    to that single evaluation, so the recorded call (whatever the code under
+    test actually passed) can never equal the re-generated expectation: the
+    assertion always FAILS, and an ``assert_any_call`` can never match any
+    recorded call either. This is the expected-argument twin of the assert-
+    position fresh-value lens, and is almost always a broken attempt to assert
+    against a value generated by the test itself at assert time. Capture the
+    generated value in a variable first, feed it into the code under test (or
+    into the mock), then assert against that same bound name."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _fresh_value_call_assertion_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} fresh non-deterministic value(s) in call-assertion expected "
+        "arguments.\n"
+        "A fresh UUID/token/wall-clock/datetime.now() value is regenerated on every evaluation, "
+        "so the recorded call can never equal it and the assertion ALWAYS FAILS. Capture the\n"
+        "value in a variable first, feed it into the code under test (or into the mock), and\n"
+        "assert against that bound name.\n" + "\n".join(violations)
+    )
+
+
+def test_fresh_value_call_assertion_lens_flags_impossible_expectations():
+    """Synthetic positive/negative control for the fresh-value-in-call-
+    assertion lens: it must flag a fresh non-deterministic call in any
+    expected-argument position (positional, keyword, sync or awaited method,
+    every recognised spelling) and ignore bound names holding a previously
+    captured value, non-assertion mock calls, fresh values nested inside
+    container/call wrappers, and fresh values anywhere outside the verify
+    methods."""
+    positive_sources = [
+        "def test_foo():\n    mock.assert_called_with(request_id=uuid.uuid4())\n",
+        "def test_foo():\n    mock.assert_called_once_with(uuid4())\n",
+        "def test_foo():\n    mock.assert_any_call(token_hex(), 'header')\n",
+        "def test_foo():\n    mock_async.assert_awaited_with(event_time=datetime.now(UTC))\n",
+        "def test_foo():\n    mock_async.assert_awaited_once_with(datetime.utcnow())\n",
+        "def test_foo():\n    mock_async.assert_awaited_any_call(secrets.token_urlsafe())\n",
+        "def test_foo():\n    mock.assert_called_with(time.monotonic())\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _fresh_value_call_assertion_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    expected = uuid.uuid4()\n    mock.assert_called_with(request_id=expected)\n",
+        "def test_foo():\n    mock.assert_called_with(request_id=request.id)\n",
+        "def test_foo():\n    mock.assert_called()\n",
+        "def test_foo():\n    mock.assert_called_once()\n",
+        "def test_foo():\n    mock.assert_not_called()\n",
+        "def test_foo():\n    mock.assert_called_once_with(request_id=ANY)\n",
+        "def test_foo():\n    mock.assert_called_with({'id': uuid.uuid4()})\n",
+        "def test_foo():\n    mock.assert_called_with(call(uuid.uuid4()))\n",
+        "def test_foo():\n    result_id = uuid.uuid4()\n    mock.assert_called_with(result_id)\n",
+        "def test_foo():\n    assert mock.call_args == uuid.UUID(result_id)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _fresh_value_call_assertion_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Zero-argument builtin calls that always produce an empty container for which
+#: ``in``/``not in`` membership is statically dead. ``bytes()`` is deliberately
+#: excluded: bytes ``in`` uses *substring* semantics, so ``b'' in bytes()`` is
+#: TRUE rather than False, and the ``in b""`` literal spelling is already owned
+#: by the empty-bytes tautology lens.
+_EMPTY_MEMBERSHIP_BUILTINS = frozenset({"list", "dict", "set", "tuple", "frozenset", "bytearray"})
+
+
+def _empty_builtin_call_membership_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``in``/``not in`` comparison
+    whose container operand is an empty container produced by a zero-argument
+    builtin call (``set()``/``list()``/``dict()``/``tuple()``/``frozenset()``/
+    ``bytearray()``).
+
+    An empty container can never contain anything, so ``in`` ALWAYS FAILS and
+    ``not in`` ALWAYS PASSES regardless of what the other operand evaluates to.
+    This is the membership twin of the ``== set()``/``== list()`` equality lens
+    (``_empty_builtin_call_comparisons``) and the call-based twin of the
+    empty-container *literal* membership lens (``_empty_container_membership_
+    tautologies``). A literal other-side is owned by the literal-comparison
+    lens, and a bare name is left alone exactly as in the sibling lenses."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], (ast.In, ast.NotIn)):
+            continue
+        for operand, container in ((test.left, test.comparators[0]), (test.comparators[0], test.left)):
+            if not (
+                isinstance(container, ast.Call)
+                and isinstance(container.func, ast.Name)
+                and container.func.id in _EMPTY_MEMBERSHIP_BUILTINS
+                and not container.args
+                and not container.keywords
+            ):
+                continue
+            if isinstance(operand, ast.Constant):
+                continue
+            op_name = "in" if isinstance(test.ops[0], ast.In) else "not in"
+            verdict = "always FAILS" if isinstance(test.ops[0], ast.In) else "always PASSES"
+            found.append(
+                (
+                    node.lineno,
+                    f"asserts value {op_name} {container.func.id}() — {verdict} "
+                    "(the zero-argument builtin always yields an empty container, which never "
+                    "contains anything)",
+                )
+            )
+            break
+    return found
+
+
+def test_no_empty_builtin_call_membership():
+    """``assert x in set()`` / ``assert x not in list()`` compare membership
+    against an empty container produced by a zero-argument builtin call — the
+    call-based twin of the ``in []``/``not in {}`` literal lens. Every such
+    builtin returns an empty container, and an empty container can never
+    contain anything, so ``in`` always FAILS and ``not in`` always PASSES, no
+    matter what ``x`` evaluates to: the assertion is dead code either way. This
+    is the membership twin of the ``== set()``/``== list()`` equality lens.
+    ``bytes()`` is excluded because bytes ``in`` uses substring semantics
+    (``b'' in bytes()`` is TRUE, not dead), and a bare-name other operand is
+    left alone exactly as in the sibling lenses."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_builtin_call_membership_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-builtin-call membership assertion(s).\n"
+        "A zero-argument set()/list()/dict()/tuple()/frozenset()/bytearray() is always empty, so\n"
+        "its membership check is dead: 'in' always FAILS and 'not in' always PASSES. Assert the\n"
+        "membership (or emptiness) you actually mean on the non-empty container, or drop the\n"
+        "check entirely.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_builtin_call_membership_lens_flags_impossible_membership():
+    """Synthetic positive/negative control for the empty-builtin-call membership
+    lens: it must flag ``in``/``not in`` against a zero-argument
+    ``set()``/``list()``/``dict()``/``tuple()``/``frozenset()``/``bytearray()``
+    (either operand order) and ignore ``bytes()`` (substring semantics),
+    non-empty builtin calls, bound-named containers, literal containers owned
+    by sibling lenses, and literal-vs-literal membership."""
+    positive_sources = [
+        "def test_foo():\n    assert value in set()\n",
+        "def test_foo():\n    assert value not in list()\n",
+        "def test_foo():\n    assert value in dict()\n",
+        "def test_foo():\n    assert value not in tuple()\n",
+        "def test_foo():\n    assert frozenset() in values\n",
+        "def test_foo():\n    assert value in bytearray()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_builtin_call_membership_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert needle in b''\n",
+        "def test_foo():\n    assert value in bytes()\n",
+        "def test_foo():\n    assert value not in bytes()\n",
+        "def test_foo():\n    assert value in set([1, 2])\n",
+        "def test_foo():\n    assert value in {'a': 1}\n",
+        "def test_foo():\n    assert value in []\n",
+        "def test_foo():\n    seen = set()\n    assert value in seen\n",
+        "def test_foo():\n    assert 1 in []\n",
+        "def test_foo():\n    assert item in load_set()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_builtin_call_membership_violations(tree), f"lens should NOT flag:\n{source}"
