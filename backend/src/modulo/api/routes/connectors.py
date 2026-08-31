@@ -143,23 +143,6 @@ async def list_connector_types() -> ConnectorTypeListResponse:
     return ConnectorTypeListResponse(items=items)
 
 
-def _optional_attr(obj: Any, name: str) -> Any:
-    """Read an optional attribute that may be absent on test doubles.
-
-    Real ``ConnectorInstance`` ORM rows always expose ``degraded_at`` /
-    ``last_skip_error`` (nullable columns). ``MagicMock`` test doubles
-    auto-create *any* attribute, returning a truthy ``MagicMock`` that is not
-    JSON-serialisable — so coerce that case back to ``None`` to keep the
-    response model valid (FAR-495 read path).
-    """
-    import unittest.mock
-
-    value = getattr(obj, name, None)
-    if isinstance(value, unittest.mock.MagicMock):
-        return None
-    return value
-
-
 def _to_response(ci: Any) -> ConnectorResponse:
     return ConnectorResponse(
         id=ci.id,
@@ -175,8 +158,8 @@ def _to_response(ci: Any) -> ConnectorResponse:
         tier=ci.tier,
         created_at=ci.created_at,
         updated_at=ci.updated_at,
-        degraded_at=_optional_attr(ci, "degraded_at"),
-        last_skip_error=_optional_attr(ci, "last_skip_error"),
+        degraded_at=ci.degraded_at,
+        last_skip_error=ci.last_skip_error,
     )
 
 

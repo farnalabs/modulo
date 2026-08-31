@@ -67,6 +67,10 @@ def _make_connector(credentials_ciphertext: bytes = b"encrypted", tier: str = "n
     ci.tier = tier
     ci.created_at = _NOW
     ci.updated_at = _NOW
+    # Nullable degraded markers: a bare MagicMock would auto-create these as
+    # non-serialisable mocks, so mirror a healthy ORM row explicitly.
+    ci.degraded_at = None
+    ci.last_skip_error = None
     return ci
 
 
