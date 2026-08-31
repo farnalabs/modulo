@@ -29,7 +29,7 @@ _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0120 is still the
 # org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0161_accounts_must_change_password"
+_CHAIN_HEAD_MIGRATION = "0163_rls_strict_oauth_auth_codes_token_families"
 
 
 def _source(name: str) -> str:
