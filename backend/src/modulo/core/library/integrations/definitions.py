@@ -875,14 +875,14 @@ REST_INTEGRATION: dict[str, Any] = {
                 "enum": ["fail_open", "fail_closed", "off"],
                 "default": "fail_open",
                 "description": (
-                    "Behaviour when the response shape is unknown or no records can be extracted at records_path."
+                    "Connector-write idempotency gate mode for the ambiguous (couldn't-confirm-delivery) case."
                 ),
                 "help": (
-                    "fail_open: return whatever was fetched even if no records were "
-                    "extracted (safe when a re-run can recover duplicates). "
-                    "fail_closed: fail the run when records cannot be extracted (safe "
-                    "when a silent miss is catastrophic). "
-                    "off: no on-unknown handling — classic root-mapping only."
+                    "fail_open: on an ambiguous prior write (delivery unconfirmed), "
+                    "re-fire the write — possible duplicate, usually recoverable. "
+                    "fail_closed: on an ambiguous prior write, suppress the write — "
+                    "possible silent miss the operator must reconcile. "
+                    "off: never dedupe connector writes (gate bypassed entirely)."
                 ),
             },
             "records_path": {

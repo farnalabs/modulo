@@ -89,6 +89,14 @@ def _encrypt(credentials: str, fernet_key: str) -> bytes:
 # is supplied) and everything else (identity + legacy keys, always overlaid).
 _CRED_SECRET_FIELDS = {"token", "api_key", "username", "password"}
 
+# The secret fields that legitimately belong to each REST ``auth_mode``. Used by
+# ``_credential_overlay`` to drop stale secrets left behind by an auth-mode switch.
+_AUTH_MODE_SECRET_FIELDS: dict[str, set[str]] = {
+    "bearer": {"token"},
+    "basic": {"username", "password"},
+    "api_key": {"api_key"},
+}
+
 
 class StoredCredentialDecryptError(Exception):
     """Stored credential ciphertext exists but could not be decrypted.
@@ -130,6 +138,13 @@ def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> d
     request supplies a real, non-empty, non-masked value; otherwise the stored
     secret is left intact. Keys outside both groups (legacy/unknown payloads)
     are overlaid as-is, preserving the historical replace-all behaviour.
+
+    Switching ``auth_mode`` drops any secret that belongs to the PREVIOUS mode
+    but not the incoming one (e.g. a ``bearer -> api_key`` switch clears the
+    stale ``token``), so a mode change never leaves an orphaned secret encrypted
+    at rest — it is ignored by ``_normalise_auth`` and only a source of
+    confusion. A secret that is still valid for the new mode is preserved
+    (subject to the replace-only-on-real-value rule above).
     """
     merged = dict(previous)
     for key, value in incoming.items():
@@ -138,6 +153,12 @@ def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> d
                 merged[key] = value
         else:
             merged[key] = value
+    new_mode = str(incoming.get("auth_mode", "")).strip().lower()
+    allowed_secrets = _AUTH_MODE_SECRET_FIELDS.get(new_mode)
+    if allowed_secrets is not None:
+        for key in _CRED_SECRET_FIELDS:
+            if key not in allowed_secrets and key in merged and key not in incoming:
+                merged.pop(key, None)
     return merged
 
 
@@ -568,12 +589,11 @@ async def update_connector_endpoint(
                         merged_cfg[k] = v
                 updates["config_json"] = merged_cfg
             if credentials_updated and existing is not None:
-                if new_credentials is None:
-                    # No credential change supplied (e.g. an empty config textarea
-                    # posts credentials: null) — skip the credential write. Never
-                    # 500 on a null credentials payload.
-                    credentials_updated = False
-                elif existing.connector_type_id == "rest":
+                # ``credentials_updated is True`` here implies ``new_credentials is
+                # not None``: the sole-field ``credentials: null`` case raised 422
+                # before this block, and the multi-field ``credentials: null`` case
+                # set ``credentials_updated = False`` pre-transaction.
+                if existing.connector_type_id == "rest":
                     # Partial credential update (FAR-466) — REST connector only.
                     # The connector reads auth identity (auth_mode, in,
                     # header_name, query_param_name) from the DECRYPTED credential
