@@ -474,3 +474,28 @@ def test_sandbox_capacity_exceeded_maps_to_capacity_org():
     assert is_retryable("capacity.org") is True
     assert "capacity.org" in expand_code_variants("SandboxCapacityExceededError")
     assert "SandboxCapacityExceededError" in expand_code_variants("capacity.org")
+
+
+# ---------------------------------------------------------------------------
+# FAR-510 — masked sandbox-agent failure downgrade code
+# ---------------------------------------------------------------------------
+
+
+def test_sandbox_agent_failed_is_known_non_retryable():
+    """sandbox.agent_failed is the executor's finalization-downgrade code
+    (FAR-510): a sandbox_agent node whose synthetic failure path (generic
+    exception, schema validation) RETURNED the stamped failure envelope
+    instead of raising is downgraded from "complete" to "failed" at
+    finalization. The dotted code the executor writes into ``runs.error_code``
+    must resolve through the registry — never fall back to the
+    ``harness.unknown`` unknown slice."""
+    known = known_error_codes()
+    assert "sandbox.agent_failed" in known
+    spec = ERROR_CODE_REGISTRY["sandbox.agent_failed"]
+    assert spec.error_class == "sandbox"
+    assert spec.retryable is False
+    assert spec.alert_severity == "critical"
+    assert is_retryable("sandbox.agent_failed") is False
+    assert map_legacy_code("sandbox.agent_failed") == "sandbox.agent_failed"
+    assert class_for("sandbox.agent_failed") == "sandbox"
+    assert "sandbox.agent_failed" in expand_code_variants("sandbox.agent_failed")
