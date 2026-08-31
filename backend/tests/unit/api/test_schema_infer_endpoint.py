@@ -189,6 +189,63 @@ def test_infer_schema_threads_session_into_secrets_backend(client: TestClient) -
     assert any(s is not None for s in captured_sessions), "connector sampling secrets backend must carry the DB session"
 
 
+def test_infer_schema_threads_session_into_model_backend(client: TestClient) -> None:
+    """Regression (FAR-519): the model-backend path (``_infer_definition`` ->
+
+    ``_resolve_model_backend``) must build the secrets backend with the DB
+    session. The default FernetSecretsBackend raises
+    ``RuntimeError('no DB session')`` inside ``get_secret`` before the
+    ``credentials_ciphertext`` fallback applies, and ``ModelBackendHub.initialise``
+    only catches ``TimeoutError``/``KeyError`` — so without a session every model
+    backend init becomes a blanket 502 ("Failed to initialise model backend for
+    inference") and ``POST /api/v1/schemas/infer`` cannot complete end-to-end."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    captured_backends: list[object] = []
+
+    def fake_create_backend(*args: object, **kwargs: object) -> MagicMock:
+        obj = MagicMock()
+        obj._session = kwargs.get("session")
+        return obj
+
+    async def spy_initialise(*args: object, **kwargs: object) -> None:
+        captured_backends.append(kwargs.get("secrets_backend"))
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1", "title": "Test"}]),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object"}),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise", side_effect=spy_initialise),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend", fake_create_backend),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200
+    # The model-backend path (``_infer_definition`` -> ``_resolve_model_backend``)
+    # must build the secrets backend with the DB session — this is the exact
+    # regression the PR-Reviewer MAJOR flagged for schemas.py:916.
+    assert captured_backends, "ModelBackendHub.initialise was never called"
+    assert all(b is not None and getattr(b, "_session", None) is not None for b in captured_backends), (
+        "model-backend secrets backend must carry the DB session"
+    )
+
+
 def test_infer_schema_forwards_filters_to_sampling(client: TestClient) -> None:
     """The request ``sample_query.filters`` must reach the connector sampling call."""
     ci = _make_mock_connector_instance()
