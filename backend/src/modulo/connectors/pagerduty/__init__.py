@@ -19,6 +19,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 
 _BASE = "https://api.pagerduty.com"
 
@@ -53,6 +54,7 @@ def _next_offset_cursor(offset: object, records: list[Any], more: object) -> str
 class PagerDutyConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
+        self._redactor = CredentialRedactor([token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -76,12 +78,15 @@ class PagerDutyConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="PagerDuty API token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid PagerDuty API token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:
             match q.resource:
@@ -102,6 +107,7 @@ class PagerDutyConnector(ConnectorBase):
                 case _:
                     raise ValueError(f"Unsupported PagerDuty resource: {q.resource!r}")
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as c:
             match payload.resource:

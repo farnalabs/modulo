@@ -1,6 +1,6 @@
 """Unit tests for TogetherAIBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -27,4 +27,5 @@ def test_chat_openai_uses_togetherai_base_url():
             model="mistralai/Mixtral-8x7B-Instruct-v0.1",
             api_key="test-key",
             base_url=TOGETHERAI_BASE_URL,
+            http_async_client=ANY,
         )

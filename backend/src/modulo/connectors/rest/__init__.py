@@ -179,6 +179,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.rest import rest_metrics
+from modulo.core.ssrf import pinned_async_transport_sync
 
 _log = logging.getLogger(__name__)
 
@@ -215,6 +216,13 @@ _RETRYABLE_METHODS = frozenset({"GET", "HEAD"})
 # key such as ``data.2024`` must never be rewritten to ``data[2024]``).
 _MAX_RETRY_WAIT = 30.0
 _DOT_INDEX = re.compile(r"\.\d+(?![A-Za-z_])")
+
+# A credential at/above this length is treated as a whole credential-like token
+# for redaction (bounded by any non-word char). Below it (short, word-like creds
+# such as ``data`` / ``admin`` / ``test``), redaction is BOUNDARY-AWARE so a
+# normal word that merely CONTAINS the substring is never mangled — only a true
+# standalone/credential-like value is replaced (FAR-518 no-over-redaction).
+_SHORT_CREDENTIAL_LEN = 8
 
 SsrfValidator = Callable[[str], Awaitable[None] | None]
 
@@ -584,19 +592,43 @@ class RestConnector(ConnectorBase):
         return ConnectorType.REST
 
     def _client(self) -> httpx.AsyncClient:
-        """Return the lazily-created, connection-pooled client (never closed here)."""
+        """Return the lazily-created, connection-pooled client (never closed here).
+
+        The transport is PINNED (FAR-512) to the tenant-supplied ``base_url``
+        host unless a ``transport`` test seam was injected: the SSRF guard (or
+        ``ssrf_validator`` seam) validated the rendered URL in
+        :meth:`_build_request` / :meth:`_build_health_request`, and this transport
+        connects to the validated address while keeping the original hostname for
+        TLS SNI/cert — so the connection never re-resolves the host at connect
+        time (closes the DNS-rebinding window). ``trust_env=False`` stops a proxy
+        from re-resolving the destination server-side and defeating the pin.
+        Redirects are not followed, so a hop that escapes the pin map is refused
+        by the transport (``UnpinnedHostError``) rather than silently followed.
+        """
         if self._cached_client is None:
             kwargs: dict[str, Any] = {
                 "timeout": self._timeout,
                 "verify": self._verify_tls,
                 "follow_redirects": False,
-                "limits": httpx.Limits(
-                    max_connections=self._max_connections,
-                    max_keepalive_connections=self._max_keepalive,
-                ),
             }
+            limits = httpx.Limits(
+                max_connections=self._max_connections,
+                max_keepalive_connections=self._max_keepalive,
+            )
             if self._transport is not None:
+                # Test seam: honour the injected transport (MockTransport).
                 kwargs["transport"] = self._transport
+            else:
+                # Production: pin the base_url host onto a pinned transport. The
+                # transport is pinned per validated host; REST forwards every
+                # request to the base_url host, so a single pinned host is the
+                # complete reachable set (any other host is refused fail-closed).
+                kwargs["transport"] = pinned_async_transport_sync(
+                    self._base_url,
+                    verify=self._verify_tls,
+                    trust_env=False,
+                    limits=limits,
+                )
             self._cached_client = httpx.AsyncClient(**kwargs)
         return self._cached_client
 
@@ -974,26 +1006,96 @@ class RestConnector(ConnectorBase):
         return headers
 
     def _secret_values(self) -> list[str]:
-        """Credential strings that must be redacted from error detail.
+        """Credential strings that must be redacted from error detail and success data.
+
+        Collects the raw credential fields (username, token, api_key, password,
+        secret) PLUS the derived auth values the connector actually sends on the
+        wire, so a server that reflects the request's Authorization back (in ANY
+        auth mode) is redacted too:
+
+        * ``basic`` — the raw ``username:password``, the computed base64 blob and
+          the full ``Basic <b64>`` header value (the decodable base64 is the
+          credential-bearing artefact a reflected header would leak).
+        * ``bearer`` — the full ``Bearer <token>`` header value.
+        * ``api_key`` — the ``<header_name>: <api_key>`` / ``<param>=<api_key>``
+          wire form, in addition to the raw ``api_key`` value.
 
         Values shorter than 4 chars are ignored — redacting a 1-2 char secret
         would mangle every occurrence of the common substring it appears in.
         """
         secrets: list[str] = []
-        for key in ("token", "api_key", "password", "secret"):
+        for key in ("username", "token", "api_key", "password", "secret"):
             value = self._creds.get(key)
             if isinstance(value, str) and len(value) >= 4:
                 secrets.append(value)
-        return secrets
+        auth = self._auth
+        mode = auth.get("mode")
+        if mode == "basic":
+            raw = f"{auth.get('username', '')}:{auth.get('password', '')}"
+            b64 = base64.b64encode(raw.encode()).decode()
+            if len(raw) >= 4:
+                secrets.append(raw)
+            if len(b64) >= 4:
+                secrets.extend([b64, f"Basic {b64}"])
+        elif mode == "bearer":
+            token = auth.get("token")
+            if token:
+                secrets.append(f"Bearer {token}")
+        elif mode == "api_key":
+            api_key = auth.get("api_key")
+            if api_key:
+                if auth.get("in") == "header":
+                    secrets.append(f"{auth.get('header_name', '')}: {api_key}")
+                else:
+                    secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
+        # Deduplicate while preserving order (raw value + derived forms can overlap).
+        return list(dict.fromkeys(secrets))
 
     def _redact(self, text: str) -> str:
-        """Strip credential values from *text* so error detail never echoes secrets."""
+        """Strip credential values from *text* so error detail never echoes secrets.
+
+        Boundary-aware: a credential is only replaced where it appears as a
+        standalone/credential-like token — a full string equal to the secret, a
+        header/query value, or a ``key: secret`` fragment — NEVER as a substring
+        inside a normal word. Short, word-like credentials (``data``, ``admin``,
+        ``test``, …) are replaced only when flanked by hard value delimiters
+        (quote/colon/equals/comma/braces), NOT by word characters, hyphens, dots
+        or whitespace — so ``{"status": "data synced"}`` and ``data-point`` are
+        left intact, while a reflected ``{"token": "data"}`` IS redacted
+        (FAR-518 no over-redaction).
+        """
         redacted = text
         for secret in self._secret_values():
-            if secret and secret in redacted:
-                redacted = redacted.replace(secret, "***")
+            if not secret:
+                continue
+            if len(secret) >= _SHORT_CREDENTIAL_LEN:
+                pattern = rf"(?<![A-Za-z0-9_]){re.escape(secret)}(?![A-Za-z0-9_])"
+            else:
+                pattern = rf"(?<![A-Za-z0-9_\-.\s]){re.escape(secret)}(?![A-Za-z0-9_\-.\s])"
+            candidate = re.sub(pattern, "***", redacted)
+            if candidate != redacted:
+                redacted = candidate
                 rest_metrics.record_redaction_event()
         return redacted
+
+    def _redact_value(self, value: Any) -> Any:
+        """Recursively redact credential values from *value* (dicts, lists, scalars).
+
+        Value-based redaction that mirrors :meth:`_redact` — only actual
+        credential strings are stripped, so legitimate response content that never
+        reflects a credential is left untouched (no over-redaction). Used to scrub
+        success-path result data (``_write_result`` records, ``_transform``
+        metadata/records, ``_passthrough_record`` header/body values) so a server
+        that echoes the request's auth back into a response body or header does not
+        leak the credential into the persisted run result / node output.
+        """
+        if isinstance(value, str):
+            return self._redact(value)
+        if isinstance(value, dict):
+            return {k: self._redact_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._redact_value(v) for v in value]
+        return value
 
     def _item_summary(self, item: Any) -> str:
         """A bounded, redacted string summary of a fan-out item for outcome records.
@@ -1481,11 +1583,16 @@ class RestConnector(ConnectorBase):
         retry_after = parse_retry_after(resp)
         if retry_after is not None:
             metadata["retry_after"] = retry_after
+        # Scrub success-path data so a read response that reflects the request's
+        # auth (a bearer token in the body, a query-secret URL in metadata) is
+        # redacted from the persisted run result / node output.
+        redacted_records = self._redact_value(records)
+        redacted_cursor = self._redact(next_cursor) if next_cursor is not None else None
         return ConnectorResult(
-            records=records,
-            next_cursor=next_cursor,
-            total=len(records),
-            metadata=metadata,
+            records=redacted_records,
+            next_cursor=redacted_cursor,
+            total=len(redacted_records),
+            metadata=self._redact_value(metadata),
         )
 
     def _passthrough_record(
@@ -1494,12 +1601,20 @@ class RestConnector(ConnectorBase):
         body_text: str,
         content_type: str,
     ) -> list[dict[str, Any]]:
+        """Wrap the raw body + response headers as a single passthrough record.
+
+        The body and header values are redacted before returning so a passthrough
+        response that reflects the request's auth (the Authorization value echoed
+        back in a header, a credential in the body) is redacted from the persisted
+        run result / node output. Field NAMES are preserved — only actual
+        credential VALUES are stripped (value-based, mirroring ``_redact``).
+        """
         return [
             {
-                "body": body_text,
-                "content_type": content_type,
+                "body": self._redact(body_text),
+                "content_type": self._redact(content_type),
                 "status_code": resp.status_code,
-                "headers": dict(resp.headers.items()),
+                "headers": self._redact_value(dict(resp.headers.items())),
             }
         ]
 
@@ -1526,18 +1641,29 @@ class RestConnector(ConnectorBase):
         return str(value) if isinstance(value, str) and value else None
 
     def _write_result(self, resp: httpx.Response, body_text: str) -> dict[str, Any]:
-        """Map a REST write response onto a JSON-serialisable result dict."""
+        """Map a REST write response onto a JSON-serialisable result dict.
+
+        The result is run through :meth:`_redact_value` before returning so a
+        write response that reflects the request's auth (a bearer token echoed in
+        the JSON body, a credential in a header) is redacted from the persisted
+        run result / node output.
+        """
         if body_text:
             try:
                 parsed = json.loads(body_text)
             except json.JSONDecodeError:
                 parsed = None
             if isinstance(parsed, dict):
-                return parsed
+                return cast(dict[str, Any], self._redact_value(parsed))
             if isinstance(parsed, list):
-                return {"records": parsed}
-        return {
-            "status_code": resp.status_code,
-            "body": body_text,
-            "content_type": resp.headers.get("content-type", ""),
-        }
+                return cast(dict[str, Any], self._redact_value({"records": parsed}))
+        return cast(
+            dict[str, Any],
+            self._redact_value(
+                {
+                    "status_code": resp.status_code,
+                    "body": body_text,
+                    "content_type": resp.headers.get("content-type", ""),
+                }
+            ),
+        )

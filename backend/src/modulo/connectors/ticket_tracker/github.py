@@ -14,6 +14,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 
 
@@ -24,6 +25,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         self._token = creds.get("token") or creds.get("api_key", "")
         self._repo = config.get("repo", "")
         self._base_url = config.get("base_url", "https://api.github.com")
+        self._redactor = CredentialRedactor.from_creds(creds)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -46,8 +48,9 @@ class GitHubTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(e)
+            return health_check_failure(self._redactor.redact_exc(e))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}
         if "ticket_id" in filters:
@@ -64,6 +67,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         data = payload.data
         async with httpx.AsyncClient() as client:

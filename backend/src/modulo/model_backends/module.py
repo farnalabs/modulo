@@ -1,11 +1,12 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIStatusError
 
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import pinned_async_client_sync
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 
@@ -38,17 +39,42 @@ class OpenAICompatibleBackend(ModelBackendBase):
     ) -> None:
         resolved_api_key = api_key or provider
         self._base_url = base_url.rstrip("/") if base_url else None
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the OpenAI-compatible client's transport so
+        # the completion connection never re-resolves the host at connect time
+        # (closes the DNS-rebinding window). ``trust_env=False`` stops a proxy
+        # from re-resolving the destination server-side and defeating the pin.
+        # The pinned async client is owned here and closed on aclose().
+        self._http_async_client: httpx.AsyncClient | None = None
+        chat_kwargs: dict[str, Any] = dict(default_params)
         if self._base_url:
-            validate_outbound_url(self._base_url)
+            self._http_async_client = pinned_async_client_sync(
+                self._base_url,
+                trust_env=False,
+                timeout=30,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            )
+            chat_kwargs["http_async_client"] = self._http_async_client
 
         self._model = ChatOpenAI(
             model=model_id,
             api_key=resolved_api_key,
             base_url=self._base_url,
-            **default_params,
+            **chat_kwargs,
         )
         self._backend_id = f"{provider}/{model_id}"
         self._api_key = resolved_api_key
+
+    async def aclose(self) -> None:
+        """Close the pinned HTTP client owned by this backend (idempotent).
+
+        The pinned ``http_async_client`` was created here (not by ChatOpenAI),
+        so it is closed here as well — a leak-free lifecycle rather than relying
+        on the OpenAI SDK to close a caller-supplied client.
+        """
+        client, self._http_async_client = self._http_async_client, None
+        if client is not None:
+            await client.aclose()
 
     @property
     def base_url(self) -> str | None:

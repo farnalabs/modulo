@@ -1,6 +1,6 @@
 """Unit tests for Ai21Backend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -24,4 +24,5 @@ def test_chat_openai_uses_ai21_base_url():
             model="jamba-1.5-mini",
             api_key="test-key",
             base_url=AI21_BASE_URL,
+            http_async_client=ANY,
         )

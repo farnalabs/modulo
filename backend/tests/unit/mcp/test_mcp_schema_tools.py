@@ -334,8 +334,10 @@ class TestInferSchemaErrors(AuthContext):
     @patch("modulo.core.schema_registry.SchemaInferenceService")
     @patch("modulo.core.model_backend_hub.ModelBackendHub")
     @patch("modulo.core.secrets_backend.create_secrets_backend")
+    @patch("modulo.api.mcp_server.set_rls_org")
     async def test_inference_failure_returns_inference_failed(
         self,
+        mock_set_rls: MagicMock,
         mock_create_backend: MagicMock,
         mock_hub_cls: MagicMock,
         mock_service_cls: MagicMock,
@@ -375,8 +377,10 @@ class TestInferSchemaSuccess(AuthContext):
     @patch("modulo.core.schema_registry.SchemaInferenceService")
     @patch("modulo.core.model_backend_hub.ModelBackendHub")
     @patch("modulo.core.secrets_backend.create_secrets_backend")
+    @patch("modulo.api.mcp_server.set_rls_org")
     async def test_returns_inferred_definition(
         self,
+        mock_set_rls: MagicMock,
         mock_create_backend: MagicMock,
         mock_hub_cls: MagicMock,
         mock_service_cls: MagicMock,
@@ -406,6 +410,68 @@ class TestInferSchemaSuccess(AuthContext):
 
         assert result["definition"] == definition
         assert result["sample_count"] == 1
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.settings.get_settings")
+    @patch("modulo.db.crud.model_backend.list_model_backends")
+    @patch("modulo.core.schema_registry.SchemaInferenceService")
+    @patch("modulo.core.model_backend_hub.ModelBackendHub")
+    @patch("modulo.core.secrets_backend.create_secrets_backend")
+    @patch("modulo.api.mcp_server.set_rls_org")
+    async def test_decrypt_threads_session_and_org_scope(
+        self,
+        mock_set_rls: MagicMock,
+        mock_create_backend: MagicMock,
+        mock_hub_cls: MagicMock,
+        mock_service_cls: MagicMock,
+        mock_list_backends: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Regression (FAR-522): the MCP ``infer_schema`` tool's model-backend
+        decrypt must build its secrets backend with the session AND re-assert the
+        org scope in the same transaction — otherwise FernetSecretsBackend
+        raises and the tool returns a generic "Failed to infer schema"."""
+        mb = MagicMock()
+        mb.id = uuid.uuid4()
+        mock_list_backends.return_value = PageResult(items=[mb], total=1, page=1, page_size=1)
+        mock_get_settings.return_value = _make_settings(dev_mode=True)
+
+        definition = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        service = MagicMock()
+        service.infer = AsyncMock(return_value=definition)
+        mock_service_cls.return_value = service
+
+        hub = AsyncMock()
+        hub.get = AsyncMock(return_value=AsyncMock())
+        mock_hub_cls.return_value.__aenter__ = AsyncMock(return_value=hub)
+        mock_hub_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        session = AsyncMock()
+        mock_session.return_value = make_session_context(session)
+
+        backend_sessions: list[object] = []
+
+        def fake_create_backend(**kwargs: object) -> object:
+            backend = MagicMock()
+            backend._session = kwargs.get("session")
+            backend_sessions.append(backend._session)  # type: ignore[arg-type]
+            return backend
+
+        mock_create_backend.side_effect = fake_create_backend
+
+        result = await infer_schema(input_sample={"name": "x"})
+
+        assert result["definition"] == definition
+        assert backend_sessions, "MCP infer_schema decrypt must build its secrets backend with a session"
+        assert all(s is not None for s in backend_sessions), (
+            "MCP infer_schema decrypt secrets backend must carry the session, or credentials never decrypt"
+        )
+        assert any(call.args[0] is session and call.args[1] == ORG_ID for call in mock_set_rls.call_args_list), (
+            "MCP infer_schema decrypt must re-assert the org scope (set_rls_org) on the decrypt session"
+        )
 
 
 # ---------------------------------------------------------------------------

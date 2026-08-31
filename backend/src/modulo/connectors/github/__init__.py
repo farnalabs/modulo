@@ -37,6 +37,8 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
@@ -371,6 +373,7 @@ class GitHubConnector(ConnectorBase):
     ) -> None:
         self._token = token
         self._base_url = base_url
+        self._redactor = CredentialRedactor([token])
         if circuit_failure_threshold < 1:
             raise ValueError("circuit_failure_threshold must be >= 1")
         if circuit_cooldown_seconds <= 0:
@@ -547,7 +550,18 @@ class GitHubConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). The `_base_url` is
+        # tenant-configurable (GHES), so it is gated + pinned here just like the
+        # other base_url-bearing connectors. ``trust_env=False`` stops a proxy
+        # from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
+            base_url=self._base_url,
+            headers=self._headers(),
+            timeout=30,
+        )
 
     @staticmethod
     def _jitter(delay: float, *, tight: bool = False) -> float:
@@ -679,7 +693,7 @@ class GitHubConnector(ConnectorBase):
         status_code = exc.response.status_code
         if self._should_trip_circuit(status_code):
             self._record_failure()
-        detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
+        detail = self._redactor.redact(f"GitHub API HTTP {status_code}: {exc.response.text[:200]}")
         if status_code == 429:
             quota = _rate_limit_detail(exc.response)
             if quota:
@@ -727,7 +741,7 @@ class GitHubConnector(ConnectorBase):
             return response.json()
         except json.JSONDecodeError as exc:
             raise GitHubAPIError(
-                f"GitHub API returned invalid JSON: {response.text[:200]}",
+                self._redactor.redact(f"GitHub API returned invalid JSON: {response.text[:200]}"),
                 error_code="invalid_response",
             ) from exc
 
@@ -772,6 +786,7 @@ class GitHubConnector(ConnectorBase):
             return set()
         return set(REQUIRED_FINE_GRAINED_PERMISSIONS - accepted)
 
+    @redacting
     async def verify_scopes(self) -> set[str]:
         """Verify the token's scopes/permissions.
 
@@ -797,6 +812,7 @@ class GitHubConnector(ConnectorBase):
             token_scopes.add("read:org")
         return set(REQUIRED_SCOPES - token_scopes)
 
+    @redacting
     async def health_check(self) -> HealthResult:
         """Check API access and verify required scopes/permissions.
 
@@ -820,16 +836,16 @@ class GitHubConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
             return HealthResult(ok=False, detail="Missing scopes: token lacks required permission (HTTP 403)")
         except GitHubRateLimitError as exc:
-            return HealthResult(ok=False, detail=f"GitHub rate limit exhausted: {exc}")
+            return HealthResult(ok=False, detail=self._redactor.redact(f"GitHub rate limit exhausted: {exc}"))
         except GitHubNetworkError as exc:
-            return HealthResult(ok=False, detail=f"GitHub network error: {exc}")
+            return HealthResult(ok=False, detail=self._redactor.redact(f"GitHub network error: {exc}"))
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
         try:
             user_login = (await self._parse_json(r)).get("login", "")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
         token_scopes = self._parse_scopes_from_headers(r)
         if is_fine_grained_pat(self._token):
@@ -941,6 +957,7 @@ class GitHubConnector(ConnectorBase):
         links = _parse_link_header(response)
         return self._result(records, response, total=len(records), next_cursor=links.get("next"))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         handlers: dict[str, Callable[[ConnectorQuery], Awaitable[ConnectorResult]]] = {
             "repos": self._query_repos,
@@ -1183,6 +1200,7 @@ class GitHubConnector(ConnectorBase):
         )
         return await self._parse_json_object(r)
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         handlers: dict[str, Callable[[ConnectorPayload], Awaitable[dict[str, Any]]]] = {
             "commit": self._write_commit,

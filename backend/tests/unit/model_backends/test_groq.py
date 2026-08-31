@@ -1,6 +1,6 @@
 """Unit tests for GroqBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -27,4 +27,5 @@ def test_chat_openai_uses_groq_base_url():
             model="llama3-70b-8192",
             api_key="test-key",
             base_url=GROQ_BASE_URL,
+            http_async_client=ANY,
         )

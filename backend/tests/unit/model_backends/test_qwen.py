@@ -1,6 +1,6 @@
 """Unit tests for QwenBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ def test_chat_openai_uses_qwen_base_url():
             model="qwen-max",
             api_key="sk-test",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            http_async_client=ANY,
         )
 
 
