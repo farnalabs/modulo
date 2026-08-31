@@ -399,8 +399,17 @@ def test_validate_credentials_accepts_real_nonempty_secret() -> None:
         {"auth_mode": "basic", "username": "user@example.com", "password": "hunter2!"},
     ]
     for creds in valid:
-        RestConnector.validate_credentials(creds)
-        RestConnector._normalise_auth(creds)
+        RestConnector.validate_credentials(creds)  # must not raise for a real secret
+        auth = RestConnector._normalise_auth(creds)
+        assert auth["mode"] == str(creds["auth_mode"]).lower()
+        if creds["auth_mode"] == "bearer":
+            assert auth["token"] == creds["token"]
+        elif creds["auth_mode"] == "basic":
+            assert auth["username"] == creds["username"]
+            assert auth["password"] == creds["password"]
+        else:  # api_key
+            assert auth["api_key"] == creds["api_key"]
+            assert auth["in"] == str(creds.get("in", "header")).lower()
 
 
 # ── Injection guard ────────────────────────────────
