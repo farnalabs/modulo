@@ -300,3 +300,26 @@ def test_migration_0158_extends_constraint_consistently() -> None:
     assert _UNKNOWN not in migration._ADD_OLD
     # Both share the pre-existing base statuses.
     assert "'cost_ceiling_exceeded'::character varying" in migration._ADD_NEW
+
+
+def test_policy_from_pipeline_default_maps_run_vocabulary_to_node_policy() -> None:
+    """FAR-402 P5 (reviewer finding 4): the run-level ``retry_policy`` vocabulary
+    ({on: [stall|timeout|failure], max_retries}) is re-parsed by
+    ``_policy_from_pipeline_default`` (the DB-free mirror of the executor's own
+    parse). Lock the mapping so the two vocabularies cannot silently drift:
+    'failure' -> node 'error', 'stall' -> 'stall', 'timeout' -> 'timeout', and
+    the attempt ceiling is ``max_retries + 1``.
+    """
+    policy = rc._policy_from_pipeline_default({"on": ["stall", "timeout", "failure"], "max_retries": 3, "backoff": 1.5})
+    assert policy.max_attempts == 4  # max_retries 3 -> ceiling 4
+    assert policy.backoff_seconds == 1.5
+    assert policy.events == frozenset({"stall", "timeout", "error"})
+
+
+def test_policy_from_pipeline_default_fail_closed_on_missing_vocabulary() -> None:
+    """A malformed / legacy run-level policy must fail CLOSED to no retry (the
+    executor's parse path relies on this default — the mirrors must agree)."""
+    for bad in (None, {}, {"on": "stall"}, {"max_retries": 0}, {"on": ["stall"], "max_retries": -1}):
+        policy = rc._policy_from_pipeline_default(bad)
+        assert policy.max_attempts == 1
+        assert not policy.events
