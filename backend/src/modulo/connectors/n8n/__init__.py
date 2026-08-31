@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.core.ssrf import validate_outbound_url
 
 # Repeated REST path (S1192).
@@ -27,6 +28,7 @@ class N8NConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "http://localhost:5678") -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
+        self._redactor = CredentialRedactor([token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -51,14 +53,17 @@ class N8NConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="n8n API is reachable and token is valid")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid n8n API token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                )
         except httpx.ConnectError as exc:
-            return HealthResult(ok=False, detail=f"Cannot connect to n8n: {exc}")
+            return HealthResult(ok=False, detail=self._redactor.redact(f"Cannot connect to n8n: {exc}"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:
             match q.resource:
@@ -83,6 +88,7 @@ class N8NConnector(ConnectorBase):
                 case _:
                     raise ValueError(f"Unsupported n8n resource: {q.resource!r}")
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as c:
             match payload.resource:

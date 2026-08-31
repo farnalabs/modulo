@@ -25,6 +25,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 
 _SLACK_API = "https://slack.com/api"
 
@@ -87,6 +88,7 @@ async def _backoff_or_raise(message: str, attempt: int, exc: Exception) -> None:
 class SlackConnector(ConnectorBase):
     def __init__(self, bot_token: str) -> None:
         self._bot_token = bot_token
+        self._redactor = CredentialRedactor([bot_token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -155,30 +157,37 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "conversations.list")
         return bool(body.get("channels"))
 
+    @redacting
     async def health_check(self) -> HealthResult:
         try:
             r = await self._call_api("GET", "/api.test", timeout=10)
             body = await self._parse_json(r)
             if not body.get("ok"):
-                return HealthResult(ok=False, detail=body.get("error", "unknown"))
+                return HealthResult(ok=False, detail=self._redactor.redact(body.get("error", "unknown")))
             try:
                 await self.verify_scopes()
             except SlackNetworkError as exc:
-                return HealthResult(ok=False, detail=f"Token validation failed due to network error: {exc}")
+                return HealthResult(
+                    ok=False, detail=self._redactor.redact(f"Token validation failed due to network error: {exc}")
+                )
             except SlackError as exc:
-                return HealthResult(ok=False, detail=f"Token is invalid or revoked: {exc}")
+                return HealthResult(ok=False, detail=self._redactor.redact(f"Token is invalid or revoked: {exc}"))
             try:
                 in_channel = await self._is_bot_in_channel()
             except SlackNetworkError as exc:
-                return HealthResult(ok=False, detail=f"Channel membership check failed due to network error: {exc}")
+                return HealthResult(
+                    ok=False,
+                    detail=self._redactor.redact(f"Channel membership check failed due to network error: {exc}"),
+                )
             except SlackError as exc:
-                return HealthResult(ok=False, detail=f"Channel membership check failed: {exc}")
+                return HealthResult(ok=False, detail=self._redactor.redact(f"Channel membership check failed: {exc}"))
             if not in_channel:
                 return HealthResult(ok=False, detail="Bot is not in any channel")
             return HealthResult(ok=True)
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(self._redactor.redact_exc(exc))
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "channels":
@@ -206,6 +215,7 @@ class SlackConnector(ConnectorBase):
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
             case "message":

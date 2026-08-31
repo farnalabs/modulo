@@ -13,6 +13,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.security import CredentialRedactor, redacting
 
 _TRELLO_API = "https://api.trello.com/1"
 
@@ -40,6 +41,11 @@ class TrelloConnector(ConnectorBase):
     def __init__(self, api_key: str, token: str) -> None:
         self._api_key = api_key
         self._token = token
+        # Key + token are passed as QUERY parameters on every request, so httpx
+        # includes them in the request URL — and a transport/status error echoes
+        # that URL. Redact the credential values at the connector boundary so a
+        # failing request never leaks them.
+        self._redactor = CredentialRedactor([api_key, token])
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -52,21 +58,23 @@ class TrelloConnector(ConnectorBase):
             timeout=30,
         )
 
+    @redacting
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the authenticated user's profile."""
         async with self._client() as client:
             r = await client.get("/members/me")
 
         if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redactor.redact(f"HTTP {r.status_code}: {r.text[:200]}"))
 
-        body: dict[str, Any] = r.json()
-        if "id" not in body:
+        payload: dict[str, Any] = r.json()
+        if "id" not in payload:
             return HealthResult(ok=False, detail="Unexpected response — no 'id' in member profile")
 
-        display_name = body.get("fullName") or body.get("username") or ""
+        display_name = payload.get("fullName") or payload.get("username") or ""
         return HealthResult(ok=True, detail=display_name)
 
+    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
             handler = self._query_handlers().get(q.resource)
@@ -151,6 +159,7 @@ class TrelloConnector(ConnectorBase):
             return {"fields": q.filters["fields"]}
         return {}
 
+    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:
             match payload.resource:
