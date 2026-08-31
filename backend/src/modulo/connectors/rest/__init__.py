@@ -232,6 +232,15 @@ _AUTH_PROTECTED_HEADERS = frozenset({"authorization", "proxy-authorization", "ho
 # C0 control chars (minus tab, which is legal in header values) + DEL.
 _CONTROL_CHARS = frozenset({chr(c) for c in range(0x20) if c != 0x09} | {"\x7f"})
 
+# FAR-504: the sensitive-mask sentinel a redacted secret value is masked to.
+# Defined LOCALLY rather than imported because the ``Connectors don't reach into
+# core`` import-linter contract forbids ``modulo.connectors`` depending on
+# ``modulo.core``; the value mirrors ``modulo.core.secret_patterns
+# .SENSITIVE_VALUE_MASK`` (re-exported by ``modulo.api.middleware.sensitive_mask``
+# and compared verbatim by the PATCH credential overlay). A masked placeholder is
+# NOT a real secret and must be rejected on create — see ``validate_credentials``.
+_SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
+
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MiB
 # ``_MAX_RETRIES`` is the default number of ATTEMPTS for the retry loop (the
@@ -321,6 +330,23 @@ def _reject_control_chars(value: str, *, what: str) -> None:
     if bad:
         offending = " ".join(repr(c) for c in sorted(bad))
         raise ValueError(f"REST {what} contains control characters (header injection): {offending}")
+
+
+def _is_secret_effectively_missing(value: Any) -> bool:
+    """True when *value* is absent, whitespace-only, or the sensitive-mask sentinel.
+
+    FAR-504: a MASKED placeholder (``SENSITIVE_VALUE_MASK``) or a whitspace-only
+    string is NOT a real secret. Accepting one on CREATE would persist the literal
+    placeholder as the stored secret — a guaranteed runtime auth failure at
+    ``_normalise_auth``/request time. The PATCH overlay substitutes the real secret
+    before ``validate_credentials`` runs on the overlay path, so a masked/blank
+    value can never reach this check there; CREATE is the asymmetry this closes.
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return not value
+    return not value.strip() or value == _SENSITIVE_VALUE_MASK
 
 
 class RESTError(ValueError):
@@ -1021,12 +1047,15 @@ class RestConnector(ConnectorBase):
         Single source of truth for the required-secret invariant (FAR-504):
         ``bearer`` requires ``token``; ``basic`` requires ``username`` +
         ``password``; ``api_key`` requires ``api_key`` (with ``in`` limited to
-        ``header`` / ``query``). Raises ``ValueError`` with a clear message when
-        the declared ``auth_mode`` is missing a required secret or an invalid
-        ``auth_mode`` is supplied. Called by ``_normalise_auth`` (run-time) and
-        by the API boundary (create + PATCH overlay) so a broken credential is
-        rejected at the boundary (422) instead of saved and exploding on the
-        first run.
+        ``header`` / ``query``). A required secret that is absent,
+        whitespace-only, or the sensitive-mask sentinel (``SENSITIVE_VALUE_MASK``)
+        is treated as MISSING — accepting a masked/blank placeholder on create
+        would persist it as the real secret. Raises ``ValueError`` with a clear
+        message when the declared ``auth_mode`` is missing a required secret or an
+        invalid ``auth_mode`` is supplied. Called by ``_normalise_auth``
+        (run-time) and by the API boundary (create + PATCH overlay) so a broken
+        credential is rejected at the boundary (422) instead of saved and
+        exploding on the first run.
         """
         mode = str(creds.get("auth_mode", "")).strip().lower()
         if mode not in {"bearer", "api_key", "basic"}:
@@ -1034,13 +1063,15 @@ class RestConnector(ConnectorBase):
                 f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
             )
         if mode == "bearer":
-            if not creds.get("token"):
+            if _is_secret_effectively_missing(creds.get("token")):
                 raise ValueError("REST bearer auth requires creds['token']")
         elif mode == "basic":
-            if not creds.get("username") or not creds.get("password"):
+            if _is_secret_effectively_missing(creds.get("username")) or _is_secret_effectively_missing(
+                creds.get("password")
+            ):
                 raise ValueError("REST basic auth requires creds['username'] and creds['password']")
         else:  # api_key
-            if not creds.get("api_key"):
+            if _is_secret_effectively_missing(creds.get("api_key")):
                 raise ValueError("REST api_key auth requires creds['api_key']")
             auth_in = creds.get("in")
             if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
