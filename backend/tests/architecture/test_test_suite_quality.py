@@ -768,6 +768,42 @@ regression that silently weakens the suite:
   *direct* positional/keyword argument positions mirror the fresh-value-in-call-
   assertion lens; draws nested inside a container or ``call(...)`` wrapper are a
   less direct shape and are left alone
+- an assertion whose operand is a freshly-built *iterator object* — a
+  generator expression (``assert (x for x in results)``) or an
+  iterator-producing builtin call (``map()``/``filter()``/``zip()``/``iter()``/
+  ``reversed()``/``enumerate()``) standing as the assert's truthiness position
+  (bare or ``not``-wrapped) or compared with ``==``/``!=`` against a
+  freshly-allocated container literal. Iterator objects have no ``__bool__``/
+  ``__len__``, so a generator that yields nothing — or a ``filter()`` that
+  matches nothing — is still a *truthy* object: ``assert <iterator>`` ALWAYS
+  PASSES (a silent false green when the code under test produced an empty
+  result) and ``assert not <iterator>`` ALWAYS FAILS. The equality form is
+  fixed too: a fresh iterator can never equal a freshly-allocated
+  list/dict/set/tuple literal (``assert map(...) == [...]`` ALWAYS FAILS,
+  ``!=`` ALWAYS PASSES), and two fresh iterators compare by identity, so
+  ``assert map(...) == filter(...)`` ALWAYS FAILS. These are almost always a
+  forgotten materialization — ``assert map(...)`` instead of ``assert
+  list(map(...))``, ``assert (x for x in y)`` instead of ``assert any(x for x
+  in y)`` — the lazy-iterator twin of the container-literal-truthiness lens,
+  which provably misses both shapes (a generator expression parses as
+  ``ast.GeneratorExp``, not a container literal, and a bare builtin call is
+  ``ast.Call``, not a literal). Consume or reduce the iterator before
+  asserting. Attribute spellings (``df.map``/``conn.iter``), iterators nested
+  as an argument to a materializing call (``assert list(map(...))``), and
+  compares against a *name* (which cannot be proven unequal — a bound mock's
+  ``__eq__`` can always return truthy) are left alone
+- ``type(x) == X`` / ``type(x) != X`` equality on the builtin ``type`` —
+  ``assert type(err) == ValueError``, ``assert ValueError == type(result)``,
+  ``assert type(a) != type(b)``. ``type()`` returns the exact runtime class,
+  and comparing it with ``==``/``!=`` (rather than ``is``/``is not``)
+  silently rejects an instance of a *subclass* of ``X`` — the unidiomatic
+  typecheck a subclass-aware ``isinstance(x, X)`` (or the identity-safe
+  exact-type ``type(x) is X``) was meant to be — and a mocked or replaced
+  class defeats the check outright. Only the builtin ``type`` name with a
+  single argument is matched (the three-argument ``type(name, bases, ns)``
+  form *creates* a class and is left alone), the ``is``/``is not`` exact-type
+  spellings are blessed and left alone, and ``type(a) == type(b)`` is
+  covered (prefer ``type(a) is type(b)``)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -10957,3 +10993,354 @@ def test_random_draw_call_assertion_lens_flags_flaky_expectations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _random_draw_call_assertion_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Iterator-producing builtin names. Unlike list/dict/set/tuple (which have a
+#: real truthiness/length contract) and ``range`` (which implements ``__len__``
+#: so ``bool(range(0))`` is False), the object these calls return is a lazy
+#: iterator with neither ``__bool__`` nor ``__len__``, so it is ALWAYS truthy no
+#: matter how many items it will eventually produce (including zero).
+_ITERATOR_PRODUCING_BUILTINS = frozenset({"map", "filter", "zip", "iter", "reversed", "enumerate"})
+
+
+def _iterator_object(node: ast.AST) -> str | None:
+    """Return a short label for an expression that is statically an iterator
+    object, or ``None``.
+
+    Two shapes are recognised: a generator expression (``ast.GeneratorExp`` —
+    the body never runs until the first ``next()``, so even a generator that
+    yields nothing is a real object) and an iterator-producing builtin call in
+    the ``map``/``filter``/``zip``/``iter``/``reversed``/``enumerate`` set. Only
+    the bare builtin-name spelling is matched: an attribute spelling such as
+    ``df.map`` or ``conn.iter`` is a method with an unknown return type and is
+    deliberately left alone, mirroring the bare-name discipline of the
+    random-draw lens."""
+    if isinstance(node, ast.GeneratorExp):
+        return "generator expression"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _ITERATOR_PRODUCING_BUILTINS:
+        return f"{node.func.id}() iterator"
+    return None
+
+
+def _fresh_container_literal(node: ast.AST) -> bool:
+    """True for a list/tuple/set/dict literal with no ``*``/``**`` unpacking.
+
+    A starred element (``[*x]`` / ``{**d}``) makes the literal dynamic by
+    nature, mirroring how the container-literal lenses exclude unpacked
+    shapes."""
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return not any(isinstance(elt, ast.Starred) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return not any(key is None for key in node.keys)
+    return False
+
+
+def _iterator_object_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose operand is
+    a freshly-built iterator object.
+
+    Two shapes are owned:
+
+    - *truthiness*: the assert's test (possibly ``not``-wrapped) is a generator
+      expression or an iterator-producing builtin call. The object is ALWAYS
+      truthy, so ``assert <iterator>`` always PASSES (a silent false green when
+      the code under test produced an empty iterator) and ``assert not
+      <iterator>`` always FAILS.
+    - *equality*: an ``==``/``!=`` comparison where one side is a fresh iterator
+      object and the other side is a freshly-allocated container literal
+      (``map(...) == [...]`` always FAILS; ``!=`` always PASSES), or where both
+      sides are fresh iterator objects (always FAILS for ``==``, always PASSES
+      for ``!=`` — iterators compare by identity, so two freshly-constructed
+      ones can never be equal).
+
+    A comparison against a *name* is left alone: the name may hold a mock whose
+    ``__eq__`` always returns a truthy sentinel, so the outcome is not provable
+    statically (the mock-equality shapes are owned by the mock lenses), and two
+    *syntactically identical* iterator calls are left alone — that is the
+    self-comparison lens's determinism-check territory."""
+    found: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            label = _iterator_object(test.operand)
+            if label is None:
+                continue
+            found.append(
+                (
+                    node.lineno,
+                    f"assert not {ast.unparse(test.operand)} — a {label} is ALWAYS truthy "
+                    "(iterator objects have no __bool__/__len__), so the assert ALWAYS FAILS; "
+                    "consume the iterator (list(...)/next(...)) or reduce it (any(...)/all(...)) "
+                    "and assert on its contents",
+                )
+            )
+            continue
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+            left = _iterator_object(test.left)
+            right = _iterator_object(test.comparators[0])
+            if not (left or right):
+                continue
+            if left and right:
+                if ast.unparse(test.left) == ast.unparse(test.comparators[0]):
+                    continue
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(test)} — two freshly-constructed iterator objects "
+                        "compare by identity, so they can never be equal: == ALWAYS FAILS / != "
+                        "ALWAYS PASSES regardless of the data; materialize or reduce the iterators "
+                        "(list(...)/any(...)) before comparing",
+                    )
+                )
+                continue
+            if left and _fresh_container_literal(test.comparators[0]):
+                other = ast.unparse(test.comparators[0])
+            elif right and _fresh_container_literal(test.left):
+                other = ast.unparse(test.left)
+            else:
+                continue
+            found.append(
+                (
+                    node.lineno,
+                    f"assert {ast.unparse(test)} — a {left or right} can never compare equal to the "
+                    f"freshly-allocated {other}: == ALWAYS FAILS / != ALWAYS PASSES no matter what "
+                    "the code under test produced; materialize the iterator "
+                    "(list(...)/tuple(...)/sorted(...)) before comparing",
+                )
+            )
+            continue
+        label = _iterator_object(test)
+        if label is None:
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"assert {ast.unparse(test)} — a {label} is ALWAYS truthy (iterator objects have no "
+                "__bool__/__len__), so the assert always PASSES even when the code under test "
+                "produced an empty result (silent false green); materialize the iterator "
+                "(list(...)/next(...)) or reduce it (any(...)/all(...)) before asserting",
+            )
+        )
+    return found
+
+
+def test_no_iterator_object_asserts():
+    """An ``assert`` whose operand is a freshly-built iterator object — a
+    generator expression (``assert (x for x in results)``) or an
+    iterator-producing builtin call (``map``/``filter``/``zip``/``iter``/
+    ``reversed``/``enumerate``) — is dead code: the object is ALWAYS truthy no
+    matter what it will produce, so ``assert <iterator>`` always PASSES (a
+    silent false green when the code under test produced an empty result) and
+    ``assert not <iterator>`` always FAILS, while ``assert <iterator> ==
+    [...]`` always FAILS (a fresh iterator can never equal a freshly-allocated
+    container literal) and ``assert <iterator> != [...]`` always PASSES. These
+    are almost always a forgotten materialization — ``list(map(...))``,
+    ``any(x for x in y)`` — and are the lazy-iterator twin of the
+    container-literal-truthiness lens.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _iterator_object_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a freshly-built iterator object.\n"
+        "An iterator object is ALWAYS truthy (no __bool__/__len__), and can never compare equal to\n"
+        "a freshly-allocated container literal, so the verdict is fixed at source time.\n"
+        "Materialize or reduce the iterator (list(...)/any(...)/all(...)/next(...)) first.\n" + "\n".join(violations)
+    )
+
+
+def test_iterator_object_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the iterator-object lens: it must
+    flag a generator expression or iterator-producing builtin call standing as
+    the assertion (bare, ``not``-wrapped, or compared against a container
+    literal / another fresh iterator) and ignore materialized calls
+    (``list(...)``/``any(...)``/``sorted(...)``), container comprehensions
+    (which have real truthiness), ``range``, attribute spellings, and compares
+    against a name."""
+    positive_sources = [
+        "def test_foo():\n    assert (x for x in items)\n",
+        "def test_foo():\n    assert (item.name for item in rows)\n",
+        "def test_foo():\n    assert not (x for x in items)\n",
+        "def test_foo():\n    assert map(str, items)\n",
+        "def test_foo():\n    assert filter(None, items)\n",
+        "def test_foo():\n    assert zip(a, b)\n",
+        "def test_foo():\n    assert not iter(items[0])\n",
+        "def test_foo():\n    assert reversed(items)\n",
+        "def test_foo():\n    assert enumerate(sorted_keys)\n",
+        "def test_foo():\n    assert map(str, items) == ['a', 'b']\n",
+        "def test_foo():\n    assert ['a', 'b'] != filter(None, items)\n",
+        "def test_foo():\n    assert {'k': 'v'} == filter(None, items)\n",
+        "def test_foo():\n    assert map(f, a) == filter(g, b)\n",
+        "def test_foo():\n    assert (x for x in a) != (y for y in b)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _iterator_object_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert list(map(str, items))\n",
+        "def test_foo():\n    assert any(x for x in items)\n",
+        "def test_foo():\n    assert all(flag for flag in flags)\n",
+        "def test_foo():\n    assert [x for x in items]\n",
+        "def test_foo():\n    assert {x for x in items}\n",
+        "def test_foo():\n    assert {k: v for k, v in pairs}\n",
+        "def test_foo():\n    assert sorted(map(str, items)) == ['a']\n",
+        "def test_foo():\n    assert range(5)\n",
+        "def test_foo():\n    assert not range(0)\n",
+        "def test_foo():\n    assert len(iter(x)) == 0\n",
+        "def test_foo():\n    assert next(iter(items)) == 7\n",
+        "def test_foo():\n    assert result == stored_map\n",
+        "def test_foo():\n    assert map(str, items) != stored\n",
+        "def test_foo():\n    assert reporter.map(str, items)\n",
+        "def test_foo():\n    assert mapper(str, items)\n",
+        "def test_foo():\n    assert map(str, x) == map(str, x)\n",
+        "def test_foo():\n    assert x == map_result\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _iterator_object_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _type_equality_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``==``/``!=`` comparison
+    whose operand is a single-argument ``type(...)`` call.
+
+    ``type(x) == X`` checks the *exact* runtime class with equality semantics,
+    so an instance of a subclass of ``X`` silently fails the check even though
+    ``isinstance(x, X)`` is what such a test almost always wants, and a mocked
+    or replaced class defeats the check outright — equality on a class object
+    is the unidiomatic-typecheck spelling of ``type(x) is X``. ``is``/``is
+    not`` on a class object is identity-safe (the blessed exact-type spelling,
+    mirroring how the None lens blesses ``is None`` over ``== None``). Only the
+    builtin ``type`` name with a single argument is matched — the
+    three-argument ``type(name, bases, ns)`` form *creates* a class and is left
+    alone. An identical ``type(x) == type(x)`` comparison is a tautology and is
+    flagged separately."""
+    found: list[tuple[int, str]] = []
+
+    def _is_type_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "type"
+            and len(node.args) == 1
+            and not node.keywords
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        op = node.ops[0]
+        if not isinstance(op, (ast.Eq, ast.NotEq)):
+            continue
+        op_name = "==" if isinstance(op, ast.Eq) else "!="
+        for side in (node.left, *node.comparators):
+            if not _is_type_call(side):
+                continue
+            other = node.comparators[0] if side is node.left else node.left
+            if _is_type_call(other):
+                if ast.dump(side, include_attributes=False) == ast.dump(other, include_attributes=False):
+                    found.append(
+                        (
+                            node.lineno,
+                            f"assert {ast.unparse(node)} — two identical type() calls always compare "
+                            "equal (a tautology that passes no matter how broken the code under test is); "
+                            "assert against a real expected type",
+                        )
+                    )
+                else:
+                    found.append(
+                        (
+                            node.lineno,
+                            f"assert {ast.unparse(node)} — compares the exact type of two values with "
+                            f"{op_name}; a subclass instance fails silently and a mocked class defeats "
+                            "the check, prefer 'type(a) is type(b)' (exact-type identity) or "
+                            "isinstance(a, type(b)) (subclass-aware)",
+                        )
+                    )
+            else:
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(node)} — compares {op_name} the exact type via type(); "
+                        "an instance of a subclass of the expected class fails silently and a mocked "
+                        "class defeats the check, prefer isinstance(x, X) (subclass-aware) or "
+                        "'type(x) is X' (exact type)",
+                    )
+                )
+            break
+    return found
+
+
+def test_no_type_equality_comparisons():
+    """``type(x) == X`` / ``type(x) != X`` compare the *exact* runtime class
+    with equality semantics, so an instance of a subclass of ``X`` silently
+    fails the check and a mocked or replaced class defeats it outright — the
+    unidiomatic typecheck spelling where ``isinstance(x, X)`` (subclass-aware)
+    or the identity-safe ``type(x) is X`` (exact type) was intended. ``is``/``is
+    not`` are the blessed spellings and left alone, as is the three-argument
+    ``type(name, bases, ns)`` class-creation form."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _type_equality_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} type() equality comparison(s).\n"
+        "type(x) == X compares the exact runtime class with equality semantics, so a subclass\n"
+        "instance fails silently and a mocked class defeats the check. Use isinstance(x, X) for\n"
+        "subclass-aware checks, or the identity-safe 'type(x) is X' for an exact-type check.\n" + "\n".join(violations)
+    )
+
+
+def test_type_equality_lens_flags_fragile_exact_type_checks():
+    """Synthetic positive/negative control for the type-equality lens: it must
+    flag ``==``/``!=`` on a one-argument ``type(...)`` call (either operand
+    order, ``type(a) == type(b)`` included, in assert or helper code) and ignore
+    the ``is``/``is not`` exact-type spellings, ``isinstance``, ``__class__``
+    identity, the three-argument class-creation form, subscripts/attributes, and
+    comparisons against a captured type name."""
+    positive_sources = [
+        "def test_foo():\n    assert type(err) == ValueError\n",
+        "def test_foo():\n    assert type(result) != SomeModel\n",
+        "def test_foo():\n    assert ValueError == type(err)\n",
+        "def test_foo():\n    assert SomeModel != type(result)\n",
+        "def test_foo():\n    assert type(a) == type(b)\n",
+        "def test_foo():\n    assert type(model) != models.BaseModel\n",
+        "def test_foo():\n    assert type(x) == type(x)\n",
+        "def _is_ok(v):\n    return type(v) == int\n",
+        "def test_foo():\n    assert type(result) == SomeModule.Result\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _type_equality_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert type(err) is ValueError\n",
+        "def test_foo():\n    assert type(result) is not SomeModel\n",
+        "def test_foo():\n    assert isinstance(err, ValueError)\n",
+        "def test_foo():\n    assert not isinstance(x, (int, float))\n",
+        "def test_foo():\n    assert x.__class__ is int\n",
+        "def test_foo():\n    assert x.__class__ == int\n",
+        "def test_foo():\n    C = type('C', (object,), {})\n",
+        "def test_foo():\n    t = type(obj)\n    assert t == SomeClass\n",
+        "def test_foo():\n    assert obj.type == SomeClass\n",
+        "def test_foo():\n    assert SomeClass == other_type\n",
+        "def test_foo():\n    assert type(x) in (int, float)\n",
+        "def test_foo():\n    assert result_type == SomeClass\n",
+        "def test_foo():\n    return type(value)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _type_equality_violations(tree), f"lens should NOT flag:\n{source}"
