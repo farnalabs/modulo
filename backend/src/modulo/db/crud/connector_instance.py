@@ -15,6 +15,23 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.connector_instance import ConnectorInstance
 
+# Matches the hub's _SKIP_SUMMARY_LIMIT / _record_skip sanitization (FAR-495):
+# Postgres rejects NUL bytes in SQL text (a NUL in any batched summary fails the
+# WHOLE UPDATE so no instance gets marked) and the column is String(2000).
+_SKIP_SUMMARY_LIMIT: int = 2000
+
+
+def _sanitize_skip_summary(summary: str) -> str:
+    """NUL-strip + truncate a skip summary so the batched UPDATE cannot fail (FAR-498).
+
+    Defense-in-depth twin of ``ConnectorHub._record_skip``: the hub sanitizes
+    the summaries it records, but this writer must not trust every future
+    caller to pass DB-safe values. Kept consistent with the hub's logic
+    (NUL-strip, then truncate to 2000 — the ``last_skip_error`` String(2000)
+    column limit). Module-level here because db must not import core.
+    """
+    return summary.replace("\x00", "")[:_SKIP_SUMMARY_LIMIT]
+
 
 async def create_connector_instance(
     session: AsyncSession,
@@ -142,12 +159,19 @@ async def mark_instances_degraded(session: AsyncSession, skipped: dict[uuid.UUID
 
     Issues a single ``UPDATE connector_instances SET degraded_at = now(),
     last_skip_error = <summary> WHERE id = ANY(<ids>)`` statement. An empty
-    *skipped* dict is a no-op. Requires RLS org context to be set by the caller.
+    *skipped* dict is a no-op. Each summary is sanitized writer-side
+    (NUL-strip + truncate to 2000, FAR-498) so a caller bypassing the hub's
+    own sanitization cannot overflow the String(2000) column or fail the whole
+    batched UPDATE with a NUL byte. Requires RLS org context to be set by the
+    caller.
     """
     if not skipped:
         return
     summary_by_id = case(
-        *[(ConnectorInstance.id == instance_id, summary) for instance_id, summary in skipped.items()],
+        *[
+            (ConnectorInstance.id == instance_id, _sanitize_skip_summary(summary))
+            for instance_id, summary in skipped.items()
+        ],
     )
     stmt = (
         update(ConnectorInstance)

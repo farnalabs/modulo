@@ -527,20 +527,14 @@ async def update_connector_endpoint(
     if credentials_updated:
         new_credentials = updates.pop("credentials")
         if new_credentials is None:
-            # An explicit ``"credentials": null`` is only an error when it is the
-            # sole field in the PATCH — there is nothing else to do and clearing
-            # credentials via null is unsupported. This guards ``_encrypt(None,
-            # ...)`` raising AttributeError → unhandled 500 (FAR-495 QA). When
-            # other fields (e.g. ``name``) are being updated, the empty config
-            # textarea just means "no credential change" — skip the credential
-            # write and proceed with the rest of the update.
-            if not any(k for k in updates if k != "credentials"):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="'credentials' must be a non-empty string",
-                )
+            # ``min_length`` only constrains str values — an explicit
+            # ``"credentials": null`` (e.g. an empty config textarea on a
+            # name-only edit) would otherwise reach _encrypt(None, ...) and raise
+            # AttributeError → unhandled 500 (FAR-495 QA). Treat it as "no
+            # credential change": skip the credential write entirely and leave
+            # the stored secret intact. The later block re-affirms this.
             credentials_updated = False
-        if new_credentials is not None:
+        else:
             ct = _encrypt(new_credentials, settings.fernet_key)
             updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
             # Fresh credentials clear the degraded marker (FAR-495) — the stored
@@ -568,12 +562,8 @@ async def update_connector_endpoint(
                         merged_cfg[k] = v
                 updates["config_json"] = merged_cfg
             if credentials_updated and existing is not None:
-                if new_credentials is None:
-                    # No credential change supplied (e.g. an empty config textarea
-                    # posts credentials: null) — skip the credential write. Never
-                    # 500 on a null credentials payload.
-                    credentials_updated = False
-                elif existing.connector_type_id == "rest":
+                assert new_credentials is not None
+                if existing.connector_type_id == "rest":
                     # Partial credential update (FAR-466) — REST connector only.
                     # The connector reads auth identity (auth_mode, in,
                     # header_name, query_param_name) from the DECRYPTED credential

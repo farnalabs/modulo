@@ -665,6 +665,36 @@ async def test_close_clears_skipped_and_healthy(tmp_path):
     assert not hub.healthy
 
 
+async def test_initialise_resets_stale_skipped_and_healthy_from_aborted_pass(tmp_path):
+    """FAR-498: initialise() resets stale skipped/healthy entries at entry.
+
+    The attributes promise "during the last initialise() call". A hub whose
+    previous pass aborted mid-loop (never reached close()) must not carry its
+    stale entries into a new pass: simulate the aborted state by populating
+    skipped/healthy manually, then run a fresh initialise() loop and assert
+    only the new pass's results remain.
+    """
+    healthy = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend)
+    # Simulate a previous aborted pass: entries for instances that are NOT
+    # part of the new pass, populated exactly as the hub would have done.
+    stale_skipped = uuid.uuid4()
+    stale_healthy = uuid.uuid4()
+    hub.skipped[stale_skipped] = "ValueError: stale from aborted pass"
+    hub.healthy.add(stale_healthy)
+    with patch.object(backend, "get_secret", return_value="{}"):
+        await hub.initialise([healthy])
+    assert stale_skipped not in hub.skipped
+    assert not hub.skipped
+    assert hub.healthy == {healthy.id}
+    assert stale_healthy not in hub.healthy
+
+
 # ---------------------------------------------------------------------------
 # Skip-warning dedup (FAR-465)
 # ---------------------------------------------------------------------------

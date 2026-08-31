@@ -807,13 +807,32 @@ def test_create_rest_bearer_with_token_succeeds(client: TestClient) -> None:
     assert resp.json()["has_credentials"] is True
 
 
-def test_update_connector_null_credentials_returns_422(client: TestClient) -> None:
-    """FAR-495 QA regression: PATCH {"credentials": null} must return 422, not a
-    500. Without the ``new_credentials is None`` guard, ``_encrypt(None, ...)``
-    raised ``AttributeError`` on ``None.encode()`` (unhandled 500)."""
-    resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": None})
-    assert resp.status_code == 422
-    assert "credentials" in resp.json()["detail"].lower()
+def test_update_connector_null_credentials_skips_write(client: TestClient) -> None:
+    """FAR-495 QA regression: PATCH {"credentials": null} must NOT 500. An explicit
+    ``null`` credential is treated as "no credential change" — the stored secret is
+    left intact (never wiped or re-encrypted) and the request succeeds. The
+    historical bug was ``_encrypt(None, ...)`` raising ``AttributeError`` → unhandled
+    500; the fix is to skip the credential write, not to reject with 422."""
+    existing = _make_connector()  # has stored credentials
+    captured: dict[str, Any] = {}
+    mock_update = AsyncMock()
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        return existing
+
+    mock_update.side_effect = fake_update
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": None})
+    assert resp.status_code == 200
+    assert "credentials_ciphertext" not in captured["updates"], (
+        "Explicit null credentials must NOT wipe the stored secret"
+    )
 
 
 def test_connector_response_surfaces_degraded_markers(client: TestClient) -> None:

@@ -134,6 +134,30 @@ async def test_mark_instances_degraded_persists_marker(
     assert fetched.last_skip_error == "ValueError: Missing credential key 'token'"
 
 
+async def test_mark_instances_degraded_sanitizes_overlong_and_nul_summary(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-498: the writer sanitizes summaries itself (NUL-strip + truncate to 2000).
+
+    Defense-in-depth: the hub sanitizes what it records, but a future caller
+    could bypass it. Postgres rejects NUL bytes in SQL text (a NUL in any
+    batched summary fails the WHOLE UPDATE so no instance gets marked) and the
+    column is String(2000).
+    """
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-sanitized"))
+    summary = f"RuntimeError: bad\x00summary{'x' * 3000}"
+    await mark_instances_degraded(rls_session, {ci.id: summary})
+    fetched = await get_connector_instance(rls_session, ci.id)
+    assert fetched is not None
+    assert fetched.degraded_at is not None
+    assert fetched.last_skip_error is not None
+    assert "\x00" not in fetched.last_skip_error
+    assert len(fetched.last_skip_error) == 2000
+    assert fetched.last_skip_error.startswith("RuntimeError: badsummary")
+
+
 async def test_mark_instances_degraded_empty_dict_is_noop(
     rls_session: AsyncSession,
     test_org: uuid.UUID,
