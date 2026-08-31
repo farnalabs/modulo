@@ -151,8 +151,9 @@ def _validate_rest_auth(creds: dict[str, Any]) -> None:
     ``ValueError`` with a clear message when the declared ``auth_mode`` is
     missing a required secret — so a broken credential is rejected at the API
     boundary (422) instead of being saved and blowing up on the first run.
-    Only the JSON-overlay credential path is validated; the raw non-JSON token
-    path (GitHub-style) keeps its historical semantics.
+    The JSON credential path is validated. Non-REST connectors retain the raw
+    token path; a REST connector with a non-JSON credential payload is rejected
+    (422) instead of being encrypted verbatim.
     """
     mode = str(creds.get("auth_mode", "")).strip().lower()
     if mode not in {"bearer", "api_key", "basic"}:
@@ -339,6 +340,29 @@ async def create_connector_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=_github_missing_scope_detail(req.credentials, missing),
             )
+
+    if req.connector_type_id == "rest":
+        # FAR-466: a REST connector's credentials are ALWAYS a JSON object.
+        # Validate the credential against the connector's auth contract HERE at
+        # the create boundary so a direct POST cannot save a broken credential
+        # (e.g. `{"auth_mode":"bearer"}` with no token) that the connector will
+        # reject at run time. This mirrors the PATCH overlay validation.
+        try:
+            rest_creds = json.loads(req.credentials)
+        except (ValueError, TypeError):
+            rest_creds = None
+        if not isinstance(rest_creds, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
+            )
+        try:
+            _validate_rest_auth(rest_creds)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Invalid REST credentials: {exc}",
+            ) from None
 
     ciphertext = _encrypt(req.credentials, settings.fernet_key)
     try:
@@ -566,10 +590,17 @@ async def update_connector_endpoint(
                             json.dumps(incoming), settings.fernet_key
                         )
                     else:
-                        # A non-JSON credential payload (e.g. a raw token) keeps
-                        # the historical full-replace behaviour for REST too.
-                        updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                            new_credentials, settings.fernet_key
+                        # FAR-466: a REST connector's credentials are ALWAYS a JSON
+                        # object. A raw non-JSON credential payload (e.g. a bare
+                        # token) is a malformed REST credential — the connector
+                        # reads identity via `.get()` on the decrypted dict, so a
+                        # bare string would blow up on the first run. Reject it at
+                        # the API boundary instead of encrypting it verbatim. The
+                        # raw-string encryption path is legit ONLY for non-REST
+                        # connectors (e.g. github), not REST.
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
                         )
                 else:
                     # Non-REST connector: historical FULL-REPLACE (no overlay) —

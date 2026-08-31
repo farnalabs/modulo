@@ -737,3 +737,67 @@ def test_patch_github_raw_token_not_validated(client: TestClient) -> None:
     assert resp.status_code == 200
     decrypted = Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode()
     assert decrypted == token  # persisted verbatim, not overlaid/validated
+
+
+def test_patch_rest_bare_string_credential_rejected(client: TestClient) -> None:
+    """A raw non-JSON (bare-string) credential payload on a REST connector must be
+    rejected (422), NOT encrypted verbatim. REST credentials are always a JSON
+    object; a bare string would make ``_normalise_auth`` (which calls ``.get()``)
+    blow up on the first run. The raw-token path is legit only for non-REST
+    connectors (e.g. github), which the test above covers."""
+    existing = _make_rest_connector(_encrypt_creds({"auth_mode": "api_key", "api_key": "secret123"}))
+    mock_update = AsyncMock()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": "raw-token-value"},
+        )
+    assert resp.status_code == 422
+    assert "must be a JSON object" in resp.json()["detail"]
+    mock_update.assert_not_awaited()
+
+
+def test_create_rest_bearer_without_token_rejected(client: TestClient) -> None:
+    """POST a REST connector with auth_mode=bearer but NO token must be rejected
+    (422) and NOT saved. REST credentials are validated at the create boundary so
+    a direct POST cannot persist a broken credential the connector rejects at run
+    time."""
+    body = {
+        "name": "REST Connector",
+        "connector_type_id": "rest",
+        "credentials": json.dumps({"auth_mode": "bearer"}),
+        "config_json": {},
+    }
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance") as mock_create,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=body)
+    assert resp.status_code == 422
+    assert "REST bearer auth requires creds['token']" in resp.json()["detail"]
+    mock_create.assert_not_awaited()
+
+
+def test_create_rest_bearer_with_token_succeeds(client: TestClient) -> None:
+    """POST a REST connector with a complete bearer credential succeeds (201)."""
+    body = {
+        "name": "REST Connector",
+        "connector_type_id": "rest",
+        "credentials": json.dumps({"auth_mode": "bearer", "token": "t"}),
+        "config_json": {},
+    }
+    connector = _make_rest_connector(b"encrypted_bytes")
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=body)
+    assert resp.status_code == 201
+    assert resp.json()["has_credentials"] is True
