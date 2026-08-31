@@ -413,6 +413,17 @@ class ConnectorHub:
             if self._initialised:
                 logger.warning("ConnectorHub already initialised — skipping")
                 return
+            # FAR-498: reset the per-initialise tracking state at entry. The
+            # attribute docs promise skipped/healthy describe "the last
+            # initialise() call"; a re-initialisation attempt on a hub whose
+            # previous pass aborted mid-loop (never reached close()) must not
+            # carry stale entries into the new pass. close() also clears them;
+            # this covers the aborted-pass path. Placed AFTER the guard checks
+            # so an already-initialised hub is left untouched. .clear() matches
+            # close()'s mechanism and preserves object identity for any
+            # reference a caller captured.
+            self.skipped.clear()
+            self.healthy.clear()
             fetch_scope: set[str] | None = set(allowed_connectors) if allowed_connectors is not None else None
             for ci in instances:
                 if fetch_scope is not None and not _in_fetch_scope(ci, fetch_scope):
