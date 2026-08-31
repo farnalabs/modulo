@@ -503,8 +503,6 @@ class TestConnectorEndpointSchemas:
         connector.created_at = _NOW
         connector.updated_at = _NOW
         connector.description = None
-        # Nullable degraded markers (FAR-497): a bare MagicMock would auto-create
-        # these as non-serialisable mocks, so mirror a healthy ORM row explicitly.
         connector.degraded_at = None
         connector.last_skip_error = None
 
