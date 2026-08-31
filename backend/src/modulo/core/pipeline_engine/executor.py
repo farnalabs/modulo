@@ -2541,40 +2541,36 @@ class PipelineExecutor:
             if pipeline is None:
                 raise RunNotFoundError(run_id)
 
-            guard = RunawayGuard(
-                max_duration_seconds=pipeline.max_duration_seconds,
-                max_steps=pipeline.max_steps,
-                token_budget=pipeline.token_budget,
-            )
+            # FAR-505: capture the run/pipeline scalars through the SAME helper
+            # the execute path uses (_capture_execution_scalars) so the resume
+            # compile wiring (retry policy, idempotency identity, guard) is
+            # derived from one place and cannot drift from execute() again.
+            scalars = self._capture_execution_scalars(pipeline, run)
+            guard = scalars["guard"]
 
         if not self._checkpointer_conn_string:
             raise RuntimeError("Cannot resume without a checkpointer configured")
 
-        # FAR-402 P5: wire the per-node retry / per-edge retry / compensation
-        # wrapper onto resume so a checkpoint-resumed run carries the SAME retry
-        # behaviour as a fresh run of the same pipeline. Previously the resume
-        # path compiled WITHOUT the wrapper (and hashed with
-        # compute_port_topology_hash), so a resumed run executed with NO per-node
-        # retry / per-edge retry / compensation while a fresh run of the identical
-        # pipeline had them — a silent divergence the reviewer flagged as blocking.
-        # The pipeline retry policy folds into the compile-cache hash so a graph
-        # compiled on the execute() path (with the policy) is reused here, and a
-        # pipeline with no policy produces the identical base hash (backward
-        # compatible).
-        pipeline_retry_policy_resume: dict[str, Any] = {}
-        try:
-            raw_resume_policy = getattr(pipeline, "retry_policy", None)
-            if isinstance(raw_resume_policy, dict):
-                pipeline_retry_policy_resume = raw_resume_policy
-        except Exception:
-            # A malformed/legacy retry_policy must never crash resume —
-            # mirror the execute() path (_capture_execution_scalars) and
-            # fail open to no retry.
-            pipeline_retry_policy_resume = {}
-        _resume_run_ref = rc.build_run_ref(str(pipeline_id), int(getattr(run, "run_number", 0) or 0))
+        # FAR-505: thread the SAME retry/idempotency wiring into the resume
+        # compile as the execute path (_prepare_and_stream). The graph cache is
+        # keyed by (pipeline_id, snapshot_id, node_timeout, struct_hash); folding
+        # the pipeline retry policy into the struct hash
+        # (compute_retry_aware_topology_hash) means an execute-then-resume on the
+        # same snapshot reuses the SAME compiled graph instead of cold-compiling
+        # a second, unwired entry. The idempotency key is deliberately
+        # runtime-derived from the run's stable logical identity
+        # (``<pipeline_id>:<run_number>``) — identical on resume because a resume
+        # is the SAME run, so a side-effecting node re-executed after the HITL
+        # pause dedupes exactly as it would on a same-run retry (FAR-402 P5).
+        # The retry policy + run_number are sourced from the SAME
+        # _capture_execution_scalars helper the execute path uses, so the resume
+        # wiring cannot drift from execute() again (FAR-505). The helper already
+        # fails open on a malformed/legacy retry_policy.
+        pipeline_retry_policy = scalars["pipeline_retry_policy"]
+        run_ref = rc.build_run_ref(str(pipeline_id), scalars["run_number"])
 
-        def _resume_node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
-            return rc.node_idempotency_key(run_ref=_resume_run_ref, node_ref=node_id)
+        def _node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
+            return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
 
         compiled = get_or_compile(
             pipeline_id,
@@ -2585,18 +2581,16 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 org_id=org_id,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
-                pipeline_retry_policy=pipeline_retry_policy_resume,
-                node_idempotency_key=_resume_node_idempotency_key,
+                pipeline_retry_policy=pipeline_retry_policy,
+                node_idempotency_key=_node_idempotency_key,
             ),
             pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
-            # FAR-402 P5 + FAR-502: the resume path must mirror the execute() path's
-            # compile-cache hash — folding in BOTH the pipeline retry policy (so a
-            # retry_policy PATCH recompiles the wrapped nodes) AND the eval-definition
-            # content hash (so eval-definition changes bake into HITL gate closures at
-            # compile time, not the first run's stale closures). A graph compiled on the
-            # execute() path is reused here only when both agree.
+            # Both the retry-aware topology hash (FAR-505) and the eval-def
+            # content hash (FAR-502) must be part of the cache key so an
+            # execute-then-resume on the same snapshot reuses the SAME compiled
+            # graph as the execute path — matching _prepare_and_stream below.
             graph_struct_hash=struct_hash_with_eval_defs(
-                compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy_resume),
+                compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
                 eval_defs_by_node,
             ),
         )

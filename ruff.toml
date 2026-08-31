@@ -41,6 +41,20 @@ select = [
     "PLW2901",
     "PYI025",
     "UP032",
+    # Third wave of defensive gate-strengthening (verified zero current
+    # violations with ruff 0.16.5). Mirrors the backend/pyproject.toml gate.
+    "RSE102",
+    "PLW0406",
+    "PLR0124",
+    "PLR1714",
+    "PLR0133",
+    "PLW1508",
+    "PLC0414",
+    "PLC0205",
+    "PLR1730",
+    "PLR1733",
+    "PLR1736",
+    "PLC2401",
 ]
 ignore = [
     "S101",

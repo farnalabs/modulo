@@ -94,9 +94,9 @@ class RuntimeConfigStore:
     @classmethod
     def reset(cls) -> None:
         """Reset the module-level singleton (for test isolation)."""
-        import modulo.core.runtime_config.store as store_mod
+        global _store
 
-        store_mod._store = None
+        _store = None
 
     def _resolve(self, key: str) -> tuple[str | None, str]:
         """Resolve effective value and provenance for a key.

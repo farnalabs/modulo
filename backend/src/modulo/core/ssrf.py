@@ -584,6 +584,28 @@ async def validate_outbound_url_async(url: str, *, allow_networks: Sequence[str]
     _check_resolved(target.host, await _resolve_all_async(target.host), extra)
 
 
+def validate_outbound_url_preflight(url: str, *, allow_networks: Sequence[str] | None = None) -> None:
+    """DNS-free SSRF preflight: syntax floor plus literal-IP internal blocking.
+
+    Enforces the cheap, engine-free parts of :func:`validate_outbound_url` (an
+    ``http(s)`` scheme, no userinfo credentials, a valid hostname) and, for a
+    literal-IP target, the private/loopback/link-local/cloud-metadata block.
+
+    This deliberately does **not** resolve hostnames. Hostname resolution,
+    rebinding-close pinning and per-connect validation are performed by
+    :func:`resolve_pinned_ip` / :func:`pinned_async_client` at connect time —
+    those are the primary SSRF boundary. Use this preflight where a caller wants
+    a cheap synchronous guard ahead of (or in place of the exact-host check on) a
+    pinned connection, so an obviously-internal literal such as
+    ``https://169.254.169.254/...`` is rejected before any request, without a DNS
+    round-trip. Raises ``ValueError`` when the target is unsafe.
+    """
+    target = _parse_url_target(url)
+    extra = normalize_allow_networks(allow_networks)
+    if target.literal_ip is not None:
+        _validate_literal_ip(target.literal_ip, extra)
+
+
 async def resolve_pinned_ip(url: str, *, allow_networks: Sequence[str] | None = None) -> PinnedTarget:
     """Resolve and validate a URL, returning the pinned connect target.
 
@@ -746,3 +768,57 @@ async def pinned_async_client(
         trust_env=trust_env,
         follow_redirects=follow_redirects,
     )
+
+
+def normalize_url_host(url: str) -> str:
+    """Return the normalised hostname of an ``http(s)`` URL.
+
+    Lowercases and strips a trailing dot so the returned value is directly
+    comparable against a configured allowlist. Raises ``ValueError`` for a
+    non-http(s) scheme, embedded userinfo credentials, or a missing hostname.
+    This is the host-string extraction used by the OIDC endpoint allowlist;
+    full SSRF/IP validation is performed separately by
+    :func:`resolve_pinned_ip` / :func:`pinned_async_client`.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must use http:// or https:// scheme")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL must not contain userinfo credentials")
+    host = (parsed.hostname or "").rstrip(".").strip("[]").lower()
+    if not host:
+        raise ValueError("URL must have a valid hostname")
+    return host
+
+
+def derive_oidc_allowed_hosts(discovery_url: str, issuer: str | None = None) -> frozenset[str]:
+    """Compute the host allowlist for a remote OIDC discovery document.
+
+    The trust anchor is the admin-configured ``discovery_url``. A derived
+    endpoint (``jwks_uri`` / ``token_endpoint`` / ``userinfo_endpoint`` /
+    ``authorization_endpoint``) that the document points at may only target the
+    discovery host or the ``issuer`` host (per OIDC the issuer should itself
+    match the discovery host). This is the host-match check that stops a
+    compromised or malicious discovery document from redirecting traffic at an
+    internal / cloud-metadata address or an arbitrary third party.
+    """
+    hosts = {normalize_url_host(discovery_url)}
+    if issuer:
+        with contextlib.suppress(ValueError):
+            hosts.add(normalize_url_host(issuer))
+    return frozenset(hosts)
+
+
+def require_url_host_in_allowlist(url: str, allowed_hosts: Iterable[str]) -> str:
+    """Return the normalised host of ``url`` if it is in ``allowed_hosts``.
+
+    Raises ``ValueError`` when ``url`` is not a well-formed ``http(s)`` URL or
+    its host is not in the allowlist. Enforces that a remote-supplied OIDC
+    endpoint only targets the provider's own host(s) — the caller uses the
+    returned host as proof the endpoint was allowlisted before requesting it.
+    """
+    host = normalize_url_host(url)
+    allowed = {entry.rstrip(".").strip("[]").lower() for entry in allowed_hosts}
+    if host not in allowed:
+        raise ValueError(f"URL host '{host}' is not in the OIDC provider host allowlist (allowed: {sorted(allowed)})")
+    return host
