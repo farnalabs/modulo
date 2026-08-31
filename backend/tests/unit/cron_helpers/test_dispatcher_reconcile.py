@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -96,6 +97,7 @@ def _run_row(
     status: str,
     *,
     dispatched: bool = True,
+    dispatched_minutes_ago: float | None = None,
     stale: bool = True,
     nodeless: bool = False,
     error_code: str | None = None,
@@ -105,11 +107,15 @@ def _run_row(
     retry_policy: Any = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
+    if dispatched_minutes_ago is not None:
+        dispatched_at: Any = datetime.now(UTC) - timedelta(minutes=dispatched_minutes_ago)
+    else:
+        dispatched_at = datetime.now(UTC) if dispatched else None
     return SimpleNamespace(
         id=run_id,
         pipeline_id=uuid.uuid4(),
         status=status,
-        dispatched_at=datetime.now(UTC) if dispatched else None,
+        dispatched_at=dispatched_at,
         heartbeat_at=heartbeat,
         # Non-None by default (has finalised node output → NOT nodeless); a
         # nodeless zombie has never finalised any node.
@@ -129,7 +135,8 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
-        "saq_claimed_nodeless_minutes": 45,
+        "saq_claimed_nodeless_minutes": 35,
+        "saq_nodeless_redispatch_budget": 2,
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
         "saq_run_claim_cap": 20,
@@ -367,11 +374,13 @@ class TestReconcilePredicateMatrix:
         """A claimed-but-nodeless zombie (running + FRESH heartbeat + zero node
         output after the nodeless window) is now RE-DISPATCHED (not terminal-failed):
         a nodeless zombie executed ZERO nodes, so re-dispatch is safe and recovers
-        the run instead of permanently losing it. With no retry_policy, the default
-        is a single re-dispatch (claim_count == 1)."""
+        the run instead of permanently losing it. With no retry_policy, the
+        configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2) applies
+        and claim_count == 1 is within it. dispatched_at is NULL (never
+        dispatched) so the re-dispatch throttle does not suppress it."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
-            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, dispatched=False)],
         )
         assert summary["nodeless_redispatched"] == 1
         assert summary["nodeless_failed"] == 0
@@ -383,13 +392,14 @@ class TestReconcilePredicateMatrix:
         # A re-dispatched (non-terminal) run is NOT given a compensating fact.
         session.record_facts.assert_not_awaited()
 
-    async def test_running_nodeless_second_attempt_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without a retry_policy, re-dispatch is bounded to a single attempt.
-        Once claim_count has advanced past 1 (already re-dispatched once), the
+    async def test_running_nodeless_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a retry_policy, re-dispatch is bounded by the configurable
+        nodeless budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2). Once
+        claim_count has advanced past the budget (already re-dispatched), the
         run is terminal-failed so it is never left dangling in a re-dispatch loop."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
-            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=2)],
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=3)],
         )
         assert summary["nodeless_failed"] == 1
         assert summary["nodeless_redispatched"] == 0
@@ -399,7 +409,8 @@ class TestReconcilePredicateMatrix:
 
     async def test_running_nodeless_retry_policy_stall_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """retry_policy with 'stall' in 'on' honors max_retries: a run within the
-        retry budget (claim_count <= max_retries) is re-dispatched."""
+        retry budget (claim_count <= max_retries) is re-dispatched. dispatched_at
+        is NULL so the re-dispatch throttle does not suppress it."""
         summary, reenqueue, _, _, _, _ = await _run_reconcile(
             monkeypatch,
             [
@@ -408,6 +419,7 @@ class TestReconcilePredicateMatrix:
                     "running",
                     stale=False,
                     nodeless=True,
+                    dispatched=False,
                     claim_count=2,
                     retry_policy={"on": ["stall"], "max_retries": 3},
                 )
@@ -444,7 +456,10 @@ class TestReconcilePredicateMatrix:
         the run falls back to terminal-fail so it is never left dangling."""
         _patch_env(monkeypatch)
         session = _MockSession(
-            [_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)])]
+            [
+                _org_result([ORG]),
+                _rows_result([_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, dispatched=False)]),
+            ]
         )
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
@@ -505,6 +520,250 @@ class TestReconcilePredicateMatrix:
         assert summary["nodeless_failed"] == 0
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
+
+
+class TestNodelessRedispatchBudget:
+    """FAR-509: the policy-less nodeless re-dispatch budget is configurable via
+    SAQ_NODELESS_REDISPATCH_BUDGET (default 2). Direct unit checks of
+    ``_should_redispatch_nodeless`` — the retry-policy taxonomy (stall-covered
+    → max_retries; non-empty without stall → never) is deliberate and MUST NOT
+    change."""
+
+    @staticmethod
+    def _row(claim_count: int, retry_policy: Any = None) -> SimpleNamespace:
+        return _run_row(
+            RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=claim_count, retry_policy=retry_policy
+        )
+
+    def test_policy_less_first_claim_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """claim_count=1 (the initial claim, never re-dispatched) is within the
+        default budget → re-dispatch."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(1)) is True
+
+    def test_policy_less_second_claim_within_default_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default budget 2: claim_count=2 is still re-dispatched (one
+        re-dispatch after the original claim)."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(2)) is True
+
+    def test_policy_less_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default budget 2: claim_count=3 has exhausted the budget → the
+        backstop terminal-fail applies."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(3)) is False
+
+    def test_policy_less_custom_budget_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With SAQ_NODELESS_REDISPATCH_BUDGET=1, claim_count=2 is already past
+        the budget → terminal-fail (the pre-FAR-509 hardcoded behaviour)."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=1))
+        assert ch._should_redispatch_nodeless(self._row(2)) is False
+
+    def test_stall_retry_policy_honors_max_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A policy covering 'stall' honors its OWN max_retries budget, not the
+        global nodeless budget (claim_count <= max_retries)."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"on": ["stall"], "max_retries": 2})) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is False
+
+    def test_non_stall_policy_never_redispatches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-empty policy WITHOUT 'stall' in 'on' is terminal-failed
+        regardless of claim_count or the configured budget."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
+        assert (
+            ch._should_redispatch_nodeless(self._row(1, retry_policy={"on": ["ci_failure"], "max_retries": 5})) is False
+        )
+
+    def test_empty_policy_treated_as_policy_less(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty dict policy (the column default) is treated as policy-less:
+        the configurable budget applies."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={})) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={})) is False
+
+
+class TestNodelessRedispatchThrottle:
+    """FAR-509 (qa-iterate): the nodeless re-dispatch is THROTTLED to at most
+    one enqueue per ``SAQ_CLAIMED_NODELESS_MINUTES`` window per run — without
+    the throttle, a budget-eligible zombie was re-enqueued on every 60s tick
+    (the fresh key_suffix defeats SAQ dedupe). Three-way outcome at the repair
+    branch: budget exhaustion terminal-fails (even when throttled — waiting
+    cannot help a run that can no longer be re-dispatched); a run dispatched
+    within the window is skipped silently (no enqueue, no terminal-fail); a run
+    whose window elapsed is re-dispatched. Between the budget and the throttle,
+    a never-re-claimable zombie is bounded by the mid-graph-wedge age backstop."""
+
+    @staticmethod
+    def _row(dispatched_minutes_ago: float | None, claim_count: int = 1) -> SimpleNamespace:
+        return _run_row(
+            RUN_RUNNING,
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=dispatched_minutes_ago,
+            claim_count=claim_count,
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatched_at_null_budget_available_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A never-dispatched nodeless zombie (dispatched_at NULL) is never
+        throttled: budget available → re-dispatched (enqueue called, no fail)."""
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
+            monkeypatch, [self._row(dispatched_minutes_ago=None)]
+        )
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        assert summary["repaired"] == 0
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        ingest.assert_not_awaited()
+        session.record_facts.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_recent_dispatch_throttled_no_enqueue_no_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run re-dispatched 10 minutes ago (within the 35-min nodeless
+        window) is THROTTLED: no duplicate enqueue, no terminal-fail — the run
+        is left untouched for a later tick (the throttle bounds the enqueue
+        rate; the budget bounds the claim cycles)."""
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
+            monkeypatch, [self._row(dispatched_minutes_ago=10)]
+        )
+        assert summary["nodeless_redispatched"] == 0
+        assert summary["nodeless_failed"] == 0
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+        # Throttle-skip is silent: no compensating fact, run untouched.
+        session.record_facts.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_window_elapsed_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run last dispatched 40 minutes ago (nodeless window elapsed) is
+        re-dispatched again — at most one re-dispatch per window."""
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(monkeypatch, [self._row(dispatched_minutes_ago=40)])
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_terminal_fails_even_when_throttled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ordering pinned: the budget check wins over the throttle. A run past
+        its claim budget is terminal-failed even with a fresh dispatched_at —
+        waiting cannot help a run that can no longer be re-dispatched."""
+        summary, reenqueue, _, _, _, session = await _run_reconcile(
+            monkeypatch, [self._row(dispatched_minutes_ago=10, claim_count=3)]
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["nodeless_redispatched"] == 0
+        reenqueue.assert_not_awaited()
+        session.record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
+
+    def test_throttle_helper_boundaries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Direct boundary checks of ``_is_nodeless_redispatch_throttled``:
+        NULL dispatched_at never throttles; a dispatch inside the window
+        throttles; past the window it does not (5-min margins around the 35-min
+        window — no exact-boundary flake)."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._is_nodeless_redispatch_throttled(self._row(None), 35) is False
+        assert ch._is_nodeless_redispatch_throttled(self._row(10), 35) is True
+        assert ch._is_nodeless_redispatch_throttled(self._row(34), 35) is True
+        assert ch._is_nodeless_redispatch_throttled(self._row(36), 35) is False
+
+
+class TestNodelessRedispatchPerTickCap:
+    """FAR-509 (qa-iterate): the nodeless re-dispatch is fleet-capped at
+    ``NODELESS_REDISPATCH_MAX_PER_TICK`` enqueues per tick — after a fleet-wide
+    worker wedge every aged nodeless zombie becomes throttle-eligible in the
+    SAME tick, and the fresh key_suffix defeats SAQ dedupe, so without the cap
+    the first recovery tick floods the queue. Mirrors the B3 enqueue-failed
+    cap: capped rows are deferred (no enqueue, no terminal-fail — they stay
+    running and become eligible again next tick; budget/throttle unaffected),
+    counted ``nodeless_capped``, warning logged once per tick. The cap gates
+    ONLY the re-dispatch outcome: budget-exhausted rows still terminal-fail
+    when the cap is hit."""
+
+    @staticmethod
+    def _rows(count: int) -> list[SimpleNamespace]:
+        """*count* distinct throttle-eligible, budget-available nodeless
+        zombies (dispatched 40 min ago — the 35-min window elapsed)."""
+        return [
+            _run_row(
+                uuid.uuid4(),
+                "running",
+                stale=False,
+                nodeless=True,
+                dispatched=False,
+                dispatched_minutes_ago=40,
+                claim_count=1,
+            )
+            for _ in range(count)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_burst_above_cap_enqueues_cap_and_defers_rest(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """4 eligible zombies with the cap patched to 2: exactly 2 enqueues,
+        the other 2 untouched (no enqueue, no terminal-fail), nodeless_capped
+        == 2, and the warning logs ONCE per tick (not per capped row)."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
+        rows = self._rows(4)
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, rows)
+        assert summary["nodeless_redispatched"] == 2
+        assert summary["nodeless_capped"] == 2
+        assert summary["nodeless_failed"] == 0
+        assert reenqueue.await_count == 2
+        ingest.assert_not_awaited()
+        session.record_facts.assert_not_awaited()
+        assert sum("nodeless re-dispatch cap hit" in r.message for r in caplog.records) == 1
+        # Stats plumbing: the capped count reaches set_dispatcher_reconcile_stats
+        # (the /healthz/ready dict) for this tick.
+        assert ch._dispatcher_reconcile_stats["nodeless_capped"] == 2
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_still_terminal_fails_when_cap_hit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Ordering pinned: the cap gates only the re-dispatch outcome. The
+        budget-exhausted zombie is placed AFTER the cap is already hit — it
+        still terminal-fails (the budget check precedes the cap; terminal-fail
+        reduces load and never enqueues)."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
+        exhausted = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=3,
+        )
+        rows = [*self._rows(3), exhausted]
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _, _, _, session = await _run_reconcile(monkeypatch, rows)
+        assert summary["nodeless_redispatched"] == 2
+        assert summary["nodeless_capped"] == 1
+        assert summary["nodeless_failed"] == 1
+        assert reenqueue.await_count == 2
+        session.record_facts.assert_awaited_once_with(exhausted.id, ORG)
+
+    @pytest.mark.asyncio
+    async def test_burst_at_cap_enqueues_all_without_capping(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Exactly *cap* eligible zombies (boundary): all enqueued,
+        nodeless_capped == 0, no cap warning."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
+        rows = self._rows(2)
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _, _, _, _ = await _run_reconcile(monkeypatch, rows)
+        assert summary["nodeless_redispatched"] == 2
+        assert summary["nodeless_capped"] == 0
+        assert summary["nodeless_failed"] == 0
+        assert reenqueue.await_count == 2
+        assert not any("nodeless re-dispatch cap hit" in r.message for r in caplog.records)
 
 
 class TestReconcileRedisFailSafe:
