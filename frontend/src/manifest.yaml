@@ -3025,6 +3025,33 @@ features:
         description: Reporting and analytics over runs, costs, and facts
     feat-audit:
         description: Audit trail and audit log
+        status: covered
+        behaviours:
+            # Cryptographic chain (SHA-256 linked events per org)
+            - "[x] Every AuditEvent records the SHA-256 of its canonical, compact JSON (sort_keys, separators=(',',':')) over event_type / actor / resource_type+id / payload / request_id / previous_hash / event_id / org / created_at, chaining each event to the prior one in the same organisation and forming a tamper-evident per-org chain with an AuditChainHead row tracking last_event_hash / last_event_id / event_count"
+            - "[x] Appends lock the chain head with SELECT ... FOR UPDATE so concurrent transactions cannot fork the chain; a race that creates the head between the lock check and the insert retries up to APPEND_MAX_RETRIES=3 with exponential backoff before re-raising (test_integrity_error_retries_then_succeeds / test_integrity_error_exhausts_retries)"
+            - "[x] The first event in an org has a NULL previous_hash; every subsequent event carries the hash of its immediate predecessor (test_first_event_creates_chain_head / test_second_event_links_to_first)"
+            - "[x] Append failure handling is typed and retry-scoped: a retryable IntegrityError backs off and retries, while a ProgrammingError (missing table) and SQLAlchemyError propagate immediately without retry"
+            - "[x] append_audit_event_isolated emits an event from a fresh post-commit transaction, re-establishing the RLS org + user context lost when SET LOCAL reverts on COMMIT; it fails open (a broken append is logged under log_key and never rolls back the completed operation) and always propagates CancelledError"
+            - "[x] Append-only enforcement is defense-in-depth: application-layer SQLAlchemy ORM listeners block UPDATE/DELETE on BOTH AuditEvent and ErrorEvent rows with AppendOnlyViolationError (idempotent, thread-safe, never double-registered), complementing the DB-level Postgres triggers (test_append_only.py)"
+            - "[x] Sanitised logging: invalid listing cursors are logged sanitised (never raw CR/LF control characters)"
+
+            # Chain verification
+            - "[x] GET /api/v1/admin/audit/verify recomputes the whole chain and returns {valid, total_events, checked_events, truncated, first_gap_index, first_tampered_id, chain_head_match, chain_count_mismatch, detail}; a missing chain head, a chain-head event_count mismatch, truncation, or a degenerate zero-fetch result all fail CLOSED as not valid"
+            - "[x] Tamper evidence is actionable: on a break the response reports the expected vs stored previous_hash at the first gap in a human-readable detail string (test_verify_chain_break_detail_first_event / test_verify_chain_break_detail_reports_expected_vs_actual_hash)"
+            - "[x] Verification is bounded to the most recent 10,000 events (truncated=true beyond that, reported not valid rather than silently partial)"
+
+            # Browse / export API (all under /api/v1/admin/audit, permission audit.manage)
+            - "[x] GET '' lists events with forward-only composite-cursor pagination (JSON {'c':created_at,'i':id} over created_at DESC, id DESC), clamps limit (API default 50) into 1..1000 at the core, filters by event_type / user_id / entity_type / from_date / to_date, always returns total, and an invalid user_id format is 422 while an invalid cursor falls back to the first page"
+            - "[x] POST /batch-detail returns full details for up to 100 event ids (BATCH_MAX_SIZE), skipping silently only invalid-UUID entries, so cross-page bulk selection works"
+            - "[x] GET /export returns paginated JSON (page / page_size clamped to 1..1000, ordered created_at ASC) with the same filters and a total, driving the admin CSV/JSONL export"
+            - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
+
+            # Frontend (AdminAuditLogView, /admin/audit)
+            - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
+        deferrals:
+            - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
+            - The export surface is paginated JSON only (no server-side streaming / scan export for the whole org in one response)
     feat-connectors:
         description: External tool connectors
         status: covered
@@ -3153,6 +3180,37 @@ features:
         description: Model backend management and setup
     feat-notifications:
         description: Notifications, email delivery, and notification logs
+        status: covered
+        behaviours:
+            # Endpoint (webhook) CRUD — /api/v1/notifications
+            - "[x] Webhook endpoints are org-scoped CRUD (list endpoints with notification.view; create/get/update/delete/restore with notification.manage); create requires an http:// or https:// URL that ALSO passes SSRF validation (is_valid_http_url + validate_outbound_url at create, async revalidation on update — test_create_endpoint_rejects_relative_url)"
+            - "[x] Endpoint secrets are Fernet-encrypted at rest and never exposed in responses; the events subscription is a JSON list matched per event type"
+            - "[x] Endpoints soft-delete (DELETE -> 204) and restore; a missing or soft-deleted endpoint is 404 on every read/update/delete/restore path"
+            - "[x] Team-scoped endpoints (team_id) may only be created/assigned by admins (403 otherwise), and dispatch prefers team-specific endpoints for a run's team, falling back to org-wide (team_id IS NULL) endpoints when none are subscribed"
+            - "[x] Break-glass hardening: create/update/delete are denied for break-glass-minted principals (deny_break_glass_mint), and at dispatch time endpoints owned by denied/inactive/deprecated break-glass accounts are re-checked and skipped fail-closed with per-endpoint isolation — a DB blip resolving owners is treated as denied and counted by the modulo_notifier_break_glass_owner_read_failures_total metric (test_break_glass_webhook_deny.py)"
+
+            # Dispatch / retry / dead-letter (modulo.core.notifier)
+            - "[x] A dispatched event POSTs a single {event, timestamp, payload} JSON body per subscribed endpoint with Content-Type application/json, X-Modulo-Signature sha256=<HMAC-SHA256 over the body> (empty string when the endpoint has no secret, or when the stored secret cannot be decrypted), X-Modulo-Timestamp and User-Agent Modulo-Notifier/1.0"
+            - "[x] Delivery retries up to MAX_ATTEMPTS=4 (1 initial + 3 retries) on non-2xx or transport errors with exponential delays [1s, 5s, 30s], and a 429 honours Retry-After capped at 60s, falling back to the default backoff for invalid/missing values"
+            - "[x] A delivery that exhausts its retries is dead-lettered: the endpoint's consecutive_dead_letter_count increments and the endpoint auto-disables (auto_disabled + disabled_at) at MAX_DEAD_LETTERS=10; a successful delivery resets the counter (only when non-zero); the bookkeeping survives DB errors and re-raises CancelledError"
+            - "[x] Every attempt is written to the delivery log (status delivered/dead_lettered, attempt_count, response_code, last_error, run_id), and the payload is retained ONLY when the caller opts in and is then Fernet-encrypted at rest — never stored plaintext"
+            - "[x] In-app notification creation runs ALONGSIDE webhook dispatch as an independent always-executed step: an org with zero webhook endpoints still receives its in-app notification, an in-app failure never aborts webhook delivery, and webhook dispatch never silently skips in-app creation (guards the historical early-return silent-loss bug)"
+
+            # Event surface
+            - "[x] 17 named event types drive the pipeline: hitl_awaiting, run_failed, run_stalled, budget_exceeded, claim_expired, hitl_overdue, hitl_gate_removed, hitl_gate_removal_denied, eval_regression, eval_blocked, feedback_pending, system_announcement, trigger_deactivated, guardrail_enforcement_gap, guardrail_kill_switch, guardrail_unexpected_skip and circuit_breaker_tripped"
+            - "[x] The NotificationEventMapper turns each dispatched event into a typed in-app notification with per-event config (level, scope, category, dismiss strategy, TTL) rendered from sanitised payload fields, and GET /api/v1/admin/notifications/available-events drives the endpoint editor's event picker"
+
+            # In-app notifications — /api/v1/notifications/in-app
+            - "[x] GET /dashboard returns the dashboard feed, GET /unread-count the badge count, GET '' the paginated inbox, GET/PUT /preferences the per-user notification preferences, GET /{id} the detail, and POST /{id}/review-later + POST /{id}/dismiss action the record"
+
+            # Admin delivery log + webhooks + email
+            - "[x] GET /api/v1/admin/notifications/deliveries is the cursor-paginated org-wide delivery log (filter by status / event_type / endpoint_id / from / to), and POST /deliveries/retry-all-failed re-dispatches every failed + dead-lettered delivery"
+            - "[x] Admin webhook management lives under /api/v1/admin/notifications (list/create/get/update) with the same secret-handling and break-glass deny rules as the user surface"
+            - "[x] Email delivery: GET/PUT /api/v1/admin/org/{org_id}/email-settings (feature email_config; org.email.view / org.email.manage) configures SMTP with a clear_password flag and smtp_timeout, and a POST test endpoint verifies the configuration"
+            - "[x] Frontend surfaces: team-tier notification centre (/notifications) with preferences, review-later and dismiss actions; team-tier email settings (/settings/email); admin delivery-log UI (/admin/notification-delivery) with status/event-type/date filters, a retry control, retry-all and an empty state"
+        deferrals:
+            - A realtime/push transport is not part of the notifier — webhook (+ HMAC) and in-app notification are the only delivery channels; email settings exist but the notifier does not fan out to SMTP subscribers
+            - Dead-letter retry is manual-and-bulk only (retry-all-failed); there is no per-endpoint dead-letter replay of retained payloads in the API surface
     feat-observability:
         description: Error dashboard, monitoring, and observability exports
     feat-onboarding:
