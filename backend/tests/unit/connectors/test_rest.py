@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import uuid
 from typing import Any
@@ -1792,6 +1793,227 @@ def test_recorded_request_headers_do_not_leak_auth() -> None:
     # The record is plain data (a display-only snapshot), never an executable replay.
     assert isinstance(record["headers"], dict)
     assert record["headers"].get("server") == "echo"
+
+
+# ── FAR-518: success-path response redaction (server-reflected credential) ───
+
+
+def test_write_result_redacts_reflected_credential_in_body() -> None:
+    """A write response whose JSON body echoes the bearer token is redacted from
+    the returned result — a server-reflected credential must never persist into the
+    run result / node output."""
+    secret = "echo-me-secret-token"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"ok": True, "echo": secret, "nested": {"auth": f"Bearer {secret}"}},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={})))
+    assert_write_result_shape(result)
+    assert secret not in json.dumps(result)
+    assert "***" in json.dumps(result)
+
+
+def test_write_result_redacts_credential_in_plain_body() -> None:
+    """A write response whose non-JSON raw body echoes the token is redacted (the
+    non-JSON ``body``/``content_type`` branch of ``_write_result``)."""
+    secret = "plain-body-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"ack {secret}", headers={"content-type": "text/plain"})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={})))
+    assert_write_result_shape(result)
+    assert secret not in json.dumps(result)
+    assert "***" in json.dumps(result)
+
+
+def test_passthrough_record_redacts_reflected_credential_in_body_and_headers() -> None:
+    """A passthrough read whose body AND a response header both echo the bearer
+    token are redacted from the returned record (header + body reflection)."""
+    secret = "echo-header-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=f"body {secret}",
+            headers={"content-type": "text/plain", "x-echo": secret},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "passthrough": True},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    record = result.records[0]
+    assert secret not in json.dumps(record)
+    assert "***" in record["body"]
+    assert "***" in record["headers"]["x-echo"]
+
+
+def test_read_result_redacts_query_secret_url_echoed_in_body() -> None:
+    """A read response that echoes the request URL (which carries the api_key as
+    a query-param credential) is redacted from the returned record — the URL's
+    query secret is a credential value and must be stripped wherever it appears."""
+    secret = "query-secret-value"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"records": [{"request_url": str(request.url)}]})
+
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "path": "/items",
+            "records_path": "records",
+        },
+        {"auth_mode": "api_key", "api_key": secret, "in": "query", "query_param_name": "api_key"},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert secret not in json.dumps(result.records)
+    assert "***" in json.dumps(result.records)
+
+
+def test_read_metadata_url_redacts_credential_rendered_into_path() -> None:
+    """``_transform`` metadata's ``url`` (built from ``request.url``) is redacted
+    when the credential value is rendered into the request URL — a query/path
+    secret carried in the URL must never be persisted into the run result."""
+    secret = "url-embedded-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/res/{{ q }}"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default", filters={"q": secret})))
+    assert secret not in json.dumps(result.metadata)
+    assert "***" in json.dumps(result.metadata)
+
+
+def test_write_result_leaves_legit_response_without_reflected_credential_unchanged() -> None:
+    """A legit response that never reflects a credential is returned unchanged —
+    value-based redaction only strips actual credential values, never legitimate
+    response content."""
+    secret = "unused-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "data": {"name": "demo", "count": 3}})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={})))
+    assert_write_result_shape(result)
+    assert result == {"ok": True, "data": {"name": "demo", "count": 3}}
+
+
+# ── FAR-518: basic-auth base64 blob redaction (server-reflected Authorization) ─
+
+
+def test_basic_auth_reflected_authorization_body_is_redacted() -> None:
+    """A write response whose body reflects the request's basic-auth Authorization
+    (the ``Basic <b64>`` header value and the decodable base64 blob) is redacted —
+    the SQL-less, decodable user:pass must never persist into the run result."""
+    username = "svc-user"
+    password = "svc-pass"
+    b64 = base64.b64encode(f"{username}:{password}".encode()).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"ok": True, "echo_auth": f"Basic {b64}", "echo_blob": b64},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users"},
+        {"auth_mode": "basic", "username": username, "password": password},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={})))
+    assert_write_result_shape(result)
+    assert result["ok"] is True
+    assert b64 not in json.dumps(result)
+    assert password not in json.dumps(result)
+    assert "***" in json.dumps(result)
+
+
+def test_basic_auth_reflected_authorization_header_is_redacted() -> None:
+    """A passthrough read whose RESPONSE header echoes the request's basic-auth
+    ``Authorization: Basic <b64>`` value is redacted from the returned record —
+    the base64 blob (decodable user:pass) must never persist into node output."""
+    username = "svc-user"
+    password = "svc-pass"
+    b64 = base64.b64encode(f"{username}:{password}".encode()).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="ack",
+            headers={"content-type": "text/plain", "x-echo-auth": f"Basic {b64}"},
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "passthrough": True},
+        {"auth_mode": "basic", "username": username, "password": password},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.query(ConnectorQuery(resource="default")))
+    record = result.records[0]
+    assert b64 not in json.dumps(record)
+    assert password not in json.dumps(record)
+    assert "***" in record["headers"]["x-echo-auth"]
+
+
+# ── FAR-518: no over-redaction for short, word-like credentials ──────────────
+
+
+def test_short_credential_does_not_mangle_legit_words() -> None:
+    """A short, word-like credential (password ``data``) is redacted ONLY as a
+    standalone credential-like value, never as a substring of a normal word —
+    legit response content that merely contains the substring is untouched
+    (FAR-518 no over-redaction)."""
+    secret = "data"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "data synced",
+                "note": "a data-point that stays",
+                "echo": {"token": secret},
+            },
+        )
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/users"},
+        {"auth_mode": "bearer", "token": secret},
+    )
+    c._transport = httpx.MockTransport(handler)
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={})))
+    body = json.dumps(result)
+    # Legit content that merely CONTAINS the substring is NOT mangled:
+    assert "data synced" in body
+    assert "data-point" in body
+    # An actual reflected credential value IS redacted:
+    assert '"token": "***"' in body
 
 
 # ── FAR-413: header-injection guards (query-param, body, header name) ───────

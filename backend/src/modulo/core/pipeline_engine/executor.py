@@ -68,6 +68,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
     SPLITTABLE_NODE_TYPES,
+    node_telemetry,
     resolve_node_contract_output,
 )
 from modulo.core.notifier import EVENT_HITL_AWAITING
@@ -79,7 +80,11 @@ from modulo.core.pipeline_engine.decorator import (
     set_connector_hub,
     set_model_backend_hub,
 )
-from modulo.core.pipeline_engine.error_codes import map_legacy_code, sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import (
+    _CODE_SANDBOX_AGENT_FAILED,
+    map_legacy_code,
+    sanitize_error_text,
+)
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.evidence import (
@@ -94,6 +99,7 @@ from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_o
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
+    MODULO_SYNTHETIC_FAILURE_MARKER,
     OutputSchemaValidationError,
     SandboxNodeFailedError,
     SupersededNodeError,
@@ -2381,11 +2387,17 @@ class PipelineExecutor:
         honest work verdict is False (§15.4), so the zero-work elevation banner
         is what renders. Same for a ``sandbox.no_output_json`` session-lost run
         (FAR-227): the agent produced no output at all, so it can never be
-        "work intact".
+        "work intact". Same for a FAR-510 downgraded run
+        (``failed`` + ``sandbox.agent_failed``): the synthetic failure envelope
+        is not a work artifact — the agent died.
         """
         if final_status not in _TERMINAL_STATUSES:
             return None
-        if final_status == "failed" and error_code in ("agent.failed", "sandbox.no_output_json"):
+        if final_status == "failed" and error_code in (
+            "agent.failed",
+            "sandbox.no_output_json",
+            _CODE_SANDBOX_AGENT_FAILED,
+        ):
             return False
         return compute_work_intact(completed_node_outputs, node_ids)
 
@@ -2732,6 +2744,146 @@ class PipelineExecutor:
             except Exception:
                 _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
+    @staticmethod
+    def _sandbox_failure_scan_views(value: Any) -> list[dict[str, Any]]:
+        """FAR-510 — the dict views of one per-node output value that may carry
+        the sandbox envelope fields (``status`` / the synthetic-failure marker).
+
+        A full runner envelope ``{artifacts, output}`` yields the value itself
+        (flat / legacy mixed bodies), the outer ``output`` telemetry view, and
+        the first artifact's inner ``output``. A post-P1b stored
+        ``outputs_json`` value is the PURE agent return (``None`` or
+        agent-authored business JSON) — scanned top-level only; the marker
+        requirement in the predicate keeps agent-authored JSON collision-free.
+        """
+        views: list[dict[str, Any]] = []
+        if not isinstance(value, dict):
+            return views
+        views.append(value)
+        outer = value.get("output")
+        if isinstance(outer, dict):
+            views.append(outer)
+        artifacts = value.get("artifacts")
+        if isinstance(artifacts, list) and artifacts and isinstance(artifacts[0], dict):
+            inner = artifacts[0].get("output")
+            if isinstance(inner, dict):
+                views.append(inner)
+        return views
+
+    @staticmethod
+    def _is_sandbox_synthetic_failure_view(view: dict[str, Any]) -> bool:
+        """FAR-510 — the marker-based downgrade predicate.
+
+        Requires ``status == "failed"`` AND the runner's machine marker
+        (``MODULO_SYNTHETIC_FAILURE_MARKER``) True — never summary text — so an
+        agent-authored failure shape (honest exit-code failure, business JSON
+        self-reporting failure) is never downgraded.
+        """
+        return view.get("status") == "failed" and view.get(MODULO_SYNTHETIC_FAILURE_MARKER) is True
+
+    def _downgrade_masked_sandbox_failures(
+        self,
+        *,
+        run_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str],
+        stored_node_outputs: dict[str, Any] | None = None,
+        stored_node_telemetry: dict[str, Any] | None = None,
+    ) -> tuple[str, str | None, str | None]:
+        """FAR-510 — downgrade a masked sandbox-agent failure to an honest fail.
+
+        The sandbox_agent runner's synthetic failure paths (generic exception,
+        schema validation) do NOT raise — they RETURN a failure envelope
+        stamped with the ``MODULO_SYNTHETIC_FAILURE_MARKER`` machine marker.
+        Node completion is output-presence-based, so that node counts as
+        completed and the run would finalize ``complete`` — a failed dispatch
+        masked as success.
+
+        Only a ``complete`` final_status is inspected (failed/eval_failed/etc.
+        are already honest). A match is a completed output on a node the
+        ``node_type_map`` says is ``sandbox_agent`` for which ANY scanned view
+        shows ``status == "failed"`` AND the synthetic-failure marker (see
+        :meth:`_is_sandbox_synthetic_failure_view`). Returns the inputs
+        unchanged when nothing matches.
+
+        The scan checks the per-node UNION of three views — the live
+        ``completed_node_outputs`` envelope, the run's STORED cumulative
+        ``outputs_json`` value, and the STORED ``node_telemetry_json`` view
+        (via the legacy-safe ``node_output_split.node_telemetry`` accessor,
+        which falls back to the legacy mixed-envelope inner output for pre-P1b
+        rows). A HITL resume only re-emits the resumed segment's node events,
+        so a masked failure from a PRIOR segment is only visible in the stored
+        columns — and those hold the POST-split shapes (``outputs_json`` =
+        pure return or ``None``; telemetry = the envelope fields), which are
+        DIFFERENT shapes from the live envelope by design. No view clobbers
+        another: a match in ANY view downgrades.
+        """
+        if final_status != "complete":
+            return final_status, error_code, error_detail
+        stored_outputs = stored_node_outputs or {}
+        stored_telemetry = stored_node_telemetry or {}
+        node_ids = set(completed_node_outputs) | set(stored_outputs) | set(stored_telemetry)
+        found: list[str] = []
+        for node_id in node_ids:
+            if node_type_map.get(node_id) != "sandbox_agent":
+                continue
+            views = self._sandbox_failure_scan_views(completed_node_outputs.get(node_id))
+            views.extend(self._sandbox_failure_scan_views(stored_outputs.get(node_id)))
+            views.extend(self._sandbox_failure_scan_views(node_telemetry(stored_telemetry, stored_outputs, node_id)))
+            if any(self._is_sandbox_synthetic_failure_view(view) for view in views):
+                found.append(node_id)
+        if not found:
+            return final_status, error_code, error_detail
+        _log.warning(
+            "pipeline.masked_sandbox_failure_downgraded",
+            extra={"run_id": str(run_id), "node_ids": sorted(found)},
+        )
+        return "failed", _CODE_SANDBOX_AGENT_FAILED, "Sandbox agent node(s) failed: " + ", ".join(sorted(found))
+
+    async def _load_stored_node_columns(
+        self, *, run_id: uuid.UUID, org_id: uuid.UUID
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """FAR-510 — the run's STORED cumulative per-node columns.
+
+        Returns ``(outputs_json, node_telemetry_json)``. A HITL resume only
+        re-emits the resumed segment's node events, so the live
+        ``completed_node_outputs`` can miss a masked sandbox failure from a
+        prior segment; the stored row is the cumulative truth. Since the P1b
+        write-flip the two columns hold DIFFERENT shapes (pure return vs
+        telemetry envelope), so BOTH are loaded and the downgrade scans a
+        per-node view of each. Best-effort (guard-the-guard): any failure —
+        including a missing row or a non-dict column — yields empty dicts so
+        the downgrade falls back to scanning the live dict only. It must never
+        crash finalization.
+        """
+        if self._session_factory is None:
+            return {}, {}
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
+                run = await get_run(session, run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.masked_sandbox_failure_stored_scan_unavailable",
+                extra={"run_id": str(run_id)},
+                exc_info=True,
+            )
+            return {}, {}
+        if run is None:
+            return {}, {}
+        outputs_json = getattr(run, "outputs_json", None)
+        telemetry_json = getattr(run, "node_telemetry_json", None)
+        return (
+            dict(outputs_json) if isinstance(outputs_json, dict) else {},
+            dict(telemetry_json) if isinstance(telemetry_json, dict) else {},
+        )
+
     async def _finalize_run_after_stream(
         self,
         *,
@@ -2751,8 +2903,36 @@ class PipelineExecutor:
         Computes ``work_intact``, runs ``finalize_cost``, records the
         compensating daily fact when needed, fetches the final row, and fires
         the post-terminal evidence probes. ``final_status`` reflects the
-        terminal/awaiting_human outcome of the stream.
+        terminal/awaiting_human outcome of the stream, after the FAR-510
+        masked-sandbox-failure downgrade.
         """
+        # FAR-510: a sandbox_agent node whose dispatch died to a generic
+        # exception RETURNS a failed envelope instead of raising, and node
+        # completion is output-presence-based — so a failed dispatch would
+        # otherwise finalize the run ``complete``. Downgrade BEFORE the
+        # eval_blocked audit, work_intact, and finalize_cost so every
+        # downstream consumer sees the honest status. The scan also covers the
+        # run's STORED cumulative outputs (resume parity: a HITL resume only
+        # re-emits the resumed segment, so a masked failure from a prior
+        # segment is only visible in the stored row). The extra run-row read
+        # happens on the complete path ONLY — failed/awaiting_human skip it.
+        stored_node_outputs: dict[str, Any] = {}
+        stored_node_telemetry: dict[str, Any] = {}
+        if final_status == "complete":
+            stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(
+                run_id=run_id, org_id=org_id
+            )
+        final_status, error_code, error_detail = self._downgrade_masked_sandbox_failures(
+            run_id=run_id,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+            stored_node_outputs=stored_node_outputs,
+            stored_node_telemetry=stored_node_telemetry,
+        )
+
         # Record audit events for block failures on resume.
         eval_blocked = final_status == "eval_failed" and error_code == "eval_blocked"
         if eval_blocked:

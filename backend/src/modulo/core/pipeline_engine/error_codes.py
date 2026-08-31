@@ -47,6 +47,9 @@ _CODE_EVAL_BLOCKED = "eval.blocked"
 _CODE_CONTRACT_SCHEMA = "contract.schema"
 _CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
 _CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
+# FAR-510: the finalize-time downgrade code for a sandbox_agent node whose
+# synthetic failure envelope was masked as a completed output.
+_CODE_SANDBOX_AGENT_FAILED = "sandbox.agent_failed"
 _CODE_CAPACITY_ORG = "capacity.org"
 # FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
 # the upstream side-effect state is unknowable. This is a DISTINCT terminal
@@ -253,6 +256,19 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
             "Sandbox provisioning was retried but the rate-limit retry budget"
             " was exhausted within the node timeout window."
         ),
+    ),
+    # FAR-510: a sandbox_agent node whose synthetic failure path (generic
+    # exception, schema validation) RETURNED the stamped failure envelope
+    # (instead of raising) is downgraded from "complete" to "failed" at
+    # finalization. The executor writes this exact dotted spelling into
+    # ``runs.error_code`` (a registry key passes through ``map_legacy_code``
+    # unchanged) — otherwise the honest downgrade would present as
+    # ``harness.unknown``.
+    _CODE_SANDBOX_AGENT_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Sandbox agent execution failed; the run was downgraded from complete at finalization.",
     ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
@@ -608,6 +624,16 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"secret_[A-Za-z0-9]{16,}"),
     re.compile(r"npm_[A-Za-z0-9]{20,}"),
     GITHUB_PAT_PATTERN,
+    # Vendor connector credential formats (FAR-513 defense-in-depth). These
+    # mirror the credential values the vendor connectors hold so a token that
+    # escapes a connector boundary is still caught by the sanitizer even when
+    # the value-based connector redaction was not applied.
+    re.compile(r"lin_api_[A-Za-z0-9]{20,}"),
+    re.compile(r"(?:DD-API-KEY|DD-APPLICATION-KEY)[\s:=]+[0-9A-Fa-f]{32}"),
+    re.compile(r"(?i)n8n[\s_-]*(?:api[\s_-]*)?(?:key|token)[\s:=]+[A-Za-z0-9]{20,}"),
+    re.compile(r"u\+[0-9A-Fa-f]{20,}"),
+    re.compile(r"xapp-[A-Za-z0-9-]{10,}"),
+    re.compile(r"(?i)sentry[_-]?(?:auth[_-]?token|token|dsn)[\s:=]+[A-Za-z0-9]{32,}"),
 )
 
 # Hard control characters (NUL, bell, vertical tab, form feed, C0 except
