@@ -1131,6 +1131,47 @@ async def _srem_streak_member(redis_client: AsyncRedis, key: str, raw: str) -> N
         _log.warning("streak.notify_pending_remove_failed key=%s", key)
 
 
+def _build_deactivation_payload(
+    trigger_id: uuid.UUID,
+    pipeline_id: uuid.UUID | None,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the deactivation payload forwarded to the notifier."""
+    return {
+        "id": trigger_id,
+        "pipeline_id": pipeline_id,
+        "streak": int(data.get("streak") or 0),
+        "reason": data.get("reason") or "no_delivery",
+    }
+
+
+async def _reenqueue_streak_notify_member(
+    redis_client: AsyncRedis,
+    org_id: uuid.UUID,
+    key: str,
+    raw: str,
+    deactivation: dict[str, Any],
+    threshold: int,
+    pipeline_name: str,
+    retry_count: int,
+) -> None:
+    """Drop the member from the pending set and re-enqueue it with a bumped
+    retry_count + cooldown stamp (the SET's TTL is refreshed by the write), so
+    the member is retried at most once per 15 min and never floods the audit
+    chain. Best-effort — never raises.
+    """
+    await _srem_streak_member(redis_client, key, raw)
+    await _write_streak_notify_pending(
+        redis_client,
+        org_id,
+        data=deactivation,
+        threshold=threshold,
+        pipeline_name=pipeline_name,
+        retry_count=retry_count + 1,
+        last_retry_at=int(time.time()),
+    )
+
+
 async def _retry_one_pending_member(
     org_id: uuid.UUID,
     redis_client: AsyncRedis,
@@ -1182,12 +1223,7 @@ async def _retry_one_pending_member(
         attempted += 1
         if attempted > max_retries:
             return "stop", attempted  # per-tick dispatch cap reached — leave the rest pending
-        deactivation: dict[str, Any] = {
-            "id": trigger_id,
-            "pipeline_id": pipeline_id,
-            "streak": int(data.get("streak") or 0),
-            "reason": data.get("reason") or "no_delivery",
-        }
+        deactivation = _build_deactivation_payload(trigger_id, pipeline_id, data)
         ok = await _notify_streak_deactivation(
             org_id,
             data=deactivation,
@@ -1205,15 +1241,15 @@ async def _retry_one_pending_member(
         # Re-enqueue with a bumped retry_count + cooldown stamp (the SET's
         # TTL is refreshed by the write) so the member is retried at most
         # once per 15 min and never floods the audit chain.
-        await _srem_streak_member(redis_client, key, raw)
-        await _write_streak_notify_pending(
+        await _reenqueue_streak_notify_member(
             redis_client,
             org_id,
-            data=deactivation,
-            threshold=threshold,
-            pipeline_name=data.get("pipeline_name") or "",
-            retry_count=retry_count + 1,
-            last_retry_at=int(time.time()),
+            key,
+            raw,
+            deactivation,
+            threshold,
+            data.get("pipeline_name") or "",
+            retry_count,
         )
         return "failed", attempted
     except Exception:
@@ -1229,6 +1265,19 @@ def _streak_member_in_cooldown(data: dict[str, Any]) -> bool:
     if not isinstance(last_retry_at, (int, float)):
         return False
     return time.time() - float(last_retry_at) < _STREAK_RETRY_COOLDOWN_SECONDS
+
+
+async def _read_streak_pending_members(redis_client: AsyncRedis, org_id: uuid.UUID) -> set[str] | None:
+    """Read the per-org pending notify set; ``None`` on failure (skip the pass)."""
+    try:
+        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
+        # (dual sync/async); we always hold the async client, so cast.
+        return await cast(Awaitable[set[str]], redis_client.smembers(_streak_notify_pending_key(org_id)))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.notify_pending_read_failed org=%s", org_id)
+        return None
 
 
 async def _retry_pending_streak_notifications(
@@ -1251,16 +1300,10 @@ async def _retry_pending_streak_notifications(
         return 0
     if deadline is not None and time.monotonic() > deadline:
         return 0  # sweep budget already exhausted — skip the pass entirely
-    key = _streak_notify_pending_key(org_id)
-    try:
-        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
-        # (dual sync/async); we always hold the async client, so cast.
-        members = await cast(Awaitable[set[str]], redis_client.smembers(key))
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("streak.notify_pending_read_failed org=%s", org_id)
+    members = await _read_streak_pending_members(redis_client, org_id)
+    if members is None:
         return 0
+    key = _streak_notify_pending_key(org_id)
     retried = 0
     attempted = 0
     for raw in members or []:
