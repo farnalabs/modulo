@@ -1073,7 +1073,7 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — the cost-tracking probe (spec Â§4.7, every 5 min, retries=0).
+    """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
 
     The verification canary for the ledger/report system: samples the N=50 most
     recent terminal runs per org, checks ``total == sum``, asserts the org-row
@@ -1436,7 +1436,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         ),
         # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
         # separately by the heartbeat/staleness alert), unique=True so a second
-        # overlapping instance cannot double-advance probe_state (Â§4.7).
+        # overlapping instance cannot double-advance probe_state (§4.7).
         # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
         # 6-field expression ("0 */5 * * * *") differently and the probe fires
         # per-5-hours instead of per-5-minutes (bug class #680).

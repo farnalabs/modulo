@@ -181,7 +181,7 @@ class TestCrossTeamPipelineVisibility:
         (``SELECT owner_team_id, visibility FROM pipelines WHERE id = ...``)
         runs UNDER RLS in its own transaction. A non-member's SELECT is
         filtered to no row, so the dependency raises 404 before the
-        membership check ever fires ÔÇö the row is invisible at the DB layer.
+        membership check ever fires — the row is invisible at the DB layer.
 
         ``row_visible=False`` simulates that RLS filtering (the resolver sees
         no row). The app-layer ``require_team_membership_or_admin`` gate is

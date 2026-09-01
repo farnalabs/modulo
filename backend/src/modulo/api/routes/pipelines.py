@@ -141,7 +141,7 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     """Resolve whether the caller may strip a guardrail binding from a node.
 
     Admin-level only (``org_role == "admin"``, the role the ``guardrail.manage``
-    permission requires) ÔÇö the same privilege the admin-only guardrail
+    permission requires) — the same privilege the admin-only guardrail
     definition / apply / reject endpoints enforce. Uses the flag-independent
     numeric hierarchy so enforcement stays live even when authz.enforce is
     disabled (mirrors ``_is_privileged`` for the HITL guard).
@@ -273,11 +273,11 @@ async def _deny_hitl_gate(
     exc: HitlGateWeakeningDenied,
     request_id: str | None = None,
 ) -> None:
-    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 ┬º5).
+    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 §5).
 
     The guarded write already rolled back (guard-runs-before-delete), so the
     denial audit event is written in a fresh transaction immediately after the
-    denial ÔÇö it must never be lost with the rolled-back write.
+    denial — it must never be lost with the rolled-back write.
     """
     try:
         async with session.begin():
@@ -462,7 +462,7 @@ class PipelineUpdate(TeamVisibilityMixin):
     @field_validator("retry_policy", mode="before")
     @classmethod
     def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any]:
-        # None clears the policy (empty dict) ÔÇö the column is non-nullable.
+        # None clears the policy (empty dict) — the column is non-nullable.
         return _validate_retry_policy(value) or {}
 
     @field_validator("max_duration_seconds", mode="before")
@@ -511,7 +511,7 @@ class PipelineResponse(BaseModel):
     folder_id: uuid.UUID | None = None
     # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
     # UI warns the user to re-save the graph so connectors/model backends are
-    # rebound for the new team (PRD ┬º9.3 ownership transfer).
+    # rebound for the new team (PRD §9.3 ownership transfer).
     connector_rebind_required: bool = False
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -521,7 +521,7 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_retry_policy(cls, value: Any) -> dict[str, Any]:
         # The column is non-nullable with a {} default, but legacy rows and
-        # partial ORM objects may expose None ÔÇö the no-policy default is {}.
+        # partial ORM objects may expose None — the no-policy default is {}.
         return value if isinstance(value, dict) else {}
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -618,7 +618,7 @@ class PipelineGraphNode(BaseModel):
     # marked idempotent=false (e.g. one with an external side effect like
     # creating a PR or charging a card) suppresses BOTH the run-level
     # retry_policy re-dispatch and the node-level transient retry for any graph
-    # that contains it ÔÇö re-running would double-execute the side effect.
+    # that contains it — re-running would double-execute the side effect.
     idempotent: bool = Field(
         default=True,
         description="Whether the node is logically safe to re-run. When false, "
@@ -631,7 +631,7 @@ class PipelineGraphNode(BaseModel):
     parameter_set_id: uuid.UUID | None = None
     parameter_overrides: dict[str, Any] | None = None
     template_id: str | None = None
-    # FAR-296: sandbox_agent mode ÔÇö "llm" (default, dispatches an LLM agent with
+    # FAR-296: sandbox_agent mode — "llm" (default, dispatches an LLM agent with
     # agent_command + rendered prompt) or "script" (runs script_command verbatim
     # with the full run input at /home/user/input.json).
     mode: Literal["llm", "script"] = "llm"
@@ -641,7 +641,7 @@ class PipelineGraphNode(BaseModel):
     # FAR-296 Phase 3: egress control + resource-limit config surface.
     # egress_policy: "default" (internet allowed, e2b default), "deny_all"
     # (allow_internet_access=False), or "selected" (allow_internet_access=False
-    # + a host:port egress_allowlist carried as metadata ÔÇö FAR-296 Phase 3b-3).
+    # + a host:port egress_allowlist carried as metadata — FAR-296 Phase 3b-3).
     # resource_limits: a known-subset dict carried as sandbox metadata so a
     # server-side template/config can enforce them.
     egress_policy: Literal["default", "deny_all", "selected"] | None = None
@@ -649,7 +649,7 @@ class PipelineGraphNode(BaseModel):
     resource_limits: dict[str, Any] | None = None
     # FAR-212 PR B: sandbox write/egress mediation surface. ``read_only`` mounts
     # / chmods the workspace read-only at runtime (so writes are impossible for
-    # the agent's non-root user ÔÇö write_files derives False) and
+    # the agent's non-root user — write_files derives False) and
     # ``git_credentials`` scopes the provisioned git credential (``scoped`` =
     # limited to the allowlisted github.com host via an enforced helper;
     # ``unscoped`` = full access, the default; ``none`` = no git credentials are
@@ -661,7 +661,7 @@ class PipelineGraphNode(BaseModel):
     git_credentials: Literal["scoped", "unscoped", "none"] | None = None
     # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the
     # node's sandbox is killed by the platform-side runtime killer once the
-    # wall-clock elapsed time exceeds this budget ÔÇö a tighter spend bound than
+    # wall-clock elapsed time exceeds this budget — a tighter spend bound than
     # the node timeout. Must be a positive int (validated at save-time).
     wallclock_budget_seconds: int | None = None
     # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
@@ -773,7 +773,7 @@ class PipelineGraphNode(BaseModel):
         ):
             raise ValueError("fan_out is only allowed on agent / sandbox_agent nodes")
         # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
-        # A non-sandbox node that sets them is rejected ÔÇö the enforcement surface
+        # A non-sandbox node that sets them is rejected — the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
         # agents, and a declared-but-unenforced field on another node type would
         # be a silent no-op.
@@ -835,7 +835,7 @@ class PipelineGraphNode(BaseModel):
             raise ValueError("Composite nodes cannot have connector bindings")
 
     def _validate_sandbox_agent_node(self) -> None:
-        # FAR-296 mode-aware validation ÔÇö ONE shared helper used by every
+        # FAR-296 mode-aware validation — ONE shared helper used by every
         # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
         # MCP update_pipeline_graph, config linter) so save-time and run-time
         # agreement is guaranteed. Imported from the lightweight sandbox_mode
@@ -1053,7 +1053,7 @@ async def _enforce_connector_team_bindings(
 ) -> None:
     """Block graph saves that bind a team-private connector to a different team's pipeline.
 
-    PRD ┬º9.3: a connector with ``visibility: team`` is only usable within pipelines
+    PRD §9.3: a connector with ``visibility: team`` is only usable within pipelines
     owned by the same team. Violations raise 409 ``connector_team_mismatch`` at the
     pipeline-save command layer.
     """
@@ -1078,7 +1078,7 @@ async def _enforce_model_backend_team_bindings(
 ) -> None:
     """Block graph saves that pin a team-private model backend from another team.
 
-    PRD ┬º9.3: a model backend with ``visibility: team`` is only usable within
+    PRD §9.3: a model backend with ``visibility: team`` is only usable within
     pipelines owned by the same team, mirroring the connector rule. Violations
     raise 409 ``model_backend_team_mismatch`` at the pipeline-save command layer.
     """
@@ -1274,7 +1274,7 @@ async def _resolve_graph_references(
     Whenever the graph resolves model-backend pins, they are checked against
     the pipeline's team: a team-private model backend pinned by a pipeline owned
     by a different team (or by no team at all) raises 409
-    ``model_backend_team_mismatch`` (PRD ┬º9.3), mirroring the connector rule
+    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
     which is also enforced unconditionally. The mismatch rule itself decides
     whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
     backend.
@@ -1440,7 +1440,7 @@ async def _validate_graph_save(
     """Run save-time graph validation, returning the advisory issue list.
 
     Loads the pipeline's guardrail eval rows so the graph-save validation can
-    reject a per-node guardrail-cap violation (FAR-223 item 7) ÔÇö the
+    reject a per-node guardrail-cap violation (FAR-223 item 7) — the
     authoring-time rejection that the create_run fail-closed backstop also
     enforces at run start.
     """
@@ -1545,7 +1545,7 @@ async def replace_pipeline_graph_endpoint(
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
     # service-layer backstop (operator+ privileged under the row lock, non-
-    # privileged callers denied ÔÇö hitl-gate-removal-guard-plan.md v19 ┬º3 item
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
     # 5). There is deliberately no admin-only route gate here: operators are
     # "privileged" for weakening by design, and equivalent weakening remains
     # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
@@ -1565,7 +1565,7 @@ async def replace_pipeline_graph_endpoint(
             )
             # FAR-309 PR A review: the guardrail-binding strip guard now lives
             # in the SERVICE LAYER (replace_pipeline_graph, under the row lock)
-            # so every graph-mutation caller inherits it ÔÇö including the
+            # so every graph-mutation caller inherits it — including the
             # PATCH /{id} graph_json path and snapshot rollback. The admin flag
             # is resolved here and the service layer re-reads the live role
             # under the lock for REST callers.
@@ -1653,7 +1653,7 @@ async def _assert_team_transition_allowed(
     The endpoint's ``require_team_membership_or_admin`` dependency checks the
     CURRENT ``owner_team_id`` at request time, but the update can change
     ``visibility`` or reassign/clear ``owner_team_id`` without re-checking the
-    team gate against the NEW values ÔÇö a member could downgrade a team-private
+    team gate against the NEW values — a member could downgrade a team-private
     pipeline to org-visible or hand it to a team they don't belong to
     (task-authz-b-visibility-guard). Re-runs the RLS-parity membership-or-admin
     gate inside the same transaction (RLS context is transaction-scoped).
@@ -1776,7 +1776,7 @@ async def _apply_graph_update(
 
 
 def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
-    """Raise the 409 for an ownership transfer blocked by active runs (PRD ┬º9.3)."""
+    """Raise the 409 for an ownership transfer blocked by active runs (PRD §9.3)."""
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
@@ -2518,7 +2518,7 @@ async def rollback_snapshot_endpoint(
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
     # service-layer backstop (operator+ privileged under the row lock, non-
-    # privileged callers denied ÔÇö hitl-gate-removal-guard-plan.md v19 ┬º3 item
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
     # 5). There is deliberately no admin-only route gate here, matching the
     # graph-replace endpoint: operators are "privileged" for weakening by
     # design (equivalent weakening stays reachable via update_pipeline).

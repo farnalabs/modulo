@@ -1,5 +1,5 @@
 """Service-layer backstop guard tests for replace_pipeline_graph /
-rollback_to_snapshot (hitl-gate-removal-guard-plan.md v19 Â§3, Â§7)."""
+rollback_to_snapshot (hitl-gate-removal-guard-plan.md v19 §3, §7)."""
 
 from __future__ import annotations
 
@@ -299,7 +299,7 @@ async def test_missing_membership_denies_with_role_changed(monkeypatch: pytest.M
 
 async def test_non_liftable_regardless_of_authz_enforce(monkeypatch: pytest.MonkeyPatch) -> None:
     """With the general kill switch OFF (authz_enforce=false), a non-admin
-    weakening attempt is still denied â€” the guard never reads the flag."""
+    weakening attempt is still denied — the guard never reads the flag."""
     token = set_authz_enforce(False)
     try:
         pipeline = _PipelineRow()
@@ -307,7 +307,7 @@ async def test_non_liftable_regardless_of_authz_enforce(monkeypatch: pytest.Monk
         session = _build_session(_pipeline_result(pipeline), _edges_result(old))
 
         # If the guard ever consulted the kill switch it would call
-        # resolve_authz_enforce â€” make that a loud failure.
+        # resolve_authz_enforce — make that a loud failure.
         def _fail_switch(*_a: object, **_k: object) -> None:
             raise AssertionError("guard must not consult the authz kill switch")
 
@@ -414,7 +414,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
         )
     audit.assert_not_awaited()
 
-    # Allowed for privileged (admin) â€” the write proceeds and audit fires.
+    # Allowed for privileged (admin) — the write proceeds and audit fires.
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
         return "admin"
 
