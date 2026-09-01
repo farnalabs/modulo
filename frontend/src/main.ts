@@ -68,7 +68,19 @@ async function main() {
   const localeStore = useLocaleStore()
   localeStore.initLocale()
 
-  app.use(VueQueryPlugin)
+  // Do NOT refetch every query when the browser window regains focus: an OS
+  // window switch would otherwise re-run every active query and flash loading
+  // states across the whole page. Route changes and manual refreshes still
+  // refetch normally; per-query `staleTime` (useDataFetch) is unaffected.
+  app.use(VueQueryPlugin, {
+    queryClientConfig: {
+      defaultOptions: {
+        queries: {
+          refetchOnWindowFocus: false,
+        },
+      },
+    },
+  })
 
   // Mount only once the router has resolved the initial navigation. Without
   // this, a direct load of a guarded route (e.g. /remy) flashes the full

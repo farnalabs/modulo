@@ -1158,6 +1158,13 @@ export interface paths {
          * Sso Providers
          * @description List configured SSO providers (OIDC) and whether SAML is enabled.
          *
+         *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
+         *     authenticated, so it must never require a user and must never surface an
+         *     auth error. Plan/feature resolution is anonymous (via
+         *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
+         *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
+         *     (no 401/402) so the login page simply renders no SSO options.
+         *
          *     OIDC providers are merged from the sso_providers DB table (preferred) and
          *     the env-var fallback, deduplicated by provider_id. The DB read goes through
          *     the system session (``modulo_system`` role, instance-global) so the login

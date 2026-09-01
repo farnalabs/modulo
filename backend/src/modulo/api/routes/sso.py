@@ -20,6 +20,7 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
 )
+from modulo.core.feature_flags import CommunityTier, PlanContext, resolve_plan_context
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import get_enabled_saml_provider, list_enabled_oidc_providers
 from modulo.settings import Settings, get_settings
@@ -89,15 +90,41 @@ async def _get_enabled_saml_global(
     return provider
 
 
+async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
+    """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
+
+    Mirrors :func:`modulo.api.dependencies.get_plan_context` minus the
+    ``get_current_user`` dependency: with no organisation context the plan
+    resolves from the system-level license (in-memory store, then env var),
+    falling back to the community tier. The TypeError/AttributeError fallback
+    matches get_plan_context's handling of test-double sessions.
+
+    Never raises auth errors — the login page calls the SSO discovery endpoint
+    before any token exists.
+    """
+    try:
+        async with session.begin():
+            ctx: PlanContext = await resolve_plan_context(settings, session, org=None)
+            return ctx
+    except (TypeError, AttributeError):
+        return CommunityTier()
+
+
 @router.get("/sso/providers")
 @handle_db_errors("sso.sso_providers")
 async def sso_providers(
-    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled.
+
+    Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
+    authenticated, so it must never require a user and must never surface an
+    auth error. Plan/feature resolution is anonymous (via
+    ``_anonymous_plan_context``); when the SSO feature is not enabled /
+    unlicensed the endpoint answers a normal 200 with an EMPTY provider list
+    (no 401/402) so the login page simply renders no SSO options.
 
     OIDC providers are merged from the sso_providers DB table (preferred) and
     the env-var fallback, deduplicated by provider_id. The DB read goes through
@@ -108,6 +135,10 @@ async def sso_providers(
     SAML provider exists in the DB, or if env-var SAML is fully configured
     (enabled + license + metadata).
     """
+    plan = await _anonymous_plan_context(settings, session)
+    if not plan.feature_enabled("sso"):
+        return SsoProvidersResponse(oidc=[], saml=False)
+
     try:
         async with session.begin():
             oidc_providers = await _list_enabled_oidc_global(system_session, session)

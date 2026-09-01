@@ -594,6 +594,10 @@ onUnmounted(() => {
   border-top: none;
   border-bottom: none;
   border-right: none;
+  /* The docked panel is an overlay, not a layout column: AppLayout no longer
+     reserves padding-right for it, so this shadow is what visually separates
+     the panel from the full-width content flowing underneath it. */
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
 }
 .remy-maximised {
   inset: 0;

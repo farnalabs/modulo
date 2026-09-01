@@ -202,8 +202,20 @@ class TestJitProvisioning:
 
 
 class TestSsoProvidersEndpoint:
+    """The /api/v1/auth/sso/providers discovery endpoint (pre-auth, login page).
+
+    Plan resolution is anonymous (no user dependency): SSO enabled via a
+    licensed tier is simulated by stubbing the in-memory license store.
+    """
+
+    _TEAM_SSO_LICENSE = SimpleNamespace(tier="team", features=["sso"], expires_at=None)
+
     def test_returns_oidc_providers(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/sso/providers")
+        with (
+            patch("modulo.core.license.get_license", return_value=self._TEAM_SSO_LICENSE),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["oidc"]) == 2
@@ -217,15 +229,29 @@ class TestSsoProvidersEndpoint:
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
         )
-        resp = client.get("/api/v1/auth/sso/providers")
+        with (
+            patch("modulo.core.license.get_license", return_value=self._TEAM_SSO_LICENSE),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
-    def test_saml_disabled_without_license(self, client: TestClient) -> None:
-        """SSO providers list returns 402 when license is absent."""
+    def test_sso_providers_disabled_returns_200_empty(self, client: TestClient) -> None:
+        """Unlicensed/feature-disabled -> normal 200 with an EMPTY providers list.
+
+        The endpoint is fetched by the login page BEFORE authentication, so it
+        must never raise an auth/plan error (the old 402 behaviour put a console
+        error on every login).
+        """
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
-        resp = client.get("/api/v1/auth/sso/providers")
-        assert resp.status_code == 402
+        with (
+            patch("modulo.core.license.get_license", return_value=None),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
 
 
 # ---------------------------------------------------------------------------
@@ -1312,6 +1338,11 @@ class TestSsoProvidersEndpointDb:
 
         db_provider = SimpleNamespace(provider_id="auth0")
         with (
+            patch(
+                "modulo.core.license.get_license",
+                return_value=SimpleNamespace(tier="team", features=["sso"], expires_at=None),
+            ),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
             patch("modulo.api.routes.sso.list_enabled_oidc_providers", new_callable=AsyncMock) as mock_list,
             patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_saml,
         ):

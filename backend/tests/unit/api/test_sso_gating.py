@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,6 +58,12 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Shape the CRUD read results so resolve_plan_context's catalog reads and
+    # the provider listings see empty lists instead of MagicMock iterables.
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
     return session
 
 
@@ -164,14 +171,88 @@ class TestAdminSsoGating:
         assert resp.status_code == 402
 
 
-# ── SSO auth login/callback endpoints (should return 402 when feature disabled) ──
+# ── SSO auth login/callback endpoints ────────────────────────────────────
+#
+# NOTE: /api/v1/auth/sso/providers is a PRE-AUTH discovery endpoint (the login
+# page fetches it before any user exists). It no longer sits behind
+# require_feature/get_current_user: when the SSO feature is disabled or
+# unlicensed it answers a normal 200 with an EMPTY provider list, so the
+# pre-auth call never surfaces an auth error in the browser console. The other
+# auth endpoints (login flows) keep the 402 gate — they are only reached by
+# users clicking a provider button that this endpoint advertised.
 
 
 class TestSsoAuthGating:
-    def test_sso_providers_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
-        resp = client_no_sso.get("/api/v1/auth/sso/providers")
-        assert resp.status_code == 402
-        assert "not available on your plan" in resp.text.lower()
+    def test_sso_providers_returns_200_empty_when_disabled(self, client_no_sso: TestClient) -> None:
+        """SSO unlicensed -> normal 200 with an empty providers list (no 402/401)."""
+        with (
+            patch("modulo.core.license.get_license", return_value=None),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client_no_sso.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
+    def test_sso_providers_needs_no_authentication(self) -> None:
+        """Anonymous request with the REAL auth dependencies in place gets a 200.
+
+        Regression guard: require_feature used to pull get_current_user into
+        this route, which 401'd the pre-auth login-page call.
+        """
+        app.dependency_overrides.clear()
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        # get_current_user / get_plan_context deliberately NOT overridden: the
+        # real dependencies would run for any request. The route must never
+        # consult them.
+        try:
+            client = TestClient(app)
+            with (
+                patch("modulo.core.license.get_license", return_value=None),
+                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            ):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
+    def test_sso_providers_lists_env_providers_when_enabled(self, client_with_sso: TestClient) -> None:
+        """SSO licensed/enabled -> 200 with the configured OIDC providers."""
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key="valid-license-key",
+            modulo_oidc_providers=json.dumps(
+                [
+                    {
+                        "provider_id": "google",
+                        "client_id": "cid",
+                        "client_secret": "secret",
+                        "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                    }
+                ]
+            ),
+        )
+        app.dependency_overrides[get_settings] = lambda: settings
+        licensed = SimpleNamespace(tier="team", features=["sso"], expires_at=None)
+        with (
+            patch("modulo.core.license.get_license", return_value=licensed),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client_with_sso.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "google" in [p["provider_id"] for p in body["oidc"]]
 
     def test_oidc_login_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/oidc/google/login")

@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
@@ -43,7 +43,8 @@ afterEach(() => {
 import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
 import { useOnboardingStore } from '../../composables/useOnboarding'
-import { api } from '../../lib/api/client'
+import { useRemyStore } from '../../composables/useRemyStore'
+import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -280,5 +281,84 @@ describe('AppLayout', () => {
     const bannerWrapper = wrapper.find('main > div.relative.z-10')
     expect(bannerWrapper.classes()).toContain('relative')
     expect(bannerWrapper.classes()).not.toContain('absolute')
+  })
+
+  describe('full-width main content (Remy panel is an overlay, not a layout column)', () => {
+    it('never reserves right-side padding on main, even when the Remy panel is docked', async () => {
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await nextTick()
+      await nextTick()
+      // The premise: the panel is docked (the store default). The old layout
+      // bound `paddingRight: panelSize.width`px onto <main> in this state,
+      // reserving 440px on every page.
+      expect(useRemyStore().panelState).toBe('docked')
+      const main = wrapper.find('main')
+      expect(main.attributes('style')).toBeUndefined()
+      expect(main.element.style.paddingRight).toBe('')
+    })
+  })
+
+  describe('DbCapacityBanner admin gating', () => {
+    const DB_CAPACITY_PATH = '/api/v1/admin/db-capacity'
+
+    beforeEach(() => {
+      // api.GET call history accumulates across the whole file (the banner
+      // mounts in earlier tests too); isolate each gating assertion.
+      vi.mocked(api.GET).mockClear()
+    })
+
+    function jwtWithClaims(claims: Record<string, unknown>): string {
+      const encode = (o: object) =>
+        btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode(claims)}.sig`
+    }
+
+    function dbCapacityCalls(): unknown[][] {
+      return vi.mocked(api.GET).mock.calls.filter((c) => c[0] === DB_CAPACITY_PATH)
+    }
+
+    it('polls db-capacity for an org admin (role claim)', async () => {
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithClaims({ sub: 'a@modulo.run', org_role: 'admin' }))
+      mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await flushPromises()
+      expect(dbCapacityCalls()).toHaveLength(1)
+    })
+
+    it('polls db-capacity for a system admin (is_system_admin claim)', async () => {
+      vi.mocked(getAccessToken).mockReturnValue(
+        jwtWithClaims({ sub: 'a@modulo.run', org_role: 'member', is_system_admin: true }),
+      )
+      mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await flushPromises()
+      expect(dbCapacityCalls()).toHaveLength(1)
+    })
+
+    it('never fetches db-capacity for a non-admin (no request, no console 401)', async () => {
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithClaims({ sub: 'u@modulo.run', org_role: 'member' }))
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await flushPromises()
+      expect(dbCapacityCalls()).toHaveLength(0)
+      expect(wrapper.find('[data-testid="db-capacity-banner"]').exists()).toBe(false)
+    })
   })
 })
