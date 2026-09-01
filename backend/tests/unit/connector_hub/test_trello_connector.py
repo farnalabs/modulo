@@ -280,3 +280,106 @@ async def test_query_boards_http_error(connector):
     respx.get(f"{_BASE}/members/me/boards").mock(return_value=httpx.Response(500, text="Internal Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="boards"))
+
+
+# ---------------------------------------------------------------------------
+# FAR-507 — credentials must never leak into error detail
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_http_error_detail_redacts_credentials(connector):
+    respx.get(f"{_BASE}/members/me/boards").mock(return_value=httpx.Response(401, text="Unauthorized"))
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    message = str(exc_info.value)
+    assert API_KEY not in message
+    assert TOKEN not in message
+    assert "***" in message
+
+
+@respx.mock
+async def test_query_http_error_detail_redacts_credentials_write(connector):
+    respx.post(f"{_BASE}/cards").mock(return_value=httpx.Response(403, text="Forbidden"))
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await connector.write(ConnectorPayload(resource="card", data={"name": "n", "idList": "l1"}))
+    message = str(exc_info.value)
+    assert API_KEY not in message
+    assert TOKEN not in message
+
+
+@respx.mock
+async def test_query_transport_error_detail_redacts_credentials(connector):
+    respx.get(f"{_BASE}/members/me/boards").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(httpx.HTTPError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    message = str(exc_info.value)
+    assert API_KEY not in message
+    assert TOKEN not in message
+
+
+@respx.mock
+async def test_health_check_transport_error_detail_redacts_credentials(connector):
+    respx.get(f"{_BASE}/members/me").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(httpx.HTTPError):
+        await connector.health_check()
+
+
+@respx.mock
+async def test_status_error_request_and_response_url_redacted(connector):
+    """FAR-507: redaction is not __str__-only — the stored request/response URLs
+    must also be scrubbed, since httpx sinks capture ``exc.request.url`` and
+    ``exc.response.request.url`` directly."""
+    respx.get(f"{_BASE}/members/me/boards").mock(return_value=httpx.Response(401, text="Unauthorized"))
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    exc = exc_info.value
+    assert API_KEY not in str(exc.request.url)
+    assert TOKEN not in str(exc.request.url)
+    assert API_KEY not in str(exc.response.request.url)
+    assert TOKEN not in str(exc.response.request.url)
+
+
+@respx.mock
+async def test_transport_error_request_url_redacted(connector):
+    """FAR-507: the exact leak this PR fixes — a transport error (e.g.
+    ``httpx.ReadTimeout`` / ``httpx.ConnectError``) carries a CLEAN message but
+    the LIVE ``key``/``token`` still sits in ``exc.request.url``. The shared
+    ``CredentialRedactor`` (``scrub_url=True``) must scrub it even though the
+    message itself contains no credential."""
+    respx.get(f"{_BASE}/members/me/boards").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(httpx.HTTPError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    exc = exc_info.value
+    assert hasattr(exc, "request")
+    assert API_KEY not in str(exc.request.url)
+    assert TOKEN not in str(exc.request.url)
+
+
+@respx.mock
+async def test_status_error_does_not_chain_raw_cause(connector):
+    """FAR-507: ``raise ... from exc`` would chain the raw un-redacted exception
+    as ``__cause__``, so a full-traceback render prints the credential URL. The
+    sanitised wrapper must NOT chain the raw httpx exception."""
+    respx.get(f"{_BASE}/members/me/boards").mock(return_value=httpx.Response(500, text="Internal Error"))
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    exc = exc_info.value
+    assert exc.__cause__ is None
+    assert exc.__suppress_context__ is True
+
+    # The redacted wrapper still carries a useful message.
+    message = str(exc)
+    assert "Internal Error" in message or "500" in message
+    assert API_KEY not in message
+    assert TOKEN not in message
+
+
+@respx.mock
+async def test_transport_error_does_not_chain_raw_cause(connector):
+    respx.get(f"{_BASE}/members/me/boards").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(httpx.HTTPError) as exc_info:
+        await connector.query(ConnectorQuery(resource="boards"))
+    exc = exc_info.value
+    assert exc.__cause__ is None
+    assert exc.__suppress_context__ is True

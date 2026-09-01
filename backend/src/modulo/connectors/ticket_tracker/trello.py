@@ -22,13 +22,24 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.connectors.security import CredentialRedactor
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 
 logger = logging.getLogger(__name__)
 
 TRELLO_CARD_FIELDS = "id,name,desc,dateLastActivity,closed,due,url,idList,labels"
 DEFAULT_TIMEOUT = 10
+
+
+class _RedactedTrelloError(Exception):
+    """Internal wrapper carrying a credential-redacted message.
+
+    Health failures surface the error detail via ``health_check_failure``
+    (``detail=str(exc)[:200]``). The Trello client puts ``key``/``token`` in the
+    query string of every request, so a raw ``httpx.HTTPStatusError``/transport
+    message embeds the LIVE credentials in its URL. This wrapper carries an
+    already-redacted message so the detail can never contain them.
+    """
 
 
 class TrelloTicketTracker(TicketTrackerBase):
@@ -41,9 +52,9 @@ class TrelloTicketTracker(TicketTrackerBase):
         self._base_url = "https://api.trello.com/1"
         if not self._api_key or not self._token:
             raise ValueError("Trello connector requires api_key and token credentials")
-        # Key + token are sent as QUERY parameters on every request, so httpx
-        # includes them in the request URL — and a status/transport error echoes
-        # that URL. Redact the credential values at the connector boundary.
+        # Credential redaction now lives in the shared ``CredentialRedactor``
+        # (FAR-507) instead of a per-connector fork — Trello's ``key``/``token``
+        # are the secret values, and the same scrubbing covers every entry point.
         self._redactor = CredentialRedactor([self._api_key, self._token])
 
     @property
@@ -52,6 +63,16 @@ class TrelloTicketTracker(TicketTrackerBase):
 
     def _auth(self) -> dict[str, str]:
         return {"key": self._api_key, "token": self._token}
+
+    def _redact(self, text: str) -> str:
+        """Strip the live api_key + token from *text* via the shared redactor."""
+        return self._redactor.redact(text)
+
+    def _health_failure_detail(self, exc: Exception) -> str:
+        """Produce a credential-redacted detail string for a health failure."""
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"Trello API error: {exc.response.status_code} - {self._redact(exc.response.text)}"
+        return self._redact(str(exc))
 
     async def health_check(self) -> HealthResult:
         try:
@@ -66,9 +87,8 @@ class TrelloTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(self._redactor.redact_exc(e))
+            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)))
 
-    @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}
         if "ticket_id" in filters:
@@ -85,7 +105,6 @@ class TrelloTicketTracker(TicketTrackerBase):
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
-    @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         data = payload.data
         ticket = await self.create_ticket(
@@ -115,10 +134,10 @@ class TrelloTicketTracker(TicketTrackerBase):
                 raw_cards = resp.json()
             except httpx.HTTPStatusError as e:
                 raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redactor.redact(e.response.text)}"
+                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
                 ) from None
             except httpx.RequestError as e:
-                raise ValueError(self._redactor.redact(f"Trello network error: {e}")) from None
+                raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
         if ticket_filter and ticket_filter.search:
             raw_cards = [
@@ -149,10 +168,10 @@ class TrelloTicketTracker(TicketTrackerBase):
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
                 raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redactor.redact(e.response.text)}"
+                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
                 ) from None
             except httpx.RequestError as e:
-                raise ValueError(self._redactor.redact(f"Trello network error: {e}")) from None
+                raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     async def create_ticket(self, title: str, description: str | None = None, **kwargs: Any) -> Ticket:
         if not kwargs.get("idList"):
@@ -176,10 +195,10 @@ class TrelloTicketTracker(TicketTrackerBase):
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
                 raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redactor.redact(e.response.text)}"
+                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
                 ) from None
             except httpx.RequestError as e:
-                raise ValueError(self._redactor.redact(f"Trello network error: {e}")) from None
+                raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     async def update_ticket(self, ticket_id: str, **kwargs: Any) -> Ticket:
         body: dict[str, Any] = {}
@@ -199,10 +218,10 @@ class TrelloTicketTracker(TicketTrackerBase):
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
                 raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redactor.redact(e.response.text)}"
+                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
                 ) from None
             except httpx.RequestError as e:
-                raise ValueError(self._redactor.redact(f"Trello network error: {e}")) from None
+                raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
         labels = raw.get("labels")

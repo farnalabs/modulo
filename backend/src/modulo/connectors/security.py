@@ -146,7 +146,13 @@ def _scrub_response(response: httpx.Response, secrets: Sequence[str]) -> httpx.R
         return response
 
 
-def redact_exc(exc: Exception, secrets: Sequence[str]) -> Exception:
+def redact_exc(
+    exc: Exception,
+    secrets: Sequence[str],
+    *,
+    scrub_url: bool = False,
+    chain_cause: bool = True,
+) -> Exception:
     """Return a same-*type* exception whose message has credentials redacted.
 
     When the message contains no credential the ORIGINAL exception is returned
@@ -156,10 +162,26 @@ def redact_exc(exc: Exception, secrets: Sequence[str]) -> Exception:
     ``response`` so the credential does not survive in the attached transport
     objects either (Trello's ``key``/``token`` live in the request query string,
     which ``exc.request.url`` / ``exc.response.request.url`` would otherwise
-    still expose). The original ``__cause__`` is preserved.
+    still expose).
+
+    ``scrub_url`` — when True, an ``httpx`` transport/status error is rebuilt
+    with a scrubbed ``request``/``response`` URL EVEN WHEN ITS MESSAGE IS
+    CLEAN (e.g. ``httpx.ReadTimeout`` / ``httpx.ConnectError`` raise a message
+    with no credential, but ``exc.request.url`` still carries the live
+    ``key``/``token`` in the query string). This is the gap FAR-507 closed for
+    Trello and should be opted into by any connector that puts credentials in
+    the request URL, so the fix lives here once instead of in a per-connector
+    fork.
+
+    ``chain_cause`` — when False, the rebuilt exception does NOT chain the
+    original as ``__cause__`` (``raise ... from None``), so a full-traceback
+    render cannot print the credential-bearing URL from the chained raw
+    exception. Defaults to True (preserve the original ``__cause__``) so
+    existing connector behaviour is unchanged.
     """
     message = redact_text(str(exc), secrets)
-    if message == str(exc):
+    needs_url_scrub = scrub_url and isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError))
+    if message == str(exc) and not needs_url_scrub:
         return exc
     try:
         if isinstance(exc, httpx.HTTPStatusError):
@@ -177,7 +199,11 @@ def redact_exc(exc: Exception, secrets: Sequence[str]) -> Exception:
             new = _rebuild_generic_error(exc, message)
     except Exception:  # pragma: no cover - defensive fallback
         new = RuntimeError(message)
-    new.__cause__ = exc.__cause__
+    if chain_cause:
+        new.__cause__ = exc.__cause__
+    else:
+        new.__cause__ = None
+        new.__suppress_context__ = True
     return new
 
 
@@ -248,7 +274,13 @@ class CredentialRedactor:
     the caller.
     """
 
-    def __init__(self, secrets: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        secrets: Sequence[str] = (),
+        *,
+        scrub_url: bool = False,
+        chain_cause: bool = True,
+    ) -> None:
         self._secrets = tuple(
             sorted(
                 {s for s in secrets if isinstance(s, str) and len(s) >= _MIN_SECRET_LEN},
@@ -256,6 +288,8 @@ class CredentialRedactor:
                 reverse=True,
             ),
         )
+        self._scrub_url = scrub_url
+        self._chain_cause = chain_cause
 
     @classmethod
     def from_creds(cls, creds: dict[str, Any] | None) -> CredentialRedactor:
@@ -270,7 +304,7 @@ class CredentialRedactor:
         return redact_text(text, self._secrets)
 
     def redact_exc(self, exc: Exception) -> Exception:
-        return redact_exc(exc, self._secrets)
+        return redact_exc(exc, self._secrets, scrub_url=self._scrub_url, chain_cause=self._chain_cause)
 
     @contextmanager
     def wrapping(self) -> Iterator[None]:
@@ -278,14 +312,24 @@ class CredentialRedactor:
 
         A no-op for clean messages (returns the original exception unchanged),
         so existing behaviour is identical unless a credential value actually
-        appears in an error message.
+        appears in an error message. When ``scrub_url`` is set, even a
+        clean-message transport error is rebuilt with a scrubbed request URL
+        (FAR-507); when ``chain_cause`` is False the rebuilt exception does not
+        chain the original raw exception (``raise ... from None``).
         """
         try:
             yield
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            repaired = redact_exc(exc, self._secrets)
+            repaired = redact_exc(
+                exc,
+                self._secrets,
+                scrub_url=self._scrub_url,
+                chain_cause=self._chain_cause,
+            )
             if repaired is exc:
                 raise
-            raise repaired from exc.__cause__
+            if self._chain_cause:
+                raise repaired from exc.__cause__
+            raise repaired from None

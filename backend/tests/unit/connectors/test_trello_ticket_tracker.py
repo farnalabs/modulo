@@ -16,6 +16,17 @@ def _response(status_code: int, **kwargs: object) -> httpx.Response:
     return httpx.Response(status_code, request=req, **kwargs)
 
 
+def _response_with_auth(status_code: int, *, text: str = "") -> httpx.Response:
+    """A response whose request URL carries the credential query string, as a real
+    Trello request would — used to prove error detail never leaks them."""
+    req = httpx.Request(
+        "GET",
+        "https://api.trello.com/1/boards/board123",
+        params={"key": "fake_key", "token": "fake_token"},
+    )
+    return httpx.Response(status_code, request=req, text=text)
+
+
 def _make_mock_card(overrides: dict | None = None) -> dict:
     base = {
         "id": "abc123",
@@ -288,6 +299,73 @@ class TestHealthCheck:
 class TestConnectorType:
     def test_returns_ticket_tracker(self, tracker: TrelloTicketTracker) -> None:
         assert tracker.connector_type.value == "ticket-tracker"
+
+
+class TestCredentialRedaction:
+    def test_redact_strips_live_credentials(self, tracker: TrelloTicketTracker) -> None:
+        msg = "error for url 'https://api.trello.com/1/boards/x?key=fake_key&token=fake_token'"
+        out = tracker._redact(msg)
+        assert "fake_key" not in out
+        assert "fake_token" not in out
+        assert "***" in out
+
+    @patch("httpx.AsyncClient")
+    async def test_health_http_error_detail_redacts(
+        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.return_value = _response_with_auth(401, text="unauthorized")
+
+        result = await tracker.health_check()
+
+        assert isinstance(result, HealthResult)
+        assert result.ok is False
+        assert "fake_key" not in result.detail
+        assert "fake_token" not in result.detail
+
+    @patch("httpx.AsyncClient")
+    async def test_health_transport_error_detail_redacts(
+        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+
+        result = await tracker.health_check()
+
+        assert isinstance(result, HealthResult)
+        assert result.ok is False
+        assert "fake_key" not in result.detail
+        assert "fake_token" not in result.detail
+
+    @patch("httpx.AsyncClient")
+    async def test_list_tickets_http_error_detail_redacts(
+        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.return_value = _response_with_auth(401, text="unauthorized")
+
+        with pytest.raises(ValueError, match="Trello API error") as exc_info:
+            await tracker.list_tickets()
+
+        assert "fake_key" not in str(exc_info.value)
+        assert "fake_token" not in str(exc_info.value)
+
+    @patch("httpx.AsyncClient")
+    async def test_list_tickets_network_error_detail_redacts(
+        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+
+        with pytest.raises(ValueError, match="Trello network error") as exc_info:
+            await tracker.list_tickets()
+
+        assert "fake_key" not in str(exc_info.value)
+        assert "fake_token" not in str(exc_info.value)
 
 
 class TestInit:
