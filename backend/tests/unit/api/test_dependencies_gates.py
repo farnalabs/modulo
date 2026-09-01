@@ -210,3 +210,48 @@ class TestRequireFeature:
         ctx.feature_enabled.return_value = True
         await dep.dependency(ctx=ctx)
         ctx.feature_enabled.assert_called_once_with("audit_viewer")
+
+
+class TestSystemEngineIsFallback:
+    """The degraded-system-engine predicate must be correct regardless of
+    call ordering: the fallback flag is only set as a side effect of
+    ``get_or_create_system_engine``, so a first-caller in the degraded state
+    would read a stale False if the predicate read the bare module global.
+    The predicate now initialises the (idempotent, lock-guarded) singleton
+    before reading. Both tests patch the settings name the factory resolves
+    (``get_settings`` is lru_cached) to pin the provisioned/un-provisioned
+    scenario explicitly."""
+
+    def test_true_when_system_url_unset_and_no_prior_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        class _UnprovisionedSettings:
+            modulo_system_database_url = ""
+
+        monkeypatch.setattr(deps, "get_settings", lambda: _UnprovisionedSettings())
+        saved_engine = deps._SYSTEM_ASYNC_ENGINE
+        saved_flag = deps._SYSTEM_ENGINE_IS_FALLBACK
+        deps._SYSTEM_ASYNC_ENGINE = None
+        deps._SYSTEM_ENGINE_IS_FALLBACK = False
+        try:
+            assert deps.system_engine_is_fallback() is True
+        finally:
+            deps._SYSTEM_ASYNC_ENGINE = saved_engine
+            deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
+
+    def test_false_when_system_url_set_and_no_prior_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        class _ProvisionedSettings:
+            modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
+
+        monkeypatch.setattr(deps, "get_settings", lambda: _ProvisionedSettings())
+        saved_engine = deps._SYSTEM_ASYNC_ENGINE
+        saved_flag = deps._SYSTEM_ENGINE_IS_FALLBACK
+        deps._SYSTEM_ASYNC_ENGINE = None
+        deps._SYSTEM_ENGINE_IS_FALLBACK = False
+        try:
+            assert deps.system_engine_is_fallback() is False
+        finally:
+            deps._SYSTEM_ASYNC_ENGINE = saved_engine
+            deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag

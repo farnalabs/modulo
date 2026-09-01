@@ -609,7 +609,15 @@ def system_engine_is_fallback() -> bool:
     be instance-global (pre-auth trigger/org resolution, cross-org admin ops)
     match zero rows and fail closed. Callers on external ingress paths must
     refuse loudly (503) instead of silently 404ing every delivery.
+
+    Ensures the engine singleton is initialised before reading the flag: the
+    flag is only set as a side effect of :func:`get_or_create_system_engine`,
+    so a caller that reaches this predicate before any system-session user
+    would otherwise read a stale False purely due to call ordering. The
+    factory is idempotent and lock-guarded, so this is a no-op after the
+    first request.
     """
+    get_or_create_system_engine()
     return _SYSTEM_ENGINE_IS_FALLBACK
 
 

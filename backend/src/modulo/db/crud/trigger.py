@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.trigger_engine import TriggerNotFoundError
+from modulo.core.trigger_engine import TriggerConfigInvalidError, TriggerNotFoundError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.team_scope import team_scope_clause
@@ -158,14 +158,34 @@ async def load_trigger_and_org_global(
     signature/HMAC verification against the trigger's secret.
 
     Raises:
-        TriggerNotFoundError: the trigger does not exist, or it belongs to a
-            different org than the authenticated principal's.
+        TriggerNotFoundError: the trigger does not exist (including a
+            SOFT-DELETED trigger — deliveries must not be accepted for rows
+            that are deleted, so ``deleted_at`` is filtered here), or it
+            belongs to a different org than the authenticated principal's.
+        TriggerConfigInvalidError: the trigger's ``config_json`` is present
+            but not a JSON object (schema drift / manual edit). Validating
+            HERE — the single bootstrap site — closes the per-route
+            isinstance-guard gaps (e.g. authenticated replay previously
+            skipped its guard and could 500 on ``AttributeError``).
     """
     async with system_session.begin():
-        trigger_row = await system_session.execute(select(Trigger).where(Trigger.id == trigger_id))
+        trigger_row = await system_session.execute(
+            select(Trigger).where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None))
+        )
         trigger = trigger_row.scalar_one_or_none()
     if trigger is None:
         raise TriggerNotFoundError(trigger_id=trigger_id)
+    cfg = trigger.config_json
+    if cfg is not None and not isinstance(cfg, dict):
+        # None → unconfigured (routes treat it as {}); dict → well-formed. ANY
+        # other value — including falsy [] / "" / 0 — is corruption and would
+        # AttributeError on the route's ``.get`` reads (external ingress → 500).
+        _log.warning(
+            "trigger.bootstrap_config_invalid trigger=%s config_type=%s",
+            sanitise_log_value(str(trigger_id)),
+            type(cfg).__name__,
+        )
+        raise TriggerConfigInvalidError(trigger_id=trigger_id)
     org_id: uuid.UUID = trigger.organisation_id
     if principal_org_id is not None and principal_org_id != org_id:
         # Cross-tenant reference: same 404 as a missing trigger so the route
