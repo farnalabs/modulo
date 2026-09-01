@@ -298,6 +298,17 @@ select = [
     # __name__ (LOG001/LOG002), never the deprecated WARN constant (LOG009),
     # never a root-logger call (LOG015).
     "LOG001", "LOG002", "LOG009", "LOG015",
+    # Sixth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the repo-root ruff.toml gate. These families
+    # close drift and block future regressions: B007 (unused loop variable),
+    # B904 (raise without `from` — chain exceptions), RUF009/RUF012/RUF013
+    # (mutable defaults / typed-class hygiene), the TODO-comment TD family
+    # (author/link/capitalization hygiene), and FIX001 (no stray FIXME).
+    "B007", "B904",
+    "RUF009", "RUF012", "RUF013",
+    "TD004", "TD006", "TD007",
+    "FIX001",
 ]
 ignore = [
     "S101",     # assert allowed in tests
