@@ -249,7 +249,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
         sys.modules["langchain_google_vertexai"] = _mock_lgv
 
     try:
-        from modulo.api.dependencies import _get_engine, get_db_session
+        from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
         from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
@@ -309,6 +309,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = _settings
     app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_system_db_session] = _session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = _principal
 

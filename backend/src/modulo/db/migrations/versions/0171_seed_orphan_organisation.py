@@ -1,7 +1,7 @@
 """Seed the orphan organisation row backing public error ingest.
 
-Revision ID: 0169_seed_orphan_organisation
-Revises: 0168_add_soft_delete_org_indexes
+Revision ID: 0171_seed_orphan_organisation
+Revises: 0170_add_residual_foreign_keys
 Create Date: 2026-09-01
 
 The public error-ingest endpoint (``POST /api/v1/errors/ingest/public``) pins
@@ -26,8 +26,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0169_seed_orphan_organisation"
-down_revision: str | None = "0168_add_soft_delete_org_indexes"
+revision: str = "0171_seed_orphan_organisation"
+down_revision: str | None = "0170_add_residual_foreign_keys"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

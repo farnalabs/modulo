@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import Base
 
 # The nil-UUID sentinel organisation backing unauthenticated public error
-# ingest (seeded by migration 0169). It is infrastructure, not a customer org:
+# ingest (seeded by migration 0171). It is infrastructure, not a customer org:
 # error_events/error_groups rows written under it form an orphan partition
 # that is RLS-hidden from tenant sessions (the organisations table itself has
 # NO RLS — the row is a visible sentinel, excluded from admin org listings).

@@ -240,7 +240,7 @@ async def ingest_errors_public(
     * Max request body size 10,000 bytes.
     * Events are stored in a dedicated orphan-org partition: the ingest
       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
-      migration 0169) that tenant sessions can never see (org-only RLS
+      migration 0171) that tenant sessions can never see (org-only RLS
       policies), so unattributed frontend errors never leak across tenancy.
     * A future cleanup job will prune events older than 48 hours (TTL).
     """
@@ -310,7 +310,7 @@ async def ingest_errors_public(
             # ``ingest_batch`` swallows per-event errors (logged server-side),
             # which previously yielded a false-success 201 with an empty
             # results list and nothing persisted. Pin the transaction to the
-            # orphan org (a real organisations row seeded by migration 0169,
+            # orphan org (a real organisations row seeded by migration 0171,
             # satisfying the error_events FK) so the writes pass WITH CHECK
             # and the dedup/group lookups partition to the orphan rows
             # exactly as their explicit ``organisation_id`` predicates intend.

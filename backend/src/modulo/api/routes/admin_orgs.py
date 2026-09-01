@@ -259,7 +259,7 @@ async def admin_list_orgs(
         raise
     except Exception:
         _raise_internal_error("Unexpected error in admin_list_orgs")
-    # The nil-UUID orphan org (public-error-ingest sentinel, migration 0169)
+    # The nil-UUID orphan org (public-error-ingest sentinel, migration 0171)
     # is infrastructure, never a customer org — hide it from the admin listing.
     return [_list_org_item(o) for o in orgs if o.id != ORPHAN_ORG_ID]
 
