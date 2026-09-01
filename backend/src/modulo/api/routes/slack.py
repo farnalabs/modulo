@@ -34,6 +34,7 @@ from modulo.api.dependencies import (
     get_db_session,
     get_or_create_engine,
     get_system_db_session,
+    system_engine_is_fallback,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
@@ -42,6 +43,7 @@ from modulo.core.exceptions import TriggersPausedError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
+    TriggerBusyError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -176,6 +178,17 @@ async def receive_slack_event(
             detail="Request body must be a JSON object",
         ) from exc
 
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("slack.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
     try:
         async with session.begin():
             # Bootstrap via the shared system-session helper (FAR-523): the
@@ -188,6 +201,13 @@ async def receive_slack_event(
             await set_rls_execution_context(session)
 
             cfg = trigger.config_json or {}
+            if not isinstance(cfg, dict):
+                # Schema drift / manual edit: a non-dict JSON value would
+                # AttributeError on the .get below (external ingress -> 500).
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Trigger configuration is invalid",
+                )
             signing_secret: str | None = cfg.get("signing_secret")
 
             # Route-level signature + timestamp validation (belt-and-braces ahead
@@ -290,6 +310,12 @@ async def receive_slack_event(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock; the loser is queued, not failed (mirrors the webhook
+        # route's snapshot-lock contract).
+        _log.info("slack.receive_event.trigger_busy trigger=%s", trigger_id)
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(

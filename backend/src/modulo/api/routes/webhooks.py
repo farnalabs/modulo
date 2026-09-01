@@ -35,6 +35,7 @@ from modulo.api.dependencies import (
     get_or_create_engine,
     get_system_db_session,
     require_permission,
+    system_engine_is_fallback,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
@@ -52,6 +53,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
+    TriggerBusyError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -204,6 +206,17 @@ async def receive_webhook(
             detail="Request body must be a JSON object",
         ) from exc
 
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("webhooks.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -225,6 +238,13 @@ async def receive_webhook(
             # typed errors are rolled back with the request (documented
             # pre-existing limitation).
             cfg = trigger.config_json or {}
+            if not isinstance(cfg, dict):
+                # Schema drift / manual edit: a non-dict JSON value would
+                # AttributeError on the .get below (external ingress -> 500).
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Trigger configuration is invalid",
+                )
             hmac_secret_raw: str | None = cfg.get("hmac_secret")
             hmac_secret: str | None = None
             if hmac_secret_raw is not None:
@@ -349,6 +369,17 @@ async def receive_webhook(
                 "retry the webhook delivery"
             ),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock; the loser gets a busy ack (made honest - recorded
+        # and replayable - by the FAR-523 busy-ack change later on this
+        # branch; main's FAR-527 snapshot-lock contract above is 503-retry).
+        _log.info(
+            "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
@@ -454,6 +485,17 @@ async def replay_webhook(
             ) from exc
 
     trigger: Trigger | None = None
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("webhooks.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -475,6 +517,13 @@ async def replay_webhook(
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
                 ts = verify_timestamp(modulo_timestamp)
                 cfg = trigger.config_json or {}
+                if not isinstance(cfg, dict):
+                    # Schema drift / manual edit: a non-dict JSON value would
+                    # AttributeError on the .get below (external ingress -> 500).
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Trigger configuration is invalid",
+                    )
                 hmac_secret_raw: str | None = cfg.get("hmac_secret")
                 if hmac_secret_raw is None:
                     raise HmacValidationError
@@ -594,6 +643,17 @@ async def replay_webhook(
                 "retry the webhook delivery"
             ),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock; the loser gets a busy ack (made honest - recorded
+        # and replayable - by the FAR-523 busy-ack change later on this
+        # branch; main's FAR-527 snapshot-lock contract above is 503-retry).
+        _log.info(
+            "webhooks.replay_webhook.trigger_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
