@@ -220,7 +220,7 @@
           v-model="config.advanced_json"
           rows="8"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-          :placeholder="$t('connectors.rest.advanced_json_placeholder')"
+          placeholder='{ "path": "/items", "headers": { "Accept": "application/json" }, "operations": {}, "fan_out": {} }'
           data-testid="rest-connector-advanced-json"
           :aria-invalid="!!errors.advanced_json"
           :aria-describedby="errors.advanced_json ? 'restconn-advanced-error' : 'restconn-advanced-help'"
