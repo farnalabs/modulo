@@ -6,6 +6,7 @@ import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -32,6 +33,25 @@ from tests.bdd.conftest import (
 
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+
+class _ProvisionedSystemSettings:
+    """Settings stub presenting a provisioned system database URL.
+
+    These BDD scenarios mock the system SESSION but run without
+    ``MODULO_SYSTEM_DATABASE_URL``; the (robust) fallback predicate would
+    otherwise 503 every delivery. The created engine is lazy and never
+    connects.
+    """
+
+    modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-bdd-test"
+
+
+@pytest.fixture(autouse=True)
+def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modulo.api import dependencies as _deps
+
+    monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
 
 def _patch_trigger_run(client, request, *, pipeline=None, run=None, payload=None, pipeline_not_found=False):

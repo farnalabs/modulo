@@ -36,6 +36,7 @@ from modulo.api.dependencies import (
     get_system_db_session,
     system_engine_is_fallback,
 )
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
@@ -44,6 +45,7 @@ from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
     TriggerBusyError,
+    TriggerConfigInvalidError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -189,6 +191,7 @@ async def receive_slack_event(
             detail="System database not provisioned; trigger delivery unavailable",
         )
 
+    org_id: uuid.UUID | None = None
     try:
         async with session.begin():
             # Bootstrap via the shared system-session helper (FAR-523): the
@@ -200,14 +203,10 @@ async def receive_slack_event(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
+            # config_json shape was validated by the shared bootstrap helper
+            # (TriggerConfigInvalidError → 400 below), so ``.get`` here cannot
+            # AttributeError on external ingress.
             cfg = trigger.config_json or {}
-            if not isinstance(cfg, dict):
-                # Schema drift / manual edit: a non-dict JSON value would
-                # AttributeError on the .get below (external ingress -> 500).
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Trigger configuration is invalid",
-                )
             signing_secret: str | None = cfg.get("signing_secret")
 
             # Route-level signature + timestamp validation (belt-and-braces ahead
@@ -280,6 +279,15 @@ async def receive_slack_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "slack.receive_event.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except SlackTimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -312,10 +320,30 @@ async def receive_slack_event(
         ) from exc
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
-        # advisory lock; the loser is queued, not failed (mirrors the webhook
-        # route's snapshot-lock contract).
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy delivery is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event). Slack suppresses retries on
+        # 2xx BY DESIGN, so the recording is what makes the 202 ack honest —
+        # the delivery is visible in the event log, never silently lost.
         _log.info("slack.receive_event.trigger_busy trigger=%s", trigger_id)
-        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="slack_app_mention",
+                payload_hash=sha256_hex(raw_body),
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org — refuse loudly rather than false-ack.
+        _log.error("slack.receive_event.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(

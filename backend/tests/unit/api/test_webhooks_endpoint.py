@@ -770,6 +770,36 @@ def test_receive_webhook_missing_trigger_returns_404(client: TestClient) -> None
     assert resp.json()["detail"] == "Trigger not found"
 
 
+def test_receive_webhook_soft_deleted_trigger_returns_404(client: TestClient) -> None:
+    """A SOFT-DELETED trigger must not accept deliveries: the bootstrap helper
+    filters ``deleted_at IS NULL``, so the row reads as absent → 404. The
+    system-session mock only "misses" the row when the executed statement
+    actually carries the soft-delete filter — dropping the filter from the
+    helper query fails this test (delivery would proceed)."""
+    system_mock = make_system_session_mock(trigger_deleted=True)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+    m.assert_not_called()
+
+
 def test_receive_webhook_other_org_trigger_returns_404_no_writes(client: TestClient) -> None:
     """Cross-tenant isolation (FAR-523): an authenticated org-A principal
     referencing an org-B trigger gets the same 404 as a missing trigger —
@@ -836,15 +866,20 @@ def test_receive_webhook_degraded_system_engine_returns_503(client: TestClient) 
     assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
 
 
-def test_receive_webhook_trigger_busy_returns_202_queued(client: TestClient) -> None:
+def test_receive_webhook_trigger_busy_records_delivery_then_acks(client: TestClient) -> None:
     """Concurrent same-trigger deliveries serialize on the engine's advisory
-    lock; the loser must get the same queued-ack as the snapshot-lock case —
-    never a 500 from the generic handler."""
+    lock. The loser is NOT executed and NOT auto-queued (the engine raises
+    before any TriggerEvent and the main transaction rolls back) — the route
+    must RECORD the busy delivery in a fresh transaction and only then ack
+    202, so the delivery is never silently lost (2xx suppresses Slack-side
+    retries BY DESIGN; replay is the recovery path)."""
+    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
     from modulo.core.trigger_engine import TriggerBusyError
 
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
@@ -857,9 +892,19 @@ def test_receive_webhook_trigger_busy_returns_202_queued(client: TestClient) -> 
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "queued"
-    assert body["detail"] == "Pipeline busy — queued for retry"
+    assert body["detail"] == BUSY_ACK_DETAIL
     assert body.get("run_id") is None
     dispatch.assert_not_called()
+    # The busy delivery was recorded (org + raw body + parsed payload) before
+    # the ack was sent.
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "webhook"
+    assert kwargs["raw_payload"] == {"event": "test"}
+    assert kwargs["raw_body"].startswith(b'{"event"')
+    assert len(kwargs["payload_hash"]) == 64
 
 
 def test_receive_webhook_invalid_config_json_returns_400(client: TestClient) -> None:

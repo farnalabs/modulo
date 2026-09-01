@@ -461,15 +461,20 @@ def test_replay_webhook_degraded_system_engine_returns_503(client: TestClient) -
     assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
 
 
-def test_replay_webhook_trigger_busy_returns_202_queued(client: TestClient) -> None:
-    """Replay serializes on the same engine advisory lock: the loser gets the
-    queued-ack contract, never a 500."""
+def test_replay_webhook_trigger_busy_records_delivery_then_acks(client: TestClient) -> None:
+    """Replay serializes on the same engine advisory lock: the loser is NOT
+    executed and NOT auto-queued (the engine raises before any TriggerEvent
+    and the main transaction rolls back) — the route must RECORD the busy
+    replay (a ``concurrency_limit_reached`` event carrying the original
+    event's payload hash) and only then ack 202, never a false ack or 500."""
+    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
     from modulo.core.trigger_engine import TriggerBusyError
 
     event_id = uuid.uuid4()
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
         patch("modulo.api.routes.webhooks.set_rls_org"),
         patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
@@ -482,8 +487,18 @@ def test_replay_webhook_trigger_busy_returns_202_queued(client: TestClient) -> N
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "queued"
+    assert body["detail"] == BUSY_ACK_DETAIL
     assert body.get("run_id") is None
     dispatch.assert_not_called()
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "webhook"
+    assert kwargs["source_event_id"] == event_id
+    # A busy replay stores no NEW payload row — the original event's payload
+    # already exists and remains the replayable artefact.
+    assert kwargs.get("raw_body") is None
 
 
 def test_replay_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
@@ -500,6 +515,31 @@ def test_replay_webhook_invalid_config_json_returns_400(client: TestClient) -> N
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
                 headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_replay_webhook_authenticated_invalid_config_json_returns_400(client: TestClient) -> None:
+    """Authenticated replay hits the SAME config-shape hole: before the
+    validation moved into the shared bootstrap helper, the isinstance guard
+    only ran inside ``if principal is None:`` — a runner replaying a trigger
+    with corrupt config_json got AttributeError -> 500. The helper now raises
+    TriggerConfigInvalidError for every path → 400."""
+    system_mock = make_system_session_mock(trigger_config="bogus")
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+                headers=_auth_headers("admin"),
             )
     finally:
         app.dependency_overrides.pop(get_system_db_session, None)

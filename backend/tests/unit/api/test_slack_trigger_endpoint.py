@@ -374,15 +374,21 @@ def test_receive_slack_event_degraded_system_engine_returns_503(client: TestClie
     assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
 
 
-def test_app_mention_trigger_busy_returns_202_queued(client: TestClient) -> None:
+def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient) -> None:
     """Concurrent same-trigger slack deliveries serialize on the engine's
-    advisory lock; the loser gets the queued-ack contract, never a 500."""
+    advisory lock. The loser is NOT executed and NOT auto-queued (the engine
+    raises before any TriggerEvent and the main transaction rolls back) — the
+    route must RECORD the busy delivery and only then ack 202. Slack
+    suppresses retries on 2xx BY DESIGN, so without the recording the
+    delivery would be silently lost."""
+    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
     from modulo.core.trigger_engine import TriggerBusyError
 
     body = _event_body()
     ts = str(int(time.time()))
     with (
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
         patch("modulo.api.routes.slack.set_rls_org"),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
@@ -395,7 +401,14 @@ def test_app_mention_trigger_busy_returns_202_queued(client: TestClient) -> None
     assert resp.status_code == 202
     body_json = resp.json()
     assert body_json["status"] == "queued"
+    assert body_json["detail"] == BUSY_ACK_DETAIL
     assert body_json.get("run_id") is None
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "slack_app_mention"
+    assert len(kwargs["payload_hash"]) == 64
 
 
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:

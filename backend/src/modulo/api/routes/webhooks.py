@@ -37,6 +37,7 @@ from modulo.api.dependencies import (
     require_permission,
     system_engine_is_fallback,
 )
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -54,6 +55,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     ReplayNotFoundError,
     TimestampExpiredError,
     TriggerBusyError,
+    TriggerConfigInvalidError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -193,6 +195,7 @@ async def receive_webhook(
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
     trigger: Trigger | None = None
+    org_id: uuid.UUID | None = None
     guardrail_block_detail: str | None = None
 
     try:
@@ -236,15 +239,10 @@ async def receive_webhook(
             # hmac_secret are validated here — HMAC-less triggers accept
             # unauthenticated deliveries by design. Failure events for these
             # typed errors are rolled back with the request (documented
-            # pre-existing limitation).
+            # pre-existing limitation). config_json shape was validated by the
+            # shared bootstrap helper (TriggerConfigInvalidError → 400 below),
+            # so ``.get`` here cannot AttributeError.
             cfg = trigger.config_json or {}
-            if not isinstance(cfg, dict):
-                # Schema drift / manual edit: a non-dict JSON value would
-                # AttributeError on the .get below (external ingress -> 500).
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Trigger configuration is invalid",
-                )
             hmac_secret_raw: str | None = cfg.get("hmac_secret")
             hmac_secret: str | None = None
             if hmac_secret_raw is not None:
@@ -328,6 +326,15 @@ async def receive_webhook(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "webhooks.receive_webhook.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -371,15 +378,38 @@ async def receive_webhook(
         ) from exc
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
-        # advisory lock; the loser gets a busy ack (made honest - recorded
-        # and replayable - by the FAR-523 busy-ack change later on this
-        # branch; main's FAR-527 snapshot-lock contract above is 503-retry).
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy delivery is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event + the raw payload, making it
+        # visible in the event log and replayable). The 2xx ack is honest
+        # because of that recording: 2xx suppresses sender retries (Slack) BY
+        # DESIGN, and replay is the recovery path, not a sender retry.
         _log.info(
             "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
         )
-        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                payload_hash=sha256_hex(raw_body),
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org. If it somehow did not, there is nothing to
+        # record against — refuse so the sender retries (never a false ack).
+        _log.error("webhooks.receive_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
@@ -485,6 +515,7 @@ async def replay_webhook(
             ) from exc
 
     trigger: Trigger | None = None
+    org_id: uuid.UUID | None = None
     if system_engine_is_fallback():
         # No modulo_system role provisioned: the BYPASSRLS bootstrap read
         # would silently match zero rows and every delivery would 404. Refuse
@@ -516,14 +547,11 @@ async def replay_webhook(
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
                 ts = verify_timestamp(modulo_timestamp)
+                # config_json shape was validated by the shared bootstrap
+                # helper (TriggerConfigInvalidError → 400 below) — this read
+                # runs for authenticated replays too, so the guard cannot be
+                # skipped on any path.
                 cfg = trigger.config_json or {}
-                if not isinstance(cfg, dict):
-                    # Schema drift / manual edit: a non-dict JSON value would
-                    # AttributeError on the .get below (external ingress -> 500).
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Trigger configuration is invalid",
-                    )
                 hmac_secret_raw: str | None = cfg.get("hmac_secret")
                 if hmac_secret_raw is None:
                     raise HmacValidationError
@@ -617,6 +645,15 @@ async def replay_webhook(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "webhooks.replay_webhook.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except DuplicateWebhookError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -645,15 +682,33 @@ async def replay_webhook(
         ) from exc
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
-        # advisory lock; the loser gets a busy ack (made honest - recorded
-        # and replayable - by the FAR-523 busy-ack change later on this
-        # branch; main's FAR-527 snapshot-lock contract above is 503-retry).
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy replay is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event carrying the original event's
+        # payload hash). The 2xx ack is honest because of that recording.
         _log.info(
             "webhooks.replay_webhook.trigger_busy trigger=%s pipeline=%s",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
         )
-        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                source_event_id=event_id,
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org — refuse loudly rather than false-ack.
+        _log.error("webhooks.replay_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
