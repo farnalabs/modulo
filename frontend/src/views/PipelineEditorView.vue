@@ -7,7 +7,231 @@
       <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
     </div>
     <template v-else>
-      <div class="relative flex-1">
+      <div class="flex min-w-0 flex-1 flex-col">
+        <!-- Docked toolbar: in-flow above the canvas so it never covers node details -->
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+          <!-- Group: identity -->
+          <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
+            <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
+            <button type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
+            <span v-if="folderPath.length > 0" class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              <span v-for="(f, i) in folderPath" :key="f.id" class="truncate">
+                <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
+                <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
+              </span>
+            </span>
+            <template v-if="linkedLifecycleMaps.length > 0">
+              <span :class="groupDividerClass" />
+              <span class="flex items-center gap-1 text-xs text-muted-foreground">
+                <router-link
+                  v-for="map in linkedLifecycleMaps"
+                  :key="map.id"
+                  :to="`/lifecycle-maps/${map.id}`"
+                  class="whitespace-nowrap hover:text-foreground"
+                >
+                  {{ map.name }}
+                </router-link>
+              </span>
+            </template>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: graph file actions -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-file">
+            <button type="button" :class="btnToolbarSecondary" :disabled="savingGraph" data-testid="pipeline-editor-save" @click="saveGraph">
+              <svg v-if="savingGraph" class="h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+              {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
+            </button>
+            <button v-if="planStore.featureEnabled('pipeline_diff_rollback')" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
+              {{ $t('views.PipelineEditorView.versions') }}
+            </button>
+            <div class="relative" @click.stop>
+              <button
+                type="button"
+                :class="btnToolbarSecondary"
+                :aria-expanded="showSaveAsDropdown"
+                aria-haspopup="menu"
+                data-testid="pipeline-editor-save-as-template"
+                @click="showSaveAsDropdown = !showSaveAsDropdown"
+              >
+                {{ $t('views.PipelineEditorView.save_as_template') }}
+              </button>
+              <div
+                v-if="showSaveAsDropdown"
+                class="absolute left-0 top-full z-30 mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+                  @click="openSaveAsComposite"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-indigo-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8M4.93 10.93 12 18l7.07-7.07"/><path d="M4 20h16"/></svg>
+                  {{ $t('views.PipelineEditorView.composite') }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: run -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
+            <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" data-testid="pipeline-editor-run" @click="openRunDialog">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
+            </button>
+            <span v-if="saveGraphError" class="max-w-40 truncate text-xs text-destructive" :title="saveGraphError" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: pipeline settings -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-settings">
+            <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" :class="btnToolbarDestructive" data-testid="pipeline-editor-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <div class="flex items-center gap-1">
+              <label for="pipeline-max-duration" class="whitespace-nowrap text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.max_duration_s') }}:</label>
+              <input id="pipeline-max-duration"
+                v-model.number="maxDurationInput"
+                type="number"
+                min="0"
+                :placeholder="$t('views.PipelineEditorView.no_limit')"
+                class="w-20 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                @change="updateMaxDuration"
+                data-testid="pipeline-editor-max-duration"
+              />
+            </div>
+            <div class="relative">
+              <button
+                type="button"
+                ref="retryPolicyToggleRef"
+                :id="retryPolicyToggleId"
+                :class="btnToolbarSecondary"
+                @click="toggleRetryPolicy"
+                :aria-expanded="retryPolicyOpen"
+                aria-haspopup="dialog"
+                :aria-controls="retryPolicyPanelId"
+                data-testid="pipeline-editor-retry-policy-toggle"
+              >
+                {{ $t('views.PipelineEditorView.retry_policy') }}
+              </button>
+              <dialog
+                v-if="retryPolicyOpen"
+                open
+                :id="retryPolicyPanelId"
+                ref="retryPolicyPanelRef"
+                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
+                tabindex="-1"
+                :aria-label="$t('views.PipelineEditorView.retry_policy')"
+                data-testid="pipeline-editor-retry-policy-panel"
+              >
+                <div class="mb-1 text-xs font-medium text-foreground">{{ $t('views.PipelineEditorView.retry_policy') }}</div>
+                <div class="mb-2 text-[10px] text-muted-foreground">
+                  {{ $t('views.PipelineEditorView.retry_policy_description') }}
+                </div>
+                <div class="space-y-1">
+                  <label
+                    v-for="opt in retryPolicyOptions"
+                    :key="opt.value"
+                    class="flex min-h-6 items-center gap-2 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      :value="opt.value"
+                      v-model="retryPolicyEvents"
+                      class="h-4 w-4"
+                      :data-testid="`pipeline-editor-retry-event-${opt.value}`"
+                    />
+                    {{ $t(opt.labelKey) }}
+                  </label>
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                  <label for="retry-policy-max" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.max_retries') }}
+                  </label>
+                  <input
+                    id="retry-policy-max"
+                    v-model.number="retryPolicyMaxRetries"
+                    type="number"
+                    min="0"
+                    max="5"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-max"
+                  />
+                </div>
+                <div
+                  v-if="retryPolicyNoRetriesWarning"
+                  class="mt-2 text-xs text-warning"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-warning"
+                >
+                  {{ retryPolicyNoRetriesWarning }}
+                </div>
+                <div
+                  v-if="retryPolicyError"
+                  class="mt-2 text-xs text-destructive"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-error"
+                >
+                  {{ retryPolicyError }}
+                </div>
+                <div class="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    class="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="closeRetryPolicy"
+                  >
+                    {{ $t('views.PipelineEditorView.cancel') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="retryPolicySaving"
+                    @click="saveRetryPolicy"
+                    data-testid="pipeline-editor-retry-policy-save"
+                  >
+                    {{ retryPolicySaving ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save') }}
+                  </button>
+                </div>
+              </dialog>
+            </div>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: canvas tools -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-canvas">
+            <Select
+              v-model="newNodeType"
+              :options="nodeTypeOptions"
+              option-label="label"
+              option-value="value"
+              class="w-32 text-xs"
+              append-to="self"
+              :aria-label="$t('views.PipelineEditorView.new_node_type')"
+              :title="$t('views.PipelineEditorView.new_node_type_hint')"
+              data-testid="pipeline-editor-node-type-select"
+            />
+            <button
+              type="button"
+              :class="btnToolbarSecondary"
+              :title="$t('views.PipelineEditorView.add_node')"
+              data-testid="pipeline-editor-add-node"
+              @click="addNode()"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              {{ $t('views.PipelineEditorView.add_node') }}
+            </button>
+            <button
+              type="button"
+              :class="btnToolbarSecondary"
+              :title="$t('views.PipelineEditorView.fit_to_view')"
+              data-testid="pipeline-editor-fit-view"
+              @click="() => fitView()"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              {{ $t('views.PipelineEditorView.fit_to_view') }}
+            </button>
+          </div>
+        </div>
+        <div class="relative min-h-0 flex-1">
         <!-- Empty-state overlay on top of the canvas -->
         <div v-if="flowNodes.length === 0" class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none">
           <div class="text-center">
@@ -26,216 +250,11 @@
               option-label="label"
               option-value="value"
               class="w-36 text-xs"
-              aria-label="New node type"
+              append-to="self"
+              :aria-label="$t('views.PipelineEditorView.new_node_type')"
             />
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
-        </div>
-        <!-- Toolbar -->
-        <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
-          <div class="flex items-center gap-2">
-            <h2 class="text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
-            <button type="button" class="rounded p-1 hover:bg-accent" @click="openRenameDialog" title="Rename pipeline">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-            </button>
-            <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
-            <span v-if="folderPath.length > 0" class="ml-2 flex items-center gap-1 text-xs text-muted-foreground">
-              <span v-for="(f, i) in folderPath" :key="f.id">
-                <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
-                <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
-              </span>
-            </span>
-            <template v-if="linkedLifecycleMaps.length > 0">
-              <span class="mx-1 h-3 w-px bg-border" />
-              <span class="flex items-center gap-1 text-xs text-muted-foreground">
-                <router-link
-                  v-for="map in linkedLifecycleMaps"
-                  :key="map.id"
-                  :to="`/lifecycle-maps/${map.id}`"
-                  class="hover:text-foreground"
-                >
-                  {{ map.name }}
-                </router-link>
-              </span>
-            </template>
-          </div>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <Button size="small" type="button" class="text-xs" :disabled="savingGraph" @click="saveGraph" data-testid="pipeline-editor-save">
-            <svg v-if="savingGraph" class="mr-1 h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-            {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
-          </Button>
-          <span v-if="saveGraphError" class="ml-2 text-xs text-destructive" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
-          <Button v-if="planStore.featureEnabled('pipeline_diff_rollback')" size="small" type="button" class="text-xs" @click="showVersionTimeline = !showVersionTimeline" data-testid="pipeline-editor-version-timeline">
-            {{ $t('views.PipelineEditorView.versions') }}
-          </Button>
-          <Button size="small" type="button" class="text-xs border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" @click="openRunDialog" data-testid="pipeline-editor-run">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="mr-1"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
-          </Button>
-          <div class="relative" @click.stop>
-            <button
-              type="button"
-              class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent"
-              @click="showSaveAsDropdown = !showSaveAsDropdown"
-            >
-              Save as template
-            </button>
-            <div
-              v-if="showSaveAsDropdown"
-              class="absolute left-0 top-full mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
-            >
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
-                @click="openSaveAsComposite"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-indigo-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8M4.93 10.93 12 18l7.07-7.07"/><path d="M4 20h16"/></svg>
-                Composite
-              </button>
-            </div>
-          </div>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <div class="flex items-center gap-1">
-            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
-            <button v-else type="button" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
-          </div>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <div class="flex items-center gap-1">
-            <label for="pipeline-max-duration" class="text-[10px] text-muted-foreground whitespace-nowrap">{{ $t('views.PipelineEditorView.max_duration_s') }}:</label>
-            <input id="pipeline-max-duration"
-              v-model.number="maxDurationInput"
-              type="number"
-              min="0"
-              placeholder="No limit"
-              class="w-20 rounded border border-input bg-background px-1.5 py-1 text-xs"
-              @change="updateMaxDuration"
-              data-testid="pipeline-editor-max-duration"
-            />
-          </div>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <div class="relative">
-            <button
-              type="button"
-              ref="retryPolicyToggleRef"
-              :id="retryPolicyToggleId"
-              class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
-              @click="toggleRetryPolicy"
-              :aria-expanded="retryPolicyOpen"
-              aria-haspopup="dialog"
-              :aria-controls="retryPolicyPanelId"
-              data-testid="pipeline-editor-retry-policy-toggle"
-            >
-              {{ $t('views.PipelineEditorView.retry_policy') }}
-            </button>
-            <dialog
-              v-if="retryPolicyOpen"
-              open
-              :id="retryPolicyPanelId"
-              ref="retryPolicyPanelRef"
-              class="absolute right-0 left-auto top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
-              tabindex="-1"
-              :aria-label="$t('views.PipelineEditorView.retry_policy')"
-              data-testid="pipeline-editor-retry-policy-panel"
-            >
-              <div class="mb-1 text-xs font-medium text-foreground">{{ $t('views.PipelineEditorView.retry_policy') }}</div>
-              <div class="mb-2 text-[10px] text-muted-foreground">
-                {{ $t('views.PipelineEditorView.retry_policy_description') }}
-              </div>
-              <div class="space-y-1">
-                <label
-                  v-for="opt in retryPolicyOptions"
-                  :key="opt.value"
-                  class="flex min-h-6 items-center gap-2 text-xs"
-                >
-                  <input
-                    type="checkbox"
-                    :value="opt.value"
-                    v-model="retryPolicyEvents"
-                    class="h-4 w-4"
-                    :data-testid="`pipeline-editor-retry-event-${opt.value}`"
-                  />
-                  {{ $t(opt.labelKey) }}
-                </label>
-              </div>
-              <div class="mt-3 flex items-center gap-2">
-                <label for="retry-policy-max" class="text-[10px] text-muted-foreground whitespace-nowrap">
-                  {{ $t('views.PipelineEditorView.max_retries') }}
-                </label>
-                <input
-                  id="retry-policy-max"
-                  v-model.number="retryPolicyMaxRetries"
-                  type="number"
-                  min="0"
-                  max="5"
-                  class="w-14 rounded border border-input bg-background px-1.5 py-1 text-xs"
-                  data-testid="pipeline-editor-retry-policy-max"
-                />
-              </div>
-              <div
-                v-if="retryPolicyNoRetriesWarning"
-                class="mt-2 text-xs text-warning"
-                role="alert"
-                data-testid="pipeline-editor-retry-policy-warning"
-              >
-                {{ retryPolicyNoRetriesWarning }}
-              </div>
-              <div
-                v-if="retryPolicyError"
-                class="mt-2 text-xs text-destructive"
-                role="alert"
-                data-testid="pipeline-editor-retry-policy-error"
-              >
-                {{ retryPolicyError }}
-              </div>
-              <div class="mt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  class="rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
-                  @click="closeRetryPolicy"
-                >
-                  {{ $t('views.PipelineEditorView.cancel') }}
-                </button>
-                <button
-                  type="button"
-                  class="rounded border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="retryPolicySaving"
-                  @click="saveRetryPolicy"
-                  data-testid="pipeline-editor-retry-policy-save"
-                >
-                  {{ retryPolicySaving ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save') }}
-                </button>
-              </div>
-            </dialog>
-          </div>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <Select
-            v-model="newNodeType"
-            :options="nodeTypeOptions"
-            option-label="label"
-            option-value="value"
-            class="w-36 text-xs"
-            aria-label="New node type"
-          />
-          <button
-            type="button"
-            class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
-            @click="addNode()"
-            title="Add node"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            {{ $t('views.PipelineEditorView.add_node') }}
-          </button>
-          <span class="mx-2 h-4 w-px bg-border" />
-          <button
-            type="button"
-            class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
-            @click="() => fitView()"
-            title="Fit view"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-            Fit View
-          </button>
         </div>
         <!-- Run dialog modal -->
         <!-- eslint-disable-next-line vuejs-accessibility/click-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
@@ -356,6 +375,7 @@
             </div>
           </template>
         </VueFlow>
+        </div>
       </div>
       <!-- Node Properties Panel -->
       <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
@@ -751,6 +771,7 @@
               <Select
   aria-label="Edge type"
   v-model="edgeForm.edge_type"
+  append-to="self"
   placeholder="Normal"
   class="w-full"
   :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
@@ -856,6 +877,7 @@
             <Select
   aria-label="Condition type"
   v-model="edgeForm.condition_type"
+  append-to="self"
   placeholder="None (always gate)"
   class="w-full"
   :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
@@ -904,6 +926,7 @@
                 <Select
   aria-label="Operator"
   v-model="edgeForm.eval_operator"
+  append-to="self"
   placeholder="lt (score &lt; threshold)"
   class="w-full"
   :options="[{ value: 'lt', label: 'lt (score < threshold)' }, { value: 'gt', label: 'gt (score > threshold)' }, { value: 'lte', label: 'lte (score ≤ threshold)' }, { value: 'gte', label: 'gte (score ≥ threshold)' }, { value: 'eq', label: 'eq (score == threshold)' }, { value: 'neq', label: 'neq (score != threshold)' }]"
@@ -948,10 +971,12 @@
     >
       <div class="space-y-4">
           <div>
-            <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
+            <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent_select_label') }}</label>
             <Select
-  aria-label="Agent"
+  :aria-label="$t('views.PipelineEditorView.agent_select_label')"
+  :title="$t('views.PipelineEditorView.agent_select_hint')"
   v-model="pickerAgentId"
+  append-to="self"
   @update:model-value="onAgentChange"
   :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')"
   data-testid="pipeline-editor-agent-select"
@@ -970,6 +995,7 @@
             <Select
   aria-label="Connector"
   v-model="pickerConnectorId"
+  append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
   data-testid="pipeline-editor-connector-select"
   class="w-full"
@@ -1018,6 +1044,7 @@
           <Select
   aria-label="Snapshot"
   v-model="revertSnapshotId"
+  append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
   data-testid="pipeline-editor-snapshot-select"
   class="w-full"
@@ -1092,7 +1119,7 @@
     <FormDialog
       :open="showRenameDialog"
       @update:open="showRenameDialog = false"
-      title="Rename Pipeline"
+      :title="$t('views.PipelineEditorView.rename_pipeline')"
       confirmText="Save"
       :confirmDisabled="!renameName.trim() || renaming"
       :loading="renaming"
@@ -1173,7 +1200,50 @@ const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl' }
-const { fitView } = useVueFlow()
+const { fitView, onPaneReady } = useVueFlow()
+
+// Docked-toolbar styling: one height/radius/spacing per action class so the
+// menu bar reads as one consistent control set (presentation only).
+const btnToolbarBase = 'inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+const btnToolbarSecondary = `${btnToolbarBase} border border-input bg-background hover:bg-accent`
+const btnToolbarPrimary = `${btnToolbarBase} bg-indigo-600 text-white hover:bg-indigo-500`
+const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20`
+const btnToolbarIcon = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
+const groupDividerClass = 'mx-0.5 hidden h-5 w-px shrink-0 bg-border md:block'
+
+// Fit the graph as soon as the canvas is ready and nodes exist, so the whole
+// graph is visible on load without user action. Runs after layout settles
+// (nextTick + two animation frames) so the docked toolbar's final height is
+// accounted for by the fit.
+let initialFitDone = false
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    } else {
+      resolve()
+    }
+  })
+}
+async function runInitialFitView() {
+  if (initialFitDone || flowNodes.value.length === 0) return
+  await nextTick()
+  await nextFrame()
+  try {
+    // fitView resolves false when the viewport has nothing measurable to fit,
+    // and is a noop resolving undefined before the viewport initialises, so
+    // the guard latches only on a truthy result. Until a fit succeeds,
+    // pane-ready and the nodes watch keep re-attempting.
+    const ok = await fitView({ padding: 0.1 })
+    if (ok) initialFitDone = true
+  } catch (error) {
+    // fitView signals an unmeasured pane via its resolved value, so a
+    // rejection here is a genuine error — surface it instead of swallowing.
+    console.warn('[PipelineEditorView] initial fitView failed; retry paths remain armed', error)
+  }
+}
+onPaneReady(() => { void runInitialFitView() })
+watch(() => flowNodes.value.length, (len) => { if (len > 0) void runInitialFitView() })
 
 const agents = ref<any[]>([])
 const connectors = ref<any[]>([])
