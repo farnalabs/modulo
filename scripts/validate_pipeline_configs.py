@@ -26,14 +26,18 @@ _DEFAULT_FALLBACKS = [
     (
         "timeout_seconds",
         600,
-        "sandbox_agent timeout_seconds defaults to 600 — "
-        "too short for complex tasks like rebase + lint fix + push. Use 1200 (20 min).",
+        (
+            "sandbox_agent timeout_seconds defaults to 600 — "
+            "too short for complex tasks like rebase + lint fix + push. Use 1200 (20 min)."
+        ),
     ),
     (
         "template_id",
         "base",
-        "sandbox_agent template_id defaults to 'base' — use 'opencode' (default, has opencode CLI) "
-        "or 'modulo-opencode' (managed cache-warmed template).",
+        (
+            "sandbox_agent template_id defaults to 'base' — use 'opencode' (default, has opencode CLI) "
+            "or 'modulo-opencode' (managed cache-warmed template)."
+        ),
     ),
 ]
 
