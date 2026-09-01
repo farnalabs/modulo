@@ -3,18 +3,18 @@
 These tests exercise the REAL ``create_run`` path against an in-memory SQLite
 database (no mocks of the function under test):
 
-  * reserved-key strip-before-hash â€” same logical payload with different
+  * reserved-key strip-before-hash — same logical payload with different
     injected reserved keys produces IDENTICAL input_hash, and the keys never
     reach the stored input_payload.
-  * forge prevention per input path â€” a payload carrying ``_work_item_id``
+  * forge prevention per input path — a payload carrying ``_work_item_id``
     through the raw webhook passthrough (empty payload_mapping) or a manual
     POST /runs body never results in a forged work_item_id (the run gets its
     deterministic floor id instead).
-  * the create_run path matrix â€” manual / webhook / cron / agent_signal /
+  * the create_run path matrix — manual / webhook / cron / agent_signal /
     parent-adoption across mint modes (floor, adopted-from-parent, explicit,
     no-refs), asserting work_item_id is set once and refs are stamped when
     provided.
-  * journey hydration â€” a ref creates a journey row keyed by the deterministic
+  * journey hydration — a ref creates a journey row keyed by the deterministic
     canonical id; a duplicate (org, kind, ref) is an ON CONFLICT no-op; no
     refs means no journey row; the journey survives a run purge (no FK); a
     forced stamp failure is fail-open (create_run still succeeds).
@@ -173,7 +173,7 @@ class TestReservedKeyStripBeforeHash:
             assert key not in run.input_payload
 
     async def test_forged_work_item_id_never_survives(self, session: AsyncSession) -> None:
-        """A payload carrying _work_item_id must not forge the anchor â€” the run
+        """A payload carrying _work_item_id must not forge the anchor — the run
         gets its deterministic floor id, not the forged value."""
         await _seed_org(session)
         run = await _create(session, input_payload={"_work_item_id": "00000000-0000-0000-0000-00000000dead"})
@@ -211,7 +211,7 @@ class TestForgePreventionPerInputPath:
         self,
     ) -> None:
         """The raw webhook passthrough (empty payload_mapping) copies the
-        payload verbatim at the route layer â€” the neutralisation happens at
+        payload verbatim at the route layer — the neutralisation happens at
         the create_run chokepoint (covered by the strip tests above)."""
         raw = {"event": "opened", "_work_item_id": "forged"}
         assert _apply_payload_mapping(raw, {}) == raw

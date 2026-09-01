@@ -1,7 +1,7 @@
 """TrelloConnector — async Trello REST API v1 connector."""
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -41,11 +41,13 @@ class TrelloConnector(ConnectorBase):
     def __init__(self, api_key: str, token: str) -> None:
         self._api_key = api_key
         self._token = token
-        # Key + token are passed as QUERY parameters on every request, so httpx
-        # includes them in the request URL — and a transport/status error echoes
-        # that URL. Redact the credential values at the connector boundary so a
-        # failing request never leaks them.
-        self._redactor = CredentialRedactor([api_key, token])
+        # Trello puts ``key``/``token`` in the request query string, so a
+        # transport error whose message is clean still carries the LIVE
+        # credentials in ``exc.request.url`` (FAR-507). Scrub the request URL
+        # unconditionally and never chain the raw exception as ``__cause__`` so
+        # a full-traceback render cannot print the credential URL. This reuses
+        # the shared ``CredentialRedactor`` rather than a per-connector fork.
+        self._redactor = CredentialRedactor([api_key, token], scrub_url=True, chain_cause=False)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -58,33 +60,53 @@ class TrelloConnector(ConnectorBase):
             timeout=30,
         )
 
-    @redacting
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        raise_on_status: bool = True,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Issue a Trello request, letting httpx errors propagate.
+
+        Credential redaction (message + request/response URL + no raw-cause
+        chaining) is handled centrally by the shared ``CredentialRedactor``
+        that wraps every public entry point (``query`` / ``write`` /
+        ``health_check``) via the ``@redacting`` decorator — so a leaked
+        ``key``/``token`` never survives into run/error detail regardless of
+        which transport/status error occurs.
+        """
+        async with self._client() as client:
+            resp = await client.request(method, path, **kwargs)
+            if raise_on_status:
+                resp.raise_for_status()
+        return resp
+
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the authenticated user's profile."""
-        async with self._client() as client:
-            r = await client.get("/members/me")
+        r = await self._request("GET", "/members/me", raise_on_status=False)
 
         if r.status_code != 200:
-            return HealthResult(ok=False, detail=self._redactor.redact(f"HTTP {r.status_code}: {r.text[:200]}"))
+            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {self._redactor.redact(r.text[:200])}")
 
-        payload: dict[str, Any] = r.json()
-        if "id" not in payload:
+        body: dict[str, Any] = r.json()
+        if "id" not in body:
             return HealthResult(ok=False, detail="Unexpected response — no 'id' in member profile")
 
-        display_name = payload.get("fullName") or payload.get("username") or ""
+        display_name = body.get("fullName") or body.get("username") or ""
         return HealthResult(ok=True, detail=display_name)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        async with self._client() as client:
-            handler = self._query_handlers().get(q.resource)
-            if handler is None:
-                raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
-            return await handler(client, q)
+        handler = self._query_handlers().get(q.resource)
+        if handler is None:
+            raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+        return await handler(q)
 
     def _query_handlers(
         self,
-    ) -> dict[str, Callable[[httpx.AsyncClient, ConnectorQuery], Awaitable[ConnectorResult]]]:
+    ) -> dict[str, Callable[[ConnectorQuery], Awaitable[ConnectorResult]]]:
         return {
             "boards": self._query_boards,
             "lists": self._query_lists,
@@ -93,47 +115,42 @@ class TrelloConnector(ConnectorBase):
             "members": self._query_members,
         }
 
-    async def _query_boards(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _query_boards(self, q: ConnectorQuery) -> ConnectorResult:
         params: dict[str, str] = {}
         params.update(self._filter_param(q))
         params.update(self._fields_param(q))
-        r = await client.get("/members/me/boards", params=params)
-        r.raise_for_status()
+        r = await self._request("GET", "/members/me/boards", params=params)
         boards: list[dict[str, Any]] = r.json()
         return ConnectorResult(records=boards, total=len(boards))
 
-    async def _query_lists(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _query_lists(self, q: ConnectorQuery) -> ConnectorResult:
         if "board_id" not in q.filters:
             raise ValueError("Trello lists query requires 'board_id' filter")
         board_id = q.filters["board_id"]
         params = self._filter_param(q)
-        r = await client.get(f"/boards/{board_id}/lists", params=params)
-        r.raise_for_status()
+        r = await self._request("GET", f"/boards/{board_id}/lists", params=params)
         lists: list[dict[str, Any]] = r.json()
         return ConnectorResult(records=lists, total=len(lists))
 
-    async def _query_cards(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _query_cards(self, q: ConnectorQuery) -> ConnectorResult:
         params = self._fields_param(q)
-        r = await client.get(self._cards_endpoint(q), params=params)
-        r.raise_for_status()
+        r = await self._request("GET", self._cards_endpoint(q), params=params)
         cards: list[dict[str, Any]] = r.json()
         return ConnectorResult(records=cards, total=len(cards))
 
-    async def _query_card(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _query_card(self, q: ConnectorQuery) -> ConnectorResult:
         if "card_id" not in q.filters:
             raise ValueError("Trello card query requires 'card_id' filter")
         card_id = q.filters["card_id"]
-        r = await client.get(f"/cards/{card_id}")
-        r.raise_for_status()
+        r = await self._request("GET", f"/cards/{card_id}")
         card: dict[str, Any] = r.json()
         return ConnectorResult(records=[card])
 
-    async def _query_members(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _query_members(self, q: ConnectorQuery) -> ConnectorResult:
         if "board_id" not in q.filters:
             raise ValueError("Trello members query requires 'board_id' filter")
         board_id = q.filters["board_id"]
-        r = await client.get(f"/boards/{board_id}/members")
-        r.raise_for_status()
+        r = await self._request("GET", f"/boards/{board_id}/members")
         members: list[dict[str, Any]] = r.json()
         return ConnectorResult(records=members, total=len(members))
 
@@ -161,32 +178,25 @@ class TrelloConnector(ConnectorBase):
 
     @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        async with self._client() as client:
-            match payload.resource:
-                case "card":
-                    r = await client.post("/cards", json=payload.data)
-                    r.raise_for_status()
-                    created: dict[str, Any] = r.json()
-                    return created
+        match payload.resource:
+            case "card":
+                r = await self._request("POST", "/cards", json=payload.data)
+                return cast(dict[str, Any], r.json())
 
-                case "card_update":
-                    if "id" not in payload.data:
-                        raise ValueError("Trello card_update requires 'id' in data")
-                    card_id = payload.data["id"]
-                    r = await client.put(f"/cards/{card_id}", json=payload.data)
-                    r.raise_for_status()
-                    updated: dict[str, Any] = r.json()
-                    return updated
+            case "card_update":
+                if "id" not in payload.data:
+                    raise ValueError("Trello card_update requires 'id' in data")
+                card_id = payload.data["id"]
+                r = await self._request("PUT", f"/cards/{card_id}", json=payload.data)
+                return cast(dict[str, Any], r.json())
 
-                case "comment":
-                    if "card_id" not in payload.data:
-                        raise ValueError("Trello comment requires 'card_id' in data")
-                    card_id = payload.data["card_id"]
-                    text = payload.data.get("text", "")
-                    r = await client.post(f"/cards/{card_id}/actions/comments", json={"text": text})
-                    r.raise_for_status()
-                    action: dict[str, Any] = r.json()
-                    return action
+            case "comment":
+                if "card_id" not in payload.data:
+                    raise ValueError("Trello comment requires 'card_id' in data")
+                card_id = payload.data["card_id"]
+                text = payload.data.get("text", "")
+                r = await self._request("POST", f"/cards/{card_id}/actions/comments", json={"text": text})
+                return cast(dict[str, Any], r.json())
 
-                case _:
-                    raise ValueError(f"Unsupported Trello write resource: {payload.resource!r}")
+            case _:
+                raise ValueError(f"Unsupported Trello write resource: {payload.resource!r}")

@@ -96,7 +96,7 @@ async def test_sync_updates_agent_row_when_command_differs() -> None:
 
 
 async def test_sync_skips_agent_row_with_null_command() -> None:
-    """(d) An Agent row with a NULL agent_command is NOT updated â€” the node
+    """(d) An Agent row with a NULL agent_command is NOT updated — the node
     value already stands at snapshot time."""
     agent_id = uuid.uuid4()
     agent = SimpleNamespace(id=agent_id, agent_command=None)
@@ -133,7 +133,7 @@ async def test_sync_noop_without_bound_nodes() -> None:
 
 def test_snapshot_materializes_synced_agent_command() -> None:
     """(b) After the sync, snapshot materialization applies the UPDATED Agent
-    row value to the bound node â€” the command the operator PATCHed is what
+    row value to the bound node — the command the operator PATCHed is what
     runs. This is the shadow mechanism that made the stale-row bug silent."""
     agent = Agent(name="reviewer", prompt_template="p")
     agent.agent_command = "patched-command"
@@ -146,7 +146,7 @@ def test_snapshot_materializes_synced_agent_command() -> None:
 
 def test_snapshot_shadow_overrides_node_command_with_agent_row() -> None:
     """The shadow itself: an out-of-step Agent row would override the node
-    value at snapshot time â€” the exact mechanism behind the FAR-488 incident,
+    value at snapshot time — the exact mechanism behind the FAR-488 incident,
     and the reason the row must be synced on every graph PATCH."""
     agent = Agent(name="reviewer", prompt_template="p")
     agent.agent_command = "stale-agent-row-command"

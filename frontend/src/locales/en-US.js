@@ -3494,12 +3494,15 @@ export default {
       "on_unknown_fail_closed_help": "Suppress the write when a prior delivery could not be confirmed (possible silent miss the operator must reconcile). Inert unless the connector write-gate killswitch (MODULO_CONNECTOR_WRITE_GATE_ENABLED) is enabled.",
       "on_unknown_off_help": "Bypass the dedup gate entirely — the write always fires, never deduped.",
       "records_path_help": "JMESPath expression locating the records list (e.g. data.items).",
+      "records_path_placeholder": "data.items",
       "allowed_hosts_help": "Comma-separated hostnames allowed in rendered URLs (SSRF/egress allowlist).",
+      "allowed_hosts_placeholder": "api.example.com,cdn.example.com",
       "verify_tls_help": "Verify the TLS certificate of the target endpoint.",
       "api_key_in": "Send API key",
       "advanced_json": "Advanced configuration (JSON)",
       "advanced_json_invalid": "Advanced JSON is not valid JSON",
       "advanced_json_help": "Templated / advanced fields: path, headers, params, body, operations, next_cursor_path, passthrough, max_response_size, idempotency_header, fan_out, rate_limit.",
+      "advanced_json_placeholder": "{'{ \"path\": \"/items\", \"headers\": { \"Accept\": \"application/json\" }, \"operations\": {}, \"fan_out\": {} }'}",
       "credentials_write_only": "Credentials are write-only — they can never be read back. Re-enter to change; leave untouched to keep the existing stored credential."
     }
   }

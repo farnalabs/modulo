@@ -854,3 +854,21 @@ def test_connector_response_surfaces_degraded_markers(client: TestClient) -> Non
     assert body["degraded_at"] is not None
     assert body["degraded_at"].startswith("2025-01-01T00:00:00")
     assert body["last_skip_error"] == "ValueError: Missing credential key 'token'"
+
+
+def test_connector_response_returns_null_degraded_markers_for_healthy_instance(client: TestClient) -> None:
+    """FAR-497: an instance without degraded markers (healthy init, or cleared on
+    credential update) returns explicit nulls for degraded_at / last_skip_error on
+    the GET response — the fields are always serialised, never omitted."""
+    healthy = _make_connector()
+
+    with patch(
+        "modulo.api.routes.connectors.get_connector_instance",
+        return_value=healthy,
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["degraded_at"] is None
+    assert body["last_skip_error"] is None

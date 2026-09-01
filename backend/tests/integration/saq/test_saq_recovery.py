@@ -36,7 +36,7 @@ _RUN_ID = uuid.uuid4()
 
 
 # ---------------------------------------------------------------------------
-# retry off-by-one â€” retries=N is N TOTAL attempts (N-1 retries)
+# retry off-by-one — retries=N is N TOTAL attempts (N-1 retries)
 # ---------------------------------------------------------------------------
 
 
@@ -45,7 +45,7 @@ class TestRetryOffByOne:
         """SAQ's ``retries`` knob is the TOTAL attempt budget (N-1 retries)."""
         from saq.job import Job
 
-        # retryable only while attempts < retries â€” so retries=N admits exactly
+        # retryable only while attempts < retries — so retries=N admits exactly
         # N attempts, then the job is permanently FAILED (no Nth retry).
         assert Job(function="f", retries=5, attempts=5).retryable is False
         assert Job(function="f", retries=5, attempts=4).retryable is True
@@ -66,7 +66,7 @@ class TestRetryOffByOne:
         assert out["action"] == "fail_run"
         assert out["run_id"] == "r-1"
 
-        # A retry-in-progress job (QUEUED/ACTIVE) must be a NOOP â€” never fail a
+        # A retry-in-progress job (QUEUED/ACTIVE) must be a NOOP — never fail a
         # run mid-retry. This is the off-by-one guard: the run is failed only
         # once all N attempts are exhausted, never after attempt 1.
         for mid_retry in (Status.QUEUED, Status.ACTIVE, Status.NEW, Status.COMPLETE):
@@ -80,7 +80,7 @@ class TestRetryOffByOne:
 
 
 # ---------------------------------------------------------------------------
-# partial-eviction repair â€” reconcile's DEL/ZREM/LREM/enqueue sequence
+# partial-eviction repair — reconcile's DEL/ZREM/LREM/enqueue sequence
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ class TestNoSaqEvictionRedispatch:
 
 
 # ---------------------------------------------------------------------------
-# claim-token fence â€” superseded heartbeat aborts before any side effect
+# claim-token fence — superseded heartbeat aborts before any side effect
 # ---------------------------------------------------------------------------
 
 
@@ -306,7 +306,7 @@ class TestClaimTokenFence:
 
 
 # ---------------------------------------------------------------------------
-# event-loop-stall refusal â€” live-heartbeat runs refuse the next claim
+# event-loop-stall refusal — live-heartbeat runs refuse the next claim
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +318,7 @@ class TestEventLoopStallRefusal:
             )
         )
         # A successor can only claim a RUNNING row once the heartbeat is stale
-        # past the 450s gate â€” the at-most-once refusal point for event-loop stalls.
+        # past the 450s gate — the at-most-once refusal point for event-loop stalls.
         assert "status = 'running'" in sql
         assert "stale_seconds" in sql or "450" in sql
 
@@ -354,7 +354,7 @@ class TestEventLoopStallRefusal:
 
 
 # ---------------------------------------------------------------------------
-# fire_due_triggers â€” two workers, exactly one fire job per epoch
+# fire_due_triggers — two workers, exactly one fire job per epoch
 # ---------------------------------------------------------------------------
 
 
@@ -405,7 +405,7 @@ class TestFireDueTriggersSingleFire:
                 if "FROM organisations" in s:
                     return _Result(scalars=[_ORG])
                 if "UPDATE triggers SET next_fire_at" in s:
-                    # The atomic advance â€” exactly ONE concurrent tick may win the
+                    # The atomic advance — exactly ONE concurrent tick may win the
                     # epoch (models the row-lock + re-evaluated WHERE in SQL).
                     await asyncio.sleep(0)
                     r = _Result()
@@ -448,7 +448,7 @@ class TestFireDueTriggersSingleFire:
 
 
 # ---------------------------------------------------------------------------
-# cost_probe cron hygiene â€” 5-field "*/5 * * * *" (bug class #680)
+# cost_probe cron hygiene — 5-field "*/5 * * * *" (bug class #680)
 # ---------------------------------------------------------------------------
 
 
@@ -509,7 +509,7 @@ class TestSaqAlerting:
         stale = SimpleNamespace(
             id=trigger_id,
             trigger_type="cron",
-            cron_expression="0 * * * *",  # hourly â€” period >= 1h
+            cron_expression="0 * * * *",  # hourly — period >= 1h
             cron_timezone="UTC",
             config_json={},
             last_fired_at=now - timedelta(hours=2),  # missed by > period + grace
@@ -539,7 +539,7 @@ class TestSaqAlerting:
             cron_expression="0 * * * *",
             cron_timezone="UTC",
             config_json={},
-            last_fired_at=now - timedelta(minutes=5),  # recent â€” on schedule
+            last_fired_at=now - timedelta(minutes=5),  # recent — on schedule
             created_at=now - timedelta(days=1),
         )
         brand_new = SimpleNamespace(

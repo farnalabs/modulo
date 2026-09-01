@@ -3,12 +3,12 @@
 Two layers, mirroring the repo's existing patterns:
 
 * service-layer tests against an in-memory SQLite database with the REAL
-  models (no mocks of the functions under test) â€” list correctness, keyset
+  models (no mocks of the functions under test) — list correctness, keyset
   pagination round-trip, kind/ref filter, team-scope owner_team_id, journey
   detail with run history, empty history after a run purge.
-* route-layer tests through a minimal FastAPI app with a mocked session â€”
+* route-layer tests through a minimal FastAPI app with a mocked session —
   permission denial (403 without run.list), 404 for a missing map/journey,
-  team-scope wiring, and DB-failure â†' 503 mapping.
+  team-scope wiring, and DB-failure → 503 mapping.
 """
 
 import uuid
@@ -211,7 +211,7 @@ def _now() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Service layer â€” list
+# Service layer — list
 # ---------------------------------------------------------------------------
 
 
@@ -562,7 +562,7 @@ class TestJourneyRunHistory:
 
 
 # ---------------------------------------------------------------------------
-# Route layer â€” permissions, team scope, errors, wire shape
+# Route layer — permissions, team scope, errors, wire shape
 # ---------------------------------------------------------------------------
 
 
@@ -634,7 +634,7 @@ def _make_journey_mock(**overrides: Any) -> MagicMock:
 
 class TestRoutes:
     def test_list_requires_run_list_permission(self, mock_session: AsyncMock) -> None:
-        app = _make_app(org_role="viewer")  # viewer < runner â†' run.list denied
+        app = _make_app(org_role="viewer")  # viewer < runner → run.list denied
 
         async def override_session() -> AsyncGenerator[AsyncSession, None]:
             yield mock_session

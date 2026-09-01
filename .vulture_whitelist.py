@@ -249,6 +249,11 @@ __all__ = [
     # _network_backend is an httpcore AsyncConnectionPool attribute consumed by
     # httpcore itself; this module only assigns it to wire the pinned backend in.
     "_network_backend",  # httpcore pool attr consumed by httpcore, not this module
+    # __suppress_context__ is a builtin exception dunder consumed by the CPython
+    # interpreter at raise time (it suppresses the implicit __context__ chain).
+    # Connectors/security.py assign it on rebuilt exceptions, but static analysis
+    # cannot see the interpreter read it, so vulture false-positives "unused".
+    "__suppress_context__",  # CPython-consumed exception dunder (set, read by the interpreter)
     # --- FAR-410 REST retry / idempotency / UNKNOWN infrastructure — public API
     #     for the generic REST connector (FAR-401, separate ticket). Consumed
     #     only by tests today; vulture sees no prod call site yet. Each is a

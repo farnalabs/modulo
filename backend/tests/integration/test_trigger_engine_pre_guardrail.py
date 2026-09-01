@@ -275,7 +275,7 @@ class TestGuardrailBlockAtIntake:
         test_user: uuid.UUID,
         intake_rig: dict[str, uuid.UUID | str],
     ) -> None:
-        """After a block, the SAME trigger accepts a clean delivery â€” proving the
+        """After a block, the SAME trigger accepts a clean delivery — proving the
         blocked delivery consumed no dedup slot and created no run."""
         await _seed_guardrail(
             db_engine,
@@ -348,7 +348,7 @@ class TestCanonicalDedupAcrossEncodings:
         intake_rig: dict[str, uuid.UUID | str],
     ) -> None:
         """Same logical payload with different raw encodings (key order +
-        whitespace) must dedup â€” the FAR-214 raw-body-hash encoding-bypass
+        whitespace) must dedup — the FAR-214 raw-body-hash encoding-bypass
         closure. No guardrails bound."""
         payload = {"event": "push", "ref": "refs/heads/main"}
 
