@@ -73,7 +73,7 @@ def main() -> int:
         cmd = ["cmd.exe", "/c", pm, "run", script]
     else:
         cmd = [pm, "run", script]
-    result = subprocess.run(cmd, cwd=FRONTEND_DIR)
+    result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
     return result.returncode
 
 

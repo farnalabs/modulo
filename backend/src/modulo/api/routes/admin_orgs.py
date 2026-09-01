@@ -69,7 +69,7 @@ router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
 
 def _raise_programming_error(code: str, detail: str, exc: ProgrammingError) -> NoReturn:
     """501 -- schema/migration missing (feature not yet available)."""
-    logger.exception(code)
+    logger.error(code, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=detail,
@@ -78,16 +78,16 @@ def _raise_programming_error(code: str, detail: str, exc: ProgrammingError) -> N
 
 def _raise_db_unavailable(code: str, detail: str, exc: SQLAlchemyError) -> NoReturn:
     """503 -- database error while servicing the request."""
-    logger.exception(code)
+    logger.error(code, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=detail,
     ) from exc
 
 
-def _raise_internal_error(code: str) -> NoReturn:
+def _raise_internal_error(code: str, exc: Exception) -> NoReturn:
     """500 -- unexpected non-DB error."""
-    logger.exception(code)
+    logger.error(code, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=MSG_INTERNAL_SERVER_ERROR,
@@ -226,8 +226,8 @@ async def admin_create_org(
         _raise_db_unavailable("admin_orgs.admin_create_org", "Database error while creating organisation.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_create_org")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_create_org", exc)
 
 
 # --- List Orgs ---
@@ -257,8 +257,8 @@ async def admin_list_orgs(
         _raise_db_unavailable("admin_orgs.admin_list_orgs", "Database error while listing organisations.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_list_orgs")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_list_orgs", exc)
     # The nil-UUID orphan org (public-error-ingest sentinel, migration 0171)
     # is infrastructure, never a customer org — hide it from the admin listing.
     return [_list_org_item(o) for o in orgs if o.id != ORPHAN_ORG_ID]
@@ -403,8 +403,8 @@ async def admin_create_org_user(
         _raise_db_unavailable("admin_orgs.admin_create_org_user", "Database error while creating org user.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_create_org_user")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_create_org_user", exc)
 
 
 # --- Delete Org ---
@@ -432,8 +432,8 @@ async def admin_delete_org(
         _raise_db_unavailable("admin_orgs.admin_delete_org", "Database error while deleting organisation.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_delete_org")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_delete_org", exc)
 
 
 # --- Org License Management ---
@@ -494,8 +494,8 @@ async def admin_get_org_license(
         _raise_db_unavailable("admin_orgs.admin_get_org_license", "Database error while fetching org license.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_get_org_license")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_get_org_license", exc)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
@@ -549,8 +549,8 @@ async def admin_set_org_license(
         _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_set_org_license (fetch)")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_set_org_license (fetch)", exc)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
@@ -566,8 +566,8 @@ async def admin_set_org_license(
         _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET, "Database error while updating org license.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_set_org_license (update)")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_set_org_license (update)", exc)
 
     return _license_response_from_data(d)
 
@@ -589,8 +589,8 @@ async def admin_remove_org_license(
         )
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_remove_org_license (fetch)")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_remove_org_license (fetch)", exc)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
@@ -604,8 +604,8 @@ async def admin_remove_org_license(
         _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while removing org license.", exc)
     except HTTPException:
         raise
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_remove_org_license (remove)")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_remove_org_license (remove)", exc)
 
     return OrgLicenseResponse(has_license=False)
 
@@ -651,8 +651,8 @@ async def admin_set_org_authz_enforce(
         _raise_db_unavailable(
             "admin_orgs.admin_set_org_authz_enforce", "Database error while updating org authz-enforce.", exc
         )
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_set_org_authz_enforce")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_set_org_authz_enforce", exc)
 
     if affected == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
@@ -723,8 +723,8 @@ async def admin_set_org_triggers_paused(
         )
     except HTTPException as exc:
         raise exc
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_set_org_triggers_paused")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_set_org_triggers_paused", exc)
 
 
 # --- Guardrails org-wide kill-switch (FAR-223 item 9) ---
@@ -777,8 +777,8 @@ async def admin_get_org_guardrails_kill_switch(
         )
     except HTTPException as exc:
         raise exc
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_get_org_guardrails_kill_switch")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_get_org_guardrails_kill_switch", exc)
 
 
 @router.put(
@@ -852,5 +852,5 @@ async def admin_set_org_guardrails_kill_switch(
         )
     except HTTPException as exc:
         raise exc
-    except Exception:
-        _raise_internal_error("Unexpected error in admin_set_org_guardrails_kill_switch")
+    except Exception as exc:
+        _raise_internal_error("Unexpected error in admin_set_org_guardrails_kill_switch", exc)

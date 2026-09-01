@@ -76,7 +76,7 @@ async def intake_rig(
             {
                 "id": str(pipeline_id),
                 "oid": str(test_org),
-                "name": "FAR-214 Intake Pipeline",
+                "name": f"FAR-214 Intake Pipeline {pipeline_id.hex[:8]}",
                 "uid": str(test_user),
             },
         )

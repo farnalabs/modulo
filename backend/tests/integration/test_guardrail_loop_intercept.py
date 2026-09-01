@@ -68,6 +68,10 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
 
 async def _seed_pipeline(engine: AsyncEngine, org_id: uuid.UUID, name: str, account_id: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
+    # Suffix with a short uuid so repeated calls within a session (e.g. many
+    # tests sharing test_org) never collide on the (organisation_id, name) unique
+    # constraint under parallel execution.
+    unique_name = f"{name}-{pipeline_id.hex[:8]}"
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -77,7 +81,7 @@ async def _seed_pipeline(engine: AsyncEngine, org_id: uuid.UUID, name: str, acco
                 "VALUES (:id, :oid, :name, :uid, 10, 30, 300, "
                 "'{}'::json, '[]'::json, 'manual_approval', 'org')"
             ),
-            {"id": str(pipeline_id), "oid": str(org_id), "name": name, "uid": str(account_id)},
+            {"id": str(pipeline_id), "oid": str(org_id), "name": unique_name, "uid": str(account_id)},
         )
     return pipeline_id
 

@@ -131,7 +131,7 @@ def main() -> int:
     # Pin the uv subprocess cwd to the repo root so `--project backend`
     # resolves identically whether this wrapper was invoked from the repo root
     # (pre-commit) or from backend/ (CI's working-directory).
-    result = subprocess.run(cmd, env=env, cwd=root, capture_output=True, text=True)
+    result = subprocess.run(cmd, env=env, cwd=root, capture_output=True, text=True, check=False)
 
     # `unused variable` findings are framework-metaclass noise (Pydantic /
     # dataclass / SQLAlchemy / Alembic-consumed names) — report but never block.

@@ -22,6 +22,7 @@ def main() -> int:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.stdout:
         print(result.stdout, end="")

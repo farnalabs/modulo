@@ -13,6 +13,7 @@ import asyncio
 import importlib
 import json
 import logging
+import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -80,7 +81,7 @@ class ModelBackendHub:
 
     async def __aexit__(self, exc_type: object, exc_val: object, _exc_tb: object) -> None:
         if exc_type is not None:
-            logger.exception("ModelBackendHub exiting due to error: %s", exc_val)
+            logger.error("ModelBackendHub exiting due to error: %s", exc_val, exc_info=sys.exc_info())
         self._backends.clear()
         self._healthy.clear()
         self._fallbacks.clear()

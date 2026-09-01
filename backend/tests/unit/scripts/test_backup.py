@@ -316,6 +316,7 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
     assert result.returncode == 0
     assert Path(dec).read_text() == "fake-tar-content"

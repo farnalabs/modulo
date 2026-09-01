@@ -60,7 +60,7 @@ def main() -> int:
         "--baseline-commit=HEAD",
         "backend/src/",
     ]
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(cmd, env=env, check=False)
     return result.returncode
 
 
