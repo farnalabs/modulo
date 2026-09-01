@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -149,9 +150,9 @@ async def _write_license_cache(settings: Settings, org_id: str, response: Licens
 @router.get("")
 @handle_db_errors("admin.license.get_license_status")
 async def get_license_status(
-    settings: Settings = Depends(get_settings),
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     current_user: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
-    session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
 
     org_id = current_user.organisation_id
@@ -229,7 +230,7 @@ async def upload_license(
 async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
+    settings: Annotated[Settings, Depends(get_settings)],
     _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> LicenseIssueResponse:
     """Manually issue (sign) a team license key for a customer.

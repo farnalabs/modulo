@@ -15,7 +15,7 @@ URLs:
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -145,7 +145,7 @@ def _serialise_record(
 async def create_feedback(
     run_id: uuid.UUID,
     req: CreateFeedbackRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("feedback.create"),
 ) -> dict[str, Any]:
     try:
@@ -226,11 +226,11 @@ async def create_feedback(
 @router.get("/feedback", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_FEEDBACK_LIST_FEEDBACK)
 async def list_feedback(
-    status_filter: str | None = Query(None, alias="status"),
-    pipeline_id: uuid.UUID | None = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    pipeline_id: Annotated[uuid.UUID | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
     try:
@@ -281,14 +281,14 @@ async def list_feedback(
 @router.get("/feedback/inbox", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_FEEDBACK_LIST_FEEDBACK_INBOX)
 async def list_feedback_inbox(
-    handler_type: str | None = Query(None, alias="type"),
-    status_filter: str | None = Query(None, alias="status"),
-    pipeline_id: uuid.UUID | None = Query(None),
-    date_from: str | None = Query(None),
-    date_to: str | None = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    handler_type: Annotated[str | None, Query(alias="type")] = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    pipeline_id: Annotated[uuid.UUID | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
     date_from_dt = _parse_optional_iso(date_from, "date_from")
@@ -381,9 +381,9 @@ async def _build_node_name_map(session: AsyncSession, items: list[Any]) -> dict[
 @router.get("/feedback/proposals", status_code=status.HTTP_200_OK)
 @handle_db_errors(_CODE_FEEDBACK_LIST_EVAL_PROPOSALS)
 async def list_eval_proposals(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
     try:
@@ -509,7 +509,7 @@ async def _resolve_publish_context(
 async def publish_eval_proposal(
     record_id: uuid.UUID,
     req: PublishEvalProposalRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("feedback.review"),
 ) -> dict[str, Any]:
     """Publish an eval-gap proposal as a live eval definition (PRD §8.20 ¶Eval suite growth #3).
@@ -611,7 +611,7 @@ async def publish_eval_proposal(
 @handle_db_errors(_CODE_FEEDBACK_GET_FEEDBACK)
 async def get_feedback(
     record_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
     try:
@@ -657,7 +657,7 @@ async def get_feedback(
 async def update_feedback_status(
     record_id: uuid.UUID,
     req: UpdateStatusRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("feedback.update"),
 ) -> dict[str, Any]:
     valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated", "dismissed"}
@@ -765,7 +765,7 @@ async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID
 @handle_db_errors(_CODE_FEEDBACK_DETECT_EVAL_GAP)
 async def detect_eval_gap(
     record_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("feedback.update"),
 ) -> dict[str, Any]:
     try:
@@ -828,7 +828,7 @@ async def _resolve_pipeline_name(session: AsyncSession, record: Any) -> str | No
 @handle_db_errors(_CODE_FEEDBACK_GET_INBOX_ITEM)
 async def get_inbox_item(
     record_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_FEEDBACK_LIST),
 ) -> dict[str, Any]:
     try:
@@ -944,7 +944,7 @@ async def _apply_review_action(
 async def review_feedback(
     record_id: uuid.UUID,
     req: ReviewFeedbackRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("feedback.review"),
 ) -> dict[str, Any]:
     valid_actions = {"mark_reviewed", "dismiss", "create_correction_run"}

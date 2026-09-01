@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -44,7 +44,7 @@ class InstallRequest(BaseModel):
 
 @router.get("")
 async def list_community(
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("library.search"),
 ) -> dict[str, Any]:
     """List synced community entries, fail-open to an empty list."""
@@ -86,7 +86,7 @@ async def _fetch_entry_content(content_sha256: str) -> Any:
 @router.get("/{entry_id}")
 async def get_entry(
     entry_id: str,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     _principal: TenantPrincipal = require_permission("library.search"),
 ) -> dict[str, Any]:
     """Return a single community entry, including its parsed blob content."""
@@ -116,7 +116,7 @@ async def get_entry(
 async def install(
     entry_id: str,
     req: InstallRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("library.copy"),
 ) -> LibraryPrimitiveResponse:
     """Install a community entry into the calling organisation."""

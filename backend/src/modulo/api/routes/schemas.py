@@ -6,7 +6,7 @@ import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError
@@ -169,10 +169,10 @@ class SchemaVersionListResponse(BaseModel):
 @router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors("schemas.list_schemas_endpoint")
 async def list_schemas_endpoint(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    folder_id: uuid.UUID | None = Query(default=None),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    folder_id: Annotated[uuid.UUID | None, Query()] = None,
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaListResponse:
     try:
@@ -218,7 +218,7 @@ async def list_schemas_endpoint(
 @router.get("/counts")
 @handle_db_errors("schemas.counts_endpoint")
 async def schema_counts_endpoint(
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaCountsResponse:
     """Return total schema count and per-folder counts for the caller's org.
@@ -261,7 +261,7 @@ async def schema_counts_endpoint(
 @handle_db_errors("schemas.create_schema_endpoint")
 async def create_schema_endpoint(
     req: SchemaCreate,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
 ) -> SchemaResponse:
     try:
@@ -319,7 +319,7 @@ async def create_schema_endpoint(
 @handle_db_errors("schemas.get_schema_endpoint")
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaResponse:
     try:
@@ -364,7 +364,7 @@ async def get_schema_endpoint(
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
@@ -410,7 +410,7 @@ async def update_schema_endpoint(
 @handle_db_errors("schemas.deprecate_schema_endpoint")
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
@@ -466,7 +466,7 @@ class SchemaFolderMoveRequest(BaseModel):
 async def move_schema_to_folder_endpoint(
     schema_id: uuid.UUID,
     req: SchemaFolderMoveRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     try:
@@ -494,8 +494,8 @@ async def move_schema_to_folder_endpoint(
 @handle_db_errors("schemas.delete_schema_endpoint")
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
-    force: bool = Query(False),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    force: Annotated[bool, Query()] = False,
     principal: TenantPrincipal = require_permission("schema.delete"),
 ) -> None:
     try:
@@ -552,9 +552,9 @@ async def delete_schema_endpoint(
 )
 async def list_schema_versions_endpoint(
     schema_id: uuid.UUID,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaVersionListResponse:
     try:
@@ -608,7 +608,7 @@ async def list_schema_versions_endpoint(
 async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
 ) -> SchemaVersionResponse:
     try:
@@ -663,7 +663,7 @@ async def create_schema_version_endpoint(
 async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaVersionResponse:
     try:
@@ -738,7 +738,7 @@ async def _load_latest_definition(session: AsyncSession, schema_id: uuid.UUID, p
 @handle_db_errors("schemas.list_schema_fields_endpoint")
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaFieldListResponse:
     """Return the field list for the latest version of a schema.
@@ -993,9 +993,9 @@ async def _resolve_infer_context(
 @handle_db_errors("schemas.infer_schema_endpoint")
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
     principal: TenantPrincipal = require_permission("schema.infer"),
-    settings: Settings = Depends(get_settings),
 ) -> SchemaInferResponse:
     """Sample data from a connector and infer a JSON Schema via LLM.
 
@@ -1129,9 +1129,9 @@ async def _generate_schema(
 @handle_db_errors("schemas.generate_schema_endpoint")
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
-    settings: Settings = Depends(get_settings),
 ) -> SchemaGenerateResponse:
     """Generate a JSON Schema from a natural language description and optional
     example records via an LLM.
@@ -1323,9 +1323,9 @@ def _apply_migration_safe(data: dict[str, Any], plan: Any) -> Any:
 @handle_db_errors("schemas.migrate_data_endpoint")
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
-    dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
+    dry_run: Annotated[bool, Query(description="If true, preview the migration plan without applying it")] = False,
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.
 
@@ -1397,7 +1397,7 @@ async def migrate_data_endpoint(
 @handle_db_errors("schemas.migration_plan_endpoint")
 async def migration_plan_endpoint(
     req: SchemaMigrationPlanRequest,
-    session: AsyncSession = Depends(get_db_session),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> dict[str, Any]:
     """Preview a migration plan between two schemas without applying it.
