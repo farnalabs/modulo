@@ -692,15 +692,33 @@ def test_cleanup_expired_unauthenticated_returns_401(client: TestClient) -> None
 
 def test_receive_webhook_bootstrap_reads_trigger_via_system_session(client: TestClient) -> None:
     """Regression (FAR-523): the trigger bootstrap read must go through the
-    system session, BEFORE any app-session RLS org context exists — a
+    system session, BEFORE any app-session RLS org context exists - a
     pre-context read of the org-scoped ``triggers`` table on the app session
     matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
+    from sqlalchemy.sql import Select
+
     system_mock = make_system_session_mock(trigger_org_id=_ORG_ID)
+    app_session = _make_mock_session()
+    app_tables: list[str] = []
+    app_execute = app_session.execute
+
+    async def _recording_execute(stmt: object, *args: object, **kwargs: object):
+        if isinstance(stmt, Select):
+            froms = stmt.get_final_froms()
+            if froms:
+                app_tables.append(getattr(froms[0], "name", ""))
+        return await app_execute(stmt, *args, **kwargs)
+
+    app_session.execute = _recording_execute
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
 
+    async def override_app() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
     app.dependency_overrides[get_system_db_session] = override_system
+    app.dependency_overrides[get_db_session] = override_app
     run_mock = _make_mock_run()
     try:
         with (
@@ -716,12 +734,18 @@ def test_receive_webhook_bootstrap_reads_trigger_via_system_session(client: Test
             )
     finally:
         app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
 
     assert resp.status_code == 202
-    # The bootstrap ran on the system session (trigger + pipeline org reads),
-    # and the app session ran NO pre-context entity reads.
-    tables = [c.args[0].get_final_froms()[0].name for c in system_mock.execute.await_args_list if c.args]
-    assert "triggers" in tables
+    # The system session ran EXACTLY the bootstrap: the trigger read, and
+    # nothing else (the redundant pipeline org read was dropped with the
+    # shared helper).
+    system_tables = [c.args[0].get_final_froms()[0].name for c in system_mock.execute.await_args_list if c.args]
+    assert system_tables == ["triggers"]
+    # The app session ran NO pre-context entity reads of the org-scoped
+    # trigger/pipeline tables (any such read 404s under production RLS).
+    assert "triggers" not in app_tables
+    assert "pipelines" not in app_tables
 
 
 def test_receive_webhook_missing_trigger_returns_404(client: TestClient) -> None:
@@ -794,3 +818,68 @@ def test_receive_webhook_other_org_trigger_returns_404_no_writes(client: TestCli
     aexit = app_session.begin.return_value.__aexit__
     assert aexit.await_count == 1
     assert aexit.await_args.args[0] is TriggerNotFoundError
+
+
+def test_receive_webhook_degraded_system_engine_returns_503(client: TestClient) -> None:
+    """When the modulo_system role is not provisioned the BYPASSRLS bootstrap
+    would silently match zero rows and every delivery would 404. The route
+    must refuse loudly with a 503 (log code webhooks.system_bootstrap_degraded)
+    — distinguishable from a genuine 404."""
+    with patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True):
+        resp = client.post(
+            f"/api/v1/triggers/{uuid.uuid4()}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000"},
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
+
+
+def test_receive_webhook_trigger_busy_returns_202_queued(client: TestClient) -> None:
+    """Concurrent same-trigger deliveries serialize on the engine's advisory
+    lock; the loser must get the same queued-ack as the snapshot-lock case —
+    never a 500 from the generic handler."""
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": str(int(time.time()))},
+        )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["detail"] == "Pipeline busy — queued for retry"
+    assert body.get("run_id") is None
+    dispatch.assert_not_called()
+
+
+def test_receive_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
+    """A non-dict config_json (schema drift / manual edit) must 400 at the
+    route, not AttributeError -> 500 on external ingress."""
+    system_mock = make_system_session_mock(trigger_config=["not-a-dict"])
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"

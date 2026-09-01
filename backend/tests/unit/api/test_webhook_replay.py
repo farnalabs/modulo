@@ -446,3 +446,63 @@ def test_replay_other_org_event_unauthenticated_returns_404_no_disclosure(client
     assert resp.json()["detail"] == "Trigger event not found"
     assert _STORED_BODY.decode() not in resp.text
     m.assert_not_called()
+
+
+def test_replay_webhook_degraded_system_engine_returns_503(client: TestClient) -> None:
+    """Replay shares receive_webhook's degraded-system-engine contract: 503
+    with the distinct bootstrap-degraded failure, never a silent 404."""
+    with patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True):
+        resp = client.post(
+            f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
+
+
+def test_replay_webhook_trigger_busy_returns_202_queued(client: TestClient) -> None:
+    """Replay serializes on the same engine advisory lock: the loser gets the
+    queued-ack contract, never a 500."""
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body.get("run_id") is None
+    dispatch.assert_not_called()
+
+
+def test_replay_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
+    """Unauthenticated replay reads the trigger's config_json for the HMAC
+    secret — a non-dict value must 400, not AttributeError -> 500."""
+    system_mock = make_system_session_mock(trigger_config="bogus")
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"
