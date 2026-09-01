@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 Review = dict[str, Any]
@@ -94,7 +95,7 @@ def decide(reviews: list[Review], commits: list[Commit], head_sha: str) -> tuple
 
 
 def load(path: str) -> Any:
-    with open(path, encoding="utf-8") as fh:
+    with Path(path).open(encoding="utf-8") as fh:
         return json.load(fh)
 
 

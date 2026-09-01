@@ -54,7 +54,7 @@ def sample_archive(tmp_dir):
             h = hash_file(Path(content_dir, name))
             f.write(f"{h}  {name}\n")
 
-    archive_path = os.path.join(tmp_dir, "backup.tar.gz")
+    archive_path = Path(tmp_dir, "backup.tar.gz")
     with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(content_dir, arcname=".")
     return archive_path, content_dir
@@ -96,7 +96,7 @@ def test_decrypt_archive_missing_openssl_exits(tmp_dir, capsys):
         patch("scripts.restore.shutil.which", return_value=None),
         pytest.raises(SystemExit),
     ):
-        decrypt_archive(os.path.join(tmp_dir, "x.enc"), "pass", os.path.join(tmp_dir, "x.tar.gz"))
+        decrypt_archive(Path(tmp_dir, "x.enc"), "pass", Path(tmp_dir, "x.tar.gz"))
     assert "openssl not found" in capsys.readouterr().out
 
 
@@ -109,13 +109,13 @@ def test_decrypt_archive_failure_exits(tmp_dir, capsys):
         patch("scripts.restore.subprocess.run", return_value=proc),
         pytest.raises(SystemExit),
     ):
-        decrypt_archive(os.path.join(tmp_dir, "x.enc"), "pass", os.path.join(tmp_dir, "x.tar.gz"))
+        decrypt_archive(Path(tmp_dir, "x.enc"), "pass", Path(tmp_dir, "x.tar.gz"))
     assert "Decryption failed: bad decrypt" in capsys.readouterr().out
 
 
 def test_decrypt_archive_calls_openssl_with_expected_args(tmp_dir, capsys):
-    enc_path = os.path.join(tmp_dir, "in.enc")
-    out_path = os.path.join(tmp_dir, "out.tar.gz")
+    enc_path = Path(tmp_dir, "in.enc")
+    out_path = Path(tmp_dir, "out.tar.gz")
     proc = MagicMock()
     proc.returncode = 0
     with (
@@ -141,7 +141,7 @@ def test_decrypt_archive_missing_input(tmp_dir, monkeypatch):
 
     passphrase = rp(None)
     with pytest.raises(SystemExit):
-        da("/nonexistent", passphrase, os.path.join(tmp_dir, "out.tar.gz"))
+        da("/nonexistent", passphrase, Path(tmp_dir, "out.tar.gz"))
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +151,8 @@ def test_decrypt_archive_missing_input(tmp_dir, monkeypatch):
 
 def test_extract_archive(tmp_dir, sample_archive):
     archive_path, _ = sample_archive
-    extract_dir = os.path.join(tmp_dir, "extracted")
-    Path(extract_dir).mkdir(parents=True, exist_ok=True)
+    extract_dir = Path(tmp_dir, "extracted")
+    extract_dir.mkdir(parents=True, exist_ok=True)
     files = extract_archive(archive_path, extract_dir)
     assert "modulo.pgdump" in files
     assert "secrets.env" in files
@@ -161,24 +161,24 @@ def test_extract_archive(tmp_dir, sample_archive):
 
 
 def test_extract_archive_handles_subdirectories(tmp_dir):
-    content = os.path.join(tmp_dir, "content")
+    content = Path(tmp_dir, "content")
     Path(content, "sub").mkdir(parents=True)
     Path(content, "sub", "file.txt").write_text("x")
     Path(content, "root.txt").write_text("y")
-    archive_path = os.path.join(tmp_dir, "nested.tar.gz")
+    archive_path = Path(tmp_dir, "nested.tar.gz")
     with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(content, arcname=".")
-    extract_dir = os.path.join(tmp_dir, "out")
-    Path(extract_dir).mkdir(parents=True, exist_ok=True)
+    extract_dir = Path(tmp_dir, "out")
+    extract_dir.mkdir(parents=True, exist_ok=True)
 
     files = extract_archive(archive_path, extract_dir)
 
-    assert files["root.txt"] == os.path.join(extract_dir, "root.txt")
+    assert files["root.txt"] == str(extract_dir / "root.txt")
     # tar members always use "/" separators (POSIX spec) regardless of host
     # OS, so the dict key is "sub/file.txt" on every platform. Compare the
     # joined paths with os.path.normpath so Windows backslash vs. forward-slash
     # differences do not make the assertion platform-dependent.
-    assert os.path.normpath(files["sub/file.txt"]) == os.path.normpath(os.path.join(extract_dir, "sub", "file.txt"))
+    assert os.path.normpath(files["sub/file.txt"]) == os.path.normpath(str(extract_dir / "sub" / "file.txt"))
     assert Path(files["sub/file.txt"]).exists()
 
 
@@ -201,7 +201,7 @@ def test_read_checksums_missing(tmp_dir):
 
 
 def test_read_checksums_skips_malformed_and_blank_lines(tmp_dir):
-    cs = os.path.join(tmp_dir, "checksums.sha256")
+    cs = Path(tmp_dir, "checksums.sha256")
     Path(cs).write_text("not-a-checksum\n\n" + "a" * 64 + "  good.txt\n")
     assert read_checksums(tmp_dir) == {"good.txt": "a" * 64}
 
@@ -214,16 +214,16 @@ def test_read_checksums_skips_malformed_and_blank_lines(tmp_dir):
 def test_verify_hashes_ok(tmp_dir, sample_archive):
     _, content_dir = sample_archive
     files = {
-        "modulo.pgdump": os.path.join(content_dir, "modulo.pgdump"),
-        "secrets.env": os.path.join(content_dir, "secrets.env"),
-        "manifest.json": os.path.join(content_dir, "manifest.json"),
+        "modulo.pgdump": Path(content_dir, "modulo.pgdump"),
+        "secrets.env": Path(content_dir, "secrets.env"),
+        "manifest.json": Path(content_dir, "manifest.json"),
     }
     assert verify_hashes(content_dir, files) is True
 
 
 def test_verify_hashes_fails_on_corrupted(tmp_dir, sample_archive):
     _, content_dir = sample_archive
-    pg_path = os.path.join(content_dir, "modulo.pgdump")
+    pg_path = Path(content_dir, "modulo.pgdump")
     # corrupt the file
     Path(pg_path).write_text("tampered content")
     files = {"modulo.pgdump": pg_path}
@@ -231,14 +231,14 @@ def test_verify_hashes_fails_on_corrupted(tmp_dir, sample_archive):
 
 
 def test_verify_hashes_returns_true_without_checksums(tmp_dir):
-    target = os.path.join(tmp_dir, "a.txt")
+    target = Path(tmp_dir, "a.txt")
     Path(target).write_text("x")
     assert verify_hashes(tmp_dir, {"a.txt": target}) is True
 
 
 def test_verify_hashes_unchecked_files_do_not_fail(tmp_dir):
-    known = os.path.join(tmp_dir, "known.txt")
-    extra = os.path.join(tmp_dir, "extra.txt")
+    known = Path(tmp_dir, "known.txt")
+    extra = Path(tmp_dir, "extra.txt")
     Path(known).write_text("aaa")
     Path(extra).write_text("bbb")
     Path(tmp_dir, "checksums.sha256").write_text(f"{hash_file(known)}  known.txt\n")
@@ -375,7 +375,7 @@ def test_parse_args_flags(monkeypatch):
 
 async def test_main_missing_input_exits(tmp_dir):
     ns = MagicMock()
-    ns.input = os.path.join(tmp_dir, "nonexistent.enc")
+    ns.input = Path(tmp_dir, "nonexistent.enc")
     with (
         patch("scripts.restore.parse_args", return_value=ns),
         pytest.raises(SystemExit),
@@ -384,7 +384,7 @@ async def test_main_missing_input_exits(tmp_dir):
 
 
 async def test_main_mode_conflict_exits(tmp_dir, capsys):
-    input_path = os.path.join(tmp_dir, "backup.enc")
+    input_path = Path(tmp_dir, "backup.enc")
     Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
@@ -401,7 +401,7 @@ async def test_main_mode_conflict_exits(tmp_dir, capsys):
 
 
 async def test_main_no_mode_exits(tmp_dir, capsys):
-    input_path = os.path.join(tmp_dir, "backup.enc")
+    input_path = Path(tmp_dir, "backup.enc")
     Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
@@ -418,7 +418,7 @@ async def test_main_no_mode_exits(tmp_dir, capsys):
 
 
 async def test_main_empty_passphrase_exits(tmp_dir, capsys):
-    input_path = os.path.join(tmp_dir, "backup.enc")
+    input_path = Path(tmp_dir, "backup.enc")
     Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
@@ -436,7 +436,7 @@ async def test_main_empty_passphrase_exits(tmp_dir, capsys):
 
 
 async def test_main_dry_run_success(tmp_dir, capsys):
-    input_path = os.path.join(tmp_dir, "backup.enc")
+    input_path = Path(tmp_dir, "backup.enc")
     Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
@@ -448,7 +448,7 @@ async def test_main_dry_run_success(tmp_dir, capsys):
         patch("scripts.restore.parse_args", return_value=ns),
         patch("scripts.restore.resolve_passphrase", return_value="pass"),
         patch("scripts.restore.decrypt_archive") as mock_dec,
-        patch("scripts.restore.extract_archive", return_value={"a": os.path.join(tmp_dir, "a")}) as mock_ext,
+        patch("scripts.restore.extract_archive", return_value={"a": Path(tmp_dir, "a")}) as mock_ext,
         patch("scripts.restore.verify_hashes", return_value=True) as mock_verify,
     ):
         await main()

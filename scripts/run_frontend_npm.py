@@ -17,7 +17,6 @@ Behaviour is identical on all platforms:
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -25,8 +24,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
-FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
-PACKAGE_JSON = os.path.join(FRONTEND_DIR, "package.json")
+FRONTEND_DIR = str(Path(REPO_ROOT) / "frontend")
+PACKAGE_JSON = str(Path(FRONTEND_DIR) / "package.json")
 
 _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_./-]*$")
 
@@ -54,7 +53,7 @@ def main() -> int:
         print(f"{Path(__file__).name}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)
         return 0
 
-    with open(PACKAGE_JSON, encoding="utf-8-sig") as fh:
+    with Path(PACKAGE_JSON).open(encoding="utf-8-sig") as fh:
         scripts = json.load(fh).get("scripts", {})
     if script not in scripts:
         print(

@@ -345,7 +345,7 @@ def _safe_input_path(path: str) -> str:
 def load_pack_file(path: str) -> PolicyPack:
     """Load and validate a policy pack YAML file from disk."""
     try:
-        with open(path, encoding="utf-8") as fh:
+        with Path(path).open(encoding="utf-8") as fh:
             return load_pack(fh.read())
     except OSError as exc:
         raise GuardrailConfigError(f"Cannot read policy pack file {path!r}: {exc}") from exc

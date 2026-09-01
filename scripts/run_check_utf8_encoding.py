@@ -10,7 +10,6 @@ BOM. Exit 0 clean, 1 blocking issue.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -51,9 +50,9 @@ def _tracked_files() -> list[str]:
 
 def _write_utf8_no_bom(path: str) -> None:
     # Read as UTF-8, tolerating the BOM, then rewrite without it.
-    with open(path, encoding="utf-8-sig", newline="") as fh:
+    with Path(path).open(encoding="utf-8-sig", newline="") as fh:
         content = fh.read()
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    with Path(path).open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
 
 
@@ -70,11 +69,11 @@ def main() -> int:
         ext = Path(rel).suffix.lower()
         if ext not in _EXTENSIONS:
             continue
-        full = os.path.join(REPO_ROOT, rel)
+        full = str(Path(REPO_ROOT) / rel)
         if not Path(full).is_file():
             continue
         try:
-            with open(full, "rb") as fh:
+            with Path(full).open("rb") as fh:
                 data = fh.read()
         except OSError:
             # Skip files we can't read.

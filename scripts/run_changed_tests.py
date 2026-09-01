@@ -8,13 +8,12 @@ backend/ (so backend/.env resolves for Settings()), and fails if any fail.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
-BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
+BACKEND_DIR = str(Path(REPO_ROOT) / "backend")
 
 
 def _changed_unit_tests() -> list[str]:

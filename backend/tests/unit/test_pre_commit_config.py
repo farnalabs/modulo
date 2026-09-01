@@ -6,7 +6,6 @@ never wrapped in Bash.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -14,7 +13,7 @@ REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def _config() -> str:
-    with open(os.path.join(REPO_ROOT, ".pre-commit-config.yaml"), encoding="utf-8") as fh:
+    with Path(REPO_ROOT, ".pre-commit-config.yaml").open(encoding="utf-8") as fh:
         return fh.read()
 
 

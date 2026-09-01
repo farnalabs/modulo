@@ -84,7 +84,7 @@ def _run_gate() -> subprocess.CompletedProcess[str]:
     )
 
 
-_LOCK_PATH = os.path.join(tempfile.gettempdir(), "modulo_vulture_gate.lock")
+_LOCK_PATH = str(Path(tempfile.gettempdir()) / "modulo_vulture_gate.lock")
 
 
 @contextmanager

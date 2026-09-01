@@ -127,9 +127,9 @@ async def run_pg_dump(db_url: str, pg_dump: str, output_path: str) -> None:
 def collect_secrets(manifest_dir: str) -> list[str]:
     print("Collecting secrets...")
     files: list[str] = []
-    secrets_path = os.path.join(manifest_dir, "secrets.env")
+    secrets_path = str(Path(manifest_dir) / "secrets.env")
     keys = ["FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"]
-    with open(secrets_path, "w") as f:
+    with Path(secrets_path).open("w") as f:
         for key in keys:
             val = os.environ.get(key, "")
             f.write(f"{key}={val}\n")
@@ -141,10 +141,10 @@ def collect_secrets(manifest_dir: str) -> list[str]:
         "version": "1",
         "created_at": datetime.now(UTC).isoformat(),
     }
-    manifest_path = os.path.join(manifest_dir, "manifest.json")
+    manifest_path = str(Path(manifest_dir) / "manifest.json")
     import json
 
-    with open(manifest_path, "w") as f:
+    with Path(manifest_path).open("w") as f:
         json.dump(manifest, f, indent=2)
     files.append(manifest_path)
     print(f"  -> {manifest_path}")
@@ -154,7 +154,7 @@ def collect_secrets(manifest_dir: str) -> list[str]:
 
 def hash_file(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -165,8 +165,8 @@ def write_checksums(manifest_dir: str, files: list[str]) -> str:
     for f in files:
         rel = Path(f).name
         checksums[rel] = hash_file(f)
-    cs_path = os.path.join(manifest_dir, "checksums.sha256")
-    with open(cs_path, "w") as f:
+    cs_path = str(Path(manifest_dir) / "checksums.sha256")
+    with Path(cs_path).open("w") as f:
         f.writelines(f"{h}  {name}\n" for name, h in sorted(checksums.items()))
     return cs_path
 
@@ -242,7 +242,7 @@ async def main() -> None:
 
     db_url = get_db_url(args.db_url)
 
-    check_disk_space(os.path.dirname(args.output or "."), args.min_disk_gb)
+    check_disk_space(str(Path(args.output or ".").parent), args.min_disk_gb)
 
     pg_dump = _validate_executable(args.pg_dump, "pg_dump")
 
@@ -257,7 +257,7 @@ async def main() -> None:
 
     tmpdir = tempfile.mkdtemp(prefix="modulo-backup-")
     try:
-        dump_path = os.path.join(tmpdir, "modulo.pgdump")
+        dump_path = str(Path(tmpdir) / "modulo.pgdump")
         await run_pg_dump(db_url, pg_dump, dump_path)
 
         secret_files = collect_secrets(tmpdir)

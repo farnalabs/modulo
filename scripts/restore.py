@@ -138,18 +138,18 @@ def extract_archive(tar_path: str, extract_dir: str) -> dict[str, str]:
         for member in tar.getmembers():
             if member.isfile():
                 name = member.name.lstrip("./")
-                files[name] = os.path.join(extract_dir, name)
+                files[name] = str(Path(extract_dir) / name)
                 print(f"  extracted: {member.name}")
     return files
 
 
 def read_checksums(extract_dir: str) -> dict[str, str]:
-    cs_file = os.path.join(extract_dir, "checksums.sha256")
+    cs_file = str(Path(extract_dir) / "checksums.sha256")
     if not Path(cs_file).exists():
         print("WARNING: no checksums.sha256 found in archive")
         return {}
     checksums: dict[str, str] = {}
-    with open(cs_file) as f:
+    with Path(cs_file).open() as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line:
@@ -184,7 +184,7 @@ def verify_hashes(extract_dir: str, files: dict[str, str]) -> bool:
 
 def hash_file(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -208,7 +208,7 @@ def pg_database_name(db_url: str) -> str:
 
 
 def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
-    dump_path = os.path.join(extract_dir, "modulo.pgdump")
+    dump_path = str(Path(extract_dir) / "modulo.pgdump")
     pg_restore = _validate_executable(pg_restore, "pg_restore")
     _validate_arg(db_url, "database URL")
     if not Path(dump_path).exists():
@@ -271,24 +271,24 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
 
 
 def restore_config(extract_dir: str) -> None:
-    secrets_path = os.path.join(extract_dir, "secrets.env")
+    secrets_path = str(Path(extract_dir) / "secrets.env")
     if not Path(secrets_path).exists():
         print("WARNING: secrets.env not found in archive")
         return
     print("Restoring config...")
     print(f"  Found: {secrets_path}")
     print("  To apply, source or copy the values:")
-    with open(secrets_path) as f:
+    with Path(secrets_path).open() as f:
         for raw_line in f:
             line = raw_line.strip()
             if line and not line.startswith("#"):
                 print(f"    export {line}")
 
-    manifest_path = os.path.join(extract_dir, "manifest.json")
+    manifest_path = str(Path(extract_dir) / "manifest.json")
     if Path(manifest_path).exists():
         import json
 
-        with open(manifest_path) as f:
+        with Path(manifest_path).open() as f:
             manifest = json.load(f)
         print(f"  Backup created at: {manifest.get('created_at', 'unknown')}")
         print(f"  Tool version: {manifest.get('version', 'unknown')}")
@@ -327,7 +327,7 @@ async def main() -> None:
 
     tmpdir = tempfile.mkdtemp(prefix="modulo-restore-")
     try:
-        tar_path = os.path.join(tmpdir, "backup.tar.gz")
+        tar_path = str(Path(tmpdir) / "backup.tar.gz")
         decrypt_archive(args.input, passphrase, tar_path)
         files = extract_archive(tar_path, tmpdir)
 

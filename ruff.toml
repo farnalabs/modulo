@@ -124,14 +124,14 @@ select = [
     "YTT201", "YTT202", "YTT203", "YTT204",
     "YTT301", "YTT302", "YTT303",
     "SLOT002",
-    # flake8-use-pathlib: a small PTH backlog (PTH118/PTH120/PTH123 remain,
-    # awaiting a scan-by-scan migration) means the family cannot be enabled
-    # whole; these are the members with zero current call sites across the whole
-    # tree (incl. scripts/, which were migrated to match).
+    # flake8-use-pathlib: every member of the family now has zero current call
+    # sites across the whole tree (incl. scripts/, which were migrated to match)
+    # — the PTH118/PTH120/PTH123 backlog was cleared in a scan-by-scan migration.
     "PTH100", "PTH101", "PTH102", "PTH103", "PTH104", "PTH105", "PTH106", "PTH107",
     "PTH108", "PTH109", "PTH110", "PTH111", "PTH112", "PTH113", "PTH114", "PTH115",
-    "PTH116", "PTH117", "PTH119", "PTH121", "PTH122", "PTH124", "PTH201", "PTH202",
-    "PTH203", "PTH204", "PTH205", "PTH206", "PTH207", "PTH208", "PTH210", "PTH211",
+    "PTH116", "PTH117", "PTH118", "PTH119", "PTH120", "PTH121", "PTH122", "PTH123",
+    "PTH124", "PTH201", "PTH202", "PTH203", "PTH204", "PTH205", "PTH206", "PTH207",
+    "PTH208", "PTH210", "PTH211",
     # flake8-logging hygiene: logger must be obtained via getLogger() with
     # __name__ (LOG001/LOG002), never the deprecated WARN constant (LOG009),
     # never a root-logger call (LOG015).

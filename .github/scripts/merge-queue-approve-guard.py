@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 
 def _parse_iso(ts: str) -> int:
@@ -49,7 +50,7 @@ def load_concatenated(path: str):
     We walk the text with ``raw_decode`` and flatten every top-level array/dict
     into a single list.
     """
-    with open(path, encoding="utf-8") as fh:
+    with Path(path).open(encoding="utf-8") as fh:
         text = fh.read()
     decoder = json.JSONDecoder()
     items: list = []

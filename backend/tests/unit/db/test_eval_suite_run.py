@@ -531,7 +531,7 @@ def test_single_migration_head() -> None:
     revisions = {}
     parents = {}
     for path in _MIGRATION_PATH.parent.glob("*.py"):
-        with open(path, encoding="utf-8") as source_file:
+        with Path(path).open(encoding="utf-8") as source_file:
             source = source_file.read()
 
         # Handle both `revision = "x"` and `revision: str = "x"` styles.

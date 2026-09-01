@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -123,7 +122,7 @@ def test_get_db_url_missing(monkeypatch):
 
 
 async def test_run_pg_dump_success(tmp_manifest_dir):
-    output = os.path.join(tmp_manifest_dir, "dump.pgdump")
+    output = str(Path(tmp_manifest_dir) / "dump.pgdump")
     proc = MagicMock()
     proc.returncode = 0
     proc.communicate = AsyncMock(return_value=(None, b""))
@@ -144,7 +143,7 @@ async def test_run_pg_dump_failure_exits(tmp_manifest_dir, capsys):
         patch("scripts.backup.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
         pytest.raises(SystemExit),
     ):
-        await run_pg_dump("postgresql://u:p@h/db", "pg_dump", os.path.join(tmp_manifest_dir, "x"))
+        await run_pg_dump("postgresql://u:p@h/db", "pg_dump", str(Path(tmp_manifest_dir) / "x"))
     assert "pg_dump failed: connection failed" in capsys.readouterr().out
 
 
@@ -159,7 +158,7 @@ def test_collect_secrets_creates_env_file(tmp_manifest_dir, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test/db")
     files = collect_secrets(tmp_manifest_dir)
 
-    secrets_path = os.path.join(tmp_manifest_dir, "secrets.env")
+    secrets_path = str(Path(tmp_manifest_dir) / "secrets.env")
     assert secrets_path in files
     assert Path(secrets_path).exists()
 
@@ -177,12 +176,12 @@ def test_collect_secrets_writes_all_keys_with_empty_defaults(tmp_manifest_dir, m
     lines = dict(line.split("=", 1) for line in content.strip().splitlines())
     assert set(lines) == {"FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"}
     assert all(value == "" for value in lines.values())
-    assert os.path.join(tmp_manifest_dir, "secrets.env") in files
+    assert str(Path(tmp_manifest_dir) / "secrets.env") in files
 
 
 def test_collect_secrets_creates_manifest(tmp_manifest_dir):
     files = collect_secrets(tmp_manifest_dir)
-    manifest_path = os.path.join(tmp_manifest_dir, "manifest.json")
+    manifest_path = str(Path(tmp_manifest_dir) / "manifest.json")
     assert manifest_path in files
     assert Path(manifest_path).exists()
 
@@ -199,13 +198,13 @@ def test_collect_secrets_creates_manifest(tmp_manifest_dir):
 
 
 def test_hash_file_matches_known_sha256(tmp_manifest_dir):
-    path = os.path.join(tmp_manifest_dir, "known.txt")
+    path = str(Path(tmp_manifest_dir) / "known.txt")
     Path(path).write_text("hello world")
     assert hash_file(path) == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
 
 def test_hash_file_consistent(tmp_manifest_dir):
-    path = os.path.join(tmp_manifest_dir, "test.txt")
+    path = str(Path(tmp_manifest_dir) / "test.txt")
     Path(path).write_text("hello world")
     h1 = hash_file(path)
     h2 = hash_file(path)
@@ -213,8 +212,8 @@ def test_hash_file_consistent(tmp_manifest_dir):
 
 
 def test_write_checksums(tmp_manifest_dir):
-    a = os.path.join(tmp_manifest_dir, "a.dat")
-    b = os.path.join(tmp_manifest_dir, "b.dat")
+    a = str(Path(tmp_manifest_dir) / "a.dat")
+    b = str(Path(tmp_manifest_dir) / "b.dat")
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     cs_path = write_checksums(tmp_manifest_dir, [a, b])
@@ -231,8 +230,8 @@ def test_write_checksums(tmp_manifest_dir):
 
 
 def test_write_checksums_sorted_by_name(tmp_manifest_dir):
-    b = os.path.join(tmp_manifest_dir, "b.dat")
-    a = os.path.join(tmp_manifest_dir, "a.dat")
+    b = str(Path(tmp_manifest_dir) / "b.dat")
+    a = str(Path(tmp_manifest_dir) / "a.dat")
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     write_checksums(tmp_manifest_dir, [b, a])
@@ -248,7 +247,7 @@ def test_write_checksums_sorted_by_name(tmp_manifest_dir):
 def test_create_archive_packs_files(tmp_manifest_dir):
     Path(tmp_manifest_dir, "a.txt").write_text("aaa")
     Path(tmp_manifest_dir, "b.txt").write_text("bbb")
-    output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
+    output = str(Path(tmp_manifest_dir) / "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
     assert Path(output).exists()
@@ -256,16 +255,16 @@ def test_create_archive_packs_files(tmp_manifest_dir):
 
 
 def test_create_archive_strips_only_enc_suffix(tmp_manifest_dir):
-    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    output = os.path.join(tmp_manifest_dir, "note.enc")
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    output = str(Path(tmp_manifest_dir) / "note.enc")
     result = create_archive(tmp_manifest_dir, output)
-    assert result == os.path.join(tmp_manifest_dir, "note")
+    assert result == str(Path(tmp_manifest_dir) / "note")
     assert Path(result).exists()
 
 
 def test_create_archive_keeps_output_without_enc_suffix(tmp_manifest_dir):
-    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    output = str(Path(tmp_manifest_dir) / "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
 
@@ -274,7 +273,7 @@ def test_create_archive_skips_directories(tmp_manifest_dir):
     Path(tmp_manifest_dir, "a.txt").write_text("aaa")
     Path(tmp_manifest_dir, "subdir").mkdir(parents=True)
     Path(tmp_manifest_dir, "subdir", "b.txt").write_text("bbb")
-    output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
+    output = str(Path(tmp_manifest_dir) / "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
     with tarfile.open(output) as tar:
@@ -289,7 +288,7 @@ def test_create_archive_skips_directories(tmp_manifest_dir):
 
 @pytest.mark.skipif(not openssl_available, reason="openssl not installed")
 def test_encrypt_archive_round_trip(tmp_manifest_dir):
-    plain = os.path.join(tmp_manifest_dir, "test.tar.gz")
+    plain = str(Path(tmp_manifest_dir) / "test.tar.gz")
     Path(plain).write_text("fake-tar-content")
     enc = plain + ".enc"
 
@@ -297,7 +296,7 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
     assert Path(enc).exists()
     assert not Path(plain).exists()
 
-    dec = os.path.join(tmp_manifest_dir, "decrypted.tar.gz")
+    dec = str(Path(tmp_manifest_dir) / "decrypted.tar.gz")
     result = subprocess.run(  # noqa: S603 — test fixture
         [  # noqa: S607
             "openssl",
@@ -323,7 +322,7 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
 
 
 def test_encrypt_archive_missing_openssl_exits(tmp_manifest_dir, capsys):
-    plain = os.path.join(tmp_manifest_dir, "a.tar.gz")
+    plain = str(Path(tmp_manifest_dir) / "a.tar.gz")
     Path(plain).write_text("x")
     with (
         patch("scripts.backup.shutil.which", return_value=None),
@@ -334,7 +333,7 @@ def test_encrypt_archive_missing_openssl_exits(tmp_manifest_dir, capsys):
 
 
 def test_encrypt_archive_openssl_failure_exits(tmp_manifest_dir, capsys):
-    plain = os.path.join(tmp_manifest_dir, "a.tar.gz")
+    plain = str(Path(tmp_manifest_dir) / "a.tar.gz")
     Path(plain).write_text("x")
     proc = MagicMock()
     proc.returncode = 1
@@ -349,7 +348,7 @@ def test_encrypt_archive_openssl_failure_exits(tmp_manifest_dir, capsys):
 
 
 def test_encrypt_archive_deletes_plaintext_on_success(tmp_manifest_dir):
-    plain = os.path.join(tmp_manifest_dir, "a.tar.gz")
+    plain = str(Path(tmp_manifest_dir) / "a.tar.gz")
     Path(plain).write_text("x")
     proc = MagicMock()
     proc.returncode = 0
@@ -444,7 +443,7 @@ def test_parse_args_overrides(monkeypatch):
 
 
 async def test_main_full_flow(tmp_manifest_dir, capsys):
-    output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
+    output = str(Path(tmp_manifest_dir) / "modulo-backup.tar.gz.enc")
     Path(output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup, not a blocking risk
     ns = MagicMock()
     ns.output = output
@@ -452,7 +451,7 @@ async def test_main_full_flow(tmp_manifest_dir, capsys):
     ns.db_url = None
     ns.pg_dump = "pg_dump"
     ns.min_disk_gb = 1
-    tar_path = os.path.join(tmp_manifest_dir, "x.tar.gz")
+    tar_path = str(Path(tmp_manifest_dir) / "x.tar.gz")
 
     with (
         patch("scripts.backup.parse_args", return_value=ns),
@@ -489,7 +488,7 @@ async def test_main_exits_on_empty_passphrase(monkeypatch, capsys):
 
 
 async def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
-    raw_output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz")
+    raw_output = str(Path(tmp_manifest_dir) / "modulo-backup.tar.gz")
     enc_output = raw_output + ".enc"
     Path(enc_output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
@@ -521,15 +520,15 @@ async def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsy
 
 
 async def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
-    output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
-    Path(output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup
+    output = str(Path(tmp_manifest_dir) / "modulo-backup.tar.gz.enc")
+    Path(output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup, not a blocking risk
     ns = MagicMock()
     ns.output = output
     ns.passphrase = "pass"
     ns.db_url = None
     ns.pg_dump = "pg_dump"
     ns.min_disk_gb = 1
-    tar_path = os.path.join(tmp_manifest_dir, "x.tar.gz")
+    tar_path = str(Path(tmp_manifest_dir) / "x.tar.gz")
 
     with (
         patch("scripts.backup.parse_args", return_value=ns),

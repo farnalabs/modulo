@@ -185,7 +185,7 @@ def _load_config(config_path: str | None) -> dict[str, Any]:
     if config_path:
         try:
             safe_path = _safe_config_path(config_path)
-            with open(safe_path, encoding="utf-8") as handle:
+            with Path(safe_path).open(encoding="utf-8") as handle:
                 loaded = json.load(handle)
             if isinstance(loaded, dict):
                 raw = loaded

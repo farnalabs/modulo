@@ -102,8 +102,8 @@ def _repo_root() -> str:
 
 def main() -> int:
     root = _repo_root()
-    src = os.path.join(root, "backend", "src", "modulo")
-    whitelist = os.path.join(root, ".vulture_whitelist.py")
+    src = str(Path(root) / "backend" / "src" / "modulo")
+    whitelist = str(Path(root) / ".vulture_whitelist.py")
     if not Path(src).is_dir() or not Path(whitelist).is_file():
         print(
             f"run_vulture.py: could not resolve repo layout (src={src!r}, whitelist={whitelist!r})",

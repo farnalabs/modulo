@@ -36,7 +36,7 @@ _BOM = b"\xef\xbb\xbf"
 
 
 def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as fh:
+    with Path(path).open("rb") as fh:
         return fh.read()
 
 
@@ -108,7 +108,7 @@ def main() -> int:
 
 
 def _write_bytes(path: str, data: bytes) -> None:
-    with open(path, "wb") as fh:
+    with Path(path).open("wb") as fh:
         fh.write(data)
 
 
