@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1136,6 +1136,135 @@ class TestPatchGroup:
             )
         assert resp.status_code == 200
         assert resp.json()["displayName"] == "Engineering"
+
+    def test_add_member_foreign_org_user_is_skipped(self, client: TestClient) -> None:
+        # GH-1797: a PATCH add op must not add a user that is not a member of
+        # the caller's org — mirror the POST/PUT behaviour (skip, 200).
+        mock_team = _make_mock_team()
+        foreign_user_id = uuid.uuid4()
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": str(foreign_user_id)}]}],
+        }
+        with (
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=None),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None) as mock_add,
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        mock_add.assert_not_called()
+
+    def test_add_member_mixed_foreign_and_same_org_only_same_org_lands(self, client: TestClient) -> None:
+        # GH-1797: the foreign-org member is skipped, the same-org member is added.
+        mock_team = _make_mock_team()
+        foreign_user_id = uuid.uuid4()
+
+        def _fake_get_user(_session: MagicMock, _org_id: uuid.UUID, uid: uuid.UUID) -> MagicMock | None:
+            return _MOCK_USER if uid == _USER_ID else None
+
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "add",
+                    "path": "members",
+                    "value": [{"value": str(foreign_user_id)}, {"value": str(_USER_ID)}],
+                }
+            ],
+        }
+        with (
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", side_effect=_fake_get_user) as mock_get_user,
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None) as mock_add,
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        mock_add.assert_called_once()
+        assert mock_add.call_args.kwargs["user_id"] == _USER_ID
+        # The lookup must run against the caller's org, never the client-supplied payload.
+        mock_get_user.assert_any_call(ANY, _ORG_ID, _USER_ID)
+
+    def test_replace_members_foreign_org_user_is_skipped(self, client: TestClient) -> None:
+        # GH-1797: a PATCH replace op must not add a user that is not a member
+        # of the caller's org — mirror the PUT behaviour (skip, 200).
+        mock_team = _make_mock_team()
+        foreign_user_id = uuid.uuid4()
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "replace",
+                    "value": {"displayName": "Engineering", "members": [{"value": str(foreign_user_id)}]},
+                }
+            ],
+        }
+        with (
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_update_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=None),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None) as mock_add,
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[_MOCK_MEMBERSHIP]),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        mock_add.assert_not_called()
+
+    def test_replace_members_mixed_foreign_and_same_org_only_same_org_lands(self, client: TestClient) -> None:
+        # GH-1797: the foreign-org member is skipped, the same-org member is added.
+        mock_team = _make_mock_team()
+        foreign_user_id = uuid.uuid4()
+
+        def _fake_get_user(_session: MagicMock, _org_id: uuid.UUID, uid: uuid.UUID) -> MagicMock | None:
+            return _MOCK_USER if uid == _USER_ID else None
+
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "replace",
+                    "value": {
+                        "displayName": "Engineering",
+                        "members": [{"value": str(foreign_user_id)}, {"value": str(_USER_ID)}],
+                    },
+                }
+            ],
+        }
+        with (
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_update_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", side_effect=_fake_get_user),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None) as mock_add,
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[_MOCK_MEMBERSHIP]),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        mock_add.assert_called_once()
+        assert mock_add.call_args.kwargs["user_id"] == _USER_ID
 
 
 # ── License gate ─────────────────────────────────────────────────────

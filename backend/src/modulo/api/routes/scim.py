@@ -1052,12 +1052,14 @@ async def _replace_group_members(session: AsyncSession, group: Any, members_valu
     for em in existing:
         await scim_remove_group_member(session, group.id, em.account_id)
     for uid in _iter_member_uuids(members_value):
-        await scim_add_group_member(
-            session,
-            org_id=org_id,
-            team_id=group.id,
-            user_id=uid,
-        )
+        user = await scim_get_user(session, org_id, uid)
+        if user is not None:
+            await scim_add_group_member(
+                session,
+                org_id=org_id,
+                team_id=group.id,
+                user_id=uid,
+            )
 
 
 async def _apply_replace_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
@@ -1085,12 +1087,14 @@ def _iter_member_uuids(values: Any) -> list[uuid.UUID]:
 async def _apply_add_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
     if op.path == "members" or op.path is None:
         for uid in _iter_member_uuids(op.value):
-            await scim_add_group_member(
-                session,
-                org_id=org_id,
-                team_id=group.id,
-                user_id=uid,
-            )
+            user = await scim_get_user(session, org_id, uid)
+            if user is not None:
+                await scim_add_group_member(
+                    session,
+                    org_id=org_id,
+                    team_id=group.id,
+                    user_id=uid,
+                )
 
 
 async def _remove_member_by_path(session: AsyncSession, group: Any, path: str) -> None:

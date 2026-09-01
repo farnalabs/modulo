@@ -474,6 +474,7 @@ def _when_patch_group_add_member(
     mock_team.name = "Engineering"
     with (
         patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+        patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
         patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
         patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
         patch("modulo.api.routes.scim.set_rls_org"),
