@@ -249,6 +249,95 @@ def test_missing_report_keys_surfaced_without_eligible_nodes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# build_telemetry — agent-reported token sums (FAR-491, DISPLAY-ONLY)
+# ---------------------------------------------------------------------------
+
+
+def test_build_telemetry_sums_reported_tokens_across_nodes() -> None:
+    entries = {
+        "n1": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": 100,
+            "reported_output_tokens": 50,
+            "reported_total_tokens": 150,
+            "reported_cache_read_tokens": 10,
+            "reported_cache_write_tokens": 2,
+        },
+        "n2": {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "total_tokens": 10,
+            "reported_input_tokens": 23,
+            "reported_output_tokens": 11,
+            "reported_total_tokens": 34,
+        },
+    }
+    tele, _per_node_cost = build_telemetry(entries, [_comp()])
+    assert tele.tokens_input_reported == 123
+    assert tele.tokens_output_reported == 61
+    assert tele.tokens_total_reported == 184
+    assert tele.tokens_cache_read_reported == 10
+    assert tele.tokens_cache_write_reported == 2
+    # Server-measured sums are unaffected by the reported fields.
+    assert tele.tokens_input == 7
+    assert tele.tokens_output == 3
+    assert tele.tokens_estimated == 10
+
+
+def test_build_telemetry_reported_sums_skip_invalid_values() -> None:
+    """Tri-state at the sum: bool / non-int / negative reported values are
+    skipped; a valid 0 contributes 0; absent keys contribute nothing."""
+    entries = {
+        "n1": {
+            "reported_input_tokens": True,
+            "reported_output_tokens": "many",
+            "reported_total_tokens": -5,
+            "reported_cache_read_tokens": 0,
+        },
+        "n2": {"reported_total_tokens": 9},
+    }
+    tele, _per_node_cost = build_telemetry(entries, [_comp()])
+    assert tele.tokens_input_reported == 0
+    assert tele.tokens_output_reported == 0
+    assert tele.tokens_total_reported == 9
+    assert tele.tokens_cache_read_reported == 0
+    assert tele.tokens_cache_write_reported == 0
+
+
+def test_build_telemetry_reported_sums_default_zero_without_union_keys() -> None:
+    tele, _per_node_cost = build_telemetry({"n1": {"input_tokens": 3}}, [_comp()])
+    assert tele.tokens_input_reported == 0
+    assert tele.tokens_output_reported == 0
+    assert tele.tokens_total_reported == 0
+    assert tele.tokens_cache_read_reported == 0
+    assert tele.tokens_cache_write_reported == 0
+
+
+def test_build_params_exposes_reported_token_params() -> None:
+    comp = CostComponentConfig(
+        name="sandbox_infra",
+        display_name="Sandbox",
+        kind="calculated",
+        formula="tokens_total_reported",
+    )
+    tele = _tel(
+        tokens_input_reported=10,
+        tokens_output_reported=5,
+        tokens_total_reported=15,
+        tokens_cache_read_reported=2,
+        tokens_cache_write_reported=1,
+    )
+    params = build_params(tele, comp)
+    assert params["tokens_input_reported"] == Decimal(10)
+    assert params["tokens_output_reported"] == Decimal(5)
+    assert params["tokens_total_reported"] == Decimal(15)
+    assert params["tokens_cache_read_reported"] == Decimal(2)
+    assert params["tokens_cache_write_reported"] == Decimal(1)
+
+
+# ---------------------------------------------------------------------------
 # build_params — rate resolution + fallback
 # ---------------------------------------------------------------------------
 

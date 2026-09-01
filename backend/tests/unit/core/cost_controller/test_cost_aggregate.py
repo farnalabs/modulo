@@ -394,3 +394,37 @@ def test_calculated_without_formula_is_eval_error() -> None:
     assert breakdown[0]["error"] == "eval_error"
     assert breakdown[0]["amount_usd"] == "0.000000"
     assert total == Decimal(0)
+
+
+def test_calculated_basis_carries_reported_tokens_display_only() -> None:
+    """FAR-491: a calculated component's basis surfaces the agent-reported
+    token sums (display-only — the amount comes from the formula, which here
+    uses only server-measured values)."""
+    comp = CostComponentConfig(
+        name="calc",
+        display_name="Calc",
+        kind="calculated",
+        rate_usd=Decimal("1.0"),
+        formula="rate * wall_clock_hours",
+    )
+    tele = _tel(
+        wall_clock_elapsed_s=Decimal(3600),
+        tokens_input=100,
+        tokens_output=50,
+        tokens_input_reported=1234,
+        tokens_output_reported=567,
+        tokens_total_reported=1801,
+        tokens_cache_read_reported=100,
+        tokens_cache_write_reported=8,
+    )
+    breakdown, total = build_cost_breakdown(tele, [comp])
+    basis = breakdown[0]["basis"]
+    assert basis["tokens_input_reported"] == 1234
+    assert basis["tokens_output_reported"] == 567
+    assert basis["tokens_total_reported"] == 1801
+    assert basis["tokens_cache_read_reported"] == 100
+    assert basis["tokens_cache_write_reported"] == 8
+    assert basis["tokens_input"] == 100
+    assert basis["tokens_output"] == 50
+    # The amount is rate * wall_clock_hours — reported tokens never touch money.
+    assert total == Decimal("1.000000")

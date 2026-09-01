@@ -20,6 +20,7 @@ import pytest
 from modulo.core.cost_controller.finalize import _node_output_dict
 from modulo.core.node_output_split import (
     NODE_TYPE_GATE,
+    TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
     node_return,
     node_telemetry,
@@ -89,6 +90,25 @@ def test_split_sandbox_agent_missing_output_json_returns_none() -> None:
     assert value is None
     assert telemetry["status"] == "completed"
     assert telemetry["wall_clock_time_ms"] == 1200
+
+
+def test_split_sandbox_agent_carries_reported_token_fields() -> None:
+    """FAR-491: agent-reported token-usage fields ride the envelope's telemetry
+    views and land in the split telemetry (they are declared in
+    TELEMETRY_FIELDS and are losslessly folded either way)."""
+    tokens = {
+        "model_tokens_input": 1234,
+        "model_tokens_output": 567,
+        "model_tokens_total": 1801,
+        "model_tokens_cache_read": 100,
+        "model_tokens_cache_write": 8,
+    }
+    envelope = _sandbox_envelope(agent_return={"summary": "agent summary"}, extra_telemetry=tokens)
+    value, telemetry = split_node_output(envelope, "sandbox_agent", None)
+    assert value == {"summary": "agent summary"}
+    for key, expected in tokens.items():
+        assert telemetry[key] == expected
+        assert key in TELEMETRY_FIELDS
 
 
 def test_split_sandbox_agent_non_dict_output_json_returns_none() -> None:

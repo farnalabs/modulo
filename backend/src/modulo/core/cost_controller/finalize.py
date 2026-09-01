@@ -485,6 +485,61 @@ def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | Non
     _pop_model_cost_fields(node_dict)
 
 
+#: Node-output ``model_tokens_*`` field (written by node_runner extraction,
+#: FAR-491) -> the DISTINCT union key it folds into. The union keys are
+#: deliberately named ``reported_*`` so they NEVER overwrite the
+#: SERVER-measured ``input_tokens`` / ``output_tokens`` / ``total_tokens``
+#: entries: reported tokens are DISPLAY-ONLY analytics and must not feed
+#: ``Run.total_tokens``, the ``llm_tokens`` cost component, or the system's
+#: built-in money math (operator-defined formulas may reference them).
+_REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("model_tokens_input", "reported_input_tokens"),
+    ("model_tokens_output", "reported_output_tokens"),
+    ("model_tokens_total", "reported_total_tokens"),
+    ("model_tokens_cache_read", "reported_cache_read_tokens"),
+    ("model_tokens_cache_write", "reported_cache_write_tokens"),
+)
+
+
+def _coerce_reported_token(value: Any) -> int | None:
+    """Tri-state reported-token coercion — the same rule as extraction.
+
+    Bool / non-int / negative → ``None`` (treated as ABSENT, never a ``0``
+    placeholder). A valid ``0`` report is a real report and passes through.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _fold_token_usage(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
+    """Fold agent-reported token usage into the union's DISTINCT ``reported_*`` keys.
+
+    The node-output dict carries ``model_tokens_*`` (extracted by node_runner
+    from the sandbox agent's output.json ``token_usage``). When the output is
+    PRESENT each mapped field is folded (validated tri-state — an invalid
+    stored value is treated as ABSENT and popped); when the output LACKS the
+    field any previously folded value is popped so a stale fold can never
+    survive a re-enrich. When the output is ABSENT entirely the stored-union
+    values are left untouched (the fallback authority — mirrors
+    ``_fold_model_cost``'s branch 3). Server-measured token keys are never
+    read or written here.
+    """
+    if output_obj is None:
+        return
+    for src, dst in _REPORTED_TOKEN_FIELD_MAP:
+        if src in output_obj:
+            coerced = _coerce_reported_token(output_obj[src])
+            if coerced is None:
+                node_dict.pop(dst, None)
+            else:
+                node_dict[dst] = coerced
+        else:
+            node_dict.pop(dst, None)
+
+
 def _enrich_union(
     merged_usage: dict[str, Any],
     merged_outputs: dict[str, Any],
@@ -497,9 +552,16 @@ def _enrich_union(
 
     The union is NEWLY CONSTRUCTED here: the union's token fields
     (``input_tokens``/``output_tokens``/``total_tokens``) are the SERVER
-    entries from ``node_token_usage``; sandbox nodes contribute 0. Agent
-    ``token_usage`` is never folded in (v22 M1). The SPLIT sandbox signal is
-    set from the run-frozen node-type map, NOT field presence.
+    entries from ``node_token_usage``; sandbox nodes contribute 0 to those
+    SERVER fields. Agent-supplied ``token_usage`` IS folded in — but into the
+    DISTINCT ``reported_*`` keys (``reported_input_tokens`` /
+    ``reported_output_tokens`` / ``reported_total_tokens`` /
+    ``reported_cache_read_tokens`` / ``reported_cache_write_tokens``, FAR-491)
+    which are DISPLAY-ONLY analytics: they never overwrite the server-measured
+    fields and never feed ``Run.total_tokens``, the ``llm_tokens`` cost
+    component, or the system's built-in money math (operator-defined formulas
+    may reference them). The SPLIT sandbox signal is set from the
+    run-frozen node-type map, NOT field presence.
 
     Per-node telemetry is read from the split ``node_telemetry_json`` column
     when present (FAR-125 P1b); legacy rows fall back to the shared
@@ -566,9 +628,11 @@ def _enrich_node_fields(
     """Stamp one union entry's derived fields from its node-output dict.
 
     Sets ``wall_clock_time_ms`` (server-verified when present), the split
-    sandbox flags (``sandbox_by_map`` / ``is_sandbox_for_wallclock``) and the
-    pinned model-cost fold. Returns the node's mapped type (``None`` when the
-    frozen map lacks the node — the schema-drift provenance gate).
+    sandbox flags (``sandbox_by_map`` / ``is_sandbox_for_wallclock``), the
+    pinned model-cost fold, and the agent-reported token-usage fold
+    (``reported_*`` — display-only, FAR-491). Returns the node's mapped type
+    (``None`` when the frozen map lacks the node — the schema-drift
+    provenance gate).
     """
     wall_ms = _wall_clock_ms(output_obj)
     if wall_ms is not None:
@@ -580,6 +644,7 @@ def _enrich_node_fields(
     )
 
     _fold_model_cost(node_dict, output_obj)
+    _fold_token_usage(node_dict, output_obj)
     return map_type
 
 
