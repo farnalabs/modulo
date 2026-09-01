@@ -39,6 +39,7 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
+from modulo.db.models.organisation import ORPHAN_ORG_ID as _ORPHAN_ORG_ID
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -63,8 +64,11 @@ _key_store: SessionKeyStore | None = None
 _public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
 _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
 
-# Orphan org ID for unauthenticated public ingest events
-ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# Orphan org ID for unauthenticated public ingest events — the shared
+# sentinel constant lives on the Organisation model so the ingest path, the
+# admin listing filter and migration tooling cannot drift apart. Re-exported
+# here under the same name for backward compatibility.
+ORPHAN_ORG_ID = _ORPHAN_ORG_ID
 
 # Breadcrumbs are persisted inside ``context_json`` under this key (PRD §8.25
 # lists breadcrumbs as part of the event context payload).
