@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def _config() -> str:
@@ -33,4 +34,4 @@ def test_migration_collision_check_runs_through_cross_platform_python_script():
         r"(?m)^\s*entry:\s*uv run --project backend --no-sync python scripts/run_check_migration_heads\.py\s*$",
         config,
     )
-    assert os.path.isfile(os.path.join(REPO_ROOT, "scripts", "run_check_migration_heads.py"))
+    assert Path(REPO_ROOT, "scripts", "run_check_migration_heads.py").is_file()

@@ -42,7 +42,7 @@ _log = logging.getLogger(__name__)
 def _safe_output_path(path: Path) -> Path:
     """Resolve *path* and require it to stay within the working directory."""
     resolved = os.path.realpath(str(path))
-    base = os.path.realpath(os.getcwd())
+    base = os.path.realpath(Path.cwd())
     if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError(f"output path {str(path)!r} resolves outside the working directory")
     return Path(resolved)

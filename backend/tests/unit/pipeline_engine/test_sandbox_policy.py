@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -115,7 +116,7 @@ def _run_script(script: str, workspace: str, env: dict[str, str] | None = None) 
     shell_cmd: list[str]
     if os.name == "nt":
         git_bash = r"C:\Program Files\Git\bin\bash.exe"
-        if not os.path.isfile(git_bash):
+        if not Path(git_bash).is_file():
             pytest.skip("Git Bash not available on this Windows system")
         # Convert workspace path to POSIX for Git Bash (e.g. C:\Users\... → /c/Users/...).
         posix_workspace = workspace
@@ -166,11 +167,11 @@ def test_git_none_script_executes_and_installs_refuse_helper(tmp_path) -> None:
     # On Linux the refuse helper lands at /tmp/modulo-git-refuse-helper.sh.
     # On Windows Git Bash, /tmp maps to $TEMP, so check both locations.
     if os.name != "nt":
-        assert os.path.isfile("/tmp/modulo-git-refuse-helper.sh")
+        assert Path("/tmp/modulo-git-refuse-helper.sh").is_file()
     else:
         win_temp = os.environ.get("TEMP", os.environ.get("TMP", ""))
         if win_temp:
-            assert os.path.isfile(os.path.join(win_temp, "modulo-git-refuse-helper.sh"))
+            assert Path(win_temp, "modulo-git-refuse-helper.sh").is_file()
 
 
 def test_read_only_script_executes_clearly(tmp_path) -> None:
@@ -192,7 +193,7 @@ def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
     sh_cmd = ["sh", "-c", helper]
     if os.name == "nt":
         git_bash = r"C:\Program Files\Git\bin\bash.exe"
-        if os.path.isfile(git_bash):
+        if Path(git_bash).is_file():
             sh_cmd = [git_bash, "-c", helper]
     allowed = subprocess.run(  # noqa: S603 - executing our own helper script in tests
         sh_cmd,

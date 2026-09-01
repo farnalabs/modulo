@@ -526,12 +526,11 @@ def test_migration_is_reversible_single_head() -> None:
 
 def test_single_migration_head() -> None:
     """Exactly one migration chains off each predecessor, and the head is 0164."""
-    import glob
     import re
 
     revisions = {}
     parents = {}
-    for path in glob.glob(str(_MIGRATION_PATH.parent / "*.py")):
+    for path in _MIGRATION_PATH.parent.glob("*.py"):
         with open(path, encoding="utf-8") as source_file:
             source = source_file.read()
 
@@ -551,8 +550,8 @@ def test_single_migration_head() -> None:
         revisions[path] = rev
         parents[path] = parent
 
-    def _basename(path: str) -> str:
-        return path.replace("\\", "/").rsplit("/", 1)[-1]
+    def _basename(path: Any) -> str:
+        return str(path).replace("\\", "/").rsplit("/", 1)[-1]
 
     # The linear chain, integrated with main's run_evidence + dismissals RL
     # migrations + main's status_check_constraints + rename_remy migrations:

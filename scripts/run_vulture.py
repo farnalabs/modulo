@@ -97,7 +97,7 @@ _IGNORE_NAMES = (
 
 def _repo_root() -> str:
     """Return the repository root (the parent of this script's directory)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return str(Path(__file__).resolve().parent.parent)
 
 
 def main() -> int:

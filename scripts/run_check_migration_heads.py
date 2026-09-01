@@ -39,7 +39,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 VERSIONS_DIR = os.path.join(REPO_ROOT, "backend", "src", "modulo", "db", "migrations", "versions")
 
 _RE_REVISION = re.compile(r"(?m)^revision:\s*str\s*=\s*\"([^\"]+)\"")

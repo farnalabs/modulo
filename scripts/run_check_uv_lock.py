@@ -8,11 +8,11 @@ lockfile is fresh, 1 when stale or with dependency conflicts.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
+from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def main() -> int:

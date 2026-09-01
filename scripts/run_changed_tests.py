@@ -11,8 +11,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
 
 

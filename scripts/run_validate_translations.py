@@ -21,8 +21,9 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 _RE_NAV_LABEL = re.compile(r"components\.SidebarNav\.([^']+)")
 _RE_LOCALE_KEY = re.compile(r'"(item_[^"]+)"')

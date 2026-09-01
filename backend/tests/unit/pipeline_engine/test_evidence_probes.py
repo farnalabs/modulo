@@ -249,7 +249,7 @@ def _scan_files(root: Path) -> list[FileInfo]:
     for dirpath, _dirnames, filenames in os.walk(str(root)):
         for fname in filenames:
             full = os.path.join(dirpath, fname)
-            files.append(FileInfo(name=os.path.relpath(full, root), size=os.path.getsize(full)))
+            files.append(FileInfo(name=os.path.relpath(full, root), size=Path(full).stat().st_size))
     return files
 
 

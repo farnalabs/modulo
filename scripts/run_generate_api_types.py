@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 OUTPUT_FILE = os.path.join(FRONTEND_DIR, "src", "lib", "api", "schema.ts")
@@ -83,7 +83,7 @@ def main() -> int:
             print("Backend schema generation failed", file=sys.stderr)
             return rc
 
-        if not os.path.isfile(schema_path):
+        if not Path(schema_path).is_file():
             print("Schema file was not created", file=sys.stderr)
             return 1
 

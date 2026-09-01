@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 PACKAGE_JSON = os.path.join(FRONTEND_DIR, "package.json")
 
@@ -50,7 +50,7 @@ def main() -> int:
         print(f"{Path(__file__).name}: invalid script name {script!r}", file=sys.stderr)
         return 2
 
-    if not os.path.isfile(PACKAGE_JSON):
+    if not Path(PACKAGE_JSON).is_file():
         print(f"{Path(__file__).name}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)
         return 0
 

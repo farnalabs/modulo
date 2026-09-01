@@ -46,6 +46,7 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import pydantic
@@ -335,7 +336,7 @@ def dump_pack(pack: PolicyPack) -> str:
 def _safe_input_path(path: str) -> str:
     """Resolve *path* and require it to stay within the working directory."""
     resolved = os.path.realpath(path)
-    base = os.path.realpath(os.getcwd())
+    base = os.path.realpath(Path.cwd())
     if resolved != base and not resolved.startswith(base + os.sep):
         raise GuardrailConfigError(f"policy pack path {path!r} is outside the working directory")
     return resolved

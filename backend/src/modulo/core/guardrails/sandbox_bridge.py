@@ -32,6 +32,7 @@ import os
 import subprocess  # nosec B404 — subprocess is stdlib-only (sandbox file); only used to exec the configured agent command (no shell=True)
 import sys
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 DEFAULT_PATTERNS = (
@@ -173,7 +174,7 @@ class BridgeClient:
 def _safe_config_path(path: str) -> str:
     """Resolve *path* and require it to stay within the working directory."""
     resolved = os.path.realpath(path)
-    base = os.path.realpath(os.getcwd())
+    base = os.path.realpath(Path.cwd())
     if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError(f"config path {path!r} is outside the working directory")
     return resolved

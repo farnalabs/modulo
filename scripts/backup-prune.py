@@ -11,7 +11,6 @@ Retention:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import re
 import sys
@@ -60,8 +59,7 @@ def parse_args() -> argparse.Namespace:
 def collect_backups(backup_dir: str) -> list[BackupFile]:
     backups: list[BackupFile] = []
     safe_dir = _safe_dir(backup_dir)
-    pattern = os.path.join(safe_dir, "modulo-backup-*.tar.gz.enc")
-    for path in glob.glob(pattern):
+    for path in Path(safe_dir).glob("modulo-backup-*.tar.gz.enc"):
         basename = Path(path).name
         m = BACKUP_RE.match(basename)
         if m:
@@ -70,7 +68,7 @@ def collect_backups(backup_dir: str) -> list[BackupFile]:
                 d = date(int(ts[:4]), int(ts[4:6]), int(ts[6:8]))
             except ValueError:
                 continue
-            backups.append(BackupFile(path=path, date=d, org=m.group("org")))
+            backups.append(BackupFile(path=str(path), date=d, org=m.group("org")))
     return sorted(backups, key=lambda b: b.date, reverse=True)
 
 

@@ -269,7 +269,7 @@ async def main() -> None:
         tar_path = create_archive(tmpdir, output)
         encrypt_archive(tar_path, passphrase)
 
-        final_size = os.path.getsize(output)
+        final_size = Path(output).stat().st_size
         print(f"Backup complete: {output} ({final_size / 1024 / 1024:.1f} MB)")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

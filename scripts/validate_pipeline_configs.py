@@ -13,7 +13,6 @@ Checks for known bug patterns in sandbox_agent pipeline configs:
 from __future__ import annotations
 
 import ast
-import glob
 import json
 import sys
 from pathlib import Path
@@ -80,12 +79,11 @@ def _scan_pipeline_config_files() -> None:
         "**/pipelines/*.yml",
         "**/pipeline*config*.json",
     ]
-    found_files = set()
+    found_files: set[Path] = set()
     for pattern in patterns:
-        found_files.update(glob.glob(pattern, recursive=True))
+        found_files.update(Path.cwd().glob(pattern))
 
-    for path_str in sorted(found_files):
-        path = Path(path_str)
+    for path in sorted(found_files):
         content = path.read_text(encoding="utf-8")
         data: dict | list | None = None
         try:

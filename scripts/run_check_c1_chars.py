@@ -9,14 +9,12 @@ and non-ASCII characters (with an allowlist of legitimate punctuation). With
 
 from __future__ import annotations
 
-import glob
-import os
 import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORKFLOWS_GLOB = os.path.join(REPO_ROOT, ".github", "workflows", "*.yml")
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+WORKFLOWS_DIR = Path(REPO_ROOT, ".github", "workflows")
 
 # Legitimate Unicode that sometimes appears in workflow files.
 _ALLOWLIST = {
@@ -46,7 +44,7 @@ def main() -> int:
     fix = "--fix" in sys.argv
     found = False
 
-    files = sorted(glob.glob(WORKFLOWS_GLOB))
+    files = sorted(WORKFLOWS_DIR.glob("*.yml"))
     if not files:
         print("No C1 control characters or BOMs found in .github/workflows/", file=sys.stderr)
         return 0

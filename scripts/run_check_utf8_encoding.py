@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 _EXTENSIONS = {
     ".py",
@@ -71,7 +71,7 @@ def main() -> int:
         if ext not in _EXTENSIONS:
             continue
         full = os.path.join(REPO_ROOT, rel)
-        if not os.path.isfile(full):
+        if not Path(full).is_file():
             continue
         try:
             with open(full, "rb") as fh:

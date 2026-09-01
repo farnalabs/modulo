@@ -260,7 +260,7 @@ def test_create_archive_strips_only_enc_suffix(tmp_manifest_dir):
     output = os.path.join(tmp_manifest_dir, "note.enc")
     result = create_archive(tmp_manifest_dir, output)
     assert result == os.path.join(tmp_manifest_dir, "note")
-    assert os.path.exists(result)
+    assert Path(result).exists()
 
 
 def test_create_archive_keeps_output_without_enc_suffix(tmp_manifest_dir):

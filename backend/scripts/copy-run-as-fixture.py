@@ -25,7 +25,7 @@ from modulo.settings import Settings
 def _safe_output_dir(path: str) -> Path:
     """Resolve *path* and require it to stay within the working directory."""
     resolved = os.path.realpath(path)
-    base = os.path.realpath(os.getcwd())
+    base = os.path.realpath(Path.cwd())
     if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError(f"output directory {path!r} resolves outside the working directory")
     return Path(resolved)

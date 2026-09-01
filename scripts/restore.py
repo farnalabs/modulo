@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,7 +92,7 @@ def _safe_output_path(path: str, name: str) -> str:
     """Resolve *path* and require it to stay within the current directory's
     real path (defense against path injection for derived output files)."""
     resolved = os.path.realpath(path)
-    base = os.path.realpath(os.getcwd())
+    base = os.path.realpath(Path.cwd())
     if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError(f"invalid {name}: {path!r} resolves outside the working directory")
     return resolved
@@ -144,7 +145,7 @@ def extract_archive(tar_path: str, extract_dir: str) -> dict[str, str]:
 
 def read_checksums(extract_dir: str) -> dict[str, str]:
     cs_file = os.path.join(extract_dir, "checksums.sha256")
-    if not os.path.exists(cs_file):
+    if not Path(cs_file).exists():
         print("WARNING: no checksums.sha256 found in archive")
         return {}
     checksums: dict[str, str] = {}
@@ -210,7 +211,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     dump_path = os.path.join(extract_dir, "modulo.pgdump")
     pg_restore = _validate_executable(pg_restore, "pg_restore")
     _validate_arg(db_url, "database URL")
-    if not os.path.exists(dump_path):
+    if not Path(dump_path).exists():
         print("ERROR: modulo.pgdump not found in archive")
         sys.exit(1)
 
@@ -271,7 +272,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
 
 def restore_config(extract_dir: str) -> None:
     secrets_path = os.path.join(extract_dir, "secrets.env")
-    if not os.path.exists(secrets_path):
+    if not Path(secrets_path).exists():
         print("WARNING: secrets.env not found in archive")
         return
     print("Restoring config...")
@@ -284,7 +285,7 @@ def restore_config(extract_dir: str) -> None:
                 print(f"    export {line}")
 
     manifest_path = os.path.join(extract_dir, "manifest.json")
-    if os.path.exists(manifest_path):
+    if Path(manifest_path).exists():
         import json
 
         with open(manifest_path) as f:
@@ -296,7 +297,7 @@ def restore_config(extract_dir: str) -> None:
 async def main() -> None:
     args = parse_args()
 
-    if not os.path.exists(args.input):
+    if not Path(args.input).exists():
         print(f"ERROR: input file not found: {args.input}")
         sys.exit(1)
 
