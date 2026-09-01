@@ -1823,7 +1823,7 @@ def start_compose_stack(ctx):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        from testcontainers.postgres import PostgresContainer
+        from testcontainers.community.postgres import PostgresContainer
         from testcontainers.redis import RedisContainer
 
     from modulo.api.main import app

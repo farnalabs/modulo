@@ -28,7 +28,7 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
-from testcontainers.postgresql import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 pytestmark = [pytest.mark.integration]
 
