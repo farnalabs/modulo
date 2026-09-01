@@ -30,7 +30,7 @@ import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import httpx
 from cryptography.fernet import Fernet
@@ -1314,10 +1314,10 @@ async def _stream_ui_tool_flow(
 @router.get("/sessions", status_code=status.HTTP_200_OK)
 @handle_db_errors("remy.list_sessions")
 async def list_sessions(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1416,8 +1416,8 @@ async def _resolve_provider_model(
 @handle_db_errors("remy.create_session")
 async def create_session(
     req: CreateSessionRequest,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1473,8 +1473,8 @@ async def create_session(
 @handle_db_errors("remy.get_session")
 async def get_session(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1517,8 +1517,8 @@ async def get_session(
 async def rename_session(
     session_id: uuid.UUID,
     req: RenameSessionRequest,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1559,8 +1559,8 @@ async def rename_session(
 @handle_db_errors("remy.delete_session")
 async def delete_session(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1621,10 +1621,10 @@ async def delete_session(
 @handle_db_errors("remy.list_messages")
 async def list_messages(
     session_id: uuid.UUID,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1682,8 +1682,8 @@ async def list_messages(
 async def append_message(
     session_id: uuid.UUID,
     req: AppendMessageRequest,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1920,9 +1920,9 @@ async def stream_chat(
     session_id: uuid.UUID,
     req: StreamRequest,
     request: Request,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
-    settings: Settings = Depends(get_settings),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> StreamingResponse:
     # Validate the session exists and belongs to user
     try:
@@ -1979,8 +1979,8 @@ async def stream_chat(
 async def submit_permission_response(
     session_id: uuid.UUID,
     req: PermissionResponse,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     await _require_ui_driving(principal)
     try:
@@ -2037,8 +2037,8 @@ async def submit_permission_response(
 async def submit_ui_command_results(
     session_id: uuid.UUID,
     req: UiCommandResultsBatch,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     await _require_ui_driving(principal)
     try:
@@ -2086,8 +2086,8 @@ async def submit_ui_command_results(
 @handle_db_errors("remy.reset_session_permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     try:
         await _verify_owned_session(session_id, principal, session)
@@ -2131,8 +2131,8 @@ async def reset_session_permissions(
 @handle_db_errors("remy.resume_session")
 async def resume_session(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     try:
         await _verify_owned_session(session_id, principal, session)
@@ -2181,8 +2181,8 @@ async def resume_session(
 @handle_db_errors("remy.stop_session")
 async def stop_session(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, str]:
     try:
         await _verify_owned_session(session_id, principal, session)
@@ -2287,8 +2287,8 @@ def _derive_undo_action(tool_name: str, tool_args: dict[str, Any]) -> dict[str, 
 @handle_db_errors("remy.get_audit_trail")
 async def get_audit_trail(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     if not principal.is_system_admin:
         raise HTTPException(
@@ -2336,8 +2336,8 @@ async def get_audit_trail(
 @handle_db_errors("remy.undo_last_action")
 async def undo_last_action(
     session_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
 ) -> dict[str, Any]:
     try:
         async with session.begin():

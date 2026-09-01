@@ -8,7 +8,7 @@ API responses. A server-authenticated reveal endpoint allows temporary
 import json
 import logging
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, PlainSerializer
@@ -20,14 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 # Re-exported so API-layer callers can import from the documented location.
 # Required because mypy runs under `strict` (no_implicit_reexport = True).
-__all__ = ["SENSITIVE_VALUE_MASK"]
+__all__ = ["SENSITIVE_VALUE_MASK", "merge_masked_config_json"]
 
 _log = logging.getLogger(__name__)
 
@@ -79,10 +79,135 @@ def mask_sensitive_value(value: str) -> str:
     return SENSITIVE_VALUE_MASK if value else value
 
 
+def _mask_config_value(value: Any, key: str | None = None) -> Any:
+    """Recursively mask a config_json value.
+
+    A string is masked when its key-path is sensitive (:func:`is_sensitive_key`)
+    OR its value matches a secret-VALUE pattern (:func:`mask_secret_values_in_text`).
+    Recursing through nested dicts and lists means a secret buried under a
+    ``headers`` / ``params`` / ``operations`` / ``<resource>`` / ``body`` /
+    ``base_url`` path (an embedded token) is masked too — previously only
+    top-level string values under a sensitive key were masked, so a nested
+    ``headers.Authorization`` or a token inside a ``base_url`` / ``path`` /
+    ``body_template`` string leaked unmasked on the low-privilege
+    ``connector.list`` surface.
+    """
+    if isinstance(value, dict):
+        return {k: _mask_config_value(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_config_value(v, key) for v in value]
+    if isinstance(value, str):
+        if key is not None and is_sensitive_key(key):
+            return mask_sensitive_value(value)
+        return mask_secret_values_in_text(value)
+    return value
+
+
 def mask_config_json(config: dict[str, Any]) -> dict[str, Any]:
-    return {
-        k: (mask_sensitive_value(v) if isinstance(v, str) and is_sensitive_key(k) else v) for k, v in config.items()
-    }
+    return cast(dict[str, Any], _mask_config_value(config))
+
+
+def _is_masked_echo(value: Any) -> bool:
+    return isinstance(value, str) and SENSITIVE_VALUE_MASK in value
+
+
+def _contains_masked_echo(value: Any) -> bool:
+    """Recursively detect any masked-echo string anywhere in *value*.
+
+    Unlike :func:`_is_masked_echo` (top-level string only), this walks dict
+    and list containers so a list-of-dicts whose elements carry a masked secret
+    (e.g. a round-tripped ``operations`` entry) is correctly recognised as a
+    partial GET->PATCH payload rather than a fully-specified value.
+    """
+    if isinstance(value, str):
+        return _is_masked_echo(value)
+    if isinstance(value, dict):
+        return any(_contains_masked_echo(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_masked_echo(v) for v in value)
+    return False
+
+
+def merge_masked_config_json(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge *incoming* into *current*, refusing to persist the DOM mask.
+
+    A PATCH read-modify-write round-trip sends back the masked value it was
+    handed by a prior GET. Persisting that mask literal would clobber the real
+    stored secret, so any incoming string containing
+    :data:`SENSITIVE_VALUE_MASK` is skipped at every nesting depth (the existing
+    value is preserved). ``None`` values delete the key; nested dicts are merged
+    recursively rather than replaced wholesale. A list value that contains NO
+    masked echo is treated as the caller's complete intended value and replaces
+    the stored list wholesale (so non-secret scalar lists such as the
+    ``allowed_hosts`` SSRF egress allowlist can be shrunk or cleared); a list
+    that DOES contain a masked echo is merged positionally so stored secrets
+    are never clobbered.
+    """
+    return cast(dict[str, Any], _deep_merge(current, incoming))
+
+
+def _deep_merge(current: Any, incoming: Any) -> Any:
+    if isinstance(current, dict) and isinstance(incoming, dict):
+        merged: dict[str, Any] = dict(current)
+        for k, v in incoming.items():
+            if _is_masked_echo(v):
+                continue
+            if isinstance(v, dict):
+                merged[k] = _deep_merge(merged.get(k, {}), v)
+            elif isinstance(v, list):
+                merged[k] = _merge_list(merged.get(k), v)
+            elif v is None:
+                merged.pop(k, None)
+            else:
+                merged[k] = v
+        return merged
+    if isinstance(current, list) and isinstance(incoming, list):
+        return _merge_list(current, incoming)
+    return incoming
+
+
+def _merge_list(current: Any, incoming: list[Any]) -> list[Any]:
+    """Merge an incoming list into a stored list, skipping masked echoes.
+
+    A PATCH read-modify-write round-trip sends back the masked list it was
+    handed by a prior GET. Persisting those mask literals would clobber the
+    real stored secrets, so every element that is a masked echo is skipped at
+    its index (the stored value is preserved). Elements carrying a real change
+    replace the stored element; new elements are appended; nested dicts / lists
+    are merged recursively rather than replaced wholesale. An incoming list
+    that is entirely masked echoes therefore leaves the stored list intact.
+    """
+    if not isinstance(incoming, list):
+        return incoming
+    # A fully-specified (non-secret) list is a WHOLE-LIST REPLACEMENT, not a
+    # positional merge. The GET->PATCH round-trip only re-emits masked echoes
+    # for list elements that actually contain secrets; any list that carries NO
+    # masked echo is the caller's complete intended value, so honour shrink and
+    # removal (e.g. narrowing the ``allowed_hosts`` SSRF/egress allowlist) rather
+    # than silently preserving stale tail elements. Only a list that DOES
+    # contain a masked echo falls through to the position-preserving merge, so a
+    # stored secret can never be clobbered by a round-tripped mask literal.
+    if not _contains_masked_echo(incoming):
+        return list(incoming)
+    merged_list: list[Any] = list(current) if isinstance(current, list) else []
+    for idx, item in enumerate(incoming):
+        if isinstance(item, dict):
+            if idx < len(merged_list) and isinstance(merged_list[idx], dict):
+                merged_list[idx] = _deep_merge(merged_list[idx], item)
+            else:
+                merged_list.append(item)
+        elif isinstance(item, list):
+            if idx < len(merged_list) and isinstance(merged_list[idx], list):
+                merged_list[idx] = _merge_list(merged_list[idx], item)
+            else:
+                merged_list.append(item)
+        elif _is_masked_echo(item):
+            continue
+        elif idx < len(merged_list):
+            merged_list[idx] = item
+        else:
+            merged_list.append(item)
+    return merged_list
 
 
 SensitiveValue = Annotated[

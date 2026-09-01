@@ -9420,6 +9420,10 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Degraded At */
+            degraded_at?: string | null;
+            /** Last Skip Error */
+            last_skip_error?: string | null;
         };
         /** ConnectorTypeItem */
         ConnectorTypeItem: {

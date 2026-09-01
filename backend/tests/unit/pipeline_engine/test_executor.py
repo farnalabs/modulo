@@ -3752,6 +3752,156 @@ async def test_init_connector_hub_fails_closed_on_read_error():
         await executor._init_connector_hub(org_id)
 
 
+class _FakeConnectorHubWithMarkers:
+    """Stand-in ConnectorHub whose initialise populates skipped/healthy like the real hub."""
+
+    def __init__(
+        self,
+        skipped: dict[uuid.UUID, str] | None = None,
+        healthy: set[uuid.UUID] | None = None,
+    ) -> None:
+        self._skipped = skipped or {}
+        self._healthy = healthy or set()
+        self.skipped: dict[uuid.UUID, str] = {}
+        self.healthy: set[uuid.UUID] = set()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def initialise(self, _rows: list[Any], allowed_connectors: list[Any] | None = None) -> None:
+        self.skipped = dict(self._skipped)
+        self.healthy = set(self._healthy)
+
+
+def _make_nested_savepoint_cm() -> AsyncMock:
+    """begin_nested() savepoint stand-in whose __aexit__ records the rollback path."""
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    return nested_cm
+
+
+async def test_init_connector_hub_persists_degraded_markers():
+    """FAR-495: skipped instances get a degraded marker, healthy ones get cleared.
+
+    After ``hub.initialise`` populates ``skipped``/``healthy``, the executor must
+    persist the marker writes inside a ``begin_nested()`` savepoint:
+    ``mark_instances_degraded`` for the skipped instance ids and
+    ``clear_degraded_markers`` for the healthy ones, then still register the hub.
+    """
+    org_id = uuid.uuid4()
+    skipped_id = uuid.uuid4()
+    healthy_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    session = _make_connector_init_session([MagicMock()])
+    nested_cm = _make_nested_savepoint_cm()
+    session.begin_nested = MagicMock(return_value=nested_cm)
+    executor._session_factory = _make_session_factory(session)  # type: ignore[assignment]
+    hub = _FakeConnectorHubWithMarkers(skipped={skipped_id: "stub backend unavailable"}, healthy={healthy_id})
+    mark_mock = AsyncMock()
+    clear_mock = AsyncMock()
+
+    with (
+        patch("modulo.core.connector_hub.ConnectorHub", return_value=hub),
+        patch("modulo.core.runtime_provider.create_default_hub", return_value=MagicMock()),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="key")),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.decorator.set_connector_hub") as set_hub_mock,
+        patch("modulo.db.crud.connector_instance.mark_instances_degraded", mark_mock),
+        patch("modulo.db.crud.connector_instance.clear_degraded_markers", clear_mock),
+    ):
+        result = await executor._init_connector_hub(org_id)
+
+    assert result is hub
+    mark_mock.assert_awaited_once_with(session, {skipped_id: "stub backend unavailable"})
+    clear_mock.assert_awaited_once_with(session, {healthy_id})
+    nested_cm.__aenter__.assert_awaited_once()
+    set_hub_mock.assert_called_once_with(hub)
+
+
+async def test_init_connector_hub_marker_failure_is_swallowed():
+    """FAR-495: a degraded-marker write failure must never fail the run start.
+
+    ``mark_instances_degraded`` raising inside the savepoint must be swallowed
+    (best-effort wiring): the savepoint's ``__aexit__`` is exercised with the
+    exception (the rollback path), the sibling clear is never attempted, and
+    ``_init_connector_hub`` still completes successfully and registers the hub.
+    """
+    org_id = uuid.uuid4()
+    skipped_id = uuid.uuid4()
+    healthy_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    session = _make_connector_init_session([MagicMock()])
+    nested_cm = _make_nested_savepoint_cm()
+    session.begin_nested = MagicMock(return_value=nested_cm)
+    executor._session_factory = _make_session_factory(session)  # type: ignore[assignment]
+    hub = _FakeConnectorHubWithMarkers(skipped={skipped_id: "secrets unavailable"}, healthy={healthy_id})
+    clear_mock = AsyncMock()
+
+    with (
+        patch("modulo.core.connector_hub.ConnectorHub", return_value=hub),
+        patch("modulo.core.runtime_provider.create_default_hub", return_value=MagicMock()),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="key")),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.decorator.set_connector_hub") as set_hub_mock,
+        patch(
+            "modulo.db.crud.connector_instance.mark_instances_degraded",
+            AsyncMock(side_effect=RuntimeError("marker write failed")),
+        ),
+        patch("modulo.db.crud.connector_instance.clear_degraded_markers", clear_mock),
+    ):
+        result = await executor._init_connector_hub(org_id)
+
+    assert result is hub
+    nested_cm.__aenter__.assert_awaited_once()
+    nested_cm.__aexit__.assert_awaited_once()
+    exc_type, _exc, _tb = nested_cm.__aexit__.await_args.args
+    assert exc_type is RuntimeError
+    clear_mock.assert_not_awaited()
+    set_hub_mock.assert_called_once_with(hub)
+
+
+async def test_init_connector_hub_no_marker_calls_when_clean():
+    """FAR-495: with nothing skipped and nothing healthy, marker wiring is a no-op.
+
+    An empty ``skipped``/``healthy`` outcome must not open a savepoint or invoke
+    either crud function — the guard skips the whole marker block.
+    """
+    org_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    session = _make_connector_init_session([MagicMock()])
+    session.begin_nested = MagicMock()
+    executor._session_factory = _make_session_factory(session)  # type: ignore[assignment]
+    hub = _FakeConnectorHubWithMarkers()
+    mark_mock = AsyncMock()
+    clear_mock = AsyncMock()
+
+    with (
+        patch("modulo.core.connector_hub.ConnectorHub", return_value=hub),
+        patch("modulo.core.runtime_provider.create_default_hub", return_value=MagicMock()),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="key")),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.decorator.set_connector_hub"),
+        patch("modulo.db.crud.connector_instance.mark_instances_degraded", mark_mock),
+        patch("modulo.db.crud.connector_instance.clear_degraded_markers", clear_mock),
+    ):
+        result = await executor._init_connector_hub(org_id)
+
+    assert result is hub
+    mark_mock.assert_not_awaited()
+    clear_mock.assert_not_awaited()
+    session.begin_nested.assert_not_called()
+
+
 class _FakeModelBackendHub:
     """Stand-in ModelBackendHub whose __aexit__ is awaited by ``_teardown_hub``."""
 

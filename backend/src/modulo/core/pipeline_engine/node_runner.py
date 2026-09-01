@@ -87,7 +87,11 @@ from modulo.core.node_output_split import (
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
-from modulo.core.pipeline_engine.idempotency import node_idempotency_key
+from modulo.core.pipeline_engine.idempotency import (
+    node_idempotency_key,
+    read_before_write_ambiguous,
+    read_before_write_suppression,
+)
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
@@ -323,6 +327,14 @@ _IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
 # FAR-228: best-effort marker persist bounded inside a caught CancelledError
 # (5s — the node is being cancelled, the write must not delay the re-raise).
 _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
+# FAR-458: the per-connector-per-write ``on_unknown`` default. Governs the
+# connector-write idempotency gate's AMBIGUOUS (couldn't-confirm-delivery)
+# decision: ``fail_open`` (default) re-fires the write on ambiguity (possible
+# duplicate, usually recoverable); ``fail_closed`` SUPPRESSES it (possible
+# silent miss; the operator reconciles); ``off`` bypasses the gate entirely.
+# A CONFIRMED-delivered write (delivery_done + matching key) is ALWAYS suppressed
+# regardless of the mode (that is the point of dedup).
+_DEFAULT_CONNECTOR_ON_UNKNOWN = "fail_open"
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
@@ -1036,7 +1048,8 @@ async def _persist_raw_output_marker(
     marker: dict[str, Any],
     index: int | str | None = None,
     payload: str | bytes | None = None,
-) -> None:
+    promote_newest_key: bool = False,
+) -> bool:
     """Best-effort persist of a raw-output retention marker onto ``runs.raw_output_markers``.
 
     FAR-188 (QA round 1): the marker lives in a DEDICATED column keyed by
@@ -1076,10 +1089,10 @@ async def _persist_raw_output_marker(
             "sandbox_agent.raw_output_marker_skip_no_session",
             extra={"run_id": run_id, "node_id": node_id},
         )
-        return
+        return False
     if not run_id:
         _log.warning("sandbox_agent.raw_output_marker_skip_no_run_id", extra={"node_id": node_id})
-        return
+        return False
     org_uuid: uuid.UUID | None = None
     try:
         org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
@@ -1090,7 +1103,7 @@ async def _persist_raw_output_marker(
             "sandbox_agent.raw_output_marker_skip_unparseable_org",
             extra={"run_id": run_id, "node_id": node_id},
         )
-        return
+        return False
 
     try:
         await asyncio.wait_for(
@@ -1103,6 +1116,7 @@ async def _persist_raw_output_marker(
                 marker=marker,
                 index=index,
                 payload=payload,
+                promote_newest_key=promote_newest_key,
             ),
             timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
         )
@@ -1113,6 +1127,8 @@ async def _persist_raw_output_marker(
             "sandbox_agent.raw_output_marker_persist_timeout_or_error",
             extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
         )
+        return False
+    return True
 
 
 async def _write_raw_output_marker(
@@ -1125,6 +1141,7 @@ async def _write_raw_output_marker(
     marker: dict[str, Any],
     index: int | str | None = None,
     payload: str | bytes | None = None,
+    promote_newest_key: bool = False,
 ) -> None:
     """Bounded persist of a single raw-output retention marker row.
 
@@ -1168,11 +1185,18 @@ async def _write_raw_output_marker(
             run_ref = run.idempotency_key if hasattr(run, "idempotency_key") else None
             if run_ref:
                 with suppress(TypeError, ValueError):
-                    marker.setdefault(
-                        "idempotency_key",
-                        node_idempotency_key(run_ref, node_id, index=index, payload=payload),
-                    )
-            persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
+                    derived = node_idempotency_key(run_ref, node_id, index=index, payload=payload)
+                    if promote_newest_key:
+                        # CONNECTOR path (FAR-458): a content-edit re-run that
+                        # delivers a NEWER payload must promote that newest
+                        # derived key, so the latest delivery is independently
+                        # suppressible and a superseded content-version is not.
+                        marker["idempotency_key"] = derived
+                    else:
+                        marker.setdefault("idempotency_key", derived)
+            persisted_marker = _merge_existing_raw_output_marker(
+                marker, markers.get(key), promote_newest_key=promote_newest_key
+            )
             markers[key] = persisted_marker
             run.raw_output_markers = markers
             await session.flush()
@@ -1194,13 +1218,23 @@ async def _write_raw_output_marker(
         )
 
 
-def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any) -> dict[str, Any]:
+def _merge_existing_raw_output_marker(
+    marker: dict[str, Any], existing: Any, *, promote_newest_key: bool = False
+) -> dict[str, Any]:
     """Monotone preservation: a prior attempt's evidence is never wiped by a retry.
 
     A prior marker's non-empty ``pr_url`` and an OR'd ``delivery_done`` are
     retained; all other marker fields come from the new ``marker`` unchanged
     (pr_url is preserved as-is so a retry's empty pr_url never wipes
     attempt-1's evidence).
+
+    ``promote_newest_key`` (FAR-458 connector path) inverts the
+    ``idempotency_key`` handling: instead of pinning the marker to the first /
+    existing derived key, the NEWEST delivered content-version's key wins. This
+    is what lets a content-edit re-run promote a fresh key (so the edited
+    delivery is independently suppressible) rather than being pinned to a
+    superseded content-version's key (which would re-fire the edited payload as
+    an un-deduped double-submit).
     """
     if not isinstance(existing, dict):
         return marker
@@ -1209,14 +1243,17 @@ def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any) -> 
         preserved["pr_url"] = existing["pr_url"]
     if existing.get("delivery_done") or marker.get("delivery_done"):
         preserved["delivery_done"] = True
-    if existing.get("idempotency_key"):
+    if promote_newest_key:
+        if marker.get("idempotency_key"):
+            preserved["idempotency_key"] = marker["idempotency_key"]
+    elif existing.get("idempotency_key"):
         preserved["idempotency_key"] = existing["idempotency_key"]
     merged = dict(marker)
     merged.update(preserved)
     return merged
 
 
-def _idempotency_gate_skipped_envelope(node_id: str) -> dict[str, Any]:
+def _idempotency_gate_skipped_envelope(node_id: str, *, gate_tag: str = "email_sent") -> dict[str, Any]:
     """FAR-228: the single artifact envelope produced by BOTH guards.
 
     The ``output_json`` sub-key is REQUIRED so ``_split_sandbox_agent`` returns
@@ -1225,6 +1262,13 @@ def _idempotency_gate_skipped_envelope(node_id: str) -> dict[str, Any]:
     computes True for the single-node gated run; and ``idempotency_gate`` is
     what suppresses agent_signal re-firing (NEVER ``status == "skipped"`` —
     template-error skips fire today).
+
+    ``gate_tag`` (FAR-458) is the driver-readable reason recorded under
+    ``idempotency_gate`` — the sandbox path defaults to ``"email_sent"`` (the
+    FAR-228 delivery sentinel); a connector node that suppressed a duplicate
+    write passes ``"connector_write_suppressed"`` so observability shows the
+    real cause rather than a misleading email tag. Any non-empty tag works:
+    ``_node_output_has_idempotency_gate`` only checks truthiness.
     """
     return {
         "artifacts": [
@@ -1235,7 +1279,7 @@ def _idempotency_gate_skipped_envelope(node_id: str) -> dict[str, Any]:
                     "output_json": {
                         "status": "skipped",
                         "delivery_done": True,
-                        "idempotency_gate": "email_sent",
+                        "idempotency_gate": gate_tag,
                     }
                 },
             }
@@ -1300,6 +1344,399 @@ async def _read_run_raw_output_markers_for_gate(
             extra={"node_id": node_id, "run_id": run_id},
         )
         return None
+
+
+# FAR-458 connector-write idempotency: the connector node's write boundary is the
+# connector-specific UNKNOWN-recovery decision point. These helpers mirror the
+# sandbox marker machinery (`_retain_raw_output_marker` / `_persist_raw_output_marker`)
+# but read BOTH the run's persisted idempotency key AND its markers, and stamp a
+# `delivery_done` marker when a connector write genuinely succeeds — the evidence
+# the read-before-write suppression (`read_before_write_suppression`) requires.
+
+
+async def _read_connector_idempotency_gate_state(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read a rewrite-write run's ``(raw_output_markers, idempotency_key)``.
+
+    Bounded by ``_IDEMPOTENCY_GATE_READ_TIMEOUT`` (3s); fail-open to
+    ``(None, None)`` (the write proceeds, no suppression) on any failure — the
+    gate must never block a connector write. Reads the run row directly (no
+    claim-token fencing — a connector node has no dispatch lease), so only the
+    run id + org id are required. Returns the parsed markers dict (or ``None``)
+    and the persisted ``idempotency_key`` (or ``None`` when the run is missing
+    or carries no persisted key).
+
+    FENCING (FAR-458 MAJOR 3): the marker read is taken under
+    ``SELECT ... FOR UPDATE`` so concurrent re-runs of the same UNKNOWN write
+    serialise on the run row rather than both observing "no delivery_done" and
+    both firing the write. The deletion sentinel / delivery evidence is only
+    ever committed under the same row lock (``_write_raw_output_marker`` also
+    takes ``with_for_update``), so a gate decision cannot read past an
+    in-progress concurrent terminalization/stamp.
+
+    REMAINING WINDOW (honest, documented): this fences + serialises the gate
+    READS against the row, and the marker WRITE side takes the same lock, but
+    the actual upstream connector write executes between the gate returning and
+    the later ``delivery_done`` stamp — so two concurrently-started re-runs can
+    both pass the (now serialised) gate and both send the write before either
+    stamps. Fully closing that residual double-write requires a
+    ``write_started`` lease stamped under FOR UPDATE and held across the write;
+    that is intentionally NOT added here because a stale lease from a dead
+    pre-UNKNOWN execution would fail-CLOSED and block legitimate recovery
+    (the write never deferred). The marker write lock is what the sandbox path
+    relies on; this connector read now matches it.
+    """
+    if session_factory is None or not run_id:
+        return None, None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return None, None
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+    async def _read() -> tuple[dict[str, Any] | None, str | None]:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT raw_output_markers, idempotency_key FROM runs "
+                        "WHERE id=:rid AND organisation_id=:oid FOR UPDATE"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid)},
+                )
+            ).fetchone()
+            if row is None:
+                return None, None
+            markers = row[0]
+            markers_dict = markers if isinstance(markers, dict) else None
+            persisted_key = row[1]
+            return markers_dict, (str(persisted_key) if persisted_key else None)
+
+    try:
+        return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate_read_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None, None
+
+
+def _connector_write_payload_hash(resource: str, filters: dict[str, Any] | None, data: dict[str, Any]) -> str:
+    """Stable full-write-identity hash for a connector write's key derivation.
+
+    Folds the WHOLE write identity into the key — not just ``data`` — so a
+    re-run that changes the write TARGET (``resource``, or a write-relevant
+    ``provider_ref``) with byte-identical ``data`` derives a DIFFERENT key and
+    is not wrongly suppressed. ``resource`` is the ``ConnectorPayload.resource``
+    (the write's destination/verb); ``provider_ref`` (the shell connector's
+    execution target) may live in either ``filters`` or ``data``, so both are
+    consulted. ``data`` is the rendered write body (``ConnectorPayload.data``).
+
+    It is serialised deterministically (sorted keys) so an unchanged re-run
+    produces the identical payload component — and thus the identical
+    idempotency key — while a genuinely-edited content-version OR target
+    produces a different one. ``str`` coercion covers non-JSON values (dates,
+    Paths) without raising.
+    """
+    import json as _json
+
+    provider_ref = filters.get("provider_ref") if isinstance(filters, dict) else None
+    if provider_ref is None and isinstance(data, dict):
+        provider_ref = data.get("provider_ref")
+    identity: dict[str, Any] = {"resource": resource, "provider_ref": provider_ref, "data": data}
+    try:
+        return _json.dumps(identity, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        # ``default=str`` handles the common non-JSON scalars (dates, Paths), so
+        # this branch only triggers on a genuinely unserialisable structure. Fall
+        # back to a DETERMINISTIC coercion (every value stringified, keys sorted)
+        # rather than ``repr`` — ``repr`` is NOT canonical across processes, so
+        # two different invocations could derive DIFFERENT keys and silently
+        # defeat the dedup (gate vs stamp side disagree). See
+        # ``canonical_payload_hash`` in trigger_engine/pre_guardrail.py.
+        return _json.dumps(_canonical_coerce(identity), sort_keys=True)
+
+
+def _canonical_coerce(obj: Any) -> Any:
+    """Deterministically coerce *obj* into a JSON-serialisable structure.
+
+    Every scalar becomes ``str`` and every mapping/sequence is rebuilt with
+    sorted/stable ordering so the result is byte-identical across processes —
+    used as the safe fallback in :func:`_connector_write_payload_hash` when the
+    primary ``json.dumps(..., default=str)`` still raises.
+    """
+    if isinstance(obj, dict):
+        return {str(k): _canonical_coerce(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return [_canonical_coerce(v) for v in obj]
+    return str(obj)
+
+
+def _connector_marker_attempt_key(run_id: str, node_id: str) -> str:
+    """Stable marker key for a connector node's delivery record.
+
+    Unlike the sandbox path (which keys by ``claim_count`` per attempt), the
+    connector node makes ONE logical write per invocation, so a stable
+    ``run:{run_id}:node:{node_id}`` key lets a retry's marker merge with (and
+    preserve) the prior attempt's ``delivery_done`` via
+    ``_merge_existing_raw_output_marker``.
+    """
+    return f"run:{run_id}:node:{node_id}:connector"
+
+
+def _connector_on_unknown(connector: Any, resource: str) -> str:
+    """Read the effective ``on_unknown`` mode for a connector write to *resource*.
+
+    FAR-458: decisions of fail-open vs fail-closed on the ambiguous
+    (couldn't-confirm-delivery) path belong to the ACTION's semantics, so each
+    connector-op declares its own mode (``ConnectorBase.on_unknown_for``; REST
+    reads a per-op config value defaulting to ``fail_open``). The lookup is
+    defensive: a connector that does not expose ``on_unknown_for`` (or a reader
+    that raises) falls back to the fail-open default, so the gate never blocks a
+    write on a missing/illegible policy. Any value outside the three valid modes
+    is also coerced to ``fail_open`` (an invalid value is a config error the
+    connector surfaces loudly at parse time; the gate stays fail-open).
+    """
+    reader = getattr(connector, "on_unknown_for", None)
+    if not callable(reader):
+        return _DEFAULT_CONNECTOR_ON_UNKNOWN
+    try:
+        mode = reader(resource)
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate.on_unknown_read_failed",
+            extra={"resource": resource},
+        )
+        return _DEFAULT_CONNECTOR_ON_UNKNOWN
+    return mode if mode in ("fail_open", "fail_closed", "off") else _DEFAULT_CONNECTOR_ON_UNKNOWN
+
+
+async def _stamp_connector_write_delivered(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    result: Any = None,
+) -> None:
+    """Best-effort persist of a ``delivery_done`` marker for a successful connector write.
+
+    FAR-458 MAJOR 1: the stamp fires only when the write GENUINELY succeeded.
+    Some connectors (e.g. ``ShellConnector.write`` for the ``command`` resource)
+    RETURN a failed result ``{"exit_code": <non-zero>}`` WITHOUT raising — so a
+    non-raising ``connector.write()`` is NOT proof of upstream delivery. Stamping
+    ``delivery_done`` on such a failed result would suppress the operator's
+    recover-by-re-run of the SAME run (the exact "silent miss" the code warns
+    about). When *result* carries a non-zero ``exit_code`` we therefore SKIP the
+    stamp entirely: the write is treated as undelivered and a re-run is free to
+    fire again. Connectors that raise on failure (or that do not report an
+    ``exit_code``) are unaffected — their success path still stamps as before.
+
+    Mirrors the sandbox marker persist (bounded, never raises) — the evidence
+    a connector write genuinely reached upstream. Fail-open: a persistence
+    failure is logged and ignored, so a DB hiccup cannot convert a successful
+    write into a failed node. When no run id / session factory is available the
+    marker is skipped (the write still succeeds).
+
+    ``resource`` / ``filters`` / ``data`` are the FULL write identity folded
+    into the marker's derived ``idempotency_key`` (via
+    :func:`_connector_write_payload_hash`) on BOTH the stamp and gate sides, so
+    a re-run that edits the content OR the target derives the matching key.
+
+    MAJOR 1 (FAR-458): the connector marker slot is keyed ONCE per
+    ``(run, node)``; a content-edit re-run must PROMOTE the newest delivered
+    key (``promote_newest_key=True``) rather than pin the slot to a superseded
+    key — otherwise a later re-run of the edited payload misfires (double
+    submit) while a re-run of the superseded original is wrongly suppressed.
+
+    DURABILITY (FAR-458 MAJOR 4): persistence is best-effort, so a lost marker
+    silently turns a delivered write into a potential double-submit on re-run.
+    Emits the structured ``connector.idempotency_marker_lost`` counter on any
+    non-persisted marker so the loss is observable in analytics/metrics; the
+    underlying failure is already logged by ``_persist_raw_output_marker``.
+    """
+    if session_factory is None or not run_id:
+        return
+    # MAJOR 1: do not stamp ``delivery_done`` for a write that reported failure
+    # without raising (e.g. shell ``command`` returning exit_code != 0). A failed
+    # write is NOT confirmed delivery, so the gate must not suppress its re-run.
+    if isinstance(result, dict) and "exit_code" in result and result.get("exit_code") != 0:
+        _log.info(
+            "connector.idempotency_marker_skip_failed_write",
+            extra={
+                "run_id": run_id,
+                "node_id": node_id,
+                "resource": resource,
+                "exit_code": result.get("exit_code"),
+                "hint": "write_reported_failure_no_delivery_done_stamp_rerun_allowed",
+            },
+        )
+        return
+    payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+    attempt_key = _connector_marker_attempt_key(run_id, node_id)
+    marker: dict[str, Any] = {
+        "_modulo_marker": True,
+        "status": "completed",
+        "summary": "connector write delivered (delivery_done)",
+        "node_id": node_id,
+        "attempt_key": attempt_key,
+        "delivery_done": True,
+    }
+    persisted = await _persist_raw_output_marker(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id_raw,
+        node_id=node_id,
+        attempt_key=attempt_key,
+        marker=marker,
+        index=None,
+        payload=payload,
+        promote_newest_key=True,
+    )
+    if not persisted:
+        _log.warning(
+            "connector.idempotency_marker_lost",
+            extra={
+                "run_id": run_id,
+                "node_id": node_id,
+                "attempt_key": attempt_key,
+                "hint": "delivery_marker_not_persisted_can_double_submit_on_rerun",
+            },
+        )
+
+
+async def _connector_write_gate(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    on_unknown: str = "fail_open",
+) -> dict[str, Any] | None:
+    """FAR-458 read-before-write gate for a connector write.
+
+    Suppresses (returns a skipped envelope) in EXACTLY two situations:
+
+    1. **CONFIRMED delivery** (the dedup's whole point, mode-INDEPENDENT): the
+       run's persisted idempotency key derives a per-node key that a recorded
+       marker carries WITH ``delivery_done is True`` — a genuine prior upstream
+       delivery. Always suppressed, regardless of ``on_unknown``.
+    2. **AMBIGUOUS delivery** (governed by ``on_unknown``): a recorded marker
+       carries the SAME derived key but WITHOUT ``delivery_done is True`` — a
+       prior attempt touched this exact write but its delivery could not be
+       confirmed. ``on_unknown="fail_closed"`` suppresses (possible silent miss;
+       the operator reconciles); ``on_unknown="fail_open"`` (default) does NOT
+       suppress (the write fires, possible duplicate — usually recoverable).
+
+    A first-time write (no marker) or a changed-payload/target re-run (a
+    DIFFERENT derived key) is NEVER suppressed. ``on_unknown="off"`` bypasses
+    the gate entirely — the write always fires, never deduped.
+
+    ``on_unknown`` (FAR-458) is the per-connector-per-write idempotency mode read
+    from the connector's write op config (see ``ConnectorBase.on_unknown_for`` /
+    ``_connector_on_unknown``). The default ``fail_open`` preserves the
+    pre-existing fail-open gate contract: an ambiguous-but-unconfirmed delivery is
+    re-attempted rather than silently dropped. A CONFIRMED-delivered write is
+    still suppressed in every mode except ``off``.
+
+    ``resource`` / ``filters`` / ``data`` (MAJOR 2) are the FULL write identity
+    folded into the derived key (via :func:`_connector_write_payload_hash`) on
+    BOTH this gate side and the marker-stamp side, so a re-run that edits the
+    content OR the write target (resource / ``provider_ref``) derives a
+    DIFFERENT key and is NOT suppressed (the edit or new target is never
+    silently deduped), while an unchanged re-run reuses the same key and IS
+    suppressed. Threads the write-content ``payload`` into the key derivation.
+
+    Fail-open in every direction (missing run id / session factory / persisted
+    key, killswitch off, DB error, malformed key) returns ``None`` — the write
+    proceeds, never blocked. The killswitch
+    ``modulo_connector_write_gate_enabled`` is GENUINELY OPT-IN: it defaults to
+    ``False`` (set in ``modulo.settings``), so a deploy never silently suppresses
+    byte-identical re-executed connector writes — a behavioural change vs. the
+    pre-FAR-458 contract where every visit fired. Operators enable it explicitly.
+    """
+    if session_factory is None or not run_id:
+        return None
+    # FAR-458 per-op bypass: ``off`` never dedupes — the write always fires. This
+    # short-circuits BEFORE the killswitch and the marker read (the gate is
+    # bypassed entirely for this op).
+    if on_unknown == "off":
+        return None
+    try:
+        from modulo.settings import get_settings
+
+        if not getattr(get_settings(), "modulo_connector_write_gate_enabled", False):
+            return None
+    except Exception:
+        # Killswitch read failure must not block a write — proceed (fail-open).
+        _log.warning(
+            "connector.idempotency_gate_killswitch_check_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
+    payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+    markers, persisted_key = await _read_connector_idempotency_gate_state(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id_raw,
+        node_id=node_id,
+    )
+    if not persisted_key:
+        return None
+    try:
+        suppressed = read_before_write_suppression(
+            markers,
+            run_ref=persisted_key,
+            node_ref=node_id,
+            index=None,
+            payload=payload,
+        )
+    except ValueError:
+        return None
+    if suppressed:
+        _log.info(
+            "connector.idempotency_gate.suppressed_write",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_suppressed")
+    if on_unknown == "fail_closed":
+        try:
+            ambiguous = read_before_write_ambiguous(
+                markers,
+                run_ref=persisted_key,
+                node_ref=node_id,
+                index=None,
+                payload=payload,
+            )
+        except ValueError:
+            ambiguous = False
+        if ambiguous:
+            _log.info(
+                "connector.idempotency_gate.fail_closed_suppressed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+            return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_fail_closed")
+    return None
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -2664,6 +3101,7 @@ def make_connector_fn(
     node_def: dict[str, Any],
     *,
     timeout: float | None = None,
+    session_factory: Callable[..., Any] | None = None,
 ) -> Any:
     """Return a decorated async node function that resolves a connector
     from the ConnectorHub and executes a connector action (query/write).
@@ -2673,6 +3111,25 @@ def make_connector_fn(
       - type: connector type (e.g. 'shell')
       - operation: 'query' or 'write' (optional, default 'query')
       - input: dict of input parameters (optional)
+
+    ``session_factory`` (FAR-458) enables the connector-write UNKNOWN-recovery
+    read-before-write dedupe: for a ``write`` operation the node loads the run's
+    persisted idempotency key + markers and, when ``read_before_write_suppression``
+    reports the write was already delivered on the SAME derived key, returns a
+    skipped envelope WITHOUT re-sending the duplicate upstream write. On a
+    successful write it stamps a ``delivery_done`` marker (the evidence the
+    suppression consumes). Both paths are STRICTLY fail-open: a missing run id /
+    session factory / persisted key, or a DB error, proceeds exactly as before
+    (write sent, no suppression), so the gate can never block or change a
+    connector write that has no idempotency context.
+
+    FAR-458 refinement: the AMBIGUOUS (couldn't-confirm-delivery) decision is
+    per-connector-per-write via the connector's ``on_unknown`` mode
+    (``ConnectorBase.on_unknown_for`` / ``_connector_on_unknown``). The default
+    ``fail_open`` keeps the gate fail-open on ambiguity (possible duplicate);
+    ``fail_closed`` suppresses an ambiguous write (possible silent miss);
+    ``off`` bypasses the gate entirely. The CONFIRMED-delivered suppression is
+    mode-independent.
     """
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
@@ -2711,10 +3168,52 @@ def make_connector_fn(
 
         resource, filters, data = _connector_inputs(binding, state)
 
+        # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
+        # decision point. Only a WRITE is side-effecting; a query never double-
+        # submits. The gate reads the run's persisted idempotency key + markers,
+        # and suppresses a CONFIRMED-delivered duplicate (matching key +
+        # ``delivery_done``) in EVERY mode, and additionally suppresses an
+        # AMBIGUOUS (matching key, no ``delivery_done``) write when the
+        # connector's ``on_unknown`` policy is ``fail_closed``. Fail-open in
+        # every direction — no run id / session factory / persisted key, the
+        # killswitch, a DB error, or ``on_unknown="off"`` all proceed to send the
+        # write normally; default ``fail_open`` lets an unconfirmed write fire.
+        if op == "write":
+            run_id = str(state.get("_run_id", "") or "")
+            gate_result = await _connector_write_gate(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=state.get("_org_id"),
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+                on_unknown=_connector_on_unknown(connector, resource),
+            )
+            if gate_result is not None:
+                return gate_result
+
         try:
             result = await _run_connector_action(connector, op, resource, filters, data)
         except Exception as exc:
             return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+        # FAR-458: a successful connector WRITE genuinely reached upstream —
+        # stamp the delivery marker (bounded, fail-open) so a re-run reusing the
+        # SAME persisted key suppresses the duplicate. The full write identity
+        # (resource + filters + data) is folded into the derived key on BOTH the
+        # gate and the stamp so a target/content edit derives a fresh key.
+        if op == "write":
+            await _stamp_connector_write_delivered(
+                session_factory,
+                run_id=str(state.get("_run_id", "") or ""),
+                org_id_raw=state.get("_org_id"),
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+                result=result,
+            )
 
         scope_block = _guard_connector_secret_output(result, node_id)
         if scope_block is not None:

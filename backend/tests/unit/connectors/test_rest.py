@@ -2101,6 +2101,83 @@ def test_config_defaults_preserved_when_absent() -> None:
     assert c._verify_tls is True
 
 
+# ── per-op ``on_unknown`` idempotency mode (FAR-458) ────────────────────────
+
+
+def test_on_unknown_defaults_to_fail_open() -> None:
+    """Absent ``on_unknown`` defaults to ``fail_open`` across every op."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c.on_unknown_for("default") == "fail_open"
+
+
+def test_on_unknown_top_level_applies_to_each_op() -> None:
+    """A top-level ``on_unknown`` is the default for every op."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "on_unknown": "fail_closed"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c.on_unknown_for("default") == "fail_closed"
+
+
+def test_on_unknown_per_resource_override() -> None:
+    """A per-resource operation's ``on_unknown`` overrides the top-level default."""
+    c = _make_connector(
+        {
+            "base_url": "https://api.example.com",
+            "on_unknown": "fail_open",
+            "operations": {"users": {"path": "/items", "on_unknown": "off"}},
+        },
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c.on_unknown_for("users") == "off"
+    # An unrelated resource (no per-op override, but the top-level applies) is fail_open.
+    assert c.on_unknown_for("default") == "fail_open"
+
+
+def test_on_unknown_case_and_whitespace_normalised() -> None:
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "on_unknown": "  Fail_Closed  "},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c.on_unknown_for("default") == "fail_closed"
+
+
+def test_on_unknown_invalid_top_level_rejected_at_config_parse() -> None:
+    """An invalid top-level ``on_unknown`` is a loud config error at construction
+    time (config-parse), never silently adopted."""
+    with pytest.raises(ValueError, match="on_unknown"):
+        _make_connector(
+            {"base_url": "https://api.example.com", "path": "/items", "on_unknown": "bogus"},
+            {"auth_mode": "bearer", "token": "t"},
+        )
+
+
+def test_on_unknown_invalid_per_resource_rejected_at_config_parse() -> None:
+    """An invalid per-resource operation ``on_unknown`` is also rejected at
+    config-parse time (fail fast on a config error)."""
+    with pytest.raises(ValueError, match="on_unknown"):
+        _make_connector(
+            {
+                "base_url": "https://api.example.com",
+                "operations": {"users": {"path": "/items", "on_unknown": "always"}},
+            },
+            {"auth_mode": "bearer", "token": "t"},
+        )
+
+
+def test_off_bypasses_marker_never_dedupes() -> None:
+    """``off`` is the default-free bypass: the write is never deduped. The
+    RestConnector surfaces it so the gate can short-circuit before any read."""
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items", "on_unknown": "off"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c.on_unknown_for("default") == "off"
+
+
 def asyncio_run(coro: Any) -> Any:
     import asyncio
 

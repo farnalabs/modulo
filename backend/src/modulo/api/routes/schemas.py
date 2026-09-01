@@ -825,28 +825,22 @@ async def _sample_connector_records(
     ci: Any,
     req: SchemaInferRequest,
     session: AsyncSession,
-    org_id: uuid.UUID,
 ) -> list[dict[str, Any]]:
     """Sample connector data, failing open with informative HTTP errors."""
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
-        try:
-            # Connector credential decrypt needs the org-scoped RLS context in
-            # the SAME transaction as the secrets read — the context-loader
-            # transaction already committed, so re-assert set_rls_org here. It
-            # runs BEFORE _infer_definition, so a missing org scope would 502
-            # the whole infer endpoint at sampling.
-            async with session.begin():
-                await set_rls_org(session, org_id)
+        async with session.begin():
+            await set_rls_org(session, ci.organisation_id)
+            try:
                 await ch.initialise([ci])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("schemas.infer.connector_init_failed")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to initialise connector for sampling.",
-            ) from None
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("schemas.infer.connector_init_failed")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to initialise connector for sampling.",
+                ) from None
         try:
             async with asyncio.timeout(30.0):
                 return await ch.sample(
@@ -873,6 +867,8 @@ async def _resolve_model_backend(
     mbs: Any,
     secrets_backend: Any,
     *,
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
     init_log: str,
     init_detail: str,
     empty_detail: str,
@@ -883,9 +879,17 @@ async def _resolve_model_backend(
 
     Maps initialisation and selection failures to informative HTTP errors so
     schema inference and generation routes stay thin.
+
+    The model-backend API keys live in the secrets table and are decrypted with
+    the org-scoped RLS context, so ``mh.initialise`` must run inside a DB
+    transaction with ``app.organisation_id`` set — otherwise ``get_secret``
+    raises ``RuntimeError('no DB session')`` before the credentials fallback
+    can apply (turning every model-backend init into a blanket 502).
     """
     try:
-        await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        async with session.begin():
+            await set_rls_org(session, organisation_id)
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -918,28 +922,25 @@ async def _infer_definition(
     mbs: Any,
     records: list[dict[str, Any]],
     connector_type: str,
+    *,
     session: AsyncSession,
-    org_id: uuid.UUID,
+    organisation_id: uuid.UUID,
 ) -> tuple[dict[str, Any], uuid.UUID]:
     """Run LLM schema inference and return ``(definition_json, backend_id)``."""
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ModelBackendHub() as mh:
-        # Model-backend credential decrypt needs the org-scoped RLS context in
-        # the SAME transaction as the secrets read — set_config(..., true) is
-        # transaction-local, so re-asserting it here (split from the initial
-        # load transaction that already committed) keeps the decrypt working.
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            backend, first_backend_id = await _resolve_model_backend(
-                mh,
-                mbs,
-                secrets_backend,
-                init_log="schemas.infer.backend_init_failed",
-                init_detail="Failed to initialise model backend for inference.",
-                empty_detail="No model backends available for inference.",
-                get_log="schemas.infer.backend_get_failed",
-                get_detail="Selected model backend is unavailable.",
-            )
+        backend, first_backend_id = await _resolve_model_backend(
+            mh,
+            mbs,
+            secrets_backend,
+            session=session,
+            organisation_id=organisation_id,
+            init_log="schemas.infer.backend_init_failed",
+            init_detail="Failed to initialise model backend for inference.",
+            empty_detail="No model backends available for inference.",
+            get_log="schemas.infer.backend_get_failed",
+            get_detail="Selected model backend is unavailable.",
+        )
 
         service = SchemaInferenceService(backend, connector_type=connector_type)
         try:
@@ -1033,14 +1034,14 @@ async def infer_schema_endpoint(
             detail="Schema inference failed due to an unexpected error.",
         ) from None
 
-    records = await _sample_connector_records(settings, ci, req, session, principal.organisation_id)
+    records = await _sample_connector_records(settings, ci, req, session)
     definition_json, first_backend_id = await _infer_definition(
         settings,
         mbs,
         records,
         connector_type=ci.connector_type_id,
         session=session,
-        org_id=principal.organisation_id,
+        organisation_id=principal.organisation_id,
     )
 
     await append_audit_event_isolated(
@@ -1088,27 +1089,25 @@ async def _generate_schema(
     settings: Settings,
     mbs: Any,
     req: SchemaGenerateRequest,
+    *,
     session: AsyncSession,
-    org_id: uuid.UUID,
+    organisation_id: uuid.UUID,
 ) -> tuple[dict[str, Any], uuid.UUID]:
     """Run LLM schema generation and return ``(definition_json, backend_id)``."""
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     async with ModelBackendHub() as mh:
-        # Same org-scoped-transaction requirement as the inference path (see
-        # ``_infer_definition``): credential decrypt must share one transaction
-        # with set_rls_org, since set_config(..., true) is transaction-local.
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            backend, first_backend_id = await _resolve_model_backend(
-                mh,
-                mbs,
-                secrets_backend,
-                init_log="schemas.generate.backend_init_failed",
-                init_detail="Failed to initialise model backend for generation.",
-                empty_detail="No model backends available for generation.",
-                get_log="schemas.generate.backend_get_failed",
-                get_detail="Selected model backend is unavailable.",
-            )
+        backend, first_backend_id = await _resolve_model_backend(
+            mh,
+            mbs,
+            secrets_backend,
+            session=session,
+            organisation_id=organisation_id,
+            init_log="schemas.generate.backend_init_failed",
+            init_detail="Failed to initialise model backend for generation.",
+            empty_detail="No model backends available for generation.",
+            get_log="schemas.generate.backend_get_failed",
+            get_detail="Selected model backend is unavailable.",
+        )
 
         service = SchemaGenerationService(backend)
         try:
@@ -1183,7 +1182,7 @@ async def generate_schema_endpoint(
         mbs,
         req,
         session=session,
-        org_id=principal.organisation_id,
+        organisation_id=principal.organisation_id,
     )
 
     await append_audit_event_isolated(

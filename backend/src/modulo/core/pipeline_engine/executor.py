@@ -2110,6 +2110,10 @@ class PipelineExecutor:
                     from modulo.core.pipeline_engine.decorator import set_connector_hub
                     from modulo.core.runtime_provider import create_default_hub
                     from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.db.crud.connector_instance import (
+                        clear_degraded_markers,
+                        mark_instances_degraded,
+                    )
                     from modulo.settings import get_settings
 
                     _settings = get_settings()
@@ -2126,6 +2130,33 @@ class PipelineExecutor:
                     )
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
+                    if hub.skipped or hub.healthy:
+                        # FAR-495: persist a degraded marker for the skipped
+                        # instances and clear stale markers for instances that
+                        # initialised successfully (a connector fixed via a
+                        # config/plugin change stops being flagged degraded),
+                        # best-effort inside its own savepoint so a failure here
+                        # can NEVER fail or roll back the run-start transaction
+                        # (the hub itself already logged the skips). Only
+                        # instances actually attempted this run appear in
+                        # ``hub.skipped``/``hub.healthy``, so out-of-scope
+                        # instances are never touched.
+                        try:
+                            async with session.begin_nested():
+                                if hub.skipped:
+                                    await mark_instances_degraded(session, hub.skipped)
+                                if hub.healthy:
+                                    await clear_degraded_markers(session, hub.healthy)
+                        except Exception:
+                            # No run id in scope here (_init_connector_hub is
+                            # org-scoped); the instance ids are the correlatable
+                            # identifiers.
+                            _log.warning(
+                                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
+                                sorted(str(i) for i in hub.skipped),
+                                sorted(str(i) for i in hub.healthy),
+                                exc_info=True,
+                            )
                     set_connector_hub(hub)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no
@@ -3916,6 +3947,17 @@ class PipelineExecutor:
         second branch is the UNKNOWN-recovery path: an operator re-run with the
         SAME persisted key must NOT double-submit the write.
 
+        SCOPE (FAR-458 reconciliation): this executor gate stays confined to the
+        SANDBOX single-node transient-recovery surface — ``single_sandbox_node``
+        below. The CONNECTOR-write UNKNOWN-recovery surface has its OWN decision
+        point: the connector node's write boundary (``make_connector_fn`` →
+        ``_connector_write_gate``), which consults the SAME
+        ``read_before_write_suppression`` before re-sending a previously-delivered
+        write and stamps a ``delivery_done`` marker on success. A connector node
+        does not (and should not) reach this executor transient path, so the gate
+        is intentionally NOT extended to cover connectors here — leaving it
+        sandbox-only avoids falsely gating a connector recovery that never passes
+        through ``_decide_transient_failure``.
         ``index`` / ``payload`` (FAR-438) are the item-cardinality position and
         content-version payload handed to ``read_before_write_suppression`` so the
         derived per-node key matches the key the marker-write side stamped. They
