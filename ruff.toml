@@ -158,6 +158,30 @@ select = [
     # newly-flagged decorators must be normalized rather than re-ignored.
     "PT023",  # consistent @pytest.mark.<marker>() parentheses style
     "PT026",  # reject useless arg-free @pytest.mark.usefixtures()
+    # Eighth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5 under both this gate and the
+    # backend/pyproject.toml gate: `ruff check . --select PT001,PT002,PT003,
+    # PT007,PT008,PT009,PT010,PT014,PT015,PT016,PT017,PT022,PT024,PT025,PT030,
+    # PT031 --statistics`). Mirrors the backend/pyproject.toml gate. These
+    # pytest-style rules are all pass-to-enable (zero current violations across
+    # the whole tree), so enabling them tightens the test-quality gate against
+    # future regressions without touching existing tests.
+    "PT001",  # consistent @pytest.fixture() parentheses style
+    "PT002",  # no positional arguments to @pytest.fixture()/@pytest.mark.parametrize()
+    "PT003",  # @pytest.fixture(scope=...) should not be spelled with scope="function"
+    "PT007",  # @pytest.mark.parametrize() values must be a collection, not a bare dict/list
+    "PT008",  # no lambda argument to mocker.patch()
+    "PT009",  # use plain asserts rather than unittest-style assertEquals() etc.
+    "PT010",  # pytest.raises()/pytest.warns() must name at least one exception/warning
+    "PT014",  # no duplicated test cases in @pytest.mark.parametrize()
+    "PT015",  # no assert that is always False
+    "PT016",  # no pytest.fail() without a message
+    "PT017",  # no assert inside an except block
+    "PT022",  # no unused-yield fixture (use plain return instead)
+    "PT024",  # no redundant @pytest.mark.asyncio on an already-coroutine fixture
+    "PT025",  # no erroneous use_fixtures() marker on a fixture
+    "PT030",  # pytest.warns() too broad (bare Exception) — narrow to the concrete warning
+    "PT031",  # pytest.warns() with multiple statements — assert inside the block
 ]
 ignore = [
     "S101",
