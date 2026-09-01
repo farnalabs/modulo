@@ -25,14 +25,14 @@ DEFAULT_TIMEOUT: float = 30.0
 
 
 async def run_sync(
-    callable: Callable[..., Any],
+    func: Callable[..., Any],
     *args: Any,
     timeout_seconds: float = DEFAULT_TIMEOUT,
     **kwargs: Any,
 ) -> Any:
     """Run a synchronous callable in a thread pool with a timeout."""
     return await asyncio.wait_for(
-        asyncio.to_thread(callable, *args, **kwargs),
+        asyncio.to_thread(func, *args, **kwargs),
         timeout=timeout_seconds,
     )
 

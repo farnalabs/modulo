@@ -42,12 +42,8 @@ def _duration_seconds(raw: dict[str, Any]) -> int | None:
     finished_at = raw.get("finished_at")
     if started_at and finished_at:
         try:
-            fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
-            started = datetime.strptime(started_at, fmt) if "T" in started_at else datetime.fromisoformat(started_at)
-            if "T" in finished_at:
-                finished = datetime.strptime(finished_at, fmt)
-            else:
-                finished = datetime.fromisoformat(finished_at)
+            started = datetime.fromisoformat(started_at)
+            finished = datetime.fromisoformat(finished_at)
             return int((finished - started).total_seconds())
         except (ValueError, TypeError):
             return None

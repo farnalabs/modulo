@@ -13,7 +13,7 @@ Usage:
 """
 
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import ClassVar
 
 from fastapi import FastAPI, Request, Response
@@ -110,6 +110,6 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
         """Return True if the current date is past the sunset date."""
         try:
             sunset_date = date.fromisoformat(sunset)
-            return date.today() > sunset_date
+            return datetime.now(UTC).date() > sunset_date
         except (ValueError, TypeError):
             return False

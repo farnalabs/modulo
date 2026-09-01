@@ -37,7 +37,7 @@ from datetime import datetime
 
 def _parse_iso(ts: str) -> int:
     """Parse a GitHub ISO-8601 timestamp (UTC, 'Z' suffix) to a unix epoch."""
-    return int(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").timestamp())
+    return int(datetime.fromisoformat(ts).timestamp())
 
 
 def load_concatenated(path: str):
