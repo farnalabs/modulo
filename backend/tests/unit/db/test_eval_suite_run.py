@@ -700,12 +700,15 @@ def test_single_migration_head() -> None:
     # 0168_add_soft_delete_org_indexes (on main) chains off 0167.
     chaining_off_0167 = [p for p in revisions if parents[p] == "0167_add_hot_query_indexes"]
     assert [_basename(p) for p in chaining_off_0167] == ["0168_add_soft_delete_org_indexes.py"]
-    # 0169_connector_instance_degraded (FAR-495, this PR) chains off 0168 and is the head.
+    # 0169_connector_instance_degraded (FAR-495, on main) chains off 0168.
     chaining_off_0168 = [p for p in revisions if parents[p] == "0168_add_soft_delete_org_indexes"]
     assert [_basename(p) for p in chaining_off_0168] == ["0169_connector_instance_degraded.py"]
-    # Nothing chains off 0169 -> it is the single head.
+    # 0170_add_residual_foreign_keys (DB-improvement residual FK sweep) chains off 0169.
     chaining_off_0169 = [p for p in revisions if parents[p] == "0169_connector_instance_degraded"]
-    assert chaining_off_0169 == []
+    assert [_basename(p) for p in chaining_off_0169] == ["0170_add_residual_foreign_keys.py"]
+    # Nothing chains off 0170 -> it is the single head.
+    chaining_off_0170 = [p for p in revisions if parents[p] == "0170_add_residual_foreign_keys"]
+    assert chaining_off_0170 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

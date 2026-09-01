@@ -14,7 +14,7 @@ class NodeObservation(OrgScoped):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False)
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
     )

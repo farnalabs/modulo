@@ -12,7 +12,7 @@ class SnapshotSchemaPin(OrgScoped):
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("pipeline_snapshots.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    node_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False)
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
     schema_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("schemas.id", ondelete="RESTRICT"), nullable=False, index=True
