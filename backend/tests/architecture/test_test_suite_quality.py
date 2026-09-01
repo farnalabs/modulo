@@ -827,6 +827,14 @@ regression that silently weakens the suite:
   one fact about it, which is the legitimate form. Compute the expected value
   first (``expected = ... if ... else ...`` followed by ``assert x ==
   expected``) or split into one ``assert`` per branch
+- ``assert x in mapping.keys()`` / ``assert x not in mapping.keys()`` —
+  membership against the redundant ``.keys()`` dict view. ``k in d`` *already*
+  tests key membership, so ``k in d.keys()`` computes the same verdict through
+  an extra call that ruff SIM118 flags as redundant; the spelling also sits one
+  typo away from the value-view confusion (``k in d.values()``) that silently
+  flips the assertion's meaning from key to value. Membership against the
+  ``.items()``/``.values()`` views is deliberately left alone — those views DO
+  change the meaning and are the correct spellings when present
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -11637,3 +11645,121 @@ def test_conditional_verdict_lens_flags_opaque_branches():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _conditional_verdict_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: membership against the redundant ``d.keys()`` dict view
+# ---------------------------------------------------------------------------
+def _dict_keys_membership_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assert whose verdict is a
+    membership test against the redundant ``.keys()`` dict view (``assert x in
+    d.keys()`` / ``assert x not in d.keys()``).
+
+    ``k in d`` already performs key membership, so ``k in d.keys()`` yields the
+    same verdict through an extra call that ruff SIM118 flags as redundant.
+    Unlike the sibling ``.items()``/``.values()`` views — which genuinely change
+    what is being tested and are the correct spellings when present — the
+    ``.keys()`` view carries no information the bare mapping does not, and the
+    spelling is one typo away from a value-view confusion (``k in d.values()``)
+    that silently flips the assertion's meaning. Only the argument-free ``.keys()``
+    call whose receiver is a callable/member expression is matched: a bare
+    attribute without the call (``mapping.keys``), a ``.keys(x)`` call, or an
+    equality/other comparison against the view is a different expression."""
+    found: list[tuple[int, str]] = []
+
+    def _is_keys_view(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and not node.args
+            and not node.keywords
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "keys"
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        for op, comp in zip(test.ops, test.comparators, strict=True):
+            if not isinstance(op, (ast.In, ast.NotIn)):
+                continue
+            if not _is_keys_view(comp):
+                continue
+            op_name = "in" if isinstance(op, ast.In) else "not in"
+            found.append(
+                (
+                    node.lineno,
+                    f"assert {ast.unparse(test)} — {op_name} against the redundant "
+                    "'d.keys()' dict view: 'in <mapping>' already tests key membership "
+                    "(ruff SIM118), and the extra call is one typo away from the "
+                    "value-view confusion ('k in d.values()') that silently flips the "
+                    "meaning. Assert against the mapping directly (e.g. assert key in "
+                    "mapping)",
+                )
+            )
+    return found
+
+
+def test_no_dict_keys_membership():
+    """Membership against the redundant ``.keys()`` dict view —
+    ``assert x in d.keys()`` / ``assert x not in d.keys()`` — is a dead extra
+    call: ``k in d`` already tests key membership, so ``.keys()`` adds nothing
+    but the SIM118 redundancy while sitting one typo away from the value-view
+    confusion (``k in d.values()``) that silently changes the assertion's
+    meaning. Unlike ``.items()``/``.values()`` — the views that genuinely change
+    what is being tested — ``.keys()`` carries no information the bare mapping
+    does not."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _dict_keys_membership_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assert(s) against d.keys().\n"
+        "'assert k in d.keys()' is redundant — 'in <mapping>' already tests key "
+        "membership (ruff SIM118),\n"
+        "and the extra call is one typo away from the value-view confusion "
+        "('k in d.values()')\n"
+        "that silently flips the meaning. Assert against the mapping directly "
+        "(assert key in mapping).\n" + "\n".join(violations)
+    )
+
+
+def test_dict_keys_membership_lens_flags_redundant_views():
+    """Synthetic positive/negative control for the ``.keys()`` membership lens:
+    it must flag every ``in``/``not in`` assert whose right operand is the
+    redundant, argument-free ``.keys()`` dict view — regardless of left-operand
+    shape and receiver spelling — and leave the meaningful view memberships
+    (``.items()`` / ``.values()``), the plain ``in <mapping>`` idiom, the bare
+    ``mapping.keys`` attribute, and unrelated comparisons alone."""
+    positive_sources = [
+        "def test_foo():\n    assert key in mapping.keys()\n",
+        "def test_foo():\n    assert key not in mapping.keys()\n",
+        "def test_foo():\n    assert payload['id'] in result.keys()\n",
+        "def test_foo():\n    assert (org_id, name) not in rows.keys()\n",
+        "def test_foo():\n    assert find_key(config) in settings.keys()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _dict_keys_membership_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert key in mapping\n",
+        "def test_foo():\n    assert key not in mapping\n",
+        "def test_foo():\n    assert (k, v) in mapping.items()\n",
+        "def test_foo():\n    assert value in mapping.values()\n",
+        "def test_foo():\n    assert value not in mapping.values()\n",
+        "def test_foo():\n    assert key in mapping.keys\n",
+        "def test_foo():\n    assert key in mapping.keys(x)\n",
+        "def test_foo():\n    assert set(mapping.keys()) == expected\n",
+        "def test_foo():\n    assert len(mapping.keys()) == len(keys)\n",
+        "def test_foo():\n    assert key in ('a', 'b')\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _dict_keys_membership_violations(tree), f"lens should NOT flag:\n{source}"

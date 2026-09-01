@@ -1655,13 +1655,6 @@ async def test_execute_passes_hash_to_cache():
 # ---------------------------------------------------------------------------
 
 
-def _make_pipeline_with_capacity(max_concurrent_runs: int = 5) -> MagicMock:
-    p = MagicMock()
-    p.max_concurrent_runs = max_concurrent_runs
-    p.lock_wait_timeout_seconds = 1
-    return p
-
-
 async def test_execute_times_out_when_at_capacity():
     """When max_concurrent_runs is exceeded, run times out with lock_timeout error."""
     run = _make_run()
