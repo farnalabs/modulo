@@ -37,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSIONS_DIR = os.path.join(REPO_ROOT, "backend", "src", "modulo", "db", "migrations", "versions")
@@ -54,7 +55,7 @@ def _resolve_repo_root() -> str:
     result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if result.returncode == 0:
         cwd_top = result.stdout.strip()
-        if cwd_top and os.path.isdir(os.path.join(cwd_top, "backend", "src", "modulo", "db", "migrations", "versions")):
+        if cwd_top and Path(cwd_top, "backend", "src", "modulo", "db", "migrations", "versions").is_dir():
             return cwd_top
     return REPO_ROOT
 
@@ -80,7 +81,7 @@ def _changed_names(diff_range: str | None) -> list[str]:
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
         if line.startswith(prefix) and line.endswith(".py"):
-            names.append(os.path.basename(line))
+            names.append(Path(line).name)
     return names
 
 
@@ -134,11 +135,11 @@ def _main(argv: list[str] | None = None) -> int:
     repo_root = _resolve_repo_root()
     versions_dir = os.path.join(repo_root, "backend", "src", "modulo", "db", "migrations", "versions")
 
-    if not os.path.isdir(versions_dir):
+    if not Path(versions_dir).is_dir():
         print(f"check-migration-heads: versions dir not found at {versions_dir} - skipping", file=sys.stderr)
         return 0
 
-    files = sorted(name for name in os.listdir(versions_dir) if name.endswith(".py") and name != "__init__.py")
+    files = sorted(p.name for p in Path(versions_dir).iterdir() if p.name.endswith(".py") and p.name != "__init__.py")
 
     changed_names = _changed_names(args.diff_range)
     if not changed_names:

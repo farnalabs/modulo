@@ -58,6 +58,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 # Git-state env vars inherited from a running `git commit` (e.g. the relative
 # `GIT_INDEX_FILE=.git/index`) are harmless to vulture (unlike semgrep's
@@ -103,7 +104,7 @@ def main() -> int:
     root = _repo_root()
     src = os.path.join(root, "backend", "src", "modulo")
     whitelist = os.path.join(root, ".vulture_whitelist.py")
-    if not os.path.isdir(src) or not os.path.isfile(whitelist):
+    if not Path(src).is_dir() or not Path(whitelist).is_file():
         print(
             f"run_vulture.py: could not resolve repo layout (src={src!r}, whitelist={whitelist!r})",
             file=sys.stderr,

@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import NamedTuple
 
 
@@ -162,7 +163,7 @@ def hash_file(path: str) -> str:
 def write_checksums(manifest_dir: str, files: list[str]) -> str:
     checksums: dict[str, str] = {}
     for f in files:
-        rel = os.path.basename(f)
+        rel = Path(f).name
         checksums[rel] = hash_file(f)
     cs_path = os.path.join(manifest_dir, "checksums.sha256")
     with open(cs_path, "w") as f:
@@ -174,10 +175,9 @@ def create_archive(manifest_dir: str, output_path: str) -> str:
     print("Creating archive...")
     tar_path = output_path.removesuffix(".enc")
     with tarfile.open(tar_path, "w:gz") as tar:
-        for entry in os.listdir(manifest_dir):
-            full = os.path.join(manifest_dir, entry)
-            if os.path.isfile(full):
-                tar.add(full, arcname=entry)
+        for entry in Path(manifest_dir).iterdir():
+            if entry.is_file():
+                tar.add(os.fspath(entry), arcname=entry.name)
     print(f"  -> {tar_path}")
     return tar_path
 
@@ -213,7 +213,7 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
         print(f"Encryption failed: {result.stderr}")
         sys.exit(1)
     print(f"  -> {enc_path}")
-    os.unlink(tar_path)
+    Path(tar_path).unlink()
 
 
 def get_org_id(db_url: str) -> str:

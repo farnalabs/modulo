@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -66,7 +67,7 @@ def main() -> int:
         return 0
 
     for rel in tracked:
-        ext = os.path.splitext(rel)[1].lower()
+        ext = Path(rel).suffix.lower()
         if ext not in _EXTENSIONS:
             continue
         full = os.path.join(REPO_ROOT, rel)

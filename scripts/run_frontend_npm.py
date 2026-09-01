@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
@@ -40,31 +41,31 @@ def find_package_manager() -> str | None:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print(f"usage: {os.path.basename(__file__)} <script>", file=sys.stderr)
+        print(f"usage: {Path(__file__).name} <script>", file=sys.stderr)
         return 2
 
     script = sys.argv[1]
 
     if not _SCRIPT_NAME_RE.match(script):
-        print(f"{os.path.basename(__file__)}: invalid script name {script!r}", file=sys.stderr)
+        print(f"{Path(__file__).name}: invalid script name {script!r}", file=sys.stderr)
         return 2
 
     if not os.path.isfile(PACKAGE_JSON):
-        print(f"{os.path.basename(__file__)}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)
+        print(f"{Path(__file__).name}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)
         return 0
 
     with open(PACKAGE_JSON, encoding="utf-8-sig") as fh:
         scripts = json.load(fh).get("scripts", {})
     if script not in scripts:
         print(
-            f"{os.path.basename(__file__)}: no '{script}' script in frontend/package.json - skipping",
+            f"{Path(__file__).name}: no '{script}' script in frontend/package.json - skipping",
             file=sys.stderr,
         )
         return 0
 
     pm = find_package_manager()
     if pm is None:
-        print(f"{os.path.basename(__file__)}: neither pnpm nor npm found on PATH", file=sys.stderr)
+        print(f"{Path(__file__).name}: neither pnpm nor npm found on PATH", file=sys.stderr)
         return 1
 
     if sys.platform == "win32":

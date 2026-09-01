@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
@@ -98,9 +99,9 @@ def main() -> int:
         # Clean up temp files (schema, script, temp DB).
         for candidate in (py_script, schema_path, db_path):
             with contextlib.suppress(OSError):
-                os.remove(candidate)
+                Path(candidate).unlink()
         with contextlib.suppress(OSError):
-            os.rmdir(tempdir)
+            Path(tempdir).rmdir()
 
     print(f"=== Done: {OUTPUT_FILE}", file=sys.stderr)
     return 0

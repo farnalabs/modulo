@@ -16,6 +16,7 @@ import os
 import re
 import sys
 from datetime import date
+from pathlib import Path
 from typing import NamedTuple
 
 # ruff: noqa: N999
@@ -26,7 +27,7 @@ BACKUP_RE = re.compile(r"modulo-backup-(?P<org>[a-f0-9]+)-(?P<ts>\d{8})T.*\.tar\
 def _safe_dir(path: str) -> str:
     """Resolve *path* and require it to be an existing directory."""
     resolved = os.path.realpath(path)
-    if not os.path.isdir(resolved):
+    if not Path(resolved).is_dir():
         raise ValueError(f"backup directory is not a real directory: {path!r}")
     return resolved
 
@@ -61,7 +62,7 @@ def collect_backups(backup_dir: str) -> list[BackupFile]:
     safe_dir = _safe_dir(backup_dir)
     pattern = os.path.join(safe_dir, "modulo-backup-*.tar.gz.enc")
     for path in glob.glob(pattern):
-        basename = os.path.basename(path)
+        basename = Path(path).name
         m = BACKUP_RE.match(basename)
         if m:
             ts = m.group("ts")
@@ -122,19 +123,19 @@ def classify_backups(
 
 def prune_backups(backup_dir: str, keep: set[str], dry_run: bool) -> None:
     safe_dir = _safe_dir(backup_dir)
-    for entry in os.listdir(safe_dir):
-        path = _path_within(safe_dir, os.path.join(safe_dir, entry))
-        if os.path.isfile(path) and BACKUP_RE.match(entry) and path not in keep:
+    for entry in Path(safe_dir).iterdir():
+        path = _path_within(safe_dir, os.fspath(entry))
+        if entry.is_file() and BACKUP_RE.match(entry.name) and path not in keep:
             if dry_run:
-                print(f"Would delete: {entry}")
+                print(f"Would delete: {entry.name}")
             else:
-                os.unlink(path)
-                print(f"Deleted: {entry}")
+                entry.unlink()
+                print(f"Deleted: {entry.name}")
 
 
 def main() -> None:
     args = parse_args()
-    if not os.path.isdir(args.backup_dir):
+    if not Path(args.backup_dir).is_dir():
         print(f"ERROR: backup directory not found: {args.backup_dir}")
         sys.exit(1)
 

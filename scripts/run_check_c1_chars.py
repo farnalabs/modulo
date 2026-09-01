@@ -13,6 +13,7 @@ import glob
 import os
 import re
 import sys
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOWS_GLOB = os.path.join(REPO_ROOT, ".github", "workflows", "*.yml")
@@ -52,7 +53,7 @@ def main() -> int:
 
     # Check 1 + 2: UTF-8 BOM and C1 control chars
     for path in files:
-        name = os.path.basename(path)
+        name = Path(path).name
         raw = _read_bytes(path)
 
         had_bom = raw.startswith(_BOM)
@@ -79,7 +80,7 @@ def main() -> int:
 
     # Check 3: Non-ASCII characters (excluding allowlist)
     for path in files:
-        name = os.path.basename(path)
+        name = Path(path).name
         raw = _read_bytes(path)
         raw = raw.removeprefix(_BOM)
         text = raw.decode("utf-8", errors="replace")
