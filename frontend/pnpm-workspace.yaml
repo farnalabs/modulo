@@ -10,7 +10,7 @@ overrides:
   "@hono/node-server": ">=2.0.5"
   js-yaml: "^4.3.0"
   "postcss>nanoid": "^3.3.17"
-  rollup: "4.63.0"
+  rollup: "4.63.1"
   "@tanstack/query-core": "5.102.8"
   "@tanstack/vue-query": "5.102.8"
 minimumReleaseAgeExclude:
@@ -46,3 +46,11 @@ minimumReleaseAgeExclude:
   - '@grafana/faro-web-sdk@2.11.0'
   - '@types/node@26.4.0'
   - 'vue-echarts@8.2.0'
+  - '@lucide/vue@1.38.0'
+  - '@sentry/browser@10.73.0'
+  - '@sentry/browser-utils@10.73.0'
+  - '@sentry/core@10.73.0'
+  - '@sentry/feedback@10.73.0'
+  - '@sentry/replay@10.73.0'
+  - '@sentry/replay-canvas@10.73.0'
+  - '@sentry/vue@10.73.0'
