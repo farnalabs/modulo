@@ -186,8 +186,6 @@ class TestPublicIngestEndpoint:
         with nothing persisted. The route must call ``set_rls_org`` with
         ``ORPHAN_ORG_ID`` inside its transaction.
         """
-        import modulo.api.routes.errors as err_mod
-
         ingest_mock = AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}])
         with (
             patch("modulo.api.routes.errors._service.ingest_batch", ingest_mock),
@@ -198,7 +196,37 @@ class TestPublicIngestEndpoint:
         assert resp.status_code == 201
         rls_mock.assert_awaited_once()
         args = rls_mock.await_args.args
-        assert args[1] == err_mod.ORPHAN_ORG_ID
+        # Pin the LITERAL nil UUID (not the module constant): if the constant
+        # ever drifts from the actual orphan-org partition id this must fail.
+        assert args[1] == uuid.UUID(int=0)
+
+    def test_zero_persisted_returns_500_not_false_201(self, client):
+        """FIX (FAR-523): ingest_batch swallows per-event failures — if the
+        transaction returned ZERO results for submitted events (e.g. the
+        orphan-org FK missing), the route must raise 500 instead of acking a
+        false-success 201 with an empty results list."""
+        with patch(
+            "modulo.api.routes.errors._service.ingest_batch",
+            AsyncMock(return_value=[]),
+        ):
+            resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
+
+        assert resp.status_code == 500
+        assert "persisted" in resp.json()["detail"]
+
+    def test_partial_persist_stays_201(self, client):
+        """Partial success (some events persisted) still acks 201."""
+        with patch(
+            "modulo.api.routes.errors._service.ingest_batch",
+            AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
+        ):
+            resp = client.post(
+                "/api/v1/errors/ingest/public",
+                json=_valid_payload(),
+            )
+
+        assert resp.status_code == 201
+        assert len(resp.json()["results"]) == 1
 
 
 class TestSessionKeyResponse:
