@@ -1462,7 +1462,7 @@ def test_no_dead_fixtures():
                 continue
             if any(_decorator_autouse(d) for d in node.decorator_list):
                 continue
-            if used_names.get(node.name, 0):
+            if used_names.get(node.name):
                 continue
             violations.append(
                 f"  {path.relative_to(TESTS)}:{node.lineno}  @pytest.fixture {node.name}()"
