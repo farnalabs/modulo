@@ -33,6 +33,7 @@ from modulo.api.dependencies import (
     get_current_tenant_user_optional,
     get_db_session,
     get_or_create_engine,
+    get_system_db_session,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
@@ -126,22 +127,36 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
 
 
 async def _load_trigger_and_org(
-    session: AsyncSession,
+    system_session: AsyncSession,
     trigger_id: uuid.UUID,
     principal: TenantPrincipal | None,
 ) -> tuple[Trigger, uuid.UUID]:
-    """Load the trigger row and resolve its org_id (principal or pipeline)."""
-    trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-    trigger = trigger_row.scalar_one_or_none()
-    if trigger is None:
-        raise TriggerNotFoundError(trigger_id=trigger_id)
+    """Bootstrap-read the trigger row + resolve its org via the SYSTEM session.
 
-    org_id = principal.organisation_id if principal else None
-    if org_id is None:
-        pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-        pipeline = pipe.scalar_one_or_none()
-        if pipeline:
-            org_id = pipeline.organisation_id
+    The trigger must be read BEFORE the app session's RLS org context can
+    exist: the org is derived FROM the trigger (for unauthenticated Slack
+    deliveries there is no principal org), and the signing secret needed to
+    authenticate the delivery lives on the trigger row — a chicken-and-egg
+    bootstrap. On Postgres the app session runs as ``modulo_app`` (NOBYPASSRLS,
+    non-owner), so a pre-context read of the org-scoped ``triggers`` table
+    matches ZERO rows and every delivery 404s (the FAR-457 silent-empty failure
+    class). The system session (``modulo_system``, BYPASSRLS) resolves the
+    bootstrap row instance-globally — the same mechanism as the pre-auth SSO
+    provider resolution. Authenticity is still enforced: the Slack signature is
+    verified AFTER this bootstrap and BEFORE any tenant-scoped mutation.
+    """
+    async with system_session.begin():
+        trigger_row = await system_session.execute(select(Trigger).where(Trigger.id == trigger_id))
+        trigger = trigger_row.scalar_one_or_none()
+        if trigger is None:
+            raise TriggerNotFoundError(trigger_id=trigger_id)
+
+        org_id = principal.organisation_id if principal else None
+        if org_id is None:
+            pipe = await system_session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+            pipeline = pipe.scalar_one_or_none()
+            if pipeline is not None:
+                org_id = pipeline.organisation_id
     if org_id is None:
         raise HTTPException(status_code=401, detail="Could not resolve organization")
     return trigger, org_id
@@ -167,6 +182,7 @@ async def receive_slack_event(
     response: Response,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -199,7 +215,7 @@ async def receive_slack_event(
 
     try:
         async with session.begin():
-            trigger, org_id = await _load_trigger_and_org(session, trigger_id, principal)
+            trigger, org_id = await _load_trigger_and_org(system_session, trigger_id, principal)
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 

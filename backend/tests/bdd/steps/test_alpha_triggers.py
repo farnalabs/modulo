@@ -19,7 +19,15 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/trigger_event_log.feature")
 
-from tests.bdd.conftest import make_mock_pipeline, make_mock_run, make_mock_snapshot
+from collections.abc import AsyncGenerator
+
+from tests.bdd.conftest import (
+    _system_session_override,
+    make_mock_pipeline,
+    make_mock_run,
+    make_mock_snapshot,
+    make_mock_system_session,
+)
 
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
@@ -151,13 +159,22 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
     ):
         if trigger_missing:
+            # The bootstrap trigger read runs on the SYSTEM session (FAR-523):
+            # a missing trigger must be absent from the instance-global read.
+            from modulo.api.dependencies import get_system_db_session
+            from modulo.api.main import app
+
             missing_row = MagicMock()
             missing_row.scalar_one_or_none.return_value = None
 
-            async def _execute(stmt, *a, **kw):
-                return missing_row
+            system_mock = make_mock_system_session()
+            system_mock.execute = AsyncMock(side_effect=lambda stmt, *a, **kw: missing_row)
 
-            with patch.object(request.node._mock_session, "execute", side_effect=_execute):
+            async def _missing_system_override() -> AsyncGenerator[AsyncMock, None]:
+                yield system_mock
+
+            app.dependency_overrides[get_system_db_session] = _missing_system_override
+            try:
                 resp = client.post(
                     f"/api/v1/triggers/{request.node._trigger_name}/webhook",
                     json=payload,
@@ -166,6 +183,8 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
                         "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
                     },
                 )
+            finally:
+                app.dependency_overrides[get_system_db_session] = _system_session_override
         else:
             resp = client.post(
                 f"/api/v1/triggers/{request.node._trigger_name}/webhook",

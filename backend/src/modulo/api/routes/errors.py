@@ -297,6 +297,15 @@ async def ingest_errors_public(
     events_data = [_prepare_event_data(e) for e in valid_events]
     try:
         async with session.begin():
+            # Pre-auth route (FAR-457 pattern): error_events/error_groups are
+            # OrgScoped (org-only RLS), so the INSERTs below fail the policy's
+            # WITH CHECK when ``app.organisation_id`` is unset — and
+            # ``ingest_batch`` swallows per-event errors, silently returning a
+            # 201 with an empty results list and persisting NOTHING. Pin the
+            # transaction to the orphan org so the writes pass WITH CHECK and
+            # the dedup/group lookups partition to the orphan rows exactly as
+            # their explicit ``organisation_id`` predicates intend.
+            await set_rls_org(session, ORPHAN_ORG_ID)
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
     except ProgrammingError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)

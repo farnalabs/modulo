@@ -176,6 +176,30 @@ class TestPublicIngestEndpoint:
             resp2 = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
             assert resp2.status_code == 201
 
+    def test_ingest_pins_rls_org_context_to_orphan_org(self, client):
+        """Regression (FAR-523): the pre-auth public ingest must pin the RLS
+        org context to the orphan org BEFORE ingesting.
+
+        error_events/error_groups are OrgScoped with an org-only ALL policy, so
+        the INSERTs fail the WITH CHECK when ``app.organisation_id`` is unset —
+        and ``ingest_batch`` swallows per-event errors, silently returning 201
+        with nothing persisted. The route must call ``set_rls_org`` with
+        ``ORPHAN_ORG_ID`` inside its transaction.
+        """
+        import modulo.api.routes.errors as err_mod
+
+        ingest_mock = AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}])
+        with (
+            patch("modulo.api.routes.errors._service.ingest_batch", ingest_mock),
+            patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock) as rls_mock,
+        ):
+            resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
+
+        assert resp.status_code == 201
+        rls_mock.assert_awaited_once()
+        args = rls_mock.await_args.args
+        assert args[1] == err_mod.ORPHAN_ORG_ID
+
 
 class TestSessionKeyResponse:
     """Verify the SessionKeyResponse model parses correctly with the new `key` field."""

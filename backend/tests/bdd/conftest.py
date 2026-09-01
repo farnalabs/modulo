@@ -109,20 +109,26 @@ def make_mock_session() -> AsyncMock:
 
 
 def make_mock_system_session() -> AsyncMock:
-    """System-session mock for pre-auth SSO provider resolution.
+    """System-session mock for pre-auth bootstrap reads (FAR-523).
 
-    The system session (``modulo_system`` role) is only used by the SSO routes
-    to read instance-global IdP config from the ``sso_providers`` table. It must
-    return NO rows so the resolution falls through to the env-var provider
-    config (which is what the SSO BDD scenarios configure) — a truthy MagicMock
-    here would make the code think a DB provider exists and try to parse
-    MagicMock SAML metadata.
+    Table-aware:
+
+    * ``sso_providers`` reads return NO rows so SSO resolution falls through to
+      the env-var provider config (which is what the SSO BDD scenarios
+      configure) — a truthy MagicMock here would make the code think a DB
+      provider exists and try to parse MagicMock SAML metadata.
+    * ``triggers``/``pipelines`` reads return a trigger/pipeline row so the
+      webhook + Slack bootstrap (which must resolve the trigger BEFORE any RLS
+      org context exists — see ``webhooks._load_trigger_and_org_global``)
+      reaches the patched engine instead of 404ing.
+    * everything else falls through to an empty row.
     """
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+
     empty_row = AsyncMock()
     empty_row.scalar_one_or_none = MagicMock(return_value=None)
     empty_row.scalar_one = AsyncMock(return_value=0)
@@ -132,7 +138,30 @@ def make_mock_system_session() -> AsyncMock:
     empty_row.scalars = MagicMock(return_value=empty_scalars)
     empty_row.first = MagicMock(return_value=None)
     empty_row.all = MagicMock(return_value=[])
-    session.execute.return_value = empty_row
+
+    trigger_mock = MagicMock()
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.active = True
+    trigger_mock.config_json = {}
+    trigger_row = MagicMock()
+    trigger_row.scalar_one_or_none = MagicMock(return_value=trigger_mock)
+
+    pipeline_mock = MagicMock()
+    pipeline_mock.organisation_id = ORG_ID
+    pipeline_row = MagicMock()
+    pipeline_row.scalar_one_or_none = MagicMock(return_value=pipeline_mock)
+
+    async def _execute(stmt: object, *_a: object, **_kw: object) -> MagicMock:
+        if isinstance(stmt, Select):
+            froms = stmt.get_final_froms()
+            table = getattr(froms[0], "name", "") if froms else ""
+            if table == "triggers":
+                return trigger_row
+            if table == "pipelines":
+                return pipeline_row
+        return empty_row
+
+    session.execute = AsyncMock(side_effect=_execute)
     session.scalar = AsyncMock(return_value=0)
     session.scalar_one = AsyncMock(return_value=0)
     return session
@@ -293,6 +322,7 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 # ---------------------------------------------------------------------------
 
 from pytest_bdd import given, parsers, then, when  # noqa: E402
+from sqlalchemy.sql import Select  # noqa: E402
 
 
 def _make_mock_pipeline_full(name: str = "Test Pipeline", **kwargs: Any) -> MagicMock:

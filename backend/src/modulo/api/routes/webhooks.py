@@ -33,6 +33,7 @@ from modulo.api.dependencies import (
     get_current_tenant_user_optional,
     get_db_session,
     get_or_create_engine,
+    get_system_db_session,
     require_permission,
 )
 from modulo.auth.jwt import TenantPrincipal
@@ -63,6 +64,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
 )
 from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
@@ -91,6 +93,47 @@ async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
     """
     org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
     return org_exists.scalar_one_or_none() is not None
+
+
+async def _load_trigger_and_org_global(
+    system_session: AsyncSession,
+    trigger_id: uuid.UUID,
+    principal: TenantPrincipal | None,
+) -> tuple[Trigger | None, uuid.UUID | None]:
+    """Bootstrap-read the trigger + resolve its org via the SYSTEM session.
+
+    The trigger row must be read BEFORE the app session's RLS org context can
+    exist: the org is derived FROM the trigger (for unauthenticated deliveries
+    there is no principal org at all), and the HMAC secret needed to
+    authenticate the delivery lives on the trigger row itself — a
+    chicken-and-egg bootstrap. On Postgres the app session runs as
+    ``modulo_app`` (NOBYPASSRLS, non-owner), so a pre-context read of the
+    org-scoped ``triggers`` table matches ZERO rows and every delivery 404s
+    (the FAR-457 silent-empty failure class; the BDD/integration harnesses
+    connect as the table owner, where RLS does not apply, so they cannot catch
+    it). The system session (``modulo_system``, BYPASSRLS) resolves the
+    bootstrap row instance-globally — the same mechanism as the pre-auth SSO
+    provider resolution. Every subsequent read/write runs on the app session
+    with ``set_rls_org`` pinned to the resolved org, and authenticity is still
+    enforced: unauthenticated deliveries must present a valid HMAC, verified
+    AFTER the bootstrap read and BEFORE any tenant-scoped mutation.
+
+    Returns ``(trigger, org_id)``; ``(None, None)`` when the trigger does not
+    exist (the caller raises the same 404 as before), and ``org_id=None`` when
+    the trigger exists but its org cannot be resolved (fail-closed 401).
+    """
+    async with system_session.begin():
+        trigger_row = await system_session.execute(select(Trigger).where(Trigger.id == trigger_id))
+        trigger = trigger_row.scalar_one_or_none()
+        if trigger is None:
+            return None, None
+        org_id = principal.organisation_id if principal else None
+        if org_id is None:
+            pipe = await system_session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+            pipeline = pipe.scalar_one_or_none()
+            if pipeline is not None:
+                org_id = pipeline.organisation_id
+    return trigger, org_id
 
 
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
@@ -166,6 +209,7 @@ async def receive_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -205,20 +249,12 @@ async def receive_webhook(
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-            trigger = trigger_row.scalar_one_or_none()
+            # Bootstrap via the system session (see the helper docstring): the
+            # trigger read must precede any RLS org context, or the org-scoped
+            # policy filters it out on Postgres.
+            trigger, org_id = await _load_trigger_and_org_global(system_session, trigger_id, principal)
             if trigger is None:
                 raise TriggerNotFoundError(trigger_id=trigger_id)
-
-            # Resolve org_id from trigger pipeline (for unauth webhooks) or from auth principal
-            org_id = principal.organisation_id if principal else None
-            if org_id is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe.scalar_one_or_none()
-                if pipeline:
-                    org_id = pipeline.organisation_id
             if org_id is None:
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 
@@ -428,6 +464,7 @@ async def replay_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -464,20 +501,12 @@ async def replay_webhook(
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-            trigger = trigger_row.scalar_one_or_none()
+            # Bootstrap via the system session (see the helper docstring): the
+            # trigger read must precede any RLS org context, or the org-scoped
+            # policy filters it out on Postgres.
+            trigger, org_id = await _load_trigger_and_org_global(system_session, trigger_id, principal)
             if trigger is None:
                 raise TriggerNotFoundError(trigger_id=trigger_id)
-
-            # Resolve org_id from trigger pipeline (for unauth webhooks) or from auth principal
-            org_id = principal.organisation_id if principal else None
-            if org_id is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe.scalar_one_or_none()
-                if pipeline:
-                    org_id = pipeline.organisation_id
             if org_id is None:
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 

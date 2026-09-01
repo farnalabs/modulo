@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, create_access_token
@@ -75,6 +76,54 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+def _make_mock_system_session(
+    *,
+    trigger_found: bool = True,
+    trigger_config: dict | None = None,
+    pipeline_org_id: uuid.UUID | None = None,
+) -> AsyncMock:
+    """System-session mock for the bootstrap trigger/org resolution.
+
+    The bootstrap reads ``triggers`` (and, when no principal org is available,
+    ``pipelines``) via the system session before any RLS org context exists.
+    """
+    system_session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    system_session.begin = MagicMock(return_value=begin_cm)
+
+    trigger_mock = None
+    if trigger_found:
+        trigger_mock = MagicMock()
+        trigger_mock.pipeline_id = uuid.uuid4()
+        trigger_mock.active = True
+        trigger_mock.config_json = trigger_config
+
+    pipeline_mock = None
+    if pipeline_org_id is not None:
+        pipeline_mock = MagicMock()
+        pipeline_mock.organisation_id = pipeline_org_id
+
+    async def _execute_side_effect(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        result = MagicMock()
+        if isinstance(stmt, Select):
+            froms = stmt.get_final_froms()
+            table = getattr(froms[0], "name", "") if froms else ""
+            if table == "triggers":
+                result.scalar_one_or_none.return_value = trigger_mock
+            elif table == "pipelines":
+                result.scalar_one_or_none.return_value = pipeline_mock
+            else:
+                result.scalar_one_or_none.return_value = None
+        else:
+            result.scalar_one_or_none.return_value = None
+        return result
+
+    system_session.execute = AsyncMock(side_effect=_execute_side_effect)
+    return system_session
+
+
 def _make_hmac_session() -> AsyncMock:
     """Session whose trigger carries a real hmac_secret (route-level HMAC runs)."""
     session = AsyncMock()
@@ -116,12 +165,17 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
+    mock_system_session = _make_mock_system_session(pipeline_org_id=_ORG_ID)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_system_session
+
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
@@ -236,13 +290,20 @@ def test_receive_webhook_inactive_returns_404(client: TestClient) -> None:
 
 def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
     """Route-level HMAC validation: a bad signature against a trigger that
-    configures an hmac_secret must 401 before the engine is reached."""
+    configures an hmac_secret must 401 before the engine is reached. The
+    secret lives on the trigger row, which the route loads via the SYSTEM
+    session bootstrap (FAR-523), so the override targets the system session."""
     session = _make_hmac_session()
+    system_session = _make_mock_system_session(trigger_config={"hmac_secret": "test-hmac-secret"})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     try:
         with (
             patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
@@ -256,6 +317,7 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
         m.assert_not_called()
     finally:
         app.dependency_overrides.pop(get_db_session, None)
+        app.dependency_overrides.pop(get_system_db_session, None)
 
     assert resp.status_code == 401
 
@@ -584,13 +646,19 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
 
 def test_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     """An unauthenticated webhook to a trigger configured with an hmac_secret is
-    rejected at the route level (401). HMAC-less triggers remain public by design."""
+    rejected at the route level (401). HMAC-less triggers remain public by design.
+    The secret lives on the trigger loaded via the SYSTEM session bootstrap."""
     session = _make_hmac_session()
+    system_session = _make_mock_system_session(trigger_config={"hmac_secret": "test-hmac-secret"})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     try:
         with patch("modulo.api.routes.webhooks.set_rls_org"):
             resp = client.post(
@@ -600,6 +668,7 @@ def test_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
             )
     finally:
         app.dependency_overrides.pop(get_db_session, None)
+        app.dependency_overrides.pop(get_system_db_session, None)
     assert resp.status_code in (401, 403)
 
 
@@ -666,3 +735,82 @@ def test_cleanup_expired_unauthenticated_returns_401(client: TestClient) -> None
         )
 
     assert resp.status_code in (401, 403)
+
+
+def test_receive_webhook_bootstrap_reads_trigger_via_system_session(client: TestClient) -> None:
+    """Regression (FAR-523): the trigger bootstrap read must go through the
+    system session, BEFORE any app-session RLS org context exists — a
+    pre-context read of the org-scoped ``triggers`` table on the app session
+    matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
+    system_mock = _make_mock_system_session(pipeline_org_id=_ORG_ID)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    run_mock = _make_mock_run()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "j")),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.return_value = (run_mock, None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000", "X-Modulo-Webhook-Secret": "test-hmac"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 202
+    # The bootstrap ran on the system session (trigger + pipeline org reads),
+    # and the app session ran NO pre-context entity reads.
+    tables = [c.args[0].get_final_froms()[0].name for c in system_mock.execute.await_args_list if c.args]
+    assert "triggers" in tables
+
+
+def test_receive_webhook_missing_trigger_returns_404(client: TestClient) -> None:
+    """A trigger absent from the SYSTEM (instance-global) read is a real 404."""
+    system_mock = _make_mock_system_session(trigger_found=False)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+
+
+def test_receive_webhook_unresolvable_org_returns_401(client: TestClient) -> None:
+    """Fail-closed: a trigger whose pipeline cannot resolve an org (and no
+    principal) is rejected 401 — never fall through to an unscoped run."""
+    system_mock = _make_mock_system_session(pipeline_org_id=None)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Could not resolve organization"
