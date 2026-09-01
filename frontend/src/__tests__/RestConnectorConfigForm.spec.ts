@@ -250,7 +250,7 @@ describe('RestConnectorConfigForm', () => {
     const options = select.findAll('option').map(o => o.text())
     expect(options).toEqual(['fail_open', 'fail_closed', 'off'])
     expect(select.element.getAttribute('aria-describedby')).toContain('restconn-on-unknown-help')
-    expect(wrapper.text()).toContain('recover duplicates')
+    expect(wrapper.text()).toContain('possible duplicate')
   })
 
   it('does not clobber the stored secret on an edit prefill round-trip', async () => {
