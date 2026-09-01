@@ -5,7 +5,7 @@
       <header class="flex items-center justify-between">
         <PageHeader title="Environment Profiles" subtitle="Manage sandbox environment profiles for code execution" />
         <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-envprofiles-add" @click="openAddForm">
-          Create Profile
+          {{ $t('views.AdminEnvironmentProfilesView.create_profile') }}
         </Button>
       </header>
 
@@ -15,7 +15,7 @@
 
       <template v-else>
         <div v-if="formMode" class="card p-6">
-          <h2 class="mb-4 text-base font-semibold">{{ formMode === 'add' ? 'New Environment Profile' : 'Edit Environment Profile' }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ formMode === 'add' ? $t('views.AdminEnvironmentProfilesView.new_environment_profile') : $t('views.AdminEnvironmentProfilesView.edit_environment_profile') }}</h2>
           <form @submit.prevent="formMode === 'add' ? createProfile() : updateProfile()">
             <div class="space-y-4">
               <div>
@@ -24,7 +24,7 @@
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="My profile"
+                  :placeholder="$t('views.AdminEnvironmentProfilesView.placeholder_my_profile')"
                   data-testid="admin-envprofiles-name-input"
                 />
               </div>
@@ -34,19 +34,19 @@
                   v-model="formData.description"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="Optional description"
+                  :placeholder="$t('views.AdminEnvironmentProfilesView.placeholder_optional_description')"
                   data-testid="admin-envprofiles-description-input"
                 />
               </div>
               <div>
                 <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.provider_type') }}</label>
                 <Select
-  aria-label="Provider type"
+  :aria-label="$t('views.AdminEnvironmentProfilesView.provider_type')"
   v-model="formData.provider_type"
-  placeholder="E2B"
+  :placeholder="$t('views.AdminEnvironmentProfilesView.provider_e2b')"
   data-testid="admin-envprofiles-provider-select"
   class="w-full"
-  :options="[{ value: 'e2b', label: 'E2B' }, { value: 'docker', label: $t('views.AdminEnvironmentProfilesView.docker') }, { value: 'custom', label: 'Custom / None' }]"
+  :options="[{ value: 'e2b', label: $t('views.AdminEnvironmentProfilesView.provider_e2b') }, { value: 'docker', label: $t('views.AdminEnvironmentProfilesView.docker') }, { value: 'custom', label: $t('views.AdminEnvironmentProfilesView.custom_or_none') }]"
   option-label="label"
   option-value="value"
 >
@@ -61,7 +61,7 @@
                   v-model="formData.image_ref"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="e.g. python:3.12-slim"
+                  :placeholder="$t('views.AdminEnvironmentProfilesView.placeholder_image_ref')"
                   data-testid="admin-envprofiles-image-input"
                 />
               </div>
@@ -88,7 +88,7 @@
                   />
                 </div>
                 <div>
-                  <label for="adminenvironmentprofilesview-field-2" class="mb-1 block text-sm font-medium">CPU Cores</label>
+                  <label for="adminenvironmentprofilesview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.cpu_cores') }}</label>
                   <input id="adminenvironmentprofilesview-field-2"
                     v-model.number="formData.cpu_cores"
                     type="number"
@@ -107,7 +107,7 @@
                     class="text-xs text-primary hover:underline"
                     @click="addEnvVar"
                   >
-                    + Add Variable
+                    {{ $t('views.AdminEnvironmentProfilesView.add_variable') }}
                   </button>
                 </div>
                 <div class="space-y-2">
@@ -120,14 +120,14 @@
                       v-model="env.key"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                      placeholder="KEY"
+                      :placeholder="$t('views.AdminEnvironmentProfilesView.placeholder_key')"
                       :data-testid="`admin-envprofiles-env-key-${idx}`"
                     />
-                    <input aria-label="value"
+                    <input :aria-label="$t('views.AdminEnvironmentProfilesView.placeholder_value')"
                       v-model="env.value"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                      placeholder="value"
+                      :placeholder="$t('views.AdminEnvironmentProfilesView.placeholder_value')"
                       :data-testid="`admin-envprofiles-env-value-${idx}`"
                     />
                     <button
@@ -135,11 +135,9 @@
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
                       :data-testid="`admin-envprofiles-env-remove-${idx}`"
                       @click="removeEnvVar(idx)"
-                      aria-label="Remove"
+                      :aria-label="$t('views.AdminEnvironmentProfilesView.remove')"
                     >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-                      </svg>
+                      <X class="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -148,7 +146,7 @@
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
               <Button :disabled="saving || !formData.name.trim()" type="submit" :data-testid="`admin-envprofiles-${formMode === 'add' ? 'submit' : 'save'}`">
-                {{ saving ? 'Saving...' : (formMode === 'add' ? 'Create' : 'Save') }}
+                {{ saving ? $t('views.AdminEnvironmentProfilesView.saving') : (formMode === 'add' ? $t('views.AdminEnvironmentProfilesView.create') : $t('views.AdminEnvironmentProfilesView.save')) }}
               </Button>
                 <button
                   type="button"
@@ -156,7 +154,7 @@
                   data-testid="admin-envprofiles-cancel"
                   @click="closeForm"
                 >
-                  Cancel
+                  {{ $t('views.AdminEnvironmentProfilesView.cancel') }}
                 </button>
               </div>
             </div>
@@ -166,7 +164,7 @@
         <div v-if="profiles.length === 0" class="card p-8 text-center">
           <p class="text-lg font-medium">{{ $t('views.AdminEnvironmentProfilesView.no_environment_profiles_configured') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
-            Create a profile to define sandbox environments for code execution.
+            {{ $t('views.AdminEnvironmentProfilesView.empty_state_description') }}
           </p>
         </div>
 
@@ -204,7 +202,7 @@
                     class="h-1.5 w-1.5 rounded-full"
                     :class="profile.is_active ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ profile.is_active ? 'Active' : 'Inactive' }}
+                  {{ profile.is_active ? $t('views.AdminEnvironmentProfilesView.active') : $t('views.AdminEnvironmentProfilesView.inactive') }}
                 </span>
               </td>
               <td class="table-cell text-muted-foreground">{{ formatDate(profile.created_at) }}</td>
@@ -218,12 +216,12 @@
 
         <div v-if="testResult.profileId" class="card p-4">
           <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold">Test Connection: {{ testResult.profileName }}</h3>
+            <h3 class="text-sm font-semibold">{{ $t('views.AdminEnvironmentProfilesView.test_connection') }}: {{ testResult.profileName }}</h3>
             <button type="button"
               class="text-xs text-muted-foreground hover:text-foreground"
               @click="closeTestResult"
             >
-              Dismiss
+              {{ $t('views.AdminEnvironmentProfilesView.dismiss') }}
             </button>
           </div>
           <div class="space-y-1">
@@ -249,18 +247,18 @@
         </div>
 
         <div v-if="deleteConfirmProfileId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
+          <p class="text-sm font-medium text-destructive">{{ $t('views.AdminEnvironmentProfilesView.delete_confirm', { name: deleteConfirmName }) }}</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminEnvironmentProfilesView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-envprofiles-delete-confirm" @click="deleteProfile">
-            {{ deleting ? 'Deleting...' : 'Delete' }}
+            {{ deleting ? $t('views.AdminEnvironmentProfilesView.deleting') : $t('views.AdminEnvironmentProfilesView.delete') }}
           </Button>
             <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               data-testid="admin-envprofiles-delete-cancel"
               @click="deleteConfirmProfileId = null"
             >
-              Cancel
+              {{ $t('views.AdminEnvironmentProfilesView.cancel') }}
             </button>
           </div>
           <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -273,6 +271,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -284,6 +283,7 @@ import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
+import { X } from '@lucide/vue'
 
 type ProfileItem = components['schemas']['modulo__api__routes__environment_profiles__ProfileResponse'] & {
   timeout_seconds?: number
@@ -609,21 +609,23 @@ function closeTestResult() {
   testResult.events = []
 }
 
+const { t } = useI18n()
+
 function profileActions(profile: ProfileItem) {
   return [
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('views.AdminEnvironmentProfilesView.edit'),
       onClick: () => openEditForm(profile),
     },
     {
       key: 'test',
-      label: 'Test',
+      label: t('views.AdminEnvironmentProfilesView.test'),
       onClick: () => testConnection(profile),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.AdminEnvironmentProfilesView.delete'),
       onClick: () => confirmDelete(profile),
       danger: true,
     },
