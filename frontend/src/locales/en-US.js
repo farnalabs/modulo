@@ -3491,10 +3491,7 @@ export default {
       "on_unknown_fail_open": "fail_open",
       "on_unknown_fail_closed": "fail_closed",
       "on_unknown_off": "off",
-      "on_unknown_fail_open_help": "Return whatever was fetched even if no records were extracted — safe when a re-run can recover duplicates.",
-      "on_unknown_fail_closed_help": "Fail the run when records cannot be extracted — safe when a silent miss is catastrophic.",
-      "on_unknown_off_help": "No on-unknown handling — classic root-mapping only.",
-      "on_unknown_fail_open_help": "Re-fire the write when a prior delivery could not be confirmed (possible duplicate, usually recoverable). Inert unless the connector write-gate killswitch (MODULO_CONNECTOR_WRITE_GATE_ENABLED) is enabled.",
+      "on_unknown_fail_open_help": "Re-fire the write when a prior delivery could not be confirmed (possible duplicate, usually recoverable — a re-run can recover duplicates). Inert unless the connector write-gate killswitch (MODULO_CONNECTOR_WRITE_GATE_ENABLED) is enabled.",
       "on_unknown_fail_closed_help": "Suppress the write when a prior delivery could not be confirmed (possible silent miss the operator must reconcile). Inert unless the connector write-gate killswitch (MODULO_CONNECTOR_WRITE_GATE_ENABLED) is enabled.",
       "on_unknown_off_help": "Bypass the dedup gate entirely — the write always fires, never deduped.",
       "records_path_help": "JMESPath expression locating the records list (e.g. data.items).",
@@ -3508,7 +3505,7 @@ export default {
       "advanced_json": "Advanced configuration (JSON)",
       "advanced_json_invalid": "Advanced JSON is not valid JSON",
       "advanced_json_help": "Templated / advanced fields: path, headers, params, body, operations, next_cursor_path, passthrough, max_response_size, idempotency_header, fan_out, rate_limit.",
-      "advanced_json_placeholder": "{ \"path\": \"/items\", \"headers\": { \"Accept\": \"application/json\" }, \"operations\": {}, \"fan_out\": {} }",
+      "advanced_json_placeholder": "{'{'} \"path\": \"/items\", \"headers\": {'{'} \"Accept\": \"application/json\" {'}'}, \"operations\": {'{}'}, \"fan_out\": {'{}'} {'}'}",
       "credentials_write_only": "Credentials are write-only — they can never be read back. Re-enter to change; leave untouched to keep the existing stored credential."
     }
   }
