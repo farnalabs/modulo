@@ -18,7 +18,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
 )
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.secret_storage import decode_stored_secret, encrypt_stored_secret
+from modulo.auth.secret_storage import decode_stored_secret_scoped, encrypt_stored_secret
 from modulo.core.email_service import (
     EmailSendingError,
     EmailSendLimiter,
@@ -289,7 +289,10 @@ async def admin_test_email_settings(
     temp_settings.smtp_port = email_cfg.get("smtp_port", 587)
     temp_settings.smtp_username = email_cfg.get("smtp_username", "")
     try:
-        temp_settings.smtp_password = decode_stored_secret(email_cfg.get("smtp_password", ""), settings.fernet_key)
+        async with session.begin():
+            temp_settings.smtp_password = await decode_stored_secret_scoped(
+                session, email_cfg.get("smtp_password", ""), settings.fernet_key, org_id=org_id
+            )
     except Exception:
         logger.exception("admin_email.test_send_smtp_password_decrypt_failed")
         temp_settings.smtp_password = email_cfg.get("smtp_password", "")

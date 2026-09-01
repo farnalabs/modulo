@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     health_check_failure,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _SITES: dict[str, str] = {
     "us": "https://api.datadoghq.com",
@@ -42,7 +43,8 @@ class DatadogConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         base = self._base
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            base,
             base_url=base,
             headers={
                 "DD-API-KEY": self._api_key,

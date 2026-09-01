@@ -13,7 +13,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.error_tracking.metrics import record_alert_delivery_failed
 from modulo.db.models.account import Account
@@ -117,7 +117,9 @@ async def _dispatch_email(
 
         stored_smtp_password = email_cfg.get("smtp_password", settings.smtp_password)
         try:
-            stored_smtp_password = decode_stored_secret(stored_smtp_password, settings.fernet_key)
+            stored_smtp_password = await decode_stored_secret_scoped(
+                session, stored_smtp_password, settings.fernet_key, org_id=org_id
+            )
         except Exception:
             _log.exception("alert.email_smtp_password_decrypt_failed")
 

@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 # Pagination query parameter name shared across list endpoints (S1192).
 _SKIP_TOKEN = "$skiptoken"  # nosec B105 — Graph pagination query-param name, not a credential
@@ -68,7 +69,8 @@ class SharePointConnector(ConnectorBase):
         return ConnectorType.SHAREPOINT
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            self._BASE_URL,
             base_url=self._BASE_URL,
             headers={
                 "Authorization": f"Bearer {self._token}",

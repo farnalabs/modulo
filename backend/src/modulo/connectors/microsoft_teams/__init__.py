@@ -18,6 +18,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -36,7 +37,8 @@ class MicrosoftTeamsConnector(ConnectorBase):
         return ConnectorType.MICROSOFT_TEAMS
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            GRAPH_API_BASE,
             base_url=GRAPH_API_BASE,
             headers={
                 "Authorization": f"Bearer {self._token}",

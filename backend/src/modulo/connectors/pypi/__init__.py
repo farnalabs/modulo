@@ -19,6 +19,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 defusedxml.xmlrpc.monkey_patch()
 _API_BASE = "https://pypi.org/pypi"
@@ -36,7 +37,8 @@ class PyPIConnector(ConnectorBase):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _API_BASE,
             base_url=_API_BASE,
             headers=headers,
             timeout=30,
@@ -108,7 +110,8 @@ class PyPIConnector(ConnectorBase):
         operator = q.filters.get("operator", "and")
         xml_body = xmlrpc.client.dumps((spec, operator), "search")
 
-        async with httpx.AsyncClient(
+        async with pinned_async_client_sync(
+            _API_BASE,
             base_url=_API_BASE,
             timeout=30,
         ) as c:

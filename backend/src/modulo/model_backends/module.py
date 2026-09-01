@@ -53,6 +53,7 @@ class OpenAICompatibleBackend(ModelBackendBase):
                 trust_env=False,
                 timeout=30,
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                loudness_guard=True,
             )
             chat_kwargs["http_async_client"] = self._http_async_client
 

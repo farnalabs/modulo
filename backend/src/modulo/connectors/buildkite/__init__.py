@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _BUILDKITE_API = "https://api.buildkite.com/v2"
 
@@ -70,7 +71,7 @@ class BuildkiteConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=_BUILDKITE_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(_BUILDKITE_API, base_url=_BUILDKITE_API, headers=self._headers(), timeout=30)
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_state = raw.get("state", "")

@@ -23,6 +23,7 @@ from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
@@ -416,9 +417,12 @@ async def _retry_one_delivery(
     headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
     if ep.secret_ciphertext:
         try:
-            fernet = Fernet(settings.fernet_key.encode())
-            raw_secret = fernet.decrypt(ep.secret_ciphertext)
-            sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                raw_secret = await decode_stored_secret_scoped(
+                    session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id
+                )
+            sig = hmac.new(raw_secret.encode(), body, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
             logger.exception("Failed to sign retry payload")
@@ -855,9 +859,12 @@ async def test_webhook(
     headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
     if ep.secret_ciphertext:
         try:
-            fernet = Fernet(settings.fernet_key.encode())
-            raw_secret = fernet.decrypt(ep.secret_ciphertext)
-            sig = hmac.new(raw_secret, payload, hashlib.sha256).hexdigest()
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                raw_secret = await decode_stored_secret_scoped(
+                    session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id
+                )
+            sig = hmac.new(raw_secret.encode(), payload, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
             logger.exception("Failed to sign test payload")

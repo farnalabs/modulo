@@ -14,6 +14,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _TRELLO_API = "https://api.trello.com/1"
 
@@ -54,7 +55,8 @@ class TrelloConnector(ConnectorBase):
         return ConnectorType.TRELLO
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _TRELLO_API,
             base_url=_TRELLO_API,
             params={"key": self._api_key, "token": self._token},
             timeout=30,

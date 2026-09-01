@@ -14,6 +14,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _MONDAY_API = "https://api.monday.com/v2"
 
@@ -165,7 +166,8 @@ class MondayConnector(ConnectorBase):
         return ConnectorType.MONDAY
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _MONDAY_API,
             base_url=_MONDAY_API,
             headers={"Authorization": self._api_key},
             timeout=30,

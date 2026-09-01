@@ -307,6 +307,14 @@ async def _resolve_oidc_provider(
                 raise ValueError(f"Rejected OIDC discovery_url for provider '{provider_id}': {exc}") from None
         return (
             db_provider.client_id,
+            # NOSCOPE: instance-global OIDC IdP config, NOT tenant data. The
+            # provider is read through the modulo_system role (BYPASSRLS) for
+            # pre-auth SSO routes that carry no user/org claim, so there is no
+            # per-request RLS org to bind the decrypt to — org-scoping here would
+            # be a cross-context error, not a hardening gain. Kept on the pure
+            # helper deliberately; the no-unscoped-decrypt gate allows it via the
+            # nosemgrep below.
+            # nosemgrep: no-unscoped-decrypt
             decode_stored_secret(db_provider.client_secret, settings.fernet_key) if db_provider.client_secret else None,
             discovery_url,
             json.loads(db_provider.scopes) if db_provider.scopes else None,

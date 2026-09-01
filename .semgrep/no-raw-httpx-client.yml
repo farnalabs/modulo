@@ -1,0 +1,78 @@
+rules:
+  - id: no-raw-httpx-client
+    patterns:
+      - pattern-either:
+          # Fully-qualified construction: httpx.AsyncClient(...) / httpx.Client(...)
+          - pattern: httpx.AsyncClient(...)
+          - pattern: httpx.Client(...)
+          # Bare-name construction AFTER an import/alias that binds the httpx
+          # name:
+          #   from httpx import AsyncClient; AsyncClient(...)
+          #   Client = httpx.Client; Client(...)
+          # An aliased-qualifier call (`import httpx as h; h.AsyncClient(...)`)
+          # is NOT matched by these name/prefix patterns (semgrep matches the
+          # literal `httpx.` qualifier, not a rebound alias) — a documented
+          # residual only reachable by deliberately rebinding the module name.
+          - pattern: AsyncClient(...)
+          - pattern: Client(...)
+    message: >
+      Raw httpx client construction bypasses the pinned-IP egress transport and
+      re-opens the DNS-rebinding window: a hostname is validated at one moment
+      then re-resolved by a fresh httpx pool at connect time. Build every
+      outbound client through the shared egress factory in
+      modulo.core.ssrf (pinned_async_client_sync / pinned_async_client) so the
+      validated address is pinned onto the connection. The only legitimate
+      constructions are the factory module itself (core/ssrf.py) and the REST
+      connector's injected/pinned transport seam (it always receives a pinned or
+      mock transport, never a raw pool). Everything else must pin.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/modulo/**"
+      exclude:
+        # The pinned-egress factory — the single allowlisted construction site.
+        - "**/backend/src/modulo/core/ssrf.py"
+        # REST always receives a pinned transport (production) or an injected
+        # MockTransport (test seam) via `kwargs["transport"]`; the raw
+        # `httpx.AsyncClient(**kwargs)` here never builds an unpinned pool.
+        - "**/backend/src/modulo/connectors/rest/**"
+        # FAR-526C honest-scope residual (see the scope note in core/ssrf.py):
+        # these support modules build their own clients toward operator-config /
+        # multi-host endpoints (notification forwarders can reach per-org
+        # endpoints; library_sync already validate-then-connects). They are
+        # excluded so this gate stays green while they remain un-migrated, but
+        # they are documented residual — NOT accepted raw egress. A new raw
+        # construction anywhere else in the tree is still caught.
+        - "**/backend/src/modulo/core/error_tracking/**"
+        - "**/backend/src/modulo/core/product_analytics/**"
+        - "**/backend/src/modulo/core/notifier/**"
+        - "**/backend/src/modulo/core/watchdog/**"
+        - "**/backend/src/modulo/core/library_sync/**"
+        - "**/backend/src/modulo/core/reports/**"
+  - id: no-unscoped-decrypt
+    patterns:
+      # PURE, session-less decryption. `decode_stored_secret_scoped(...)` is a
+      # different call name so it is NOT matched. This flags an unconverted
+      # request/DB decrypt that re-enters the unscoped helper directly.
+      - pattern: decode_stored_secret(...)
+    message: >
+      Unscoped decryption of a stored secret outside an RLS org context. The
+      pure `decode_stored_secret` helper cannot guarantee the value was read
+      under tenant isolation and must ONLY be used outside a request/DB path
+      (CLI, key rotation, pure transforms). A request/DB site MUST use
+      `decode_stored_secret_scoped(session, value, key, org_id=...)` inside `async
+      with session.begin():` with the correct RLS org so a cross-tenant decrypt
+      fails loudly instead of silently leaking. When a site is a genuine global
+      (instance-wide, not tenant-scoped) path, annotate it with a `# NOSCOPE`
+      comment AND `# nosemgrep: no-unscoped-decrypt` explaining the provenance.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/modulo/**"
+      exclude:
+        # The module that OWNS both helpers — its private `decode_stored_secret`
+        # delegation inside `decode_stored_secret_scoped` (and the definition)
+        # is legitimate, not an unconverted call site.
+        - "**/backend/src/modulo/auth/secret_storage.py"

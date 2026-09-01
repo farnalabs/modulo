@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _DROPBOX_API = "https://api.dropboxapi.com/2"
 
@@ -49,7 +50,8 @@ class DropboxPaperConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _DROPBOX_API,
             base_url=_DROPBOX_API,
             headers=self._headers(),
             timeout=30,

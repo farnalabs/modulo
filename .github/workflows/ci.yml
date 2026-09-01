@@ -57,6 +57,23 @@ jobs:
           else
             uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .
           fi
+      - name: Semgrep rule tests (--test)
+        # Exercise the rule fixture tree so a rule's `# ruleid` / `# ok` guards
+        # actually enforce the intended match. The directory form (`--test
+        # .semgrep/`) is dead on this semgrep version for a dot-prefixed config
+        # dir (get_config_filenames drops configs whose parent starts with `.`),
+        # so pair each rule with its matching-stem fixture explicitly. `set -e`
+        # aborts this step (red CI) if any fixture fails to match.
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rule in .semgrep/no-raw-httpx-client.yml; do
+            base="$(basename "$rule" .yml)"
+            if [ -f ".semgrep/tests/${base}.py" ]; then
+              uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
+            fi
+          done
       - run: uv run --no-build --no-sync pip-audit
       - name: Import-linter architecture contracts
         run: uv run --no-build --no-sync lint-imports

@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
 
@@ -69,7 +70,7 @@ class BitbucketConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=_BITBUCKET_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(_BITBUCKET_API, base_url=_BITBUCKET_API, headers=self._headers(), timeout=30)
 
     async def health_check(self) -> HealthResult:
         """Verify API access by fetching the authenticated user."""

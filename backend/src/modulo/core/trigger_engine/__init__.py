@@ -54,7 +54,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
@@ -401,7 +401,9 @@ class TriggerEngine:
                 try:
                     from modulo.settings import get_settings as _get_settings
 
-                    hmac_secret = decode_stored_secret(hmac_secret_raw, _get_settings().fernet_key)
+                    hmac_secret = await decode_stored_secret_scoped(
+                        session, hmac_secret_raw, _get_settings().fernet_key, org_id=org_id
+                    )
                 except Exception:
                     _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
                     hmac_secret = hmac_secret_raw

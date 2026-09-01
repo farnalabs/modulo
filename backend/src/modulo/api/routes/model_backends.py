@@ -23,6 +23,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
@@ -866,13 +867,13 @@ async def recheck_model_backend_health_endpoint(
             mb = await get_model_backend(session, backend_id)
             if mb is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
-        try:
-            api_key = Fernet(settings.fernet_key.encode()).decrypt(mb.credentials_ciphertext).decode()
-        except HTTPException:
-            raise
-        except Exception:
-            logger.warning("Failed to decrypt credentials for model backend %s; health check skipped", backend_id)
-            api_key = None
+            try:
+                api_key = await decode_stored_secret_scoped(
+                    session, mb.credentials_ciphertext, settings.fernet_key, org_id=principal.organisation_id
+                )
+            except Exception:
+                logger.warning("Failed to decrypt credentials for model backend %s; health check skipped", backend_id)
+                api_key = None
         status_, detail = await _run_health_check_on_save_and_persist(
             session,
             mb,

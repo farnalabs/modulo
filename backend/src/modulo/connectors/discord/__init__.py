@@ -16,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _DISCORD_API = "https://discord.com/api/v10"
 
@@ -29,7 +30,8 @@ class DiscordConnector(ConnectorBase):
         return ConnectorType.DISCORD
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _DISCORD_API,
             base_url=_DISCORD_API,
             headers={
                 "Authorization": f"Bot {self._token}",

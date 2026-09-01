@@ -18,6 +18,15 @@ _AUTHZ_ENFORCE_SNIPPET = "authz_enforce"
 # means no cap violation (no 422).
 _GUARDRAIL_ROWS_SNIPPET = "FROM eval_definitions"
 
+# FAR-526 Part A: the context-bound decrypt helper (decode_stored_secret_scoped)
+# (re-)applies the RLS org via set_rls_org, which issues a
+# ``SELECT set_config('app.organisation_id', ...)`` inside the caller's active
+# transaction. Routing secrets through the scoped helper is the new normal, so
+# the strict mock treats RLS set_config as a benign no-op (an empty result) —
+# the session is already scoped by the test, and the config write is a no-return
+# SET-LOCAL equivalent.
+_RLS_SET_CONFIG_SNIPPET = "set_config"
+
 
 def _is_authz_enforce_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
@@ -29,6 +38,11 @@ def _is_guardrail_rows_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
         return False
     return _GUARDRAIL_ROWS_SNIPPET in str(stmt)
+
+
+def _is_rls_set_config_query(stmt: Any) -> bool:
+    # set_config is issued via sqlalchemy text(), not select() — match the SQL text.
+    return _RLS_SET_CONFIG_SNIPPET in str(stmt)
 
 
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
@@ -68,6 +82,10 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 guardrail_result = MagicMock()
                 guardrail_result.scalars.return_value.all.return_value = []
                 return guardrail_result
+            if _is_rls_set_config_query(args[0] if args else None):
+                rls_result = MagicMock()
+                rls_result.scalar.return_value = None
+                return rls_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

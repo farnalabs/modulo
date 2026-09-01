@@ -152,6 +152,117 @@ def test_definition_credential_keys_match_hub_read(connector_type: str) -> None:
     )
 
 
+def _derive_token_classification_from_definitions() -> tuple[frozenset[str], dict[str, str]]:
+    """Independently re-derive the token-keyed set + single-token overrides.
+
+    Mirrors the hub's ``_definition_single_credential_types`` so a bug in either
+    side surfaces at test time. A DEFINED type with a single ``token`` (or a
+    single non-default token name such as ``bot_token``) credential field is
+    token-keyed; multi-field and family/plugin labels (``ci_runner``,
+    ``custom``) and single ``api_key`` fields carry no token contract and are
+    excluded.
+    """
+    family_labels = frozenset({"ci_runner", "custom"})
+    token_types: set[str] = set()
+    overrides: dict[str, str] = {}
+    for name in integration_exports:
+        definition = getattr(integration_defs, name)
+        type_id = definition.get("connector_type")
+        if not type_id or type_id in family_labels:
+            continue
+        fields = definition.get("credential_fields") or {}
+        if len(fields) != 1:
+            continue
+        key = next(iter(fields))
+        if key == "token":
+            token_types.add(type_id)
+        elif key != "api_key":
+            overrides[type_id] = key
+    return frozenset(token_types), overrides
+
+
+def test_token_cred_sets_derive_from_definitions() -> None:
+    """The hub's token-keyed classification must mirror definitions exactly.
+
+    If a definition declares a single ``token`` credential but the hub classifies
+    the type api_key-keyed (or silently drops it), a bare-scalar ciphertext row
+    for that type fails instantiation at run time with "Missing credential key
+    'token'" (FAR-496). Re-deriving the classification from definitions and
+    asserting the hub agrees turns that run-time failure into a test-time one.
+    """
+    from modulo.core.connector_hub import (
+        _BARE_CRED_KEY_OVERRIDES,
+        _DEFINITION_KEY_OVERRIDES,
+        _DEFINITION_TOKEN_TYPES,
+        _HUB_NATIVE_SINGLE_KEY_OVERRIDES,
+        _HUB_NATIVE_TOKEN_TYPES,
+        _TOKEN_CRED_TYPES,
+    )
+
+    expected_tokens, expected_overrides = _derive_token_classification_from_definitions()
+
+    # The definitions-derived portion must match exactly what definitions declare.
+    assert expected_tokens == _DEFINITION_TOKEN_TYPES, (
+        f"definitions-derived token types drifted: hub={sorted(_DEFINITION_TOKEN_TYPES)} "
+        f"definitions={sorted(expected_tokens)}"
+    )
+    assert expected_overrides == _DEFINITION_KEY_OVERRIDES, (
+        f"definitions-derived token overrides drifted: hub={_DEFINITION_KEY_OVERRIDES} definitions={expected_overrides}"
+    )
+
+    # The total exposed set is definitions-derived UNION the curated hub-native
+    # fallback, and the two portions must never overlap.
+    assert expected_tokens | _HUB_NATIVE_TOKEN_TYPES == _TOKEN_CRED_TYPES, (
+        f"_TOKEN_CRED_TYPES is not definitions-derived + hub-native: got {sorted(_TOKEN_CRED_TYPES)}"
+    )
+    assert expected_overrides | _HUB_NATIVE_SINGLE_KEY_OVERRIDES == _BARE_CRED_KEY_OVERRIDES, (
+        f"_BARE_CRED_KEY_OVERRIDES is not definitions-derived + hub-native: got {_BARE_CRED_KEY_OVERRIDES}"
+    )
+    assert not (expected_tokens & _HUB_NATIVE_TOKEN_TYPES), (
+        f"hub-native token types overlap definitions-derived types: {sorted(expected_tokens & _HUB_NATIVE_TOKEN_TYPES)}"
+    )
+    assert not (expected_overrides.keys() & _HUB_NATIVE_SINGLE_KEY_OVERRIDES.keys()), (
+        f"hub-native overrides overlap definitions-derived overrides: "
+        f"{sorted(expected_overrides.keys() & _HUB_NATIVE_SINGLE_KEY_OVERRIDES.keys())}"
+    )
+
+
+def test_construction_paths_are_accounted_for() -> None:
+    """Every credential-bearing construction path is either reconciled or excluded.
+
+    ``_build_connector`` reads credentials through several paths: a direct
+    ``_get_cred`` single-field read (the parity-checkable hub types), a whole
+    ``creds`` dict (jira/confluence/rest/ticket-tracker), the plugin registry
+    (custom/system connectors), and the CI family label (``ci_runner``, which
+    the hub expands to ``github_actions_ci``/``gitlab_ci``). This test asserts
+    each of those paths is explicitly accounted for so a new construction path
+    can never be silently skipped by the parity guard.
+    """
+
+    hub = _hub_cred_keys()
+    reconciled_set = set(_reconciled_types())
+    # The whole-dict + family/plugin paths never surface a single _get_cred key.
+    for type_id in ("jira", "confluence", "rest", "ticket-tracker", "ci_runner", "custom"):
+        assert type_id not in hub, (
+            f"{type_id!r} is a whole-dict/family/plugin construction path and must not "
+            f"surface a hub _get_cred read (found {sorted(hub[type_id])})"
+        )
+
+    # Every defined type lands in either the reconciled (hub _get_cred) set or in
+    # EXCLUDED_TYPES with a reason — the completeness guard for the partition.
+    for ct in _defined_types():
+        if ct not in reconciled_set:
+            assert ct in EXCLUDED_TYPES, (
+                f"connector type {ct!r} has no hub _get_cred read and no reason in "
+                f"EXCLUDED_TYPES — reconcile it or explain the exclusion"
+            )
+
+    # _build_connector must actually contain a case for every reconciled type
+    # (i.e. the hub builds it from definition-shaped credentials).
+    for ct in reconciled_set:
+        assert ct in _hub_cred_keys(), f"reconciled type {ct!r} has no _build_connector construction path"
+
+
 @pytest.mark.parametrize("connector_type", _reconciled_types())
 async def test_connector_configured_via_definitions_is_resolvable(connector_type: str) -> None:
     """A connector whose credentials use the definition's field names must build

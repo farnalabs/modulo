@@ -42,7 +42,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
@@ -229,7 +229,9 @@ def _trigger_failure_hash(trigger_id: uuid.UUID) -> str:
     return _slack_dedup_hash(str(trigger_id))
 
 
-async def _resolve_signing_secret(trigger_id: uuid.UUID, cfg: dict[str, Any]) -> str:
+async def _resolve_signing_secret(
+    session: AsyncSession, trigger_id: uuid.UUID, cfg: dict[str, Any], org_id: uuid.UUID
+) -> str:
     """Decode the trigger's Slack signing secret, falling back to the raw
     value if decryption fails."""
     signing_secret_raw = cfg.get("signing_secret")
@@ -238,7 +240,7 @@ async def _resolve_signing_secret(trigger_id: uuid.UUID, cfg: dict[str, Any]) ->
     try:
         from modulo.settings import get_settings as _get_settings
 
-        return decode_stored_secret(signing_secret_raw, _get_settings().fernet_key)
+        return await decode_stored_secret_scoped(session, signing_secret_raw, _get_settings().fernet_key, org_id=org_id)
     except Exception:
         _log.exception("slack_app_mention.signing_secret_decrypt_failed trigger=%s", trigger_id)
         return str(signing_secret_raw)
@@ -433,7 +435,7 @@ async def handle_app_mention(
         trigger = await engine._load_trigger(session, trigger_id, org_id)
         cfg = trigger.config_json or {}
 
-        signing_secret = await _resolve_signing_secret(trigger_id, cfg)
+        signing_secret = await _resolve_signing_secret(session, trigger_id, cfg, org_id)
 
         # X-Slack-Request-Timestamp replay window check
         verify_slack_timestamp(slack_timestamp)

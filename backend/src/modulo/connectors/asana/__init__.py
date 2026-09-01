@@ -13,6 +13,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _ASANA_API = "https://app.asana.com/api/1.0"
 
@@ -48,7 +49,8 @@ class AsanaConnector(ConnectorBase):
         return ConnectorType.ASANA
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _ASANA_API,
             base_url=_ASANA_API,
             headers={"Authorization": f"Bearer {self._token}"},
             timeout=30,

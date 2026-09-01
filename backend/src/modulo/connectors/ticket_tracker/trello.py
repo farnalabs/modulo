@@ -24,6 +24,7 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.security import CredentialRedactor
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
+from modulo.core.ssrf import pinned_async_client_sync
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +75,17 @@ class TrelloTicketTracker(TicketTrackerBase):
             return f"Trello API error: {exc.response.status_code} - {self._redact(exc.response.text)}"
         return self._redact(str(exc))
 
+    def _client(self) -> httpx.AsyncClient:
+        # PINNED TRANSPORT (FAR-526B): build the client through the pinned
+        # transport so the validated api.trello.com address is pinned onto the
+        # connection (never re-resolved at connect time — closes DNS rebinding).
+        # key/token are passed as query parameters per request (never headers),
+        # and error redaction is preserved by the existing _redact wrappers.
+        return pinned_async_client_sync(self._base_url)
+
     async def health_check(self) -> HealthResult:
         try:
-            async with httpx.AsyncClient() as client:
+            async with self._client() as client:
                 resp = await client.get(
                     f"{self._base_url}/boards/{self._board_id}",
                     params=self._auth(),
@@ -119,7 +128,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         if ticket_filter and ticket_filter.offset:
             logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
 
-        async with httpx.AsyncClient() as client:
+        async with self._client() as client:
             params: dict[str, Any] = self._auth()
             params["fields"] = TRELLO_CARD_FIELDS
             if ticket_filter and ticket_filter.limit:
@@ -154,7 +163,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         return tickets
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
-        async with httpx.AsyncClient() as client:
+        async with self._client() as client:
             try:
                 resp = await client.get(
                     f"{self._base_url}/cards/{ticket_id}",
@@ -183,7 +192,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         if "labels" in kwargs:
             raw_labels = kwargs["labels"]
             body["labels"] = ",".join(raw_labels) if isinstance(raw_labels, list) else raw_labels
-        async with httpx.AsyncClient() as client:
+        async with self._client() as client:
             try:
                 resp = await client.post(
                     f"{self._base_url}/cards",
@@ -206,7 +215,7 @@ class TrelloTicketTracker(TicketTrackerBase):
             body["idList"] = kwargs["idList"]
         if "due" in kwargs:
             body["due"] = kwargs["due"]
-        async with httpx.AsyncClient() as client:
+        async with self._client() as client:
             try:
                 resp = await client.put(
                     f"{self._base_url}/cards/{ticket_id}",

@@ -37,7 +37,7 @@ from modulo.api.dependencies import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
@@ -236,7 +236,9 @@ async def receive_webhook(
             hmac_secret: str | None = None
             if hmac_secret_raw is not None:
                 try:
-                    hmac_secret = decode_stored_secret(hmac_secret_raw, get_settings().fernet_key)
+                    hmac_secret = await decode_stored_secret_scoped(
+                        session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+                    )
                 except Exception:
                     _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
                     hmac_secret = hmac_secret_raw
@@ -493,7 +495,9 @@ async def replay_webhook(
                 if hmac_secret_raw is None:
                     raise HmacValidationError
                 try:
-                    hmac_secret = decode_stored_secret(hmac_secret_raw, get_settings().fernet_key)
+                    hmac_secret = await decode_stored_secret_scoped(
+                        session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+                    )
                 except Exception:
                     _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
                     hmac_secret = hmac_secret_raw

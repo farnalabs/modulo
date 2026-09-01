@@ -18,6 +18,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _BASE = "https://api.opsgenie.com/v2"
 
@@ -48,7 +49,8 @@ class OpsgenieConnector(ConnectorBase):
         return ConnectorType.OPSGENIE
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _BASE,
             base_url=_BASE,
             headers={
                 "Authorization": f"GenieKey {self._api_key}",

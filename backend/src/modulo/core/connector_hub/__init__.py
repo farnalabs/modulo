@@ -781,47 +781,97 @@ def _in_fetch_scope(instance: ConnectorInstance, fetch_scope: set[str]) -> bool:
 # below). A bare (non-JSON) ciphertext scalar for these types must be wrapped
 # under "token" on the read-side fallback, NOT the legacy "api_key" wrapper
 # (FAR-496).
-_TOKEN_CRED_TYPES: frozenset[str] = frozenset(
+#
+# FAR-526C — single source of truth: these sets DERIVE from
+# ``definitions.py``'s ``credential_fields`` (the canonical credential-key
+# declarations), UNION a curated fallback for the hub-native connector types the
+# library does not carry. A ``_get_cred`` read in ``_build_connector`` that
+# disagrees with the type's declared credential key is now caught by the parity
+# guard in ``tests/unit/connector_hub/test_definitions_credential_parity.py`` at
+# TEST time, not by a connector failing at run time.
+
+
+def _definition_single_credential_types() -> tuple[frozenset[str], dict[str, str]]:
+    """Derive the token-keyed set + single-token key overrides from definitions.
+
+    ``definitions.py``'s ``credential_fields`` is the single source of truth for
+    the credential keys a connector type consumes. A DEFINED type with exactly
+    one credential field is a single-credential connector:
+
+    * the field is the canonical ``token`` → token-keyed (a bare-scalar
+      ciphertext heals under ``token``);
+    * the single field is a non-default token name (``bot_token``,
+      ``personal_access_token``) → token-keyed, with an override mapping the
+      type to its actual key.
+
+    Multi-field types (jira, confluence, rest, datadog, jenkins) and the
+    family/plugin labels (``ci_runner``, ``custom``) carry no single-field
+    contract and are excluded so the derivation never mis-classifies them.
+    Single ``api_key`` fields keep the legacy default wrapper and are excluded.
+    The lazy import keeps ``definitions`` out of the connector-hub import-time
+    coupling (it is pure data).
+    """
+    from modulo.core.library.integrations import __all__ as _integration_exports
+    from modulo.core.library.integrations import definitions as _integration_defs
+
+    family_labels = frozenset({"ci_runner", "custom"})
+    token_types: set[str] = set()
+    overrides: dict[str, str] = {}
+    for name in _integration_exports:
+        definition = getattr(_integration_defs, name)
+        type_id = definition.get("connector_type")
+        if not type_id or type_id in family_labels:
+            continue
+        fields = definition.get("credential_fields") or {}
+        if len(fields) != 1:
+            continue  # multi-field (jira/confluence/rest/datadog/jenkins)
+        key = next(iter(fields))
+        if key == "token":
+            token_types.add(type_id)
+        elif key != "api_key":
+            overrides[type_id] = key  # single non-default token name (e.g. bot_token)
+    return frozenset(token_types), overrides
+
+
+# Hub-native token-keyed connector types with NO library definition (the library
+# carries only the 24 canonical integrations; these are connector types the
+# platform ships outside that catalog). Their single credential is the token, so
+# a bare-scalar ciphertext heals under "token" (FAR-496).
+_HUB_NATIVE_TOKEN_TYPES: frozenset[str] = frozenset(
     {
         "gitea",
         "azure_repos",
-        "bitbucket",
         "github",
         "github_actions_ci",
         "gitlab_ci",
-        "gitlab",
         "linear",
         "sharepoint",
         "shortcut",
         "youtrack",
-        "notion",
         "npm",
         "pypi",
         "dropbox_paper",
         "buildkite",
-        "circleci",
         "teamcity",
         "azure_key_vault",
-        "azure_pipelines",
-        "sentry",
-        "pagerduty",
         "grafana",
-        "microsoft_teams",
-        "discord",
         "onepassword",
-        "sonarqube",
         "codeclimate",
-        "snyk",
         "trivy",
-        "n8n",
     }
 )
 
-# Single-key overrides for token-keyed types whose credential key is not "token".
-_BARE_CRED_KEY_OVERRIDES: dict[str, str] = {
-    "slack": "bot_token",
+# Hub-native single-token types whose credential key is not "token".
+_HUB_NATIVE_SINGLE_KEY_OVERRIDES: dict[str, str] = {
     "asana": "personal_access_token",
 }
+
+_DEFINITION_TOKEN_TYPES, _DEFINITION_KEY_OVERRIDES = _definition_single_credential_types()
+
+# The token-keyed set + overrides are the definitions-derived values UNION the
+# curated hub-native fallback (see the module note above).
+_TOKEN_CRED_TYPES: frozenset[str] = _DEFINITION_TOKEN_TYPES | _HUB_NATIVE_TOKEN_TYPES
+_BARE_CRED_KEY_OVERRIDES: dict[str, str] = _DEFINITION_KEY_OVERRIDES | _HUB_NATIVE_SINGLE_KEY_OVERRIDES
 
 
 def _bare_credential_key(type_id: str) -> str:

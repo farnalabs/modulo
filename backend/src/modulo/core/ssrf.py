@@ -24,6 +24,29 @@ Operating ``SSRF_ALLOW_PRIVATE_RANGES``
   var. Link-local, multicast and cloud-metadata ranges are a non-negotiable
   floor that no allowlist can open.
 
+``trust_env`` / proxies
+-----------------------
+The pinned transport's ``trust_env`` is ``None`` by default and resolves to the
+``SSRF_TRUST_PROXY`` setting (``False`` unless explicitly set). Because pinning
+and proxy trust are in tension — a proxy re-resolves the target server-side, so
+the transport's pin map only ever sees the proxy host — the safe default keeps
+proxy env vars (``HTTP_PROXY``/``HTTPS_PROXY``/``ALL_PROXY``) ignored. Self-hosted
+deployments behind a mandatory corporate proxy can set ``SSRF_TRUST_PROXY=true``
+(or pass ``trust_env=True`` per connector) to honour it, accepting that the proxy
+becomes the trusted egress boundary and the pin is effectively bypassed; a
+warning is logged in that case. This is the escape hatch that hardcoding
+``trust_env=False`` previously removed.
+
+Failover / re-resolve policy
+----------------------------
+The pinned transport pins the **full** validated IP set (not ``ips[0]``) and
+fails over/round-robins across it on connect. When every pinned address fails to
+connect, or the resolution is older than ``resolve_ttl_seconds`` (default
+:data:`_RESOLVE_TTL_DEFAULT_SECONDS`), the host is re-resolved and re-validated
+fail-closed so a decommissioned/stale IP self-heals on a long-lived client. A
+re-resolved set now containing a private/internal address is refused rather than
+connected to.
+
 Accepted residual risks
 -----------------------
 * **Validate-then-connect (DNS rebinding).** Connectors and model backends call
@@ -32,11 +55,12 @@ Accepted residual risks
   internal at connect time. This matches the pre-existing precedent for those
   call sites; the pinned transport below is the strictly safer option and should
   be preferred by new call sites that own their client construction.
-* **No resolution cache.** Every validation performs a fresh DNS lookup (bounded
+* **No validation cache.** Every *validation* performs a fresh DNS lookup (bounded
   by ``SSRF_DNS_TIMEOUT``), which costs one resolver round trip per client
   construction on connector-heavy paths. This is deliberate: caching resolutions
   would widen the rebinding window above, and the resolver's own OS-level cache
-  already absorbs the repeat cost.
+  already absorbs the repeat cost. The pinned transport's TTL re-resolve is the
+  exception for its own connection pool, and it re-validates on every refresh.
 
 Beyond *validating* a URL, this module owns the **pinned-IP connection
 transport**: an ``httpx`` transport that resolves and validates a target once,
@@ -44,6 +68,37 @@ then forces the TCP connection to the validated address while keeping the
 **original** hostname for TLS SNI and certificate verification. This closes the
 DNS-rebinding window that a validate-then-connect pattern leaves open (see the
 note on :func:`validate_outbound_url`).
+
+FAR-526C — honest scope of the ``no-raw-httpx-client`` import gate
+------------------------------------------------------------------
+The semgrep rule ``no-raw-httpx-client`` forbids ``httpx.AsyncClient`` /
+``httpx.Client`` CONSTRUCTION outside this factory module (``core/ssrf.py``) and
+the REST connector's injected/pinned transport seam. That gate deliberately
+covers the **connector egress surface** — every connector's ``_client()`` now
+builds through :func:`pinned_async_client_sync` / :func:`pinned_async_client`
+(Part A/B + FAR-526C migrations). The following are explicitly OUT OF SCOPE and
+are **known residual**, documented here so the gate is honest about what it does
+and does not cover:
+
+* **SDK-internal clients.** ``langchain_openai``, the provider SDKs
+  (``anthropic``, ``openai``), and similar third-party clients construct their
+  own ``httpx`` pools internally; the rule cannot see their construction and does
+  not attempt to. They are mitigated by injecting a pinned client where the SDK
+  supports it (``model_backends`` wire the validated transport in) — i.e. the
+  SDK is told to reuse OUR pinned client rather than building its own.
+* **Core support modules that build their own client.** ``core/notifier``,
+  ``core/error_tracking/**`` (forwarders + ``alert_dispatcher``),
+  ``core/product_analytics/vendor_client``, ``core/watchdog/worker_liveness``,
+  ``core/library_sync/client`` and ``core/reports/scheduler`` construct raw
+  clients toward operator-config / per-org / multi-host endpoints. Several are
+  genuinely multi-host (the notifier fans out to per-org notification
+  endpoints), so a single pinned client cannot cover them — they need either a
+  per-host pin or per-request validation. ``core/library_sync`` already
+  validate-then-connects (an accepted residual, see the note on
+  :func:`validate_outbound_url`); the others are pending a per-call-site pin and
+  are excluded from the semgrep gate so it does not go red while they remain
+  un-migrated. A NEW raw ``httpx`` construction anywhere else in the tree is
+  still caught by the rule.
 """
 
 from __future__ import annotations
@@ -56,6 +111,7 @@ import logging
 import os
 import socket
 import ssl
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +120,8 @@ from urllib.parse import urlparse
 import httpcore
 import httpx
 from httpcore._backends.base import SOCKET_OPTION
+
+from modulo.core import egress_metrics
 
 _log = logging.getLogger(__name__)
 
@@ -111,6 +169,21 @@ _PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "http
 _DNS_TIMEOUT_ENV = "SSRF_DNS_TIMEOUT"
 _DNS_TIMEOUT_DEFAULT = 10.0
 
+# Default TTL (seconds) before the pinned transport re-resolves a host to
+# self-heal a decommissioned/stale IP. Configurable per-transport via
+# ``resolve_ttl_seconds`` or override the module default with SSRF_RESOLVE_TTL.
+_RESOLVE_TTL_DEFAULT_SECONDS = 300.0
+_RESOLVE_TTL_ENV = "SSRF_RESOLVE_TTL"
+
+# Proxy-trust default for the pinned transport. ``trust_env`` is ``None`` by
+# default and resolves to this setting, so an operator can switch the whole
+# fleet to honouring a corporate proxy (SSRF_TRUST_PROXY=true) without editing
+# every connector — while keeping the safe-by-default (no proxy) behaviour when
+# unset. Enabling proxy trust means the proxy re-resolves the target server-side
+# and the pin map sees only the proxy host, so pinning is effectively bypassed;
+# use it only where the proxy IS the trusted egress boundary.
+_TRUST_PROXY_ENV = "SSRF_TRUST_PROXY"
+
 # Bounded thread pool for the synchronous DNS path so socket.getaddrinfo runs
 # off the caller thread without unbounded thread creation. Worker threads are
 # created only on first use; the pool is tiny and never grows past max_workers.
@@ -127,6 +200,19 @@ class UnpinnedHostError(RuntimeError):
     """
 
 
+class PinDroppedError(RuntimeError):
+    """Raised when the pinned transport's runtime loudness guard detects the pin
+    was silently dropped.
+
+    The pin is installed by overriding httpcore's PRIVATE ``_pool._network_backend``
+    attribute (see :class:`PinnedAsyncHTTPTransport`). If a future httpcore stops
+    routing that attribute into connection creation, the DNS-rebinding pin would
+    be dropped with NO error — re-opening the rebinding window. This error fires
+    when a request completes but the pinned backend's ``connect_tcp`` was never
+    consulted, making the un-pin loud instead of silent.
+    """
+
+
 # Configurable allowlist for self-hosted deployments on private networks.
 # Comma-separated CIDR list in SSRF_ALLOW_PRIVATE_RANGES env var. Parsed
 # lazily and cached keyed on the raw env value: a stable value parses once for
@@ -139,18 +225,26 @@ _allowlist_parsed: tuple[Network, ...] = ()
 
 @dataclass(frozen=True)
 class PinnedTarget:
-    """A validated outbound target with its pinned connect address.
+    """A validated outbound target with its full pinned connect-address set.
 
     ``host`` is the **original** hostname as given in the URL — it is what the
     connection uses for TLS SNI and certificate verification, and it must never
-    be replaced by ``ip`` (rewriting the URL to the IP breaks TLS). ``ip`` is
-    the validated address the TCP connection is pinned to.
+    be replaced by an IP (rewriting the URL to the IP breaks TLS). ``ips`` is the
+    validated address set the TCP connection pins to (a host can resolve to
+    several valid public addresses, e.g. CDNs); the transport fails over /
+    round-robins across them and re-resolves on expiry. ``ip`` is a convenience
+    alias for the first validated address.
     """
 
     scheme: str
     host: str
     port: int | None
-    ip: str
+    ips: tuple[str, ...]
+
+    @property
+    def ip(self) -> str:
+        """The first validated address (backward-compatible alias)."""
+        return self.ips[0]
 
 
 def _get_allowlist() -> tuple[Network, ...]:
@@ -297,6 +391,31 @@ def _get_dns_timeout() -> float:
     return value if value > 0 else _DNS_TIMEOUT_DEFAULT
 
 
+def _default_trust_env() -> bool:
+    """Resolve the process-wide default for the pinned transport's ``trust_env``.
+
+    ``trust_env`` is exposed as ``bool | None`` so each caller can opt in or out
+    explicitly, while leaving it ``None`` falls back to this setting. Reads
+    ``SSRF_TRUST_PROXY`` (``true``/``1``/``yes``/``on`` honours a corporate proxy
+    for every connector; unset/other keeps the safe-by-default ``False`` so a
+    proxy env var does not silently defeat pinning).
+    """
+    return os.environ.get(_TRUST_PROXY_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _get_resolve_ttl() -> float:
+    """Return the configured re-resolve TTL in seconds."""
+    raw = os.environ.get(_RESOLVE_TTL_ENV)
+    if raw is None:
+        return _RESOLVE_TTL_DEFAULT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        _log.warning("ssrf.invalid_resolve_ttl", extra={"value": raw})
+        return _RESOLVE_TTL_DEFAULT_SECONDS
+    return value if value > 0 else _RESOLVE_TTL_DEFAULT_SECONDS
+
+
 def _warn_if_proxied(trust_env: bool) -> None:
     """Honk loudly if a caller opted into httpx proxy trust while a proxy env
     var is present.
@@ -315,6 +434,39 @@ def _warn_if_proxied(trust_env: bool) -> None:
             "ssrf.pinned_transport_proxy_env",
             extra={"proxy_vars": ",".join(present)},
         )
+
+
+def _eh_label_host(url: str) -> str:
+    """Extract a stable ``host`` label from a URL for egress metric records.
+
+    Mirrors :func:`normalize_url_host` (lowercase, trailing-dot stripped, no
+    brackets) but degrades to ``"unknown"`` on any parse problem so a metric
+    record never blocks the egress path.
+    """
+    try:
+        return normalize_url_host(url)
+    except Exception:
+        return "unknown"
+
+
+def _classify_reject_reason(exc: BaseException, url: str) -> str:
+    """Classify a resolve/validate ``ValueError`` into a stable egress reason.
+
+    The egress factory records why a pinned client could not be built. The
+    scheme check is derived from ``url`` (the first syntax gate); timeout /
+    resolution-failure are read from the stable failure messages raised by this
+    module. Anything else is a destination policy rejection (``blocked``):
+    private/internal address, non-canonical IP literal, embedded userinfo, or a
+    malformed host.
+    """
+    if urlparse(url).scheme not in ("http", "https"):
+        return egress_metrics.REASON_BAD_SCHEME
+    message = str(exc)
+    if "DNS resolution timed out" in message:
+        return egress_metrics.REASON_DNS_TIMEOUT
+    if "DNS resolution failed" in message:
+        return egress_metrics.REASON_DNS_FAILED
+    return egress_metrics.REASON_BLOCKED
 
 
 def _reject_noncanonical_ip_literal(host: str) -> None:
@@ -625,10 +777,10 @@ async def resolve_pinned_ip(url: str, *, allow_networks: Sequence[str] | None = 
                 f"URL targets a private/internal network address: {target.literal_ip}. "
                 f"{_remediation_hint(target.literal_ip)}"
             )
-        return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=target.literal_ip)
+        return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=(target.literal_ip,))
     ips = await _resolve_all_async(target.host)
     _check_resolved(target.host, ips, extra)
-    return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=ips[0])
+    return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=tuple(ips))
 
 
 def _resolve_pinned_ip_sync(url: str, *, allow_networks: Sequence[str] | None = None) -> PinnedTarget:
@@ -650,24 +802,138 @@ def _resolve_pinned_ip_sync(url: str, *, allow_networks: Sequence[str] | None = 
                 f"URL targets a private/internal network address: {target.literal_ip}. "
                 f"{_remediation_hint(target.literal_ip)}"
             )
-        return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=target.literal_ip)
+        return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=(target.literal_ip,))
     ips = _resolve_all_sync(target.host)
     _check_resolved(target.host, ips, extra)
-    return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ip=ips[0])
+    return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=tuple(ips))
+
+
+def _coerce_pin_ips(value: str | Sequence[str]) -> tuple[str, ...]:
+    """Normalise a pin-map value to an immutable non-empty tuple of IP strings.
+
+    Accepts a bare ``str`` (single pinned address, kept for backward
+    compatibility with the pre-failover pin map) or a sequence of IP strings.
+    """
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
 
 
 class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
-    """httpcore async backend that substitutes the pinned IP at connect time.
+    """httpcore async backend that substitutes a pinned IP set at connect time.
 
     ``connect_tcp`` is called by httpcore with the **origin hostname**; this
-    backend forwards the connection to the pinned validated address instead. TLS
-    SNI and certificate verification still use the origin hostname (handled by
-    httpcore at a higher layer), so the URL is never rewritten to the IP.
+    backend forwards the connection to one of the validated pinned addresses
+    instead. TLS SNI and certificate verification still use the origin hostname
+    (handled by httpcore at a higher layer), so the URL is never rewritten to an
+    IP.
+
+    Failover + re-resolve policy:
+        * The FULL validated IP set is pinned (not ``ips[0]``), so a multi-IP
+          origin (CDN, load-balanced vendor) keeps its failover pool. On connect
+          the addresses are tried round-robin; a connect failure on one advances
+          to the next (that is the failover).
+        * After the pinned set is exhausted (every IP failed to connect) OR a
+          resolution is older than ``resolve_ttl_seconds``, the host is
+          **re-resolved** and re-validated (fail-closed). This self-heals a
+          decommissioned/stale IP for a long-lived client instead of hanging
+          onto a dead address. Re-validation is fail-closed: if the re-resolved
+          set now contains a private/internal address, the transport refuses to
+          connect rather than reach it.
     """
 
-    def __init__(self, pinned_hosts: Mapping[str, str]) -> None:
+    def __init__(
+        self,
+        pinned_hosts: Mapping[str, str | Sequence[str]],
+        *,
+        allow_networks: Sequence[str] | None = None,
+        re_resolve: bool = True,
+        resolve_ttl_seconds: float | None = None,
+        connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
+    ) -> None:
         super().__init__()
-        self._pinned_hosts = {_normalize_host(host): ip for host, ip in pinned_hosts.items()}
+        self._pinned_hosts: dict[str, tuple[str, ...]] = {
+            _normalize_host(host): _coerce_pin_ips(ips) for host, ips in pinned_hosts.items()
+        }
+        self._allow_networks = normalize_allow_networks(allow_networks)
+        self._re_resolve = re_resolve
+        self._connector_type = connector_type or egress_metrics.DEFAULT_CONNECTOR_TYPE
+        self._resolve_ttl = _get_resolve_ttl() if resolve_ttl_seconds is None else resolve_ttl_seconds
+        # Per-host state: round-robin cursor + the time the pinned set was resolved.
+        self._cursor: dict[str, int] = {}
+        self._resolved_at: dict[str, float] = {host: time.time() for host in self._pinned_hosts}
+        # Loudness guard: how many connections this backend actually routed the
+        # `connect_tcp` call through (proves the pin was consulted, not dropped).
+        self.connect_calls = 0
+
+    async def _connect_to_ip(
+        self,
+        ip: str,
+        port: int,
+        *,
+        timeout: float | None = None,  # noqa: ASYNC109
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        """Connect to a single pinned address (the test seam for failover)."""
+        return await super().connect_tcp(
+            ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def _refresh_ips(self, host_key: str) -> tuple[str, ...]:
+        """Re-resolve + re-validate ``host_key`` and return the fresh IP set.
+
+        Fail-closed: a resolution that now contains any private/internal address
+        raises ``ValueError`` so the transport refuses to reach it rather than
+        connecting to an IP that was valid at pin time but is now the attack
+        surface.
+        """
+        ips = await _resolve_all_async(host_key)
+        _check_resolved(host_key, ips, self._allow_networks)
+        self._resolved_at[host_key] = time.time()
+        return tuple(ips)
+
+    async def _try_set(
+        self,
+        host_key: str,
+        ips: tuple[str, ...],
+        port: int,
+        *,
+        timeout: float | None,  # noqa: ASYNC109
+        local_address: str | None,
+        socket_options: Iterable[SOCKET_OPTION] | None,
+    ) -> httpcore.AsyncNetworkStream:
+        """Try each IP in the set round-robin from the cursor, failing over on error."""
+        # httpcore maps OS connect/read/write failures to its own exception
+        # hierarchy (ConnectError / ConnectTimeout / ReadError / ...), NOT to
+        # OSError. Catching only OSError left the failover loop dead — a connect
+        # error never advanced to the next pinned IP. Catch the two httpcore
+        # bases (NetworkError = connect/read/write errors, TimeoutException =
+        # all timeouts) so any transport failure advances the failover.
+        last_exc: Exception | None = None
+        start = self._cursor.get(host_key, 0)
+        for offset in range(len(ips)):
+            idx = (start + offset) % len(ips)
+            ip = ips[idx]
+            try:
+                stream = await self._connect_to_ip(
+                    ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+                )
+            except (httpcore.NetworkError, httpcore.TimeoutException) as exc:
+                last_exc = exc
+                self._cursor[host_key] = idx + 1
+                continue
+            self._cursor[host_key] = idx + 1
+            self._resolved_at[host_key] = time.time()
+            self.connect_calls += 1
+            return stream
+        # Every pinned IP failed to connect; re-raise the last connect error.
+        assert last_exc is not None
+        raise last_exc
 
     async def connect_tcp(
         self,
@@ -681,42 +947,79 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         # destination — e.g. a redirect hop — is refused. This is what keeps a
         # 302->169.254.169.254 from escaping the pin map.
         key = _normalize_host(host)
-        pinned = self._pinned_hosts.get(key)
-        if pinned is None:
+        ips = self._pinned_hosts.get(key)
+        if ips is None:
+            _log.warning(
+                "ssrf.reject_unpinned_host",
+                extra={"host": host, "connector_type": self._connector_type},
+            )
+            egress_metrics.record_rejected(self._connector_type, host, egress_metrics.REASON_UNPINNED)
             raise UnpinnedHostError(
                 f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only "
                 "connects to addresses it validated up front; a redirect or secondary request "
                 "must be re-validated before it can be reached."
             )
-        return await super().connect_tcp(
-            pinned,
-            port,
-            timeout=timeout,
-            local_address=local_address,
-            socket_options=socket_options,
-        )
+        # TTL-based self-heal: re-resolve before connecting when the pinned set has
+        # gone stale, so a decommissioned IP does not keep failing forever.
+        if (
+            self._re_resolve
+            and self._resolve_ttl > 0
+            and time.time() - self._resolved_at.get(key, 0.0) > self._resolve_ttl
+        ):
+            self._pinned_hosts[key] = await self._refresh_ips(key)
+            ips = self._pinned_hosts[key]
+        try:
+            return await self._try_set(
+                key, ips, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+            )
+        except (httpcore.NetworkError, httpcore.TimeoutException):
+            if not self._re_resolve:
+                raise
+            # All pinned IPs failed at connect: self-heal by re-resolving and
+            # retrying the fresh set once. A re-validation failure (now-internal
+            # resolution) propagates fail-closed rather than connecting.
+            self._pinned_hosts[key] = await self._refresh_ips(key)
+            return await self._try_set(
+                key,
+                self._pinned_hosts[key],
+                port,
+                timeout=timeout,
+                local_address=local_address,
+                socket_options=socket_options,
+            )
 
 
 class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
     """An ``httpx.AsyncHTTPTransport`` pinned to validated addresses.
 
     Built with ``pinned_async_transport`` / ``pinned_async_client``. Pins the
-    ``{hostname: validated_ip}`` mapping onto the underlying httpcore pool so the
-    TCP connection goes to the validated IP while SNI/cert stay on the hostname.
+    ``{hostname: validated_ip_set}`` mapping onto the underlying httpcore pool so
+    the TCP connection goes to a validated IP while SNI/cert stay on the
+    hostname. The full validated set is pinned (not the first address only) and
+    the backend fails over / re-resolves across it.
     """
 
     def __init__(
         self,
-        pinned_hosts: Mapping[str, str],
+        pinned_hosts: Mapping[str, str | Sequence[str]],
         verify: ssl.SSLContext | str | bool = True,
         http2: bool = False,
-        trust_env: bool = False,
+        trust_env: bool | None = None,
         limits: httpx.Limits | None = None,
+        allow_networks: Sequence[str] | None = None,
+        re_resolve: bool = True,
+        resolve_ttl_seconds: float | None = None,
+        loudness_guard: bool = False,
+        connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
     ) -> None:
-        # trust_env defaults to False: when httpcore honors a proxy (HTTP_PROXY /
-        # HTTPS_PROXY / ALL_PROXY) it re-resolves the target server-side and
-        # connect_tcp only ever sees the proxy host, which is not in the pin map
-        # — the whole point of pinning is defeated. Safe by default.
+        # ``trust_env`` is ``None`` by default and resolves to the process-wide
+        # SSRF_TRUST_PROXY setting. When true, honoring a proxy (HTTP_PROXY /
+        # HTTPS_PROXY / ALL_PROXY) makes httpcore re-resolve the target
+        # server-side and connect_tcp only ever sees the proxy host, which is not
+        # in the pin map — so pinning is effectively bypassed. Safe by default; an
+        # explicit opt-in (or the SSRF_TRUST_PROXY fleet setting) is for
+        # proxy-terminated egress where the proxy IS the trusted boundary.
+        resolved_trust = _default_trust_env() if trust_env is None else trust_env
         # ``limits`` (when supplied) flows into the underlying httpcore pool so a
         # connector that configures max_connections / max_keepalive keeps its
         # pooling budget even though it now owns the transport explicitly. When
@@ -727,20 +1030,62 @@ class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         super().__init__(
             verify=verify,
             http2=http2,
-            trust_env=trust_env,
+            trust_env=resolved_trust,
             limits=limits if limits is not None else httpx.Limits(max_connections=100, max_keepalive_connections=20),
         )
-        _warn_if_proxied(trust_env)
+        _warn_if_proxied(resolved_trust)
         # HTTPCORE SEAM: the pin is installed by overriding httpcore's PRIVATE
         # `_pool._network_backend` attribute. httpcore (httpx 0.28.x / httpcore
         # 1.0.x — the known-good range documented in backend/pyproject.toml)
         # routes connect_tcp through this attribute when building each connection.
         # This contract is private and unsupported: if httpcore ever stops routing
         # that attribute into connection creation, the pin is silently DROPPED
-        # (re-opening the DNS-rebinding window) with no error at all. The guard
-        # below makes that un-pin loud.
-        backend = _PinnedAsyncNetworkBackend(pinned_hosts)
-        self._pool._network_backend = backend
+        # (re-opening the DNS-rebinding window) with no error at all. The loudness
+        # guard below makes that un-pin explicit.
+        self._pin_backend = _PinnedAsyncNetworkBackend(
+            pinned_hosts,
+            allow_networks=allow_networks,
+            re_resolve=re_resolve,
+            resolve_ttl_seconds=resolve_ttl_seconds,
+            connector_type=connector_type,
+        )
+        self._pool._network_backend = self._pin_backend
+        self._loudness_guard = loudness_guard
+        self._pin_proven = False
+
+    def _enforce_pin_live(self) -> None:
+        """Prove the pin is live, or raise :class:`PinDroppedError`.
+
+        After a completed request the pinned backend's ``connect_tcp`` must have
+        been consulted at least once. A successful request where it was NEVER
+        consulted means httpcore stopped routing the private ``_network_backend``
+        attribute into connection creation — the pin silently dropped. Throwing
+        here turns that silent regression into a loud failure.
+        """
+        if not self._loudness_guard or self._pin_proven:
+            return
+        if self._pin_backend.connect_calls == 0:
+            self._pin_proven = True  # only honk once
+            _log.critical(
+                "ssrf.pin_dropped",
+                extra={"hosts": ",".join(sorted(self._pin_backend._pinned_hosts))},
+            )
+            raise PinDroppedError(
+                "SSRF: the pinned transport's network backend was never consulted for the "
+                "connection — httpcore likely stopped routing the private `_pool._network_backend` "
+                "attribute, and the DNS-rebinding pin has been silently dropped. Constrain httpcore "
+                "to the known-good range documented in backend/pyproject.toml."
+            )
+        self._pin_proven = True
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Only check the loudness guard after a COMPLETED request (not when the
+        # request raised), so a genuine connect/DNS error surfaces as itself and
+        # never gets masked by the guard. A raising request propagates directly
+        # from ``super().handle_async_request``, which skips the guard for free.
+        response = await super().handle_async_request(request)
+        self._enforce_pin_live()
+        return response
 
 
 async def pinned_async_transport(
@@ -749,29 +1094,63 @@ async def pinned_async_transport(
     allow_networks: Sequence[str] | None = None,
     verify: ssl.SSLContext | str | bool = True,
     http2: bool = False,
-    trust_env: bool = False,
+    trust_env: bool | None = None,
     limits: httpx.Limits | None = None,
+    re_resolve: bool = True,
+    resolve_ttl_seconds: float | None = None,
+    loudness_guard: bool = False,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
 ) -> httpx.AsyncHTTPTransport:
     """Build a pinned-IP async transport for ``url``.
 
     Resolves and validates ``url`` (fails closed), then returns an
     :class:`httpx.AsyncHTTPTransport` that connects to the validated address
-    while keeping the original hostname for TLS SNI and certificate
+    set while keeping the original hostname for TLS SNI and certificate
     verification. ``allow_networks`` layers a tenant-scoped CIDR allowlist on
     the global floor.
 
-    ``trust_env`` defaults to ``False``: honoring a proxy would let it re-resolve
-    the target server-side and silently defeat pinning. Opt in only when the
-    proxy itself is trusted (a warning is logged if a proxy env var is present).
+    ``trust_env`` is ``None`` by default and resolves to the
+    ``SSRF_TRUST_PROXY`` setting (``False`` unless set): honoring a proxy would
+    let it re-resolve the target server-side and silently defeat pinning. Opt in
+    only when the proxy itself is trusted (a warning is logged if a proxy env var
+    is present).
+
+    ``re_resolve`` (default ``True``) enables the failover self-heal: the FULL
+    validated IP set is pinned and, on a connect failure or after
+    ``resolve_ttl_seconds`` (default :data:`_RESOLVE_TTL_DEFAULT_SECONDS`), the
+    host is re-resolved and re-validated so a decommissioned/stale IP self-heals
+    instead of a long-lived client hanging onto a dead address.
+
+    ``loudness_guard`` (default ``False``) proves the pin is live on the first
+    completed request: it raises :class:`PinDroppedError` if the pinned network
+    backend was never consulted. Off by default because an intercepted transport
+    (e.g. an HTTP mock at the pool layer) legitimately never consults it; enable
+    on long-lived real-egress clients (model backends).
+
+    ``connector_type`` (default :data:`egress_metrics.DEFAULT_CONNECTOR_TYPE`)
+    labels the emitted ``modulo_egress_pinned_total`` /
+    ``modulo_egress_rejected_total`` records so the egress layer is attributable
+    to the connector (or model backend) that built it.
     """
-    target = await resolve_pinned_ip(url, allow_networks=allow_networks)
-    return PinnedAsyncHTTPTransport(
-        {target.host: target.ip},
+    try:
+        target = await resolve_pinned_ip(url, allow_networks=allow_networks)
+    except ValueError as exc:
+        egress_metrics.record_rejected(connector_type, _eh_label_host(url), _classify_reject_reason(exc, url))
+        raise
+    transport = PinnedAsyncHTTPTransport(
+        {target.host: target.ips},
         verify=verify,
         http2=http2,
         trust_env=trust_env,
         limits=limits,
+        allow_networks=allow_networks,
+        re_resolve=re_resolve,
+        resolve_ttl_seconds=resolve_ttl_seconds,
+        loudness_guard=loudness_guard,
+        connector_type=connector_type,
     )
+    egress_metrics.record_pinned(connector_type, target.host)
+    return transport
 
 
 async def pinned_async_client(
@@ -780,9 +1159,12 @@ async def pinned_async_client(
     allow_networks: Sequence[str] | None = None,
     verify: ssl.SSLContext | str | bool = True,
     http2: bool = False,
-    trust_env: bool = False,
+    trust_env: bool | None = None,
     follow_redirects: bool = False,
     limits: httpx.Limits | None = None,
+    loudness_guard: bool = False,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
+    **client_kwargs: Any,
 ) -> httpx.AsyncClient:
     """Build a pinned-IP ``httpx.AsyncClient`` for ``url``.
 
@@ -793,9 +1175,21 @@ async def pinned_async_client(
     same policy (the pinned transport only protects the primary origin, and
     :class:`UnpinnedHostError` refuses any hop outside the pin map).
 
-    ``trust_env`` defaults to ``False`` (safe-by-default; a proxy defeats
-    pinning). Opt in only when the proxy is trusted.
+    ``trust_env`` is ``None`` by default and resolves to the ``SSRF_TRUST_PROXY``
+    setting (``False`` unless set; a proxy defeats pinning). Opt in only when the
+    proxy is trusted. ``loudness_guard`` defaults ``False`` (see
+    :func:`pinned_async_transport`).
+
+    ``**client_kwargs`` (``headers``, ``timeout``, ``auth``, ``base_url``, …) are
+    forwarded to :class:`httpx.AsyncClient`, mirroring
+    :func:`pinned_async_client_sync`; a caller-supplied ``transport`` key is
+    rejected so a caller cannot silently bypass the pinned transport.
     """
+    if "transport" in client_kwargs:
+        raise ValueError(
+            "pinned_async_client: 'transport' must not be passed via client_kwargs "
+            "— it would bypass the pinned transport. Use the pinned transport built here."
+        )
     transport = await pinned_async_transport(
         url,
         allow_networks=allow_networks,
@@ -803,13 +1197,17 @@ async def pinned_async_client(
         http2=http2,
         trust_env=trust_env,
         limits=limits,
+        loudness_guard=loudness_guard,
+        connector_type=connector_type,
     )
+    resolved_trust = _default_trust_env() if trust_env is None else trust_env
     return httpx.AsyncClient(
         transport=transport,
         verify=verify,
         http2=http2,
-        trust_env=trust_env,
+        trust_env=resolved_trust,
         follow_redirects=follow_redirects,
+        **client_kwargs,
     )
 
 
@@ -873,25 +1271,43 @@ def pinned_async_transport_sync(
     allow_networks: Sequence[str] | None = None,
     verify: ssl.SSLContext | str | bool = True,
     http2: bool = False,
-    trust_env: bool = False,
+    trust_env: bool | None = None,
     limits: httpx.Limits | None = None,
+    re_resolve: bool = True,
+    resolve_ttl_seconds: float | None = None,
+    loudness_guard: bool = False,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
 ) -> httpx.AsyncHTTPTransport:
     """Synchronous :func:`pinned_async_transport` for sync ``_client()`` builders.
 
     Resolves + validates ``url`` synchronously and returns a
-    :class:`httpx.AsyncHTTPTransport` pinned to the validated address, so a
+    :class:`httpx.AsyncHTTPTransport` pinned to the validated address set, so a
     connector that constructs its client without awaiting does not re-resolve
-    the host at connect time (closing the DNS-rebinding window). ``trust_env``
-    defaults to ``False`` (safe-by-default; a proxy defeats pinning).
+    the host at connect time (closing the DNS-rebinding window). ``trust_env`` is
+    ``None`` by default and resolves to the ``SSRF_TRUST_PROXY`` setting
+    (``False`` unless set; a proxy defeats pinning). ``loudness_guard`` defaults
+    ``False`` (see :func:`pinned_async_transport`). ``connector_type`` labels the
+    egress metric records (see :func:`pinned_async_transport`).
     """
-    target = _resolve_pinned_ip_sync(url, allow_networks=allow_networks)
-    return PinnedAsyncHTTPTransport(
-        {target.host: target.ip},
+    try:
+        target = _resolve_pinned_ip_sync(url, allow_networks=allow_networks)
+    except ValueError as exc:
+        egress_metrics.record_rejected(connector_type, _eh_label_host(url), _classify_reject_reason(exc, url))
+        raise
+    transport = PinnedAsyncHTTPTransport(
+        {target.host: target.ips},
         verify=verify,
         http2=http2,
         trust_env=trust_env,
         limits=limits,
+        allow_networks=allow_networks,
+        re_resolve=re_resolve,
+        resolve_ttl_seconds=resolve_ttl_seconds,
+        loudness_guard=loudness_guard,
+        connector_type=connector_type,
     )
+    egress_metrics.record_pinned(connector_type, target.host)
+    return transport
 
 
 def pinned_async_client_sync(
@@ -900,21 +1316,25 @@ def pinned_async_client_sync(
     allow_networks: Sequence[str] | None = None,
     verify: ssl.SSLContext | str | bool = True,
     http2: bool = False,
-    trust_env: bool = False,
+    trust_env: bool | None = None,
     follow_redirects: bool = False,
     limits: httpx.Limits | None = None,
+    loudness_guard: bool = False,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
     **client_kwargs: Any,
 ) -> httpx.AsyncClient:
     """Synchronous :func:`pinned_async_client` for sync ``_client()`` builders.
 
     Builds a pinned-IP ``httpx.AsyncClient`` whose transport is pinned to the
-    validated address for ``url`` while SNI/cert use the original hostname.
+    validated address set for ``url`` while SNI/cert use the original hostname.
     Synchronous so a connector's ``def _client`` can return a ready-made
     pinned client. ``**client_kwargs`` (``base_url``, ``headers``, ``timeout``,
     ``auth``, ``limits``, …) are forwarded to :class:`httpx.AsyncClient`.
-    ``trust_env`` defaults to ``False`` (safe-by-default; a proxy defeats
-    pinning). A caller-supplied ``transport`` key is rejected so it cannot
-    silently bypass the pinned transport.
+    ``trust_env`` is ``None`` by default and resolves to the ``SSRF_TRUST_PROXY``
+    setting (``False`` unless set; a proxy defeats pinning). ``loudness_guard``
+    defaults ``False`` (see :func:`pinned_async_transport`). A caller-supplied
+    ``transport`` key is rejected so it cannot silently bypass the pinned
+    transport.
     """
     if "transport" in client_kwargs:
         raise ValueError(
@@ -928,12 +1348,15 @@ def pinned_async_client_sync(
         http2=http2,
         trust_env=trust_env,
         limits=limits,
+        loudness_guard=loudness_guard,
+        connector_type=connector_type,
     )
+    resolved_trust = _default_trust_env() if trust_env is None else trust_env
     return httpx.AsyncClient(
         transport=transport,
         verify=verify,
         http2=http2,
-        trust_env=trust_env,
+        trust_env=resolved_trust,
         follow_redirects=follow_redirects,
         **client_kwargs,
     )

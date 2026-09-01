@@ -27,7 +27,7 @@ def _no_pinned_ip_dns() -> None:
     ``resolve_pinned_ip`` to a fixed public address keeps the transport
     construction path alive while removing any environment/CI DNS dependency.
     """
-    target = PinnedTarget(scheme="https", host="unit-test.invalid", port=None, ip="93.184.216.34")
+    target = PinnedTarget(scheme="https", host="unit-test.invalid", port=None, ips=("93.184.216.34",))
     with patch("modulo.core.ssrf.resolve_pinned_ip", new=AsyncMock(return_value=target)):
         yield
 

@@ -9,6 +9,7 @@ import httpx
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
+from modulo.core.ssrf import pinned_async_client_sync
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,11 @@ class GitHubActionsCIRunner(CIRunnerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=_GITHUB_API, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-526B): build the client through the pinned
+        # transport so the hardcoded api.github.com address is pinned onto the
+        # connection (never re-resolved at connect time — closes DNS rebinding).
+        # The token is in the Authorization header, so no creds reach the URL.
+        return pinned_async_client_sync(_GITHUB_API, base_url=_GITHUB_API, headers=self._headers(), timeout=30)
 
     @staticmethod
     def _parse_duration_seconds(raw: dict[str, Any]) -> int | None:
@@ -199,7 +204,12 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     location = r.headers.get("location", "")
                     if not location:
                         break
-                    r = await client.get(location)
+                    # GitHub's log archive redirects to a signed CDN URL on a
+                    # different host; follow it through a fresh pinned client so
+                    # the redirect target is validated+pinned too (never a bare
+                    # unpinned egress), matching the primary client's SSRF gate.
+                    async with pinned_async_client_sync(location, timeout=30) as follow_client:
+                        r = await follow_client.get(location)
                     redirects += 1
                 if r.status_code == 202:
                     raise ValueError(f"GitHub log archive still preparing after {redirects} redirects")

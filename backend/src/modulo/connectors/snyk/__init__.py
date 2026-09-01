@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.core.ssrf import pinned_async_client_sync
 
 _API_BASE = "https://api.snyk.io/rest"
 
@@ -59,7 +60,8 @@ class SnykConnector(ConnectorBase):
         return ConnectorType.SNYK
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return pinned_async_client_sync(
+            _API_BASE,
             base_url=_API_BASE,
             headers={
                 "Authorization": f"token {self._token}",

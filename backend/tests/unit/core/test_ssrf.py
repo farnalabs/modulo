@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpcore
 import httpx
 import pytest
 from cryptography import x509
@@ -376,9 +377,9 @@ async def test_pinned_transport_uses_validated_ip_despite_rebind() -> None:
     """
     server, port = _start_http_server()
     try:
-        transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": "127.0.0.1"})
+        transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": ("127.0.0.1",)})
         backend = transport._pool._network_backend
-        assert backend._pinned_hosts == {"rebind.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"rebind.example": ("127.0.0.1",)}
         client = httpx.AsyncClient(transport=transport)
         async with client:
             resp = await client.get(f"http://rebind.example:{port}/")
@@ -386,7 +387,7 @@ async def test_pinned_transport_uses_validated_ip_despite_rebind() -> None:
             assert resp.text == "pinned-ok"
         # The request connected to the pinned address and NEVER re-resolved: the
         # pin map is unchanged afterwards, and an unpinned host is refused.
-        assert backend._pinned_hosts == {"rebind.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"rebind.example": ("127.0.0.1",)}
         with pytest.raises(ssrf.UnpinnedHostError):
             await backend.connect_tcp("metadata.example", port)
     finally:
@@ -424,7 +425,7 @@ async def test_pinned_transport_sni_matches_hostname(tmp_path: Path) -> None:
     server, port = _start_tls_server(cert_pem, key_pem)
     try:
         verify_ctx = ssl.create_default_context(cafile=str(cert_pem))
-        transport = ssrf.PinnedAsyncHTTPTransport({hostname: "127.0.0.1"}, verify=verify_ctx)
+        transport = ssrf.PinnedAsyncHTTPTransport({hostname: ("127.0.0.1",)}, verify=verify_ctx)
         client = httpx.AsyncClient(transport=transport, verify=verify_ctx)
         async with client:
             resp = await client.get(f"https://{hostname}:{port}/")
@@ -528,7 +529,7 @@ async def test_pinned_transport_refuses_unpinned_host() -> None:
     with pytest.raises(ssrf.UnpinnedHostError):
         await backend.connect_tcp("evil.example", 443)
     # The pin map is authoritative and unchanged.
-    assert backend._pinned_hosts == {"good.example": "127.0.0.1"}
+    assert backend._pinned_hosts == {"good.example": ("127.0.0.1",)}
 
 
 async def test_trailing_dot_host_still_pins() -> None:
@@ -536,15 +537,15 @@ async def test_trailing_dot_host_still_pins() -> None:
     the pin map (normalised host key on both sides) rather than be refused."""
     server, port = _start_http_server()
     try:
-        transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": "127.0.0.1"})
+        transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": ("127.0.0.1",)})
         backend = transport._pool._network_backend
-        assert backend._pinned_hosts == {"rebind.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"rebind.example": ("127.0.0.1",)}
         client = httpx.AsyncClient(transport=transport)
         async with client:
             resp = await client.get(f"http://rebind.example.:{port}/")
             assert resp.status_code == 200
             assert resp.text == "pinned-ok"
-        assert backend._pinned_hosts == {"rebind.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"rebind.example": ("127.0.0.1",)}
     finally:
         server.shutdown()
         server.server_close()
@@ -554,8 +555,8 @@ def test_pinned_transport_proxy_env_ignored_by_default(monkeypatch: pytest.Monke
     """trust_env defaults False, so a proxy env var does not defeat pinning."""
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:8080")
-    transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": "127.0.0.1"})
-    assert transport._pool._network_backend._pinned_hosts == {"rebind.example": "127.0.0.1"}
+    transport = ssrf.PinnedAsyncHTTPTransport({"rebind.example": ("127.0.0.1",)})
+    assert transport._pool._network_backend._pinned_hosts == {"rebind.example": ("127.0.0.1",)}
 
 
 def test_pinned_transport_honks_on_proxy_trust_with_env(
@@ -616,20 +617,20 @@ async def test_pin_registry_survives_request_and_reopen() -> None:
     """
     server, port = _start_http_server()
     try:
-        transport = ssrf.PinnedAsyncHTTPTransport({"smoke.example": "127.0.0.1"})
+        transport = ssrf.PinnedAsyncHTTPTransport({"smoke.example": ("127.0.0.1",)})
         backend = transport._pool._network_backend
-        assert backend._pinned_hosts == {"smoke.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"smoke.example": ("127.0.0.1",)}
         client = httpx.AsyncClient(transport=transport)
         async with client:
             resp = await client.get(f"http://smoke.example:{port}/")
             assert resp.status_code == 200
         # The pin map survives the request — a silent un-pin would be caught here.
         assert transport._pool._network_backend is backend
-        assert backend._pinned_hosts == {"smoke.example": "127.0.0.1"}
+        assert backend._pinned_hosts == {"smoke.example": ("127.0.0.1",)}
         await client.aclose()
         # Re-opening on a fresh transport re-establishes the pin.
-        transport2 = ssrf.PinnedAsyncHTTPTransport({"smoke.example": "127.0.0.1"})
-        assert transport2._pool._network_backend._pinned_hosts == {"smoke.example": "127.0.0.1"}
+        transport2 = ssrf.PinnedAsyncHTTPTransport({"smoke.example": ("127.0.0.1",)})
+        assert transport2._pool._network_backend._pinned_hosts == {"smoke.example": ("127.0.0.1",)}
     finally:
         server.shutdown()
         server.server_close()
@@ -658,7 +659,7 @@ async def test_pinned_async_client_full_composition(monkeypatch: pytest.MonkeyPa
     server, port = _start_tls_server(cert_pem, key_pem)
     try:
         verify_ctx = ssl.create_default_context(cafile=str(cert_pem))
-        pinned = ssrf.PinnedTarget(scheme="https", host=hostname, port=port, ip="127.0.0.1")
+        pinned = ssrf.PinnedTarget(scheme="https", host=hostname, port=port, ips=("127.0.0.1",))
         monkeypatch.setattr(ssrf, "resolve_pinned_ip", AsyncMock(return_value=pinned))
         client = await ssrf.pinned_async_client(
             f"https://{hostname}:{port}/",
@@ -668,13 +669,13 @@ async def test_pinned_async_client_full_composition(monkeypatch: pytest.MonkeyPa
             transport = client._transport
             backend = transport._pool._network_backend
             assert isinstance(backend, ssrf._PinnedAsyncNetworkBackend)
-            assert backend._pinned_hosts == {hostname: "127.0.0.1"}
+            assert backend._pinned_hosts == {hostname: ("127.0.0.1",)}
             resp = await client.get(f"https://{hostname}:{port}/")
             assert resp.status_code == 200
             assert resp.text == "pinned-ok"
             # The pin survives the request: backend is still the pinned backend.
             assert transport._pool._network_backend is backend
-            assert backend._pinned_hosts == {hostname: "127.0.0.1"}
+            assert backend._pinned_hosts == {hostname: ("127.0.0.1",)}
         finally:
             await client.aclose()
     finally:
@@ -929,3 +930,192 @@ class TestDNSRebinding:
             await ssrf.validate_outbound_url_async("http://fresh.example/")
 
         assert calls == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-526B: full-IP pin map with failover + re-resolve, configurable trust_env,
+# and the runtime loudness guard.
+# ---------------------------------------------------------------------------
+
+# Sentinels for the "stream" a fake connect returns; the transport only needs an
+# object back from ``_connect_to_ip``, not a real socket.
+_CONNECT_OK = object()
+
+
+def _fake_connect(attempted: list[str], fail_first: bool = False):
+    """Return an async ``_connect_to_ip`` replacement that records IP attempts.
+
+    ``fail_first`` raises ``httpcore.ConnectError`` for the first attempted
+    address then succeeds — the failover seam. ``ConnectError`` mirrors what
+    httpcore actually raises for an OS connect failure (it is a ``NetworkError``,
+    NOT ``OSError``), so the test guards the production exception the failover
+    loop catches. Returns the recorded list so a test can assert the order of IPs
+    tried.
+    """
+
+    async def fake(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,  # noqa: ASYNC109
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        if fail_first and ip == attempted[0]:
+            raise httpcore.ConnectError("connection refused")
+        return _CONNECT_OK
+
+    return fake
+
+
+def test_pin_map_holds_full_ip_set() -> None:
+    """(a) The pin map captures the FULL validated IP set, not just ``ips[0]``."""
+    transport = ssrf.PinnedAsyncHTTPTransport({"cdn.example": ["1.1.1.1", "2.2.2.2", "3.3.3.3"]})
+    backend = transport._pool._network_backend
+    assert backend._pinned_hosts == {"cdn.example": ("1.1.1.1", "2.2.2.2", "3.3.3.3")}
+
+
+async def test_pinned_async_transport_pins_all_resolved_ips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(a) The builder pins every resolved address, so a multi-IP origin keeps
+    its failover pool instead of losing all but the first address."""
+
+    async def fake_resolve(_host: str) -> list[str]:
+        return ["1.1.1.1", "2.2.2.2", "3.3.3.3"]
+
+    monkeypatch.setattr(ssrf, "_resolve_all_async", fake_resolve)
+    transport = await ssrf.pinned_async_transport("https://multi.example/")
+    try:
+        backend = transport._pool._network_backend
+        assert backend._pinned_hosts == {"multi.example": ("1.1.1.1", "2.2.2.2", "3.3.3.3")}
+    finally:
+        await transport.aclose()
+
+
+async def test_connect_failure_fails_over_to_next_pinned_ip() -> None:
+    """(b) A connect failure on the first pinned IP fails over to the next."""
+    transport = ssrf.PinnedAsyncHTTPTransport({"fail.example": ["10.0.0.99", "10.0.0.100"]})
+    backend = transport._pool._network_backend
+    attempted: list[str] = []
+    backend._connect_to_ip = _fake_connect(attempted, fail_first=True)  # type: ignore[method-assign]
+
+    stream = await backend.connect_tcp("fail.example", 443)
+    assert stream is _CONNECT_OK
+    assert attempted == ["10.0.0.99", "10.0.0.100"]
+    assert backend.connect_calls == 1
+
+
+async def test_stale_ip_re_resolves_on_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(c) A stale pinned IP self-heals: TTL expiry re-resolves + re-validates."""
+    seen: list[str] = []
+
+    async def fake_resolve(host: str) -> list[str]:
+        seen.append(host)
+        return ["8.8.8.8", "9.9.9.9"]
+
+    monkeypatch.setattr(ssrf, "_resolve_all_async", fake_resolve)
+    transport = ssrf.PinnedAsyncHTTPTransport({"stale.example": ["1.1.1.1"]}, resolve_ttl_seconds=1)
+    backend = transport._pool._network_backend
+    backend._resolved_at["stale.example"] = time.time() - 5
+    attempted: list[str] = []
+    backend._connect_to_ip = _fake_connect(attempted)  # type: ignore[method-assign]
+
+    await backend.connect_tcp("stale.example", 443)
+    assert seen == ["stale.example"]
+    assert backend._pinned_hosts == {"stale.example": ("8.8.8.8", "9.9.9.9")}
+    assert attempted == ["8.8.8.8"]
+
+
+async def test_connect_error_re_resolves_and_retries_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(c) When every pinned IP fails to connect, the host re-resolves and the
+    fresh set is retried — a decommissioned IP self-heals."""
+
+    async def fake_resolve(_host: str) -> list[str]:
+        return ["8.8.8.8"]
+
+    monkeypatch.setattr(ssrf, "_resolve_all_async", fake_resolve)
+    transport = ssrf.PinnedAsyncHTTPTransport({"heal.example": ["1.1.1.1"]})
+    backend = transport._pool._network_backend
+    attempted: list[str] = []
+
+    async def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,  # noqa: ASYNC109
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        if ip == "1.1.1.1":
+            raise httpcore.ConnectError("decommissioned")
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    await backend.connect_tcp("heal.example", 443)
+    assert attempted == ["1.1.1.1", "8.8.8.8"]
+    assert backend._pinned_hosts == {"heal.example": ("8.8.8.8",)}
+
+
+def test_default_trust_env_is_false_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(d) Without ``SSRF_TRUST_PROXY`` the default ``trust_env`` is false."""
+    monkeypatch.delenv("SSRF_TRUST_PROXY", raising=False)
+    assert ssrf._default_trust_env() is False
+
+
+def test_default_trust_env_true_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(d) ``SSRF_TRUST_PROXY=true`` flips the fleet-wide proxy-trust default."""
+    monkeypatch.setenv("SSRF_TRUST_PROXY", "true")
+    assert ssrf._default_trust_env() is True
+
+
+def test_transport_default_trust_env_ignores_proxy_env(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """(d) Default (None -> False) keeps proxy env vars ignored: no honk."""
+    monkeypatch.delenv("SSRF_TRUST_PROXY", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
+    with caplog.at_level(logging.WARNING):
+        ssrf.PinnedAsyncHTTPTransport({"x.example": "8.8.8.8"})
+    assert not any("ssrf.pinned_transport_proxy_env" in r.message for r in caplog.records)
+
+
+def test_transport_default_trust_env_honours_proxy_when_set(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """(d) ``SSRF_TRUST_PROXY=true`` (None default) honours the proxy: it honks."""
+    monkeypatch.setenv("SSRF_TRUST_PROXY", "true")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
+    with caplog.at_level(logging.WARNING):
+        ssrf.PinnedAsyncHTTPTransport({"x.example": "8.8.8.8"})
+    assert any("ssrf.pinned_transport_proxy_env" in r.message for r in caplog.records)
+
+
+def test_transport_explicit_trust_env_overrides_setting(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """(d) An explicit ``trust_env=False`` wins over the ``SSRF_TRUST_PROXY``
+    setting — the per-connector escape hatch beats the fleet default."""
+    monkeypatch.setenv("SSRF_TRUST_PROXY", "true")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
+    with caplog.at_level(logging.WARNING):
+        ssrf.PinnedAsyncHTTPTransport({"x.example": "8.8.8.8"}, trust_env=False)
+    assert not any("ssrf.pinned_transport_proxy_env" in r.message for r in caplog.records)
+
+
+def test_loudness_guard_raises_when_pin_dropped() -> None:
+    """(e) The loudness guard fires if the pin was silently dropped: a transport
+    whose connect_tcp was NEVER consulted raises PinDroppedError."""
+    transport = ssrf.PinnedAsyncHTTPTransport({"x.example": "8.8.8.8"}, loudness_guard=True)
+    assert transport._pin_backend.connect_calls == 0
+    with pytest.raises(ssrf.PinDroppedError):
+        transport._enforce_pin_live()
+
+
+async def test_loudness_guard_passes_after_real_connect() -> None:
+    """(e) After a real request the pin is proven live and the guard passes."""
+    server, port = _start_http_server()
+    try:
+        transport = ssrf.PinnedAsyncHTTPTransport({"live.example": "127.0.0.1"}, loudness_guard=True)
+        client = httpx.AsyncClient(transport=transport)
+        async with client:
+            resp = await client.get(f"http://live.example:{port}/")
+            assert resp.status_code == 200
+        transport._enforce_pin_live()  # no raise
+    finally:
+        server.shutdown()
+        server.server_close()

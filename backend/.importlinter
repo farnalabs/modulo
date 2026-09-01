@@ -175,3 +175,35 @@ ignore_imports =
     # (connector_hub passes config['base_url'] straight through), so it is on the
     # same external trust boundary as the connectors above and needs the guard.
     modulo.connectors.ci_runner.gitlab_ci -> modulo.core.ssrf
+    # FAR-526B: the GitHub Actions CI runner pins the hardcoded api.github.com via
+    # the shared SSRF primitive, and the GitHub/Trello ticket-tracker connectors
+    # pin their base_url host. Same narrow exception for the shared security
+    # primitive as the other base_url-bearing connectors.
+    modulo.connectors.ci_runner.github_actions -> modulo.core.ssrf
+    modulo.connectors.ticket_tracker.github -> modulo.core.ssrf
+    modulo.connectors.ticket_tracker.trello -> modulo.core.ssrf
+    # FAR-526C: EVERY connector (including the fixed-vendor-host ones below) now
+    # builds its client through the pinned transport, so the whole connector
+    # egress surface imports the shared SSRF security primitive. Same narrow
+    # exception as the base_url-bearing connectors above: the connectors stay
+    # decoupled from all other core business logic; only the shared security
+    # primitive is imported.
+    modulo.connectors.asana -> modulo.core.ssrf
+    modulo.connectors.bitbucket -> modulo.core.ssrf
+    modulo.connectors.buildkite -> modulo.core.ssrf
+    modulo.connectors.circleci -> modulo.core.ssrf
+    modulo.connectors.codeclimate -> modulo.core.ssrf
+    modulo.connectors.datadog -> modulo.core.ssrf
+    modulo.connectors.discord -> modulo.core.ssrf
+    modulo.connectors.dropbox_paper -> modulo.core.ssrf
+    modulo.connectors.monday -> modulo.core.ssrf
+    modulo.connectors.microsoft_teams -> modulo.core.ssrf
+    modulo.connectors.notion -> modulo.core.ssrf
+    modulo.connectors.npm -> modulo.core.ssrf
+    modulo.connectors.opsgenie -> modulo.core.ssrf
+    modulo.connectors.pagerduty -> modulo.core.ssrf
+    modulo.connectors.pypi -> modulo.core.ssrf
+    modulo.connectors.sharepoint -> modulo.core.ssrf
+    modulo.connectors.shortcut -> modulo.core.ssrf
+    modulo.connectors.snyk -> modulo.core.ssrf
+    modulo.connectors.trello -> modulo.core.ssrf

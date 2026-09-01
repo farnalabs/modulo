@@ -129,7 +129,7 @@ def test_connector_pins_validated_ip_despite_resolver_flip(name: str, monkeypatc
 
     client = connector._client()
     try:
-        assert _pinned_hosts(client) == {host: _VALIDATED_PUBLIC}
+        assert _pinned_hosts(client) == {host: (_VALIDATED_PUBLIC,)}
     finally:
         _aclose(client)
 
