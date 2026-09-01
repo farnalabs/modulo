@@ -1,5 +1,12 @@
 <template>
-  <div data-testid="folder-tree" class="hidden md:flex w-64 border-r border-border h-screen sticky top-0 overflow-y-auto bg-card flex-col">
+  <!-- Height chain: the parent row is flex-1 min-h-0 inside a page shell
+       capped at the remaining viewport height below the AppLayout chrome
+       (h-[calc(100vh-3.5rem)], the editor-view convention — not the full
+       viewport), so h-full fills the full column height next to a long table
+       and the flex-1 min-h-0 body below scrolls internally when its content
+       exceeds the column. Hidden below md (a mobile folder <select> is
+       offered instead). -->
+  <div data-testid="folder-tree" class="hidden md:flex w-64 border-r border-border h-full min-h-0 bg-card flex-col">
     <div class="p-3 border-b border-border flex items-center justify-between shrink-0">
       <h3 class="text-sm font-semibold text-foreground">{{ labels.folders }}</h3>
       <button type="button"
@@ -12,7 +19,7 @@
       </button>
     </div>
 
-    <div class="py-1 flex-1 overflow-y-auto">
+    <div class="py-1 flex-1 min-h-0 overflow-y-auto">
       <button type="button"
         data-testid="folder-tree-all-pipelines"
         class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"

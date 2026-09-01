@@ -13371,6 +13371,11 @@ export interface components {
              * @default 0
              */
             snapshot_count: number;
+            /**
+             * Node Count
+             * @default 0
+             */
+            node_count: number;
             /** Archived At */
             archived_at?: string | null;
             /** Owner Team Id */

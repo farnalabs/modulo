@@ -1,5 +1,15 @@
 <template>
-  <div class="min-h-screen bg-background flex flex-col">
+  <div class="h-[calc(100vh-3.5rem)] bg-background flex flex-col">
+    <!-- App-shell layout: the page height is capped at the viewport minus the
+         AppLayout chrome offset (h-[calc(100vh-3.5rem)] — the same convention as
+         PipelineEditorView/SchemaEditorView/CompositeEditorView), so the folder
+         sidebar and the table column fill the remaining viewport height and
+         scroll internally instead of the page scrolling the sidebar away next
+         to a long table. The comment lives inside the root div so the template
+         stays single-root (AppLayout's <Transition> requires an element root).
+         When the onboarding banner or the mobile fixed header are present the
+         chrome is taller than this offset and the page overflows into
+         AppLayout's scroll area — accepted trade-off. -->
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.PipelineListView.title')">
@@ -34,7 +44,7 @@
         Failed to load folders: {{ folderError }}
       </p>
 
-      <main class="flex-1 page-wide min-w-0">
+      <main class="flex-1 page-wide min-w-0 overflow-y-auto">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
           <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
@@ -56,14 +66,14 @@
               <table class="w-full text-left text-sm">
                 <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                   <tr>
-                    <th v-for="i in 7" :key="`th-${i}`" class="px-4 py-3">
+                    <th v-for="i in 8" :key="`th-${i}`" class="px-4 py-3">
                       <div class="h-4 w-16 bg-muted rounded" />
                     </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y">
                   <tr v-for="i in 6" :key="`row-${i}`">
-                    <td v-for="j in 7" :key="`cell-${j}`" class="px-4 py-3">
+                    <td v-for="j in 8" :key="`cell-${j}`" class="px-4 py-3">
                       <div class="h-6 bg-muted rounded" :class="j === 1 ? 'w-3/4' : 'w-full'" />
                     </td>
                   </tr>
@@ -136,6 +146,7 @@
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.visibility') }}</th>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.last_run') }}</th>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.trigger') }}</th>
+                  <th scope="col" class="px-4 py-3 text-right">{{ $t('views.PipelineListView.nodes') }}</th>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.created') }}</th>
                   <th class="px-4 py-3 text-right">{{ $t('views.PipelineListView.actions') }}</th>
                 </tr>
@@ -143,7 +154,7 @@
               <tbody class="divide-y">
                 <template v-for="(row, i) in treeRows" :key="i">
                   <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row" @dragover.prevent @drop="onTableFolderDrop((row.data as FolderItem).id, $event)">
-                    <td colspan="7" class="px-4 py-2">
+                    <td colspan="8" class="px-4 py-2">
                       <button
                         type="button"
                         class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
@@ -174,7 +185,7 @@
                   </tr>
 
                   <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
-                    <td colspan="7" class="px-4 py-2">
+                    <td colspan="8" class="px-4 py-2">
                       <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                         {{ $t('views.PipelineListView.uncategorised') }}
@@ -209,6 +220,9 @@
                     </td>
                     <td class="px-4 py-3">
                       <span class="text-xs text-muted-foreground block truncate max-w-[7rem]">{{ getPipelineTrigger((row.data as PipelineItem).id) || '\u2014' }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <span class="text-muted-foreground tabular-nums">{{ (row.data as PipelineItem).node_count ?? 0 }}</span>
                     </td>
                     <td class="px-4 py-3">
                       <span class="text-muted-foreground">{{ formatDate((row.data as PipelineItem).created_at) }}</span>
@@ -384,6 +398,7 @@ interface PipelineItem {
   archived_at: string | null
   folder_id?: string | null
   trigger_type?: string
+  node_count?: number
 }
 
 interface TriggerItem {
@@ -438,7 +453,9 @@ const lastRunDates = ref<Record<string, string>>({})
 
 async function loadLastRunDates() {
   try {
-    const response = await api.GET('/api/v1/runs', { params: { query: { page_size: 500, sort_by: 'created_at', sort_order: 'desc' } } })
+    // The backend caps page_size at 100 (le=100); requesting more fails with
+    // 422 — clamp to the cap instead of widening the backend limit.
+    const response = await api.GET('/api/v1/runs', { params: { query: { page_size: 100, sort_by: 'created_at', sort_order: 'desc' } } })
     if (response.data) {
       const items = (response.data as any).items as any[]
       const map: Record<string, string> = {}
@@ -462,7 +479,8 @@ function getLastRun(pipelineId: string): string | undefined {
 
 async function loadTriggers() {
   try {
-    const response = await api.GET('/api/v1/triggers', { params: { query: { page_size: 500 } } })
+    // page_size is clamped to the backend maximum (le=100) — larger values 422.
+    const response = await api.GET('/api/v1/triggers', { params: { query: { page_size: 100 } } })
     if (response.data) {
       const items = (response.data as any).items as TriggerItem[]
       const map: Record<string, string> = {}

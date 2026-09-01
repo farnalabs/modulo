@@ -45,6 +45,7 @@ vi.mock('../composables/useApi', () => ({
 }))
 
 import PipelineListView from '../views/PipelineListView.vue'
+import { api } from '../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -73,6 +74,24 @@ describe('PipelineListView', () => {
       },
     })
     expect(wrapper.exists()).toBe(true)
+  })
+
+  it('sizes the page to the viewport minus the AppLayout chrome (sibling calc convention, never bare h-screen)', async () => {
+    // PipelineEditorView/SchemaEditorView/CompositeEditorView all use
+    // h-[calc(100vh-3.5rem)] because /pipelines renders below AppLayout's
+    // breadcrumb/banner chrome — a bare h-screen root pushes the bottom of
+    // the folder tree and table below the fold.
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    const classes = (wrapper.element as HTMLElement).className.split(/\s+/)
+    expect(classes).toContain('h-[calc(100vh-3.5rem)]')
+    expect(classes).not.toContain('h-screen')
   })
 
   it('renders the search bar with correct testid', async () => {
@@ -369,5 +388,68 @@ describe('PipelineListView', () => {
     await nextTick()
     expect(wrapper.find('dialog').exists()).toBe(false)
     wrapper.unmount()
+  })
+
+  it('renders a Nodes column showing each pipeline node_count from the list response', async () => {
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Three Nodes', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', node_count: 3 },
+        { id: 'p2', organisation_id: 'org1', name: 'No Count Yet', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const headers = wrapper.findAll('th')
+    const nodesHeader = headers.find(h => h.text() === 'Nodes')
+    expect(nodesHeader).toBeDefined()
+    expect(nodesHeader!.attributes('scope')).toBe('col')
+    // Backend always sends node_count (additive default 0) — a missing value
+    // still renders the sensible 0, never "undefined".
+    expect(wrapper.text()).toContain('Three Nodes')
+    const rowCells = wrapper.findAll('td').map(td => td.text())
+    expect(rowCells).toContain('3')
+    expect(rowCells).toContain('0')
+  })
+
+  it('caps page_size at the backend maximum of 100 for runs and triggers fetches (no 422s)', async () => {
+    // Backend caps page_size at le=100 on /api/v1/runs and /api/v1/triggers;
+    // requesting 500 logs a 422 in the console on every page visit.
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Test Pipeline', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const calls = (api.GET as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, { params?: { query?: { page_size?: number } } }]>
+    const fetchCalls = calls.filter(([url]) => url === '/api/v1/runs' || url === '/api/v1/triggers')
+    expect(fetchCalls.length).toBeGreaterThan(0)
+    for (const [url, options] of fetchCalls) {
+      expect(options?.params?.query?.page_size, `${url} page_size must be clamped to the backend max`).toBeLessThanOrEqual(100)
+    }
   })
 })

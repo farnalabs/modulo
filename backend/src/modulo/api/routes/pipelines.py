@@ -507,6 +507,11 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     snapshot_count: int = 0
+    # Additive, backward-compatible: the pipelines list surfaces the stored
+    # graph's node count as a table column. Populated by the list endpoint's
+    # response builder (which already holds the full rows); other endpoints
+    # that reuse this model leave the additive default.
+    node_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
@@ -1303,6 +1308,19 @@ async def _resolve_graph_references(
     return schema_pins, model_backend_pins
 
 
+def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
+    """Build a list-item response, deriving node_count from the stored graph.
+
+    The CRUD list already loads the full rows, so ``len(graph_nodes_json)``
+    is cheap (no extra query). Defensive against partial ORM stand-ins that
+    lack the attribute (tests, internal callers).
+    """
+    response = PipelineResponse.model_validate(pipeline)
+    nodes = getattr(pipeline, "graph_nodes_json", None)
+    response.node_count = len(nodes) if isinstance(nodes, list) else 0
+    return response
+
+
 @router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors("pipelines.list")
 async def list_pipelines_endpoint(
@@ -1329,7 +1347,7 @@ async def list_pipelines_endpoint(
         _raise_db_migration_error()
 
     return PipelineListResponse(
-        items=[PipelineResponse.model_validate(p) for p in result.items],
+        items=[_pipeline_list_item(p) for p in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,

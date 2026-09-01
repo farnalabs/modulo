@@ -46,6 +46,7 @@ def _make_pipeline() -> MagicMock:
     p.max_duration_seconds = None
     p.archived_at = None
     p.snapshot_count = 0
+    p.graph_nodes_json = []
     p.id = _PIPELINE_ID
     p.organisation_id = _ORG_ID
     p.name = "Test Pipeline"
@@ -183,6 +184,57 @@ def test_list_pipelines_returns_200(client: TestClient) -> None:
     body = resp.json()
     assert body["total"] == 1
     assert body["items"][0]["name"] == "Test Pipeline"
+
+
+def test_list_pipelines_includes_node_count(client: TestClient) -> None:
+    """Prove-the-fix: each list item carries node_count derived from the row's
+    stored graph_nodes_json (the count the /pipelines Nodes column renders).
+    Without the response-builder change, node_count stays at the additive
+    default (0) and this test fails."""
+    pipeline = _make_pipeline()
+    pipeline.graph_nodes_json = [{"id": "n1"}, {"id": "n2"}, {"id": "n3"}]
+    page_result = MagicMock()
+    page_result.items = [pipeline]
+    page_result.total = 1
+    page_result.page = 1
+    page_result.page_size = 20
+    page_result.next_cursor = None
+    page_result.has_more = False
+
+    with (
+        patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/pipelines")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["node_count"] == 3
+
+
+def test_list_pipelines_node_count_defaults_to_zero_for_empty_graph(client: TestClient) -> None:
+    """A pipeline with an empty stored graph reports node_count 0 (not an
+    error and not a missing field) — the empty/0 rendering contract of the
+    Nodes column."""
+    pipeline = _make_pipeline()
+    pipeline.graph_nodes_json = []
+    page_result = MagicMock()
+    page_result.items = [pipeline]
+    page_result.total = 1
+    page_result.page = 1
+    page_result.page_size = 20
+    page_result.next_cursor = None
+    page_result.has_more = False
+
+    with (
+        patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/pipelines")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["node_count"] == 0
 
 
 # ---------------------------------------------------------------------------
