@@ -5,6 +5,30 @@ on:
     # Off-boundary minutes dodge the scheduler sampling that drops round-boundary crons on high-activity repos (FAR-492).
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
+  # FAR-492: GitHub's scheduler dropped ~95% of the */15 cron events on this
+  # high-activity repo (2-5h effective cadence vs 15m configured; gaps up to
+  # 9.7h), leaving approved, CI-green PRs waiting hours to merge. The cron
+  # stays as a last-resort sweep; the paths below make the queue event-driven
+  # so it runs the moment a PR becomes mergeable. Relevance filtering for the
+  # event paths lives in the `event-gate` job.
+  pull_request_review:
+    # Primary path: a queue-recognized reviewer (farnalabs / modulo-reviewbot)
+    # submits an APPROVED review. Filtered in event-gate.
+    types: [submitted]
+  check_suite:
+    # Primary path: a check suite completed (CI on a PR head). Runs only when
+    # a SUCCESSFUL suite belongs to the head of an open, APPROVED PR.
+    types: [completed]
+  repository_dispatch:
+    # Self-chaining fallback (stateless, FAR-492): a pass that found approved
+    # PRs still waiting on CI dispatches 'merge-queue-chain' ~10 min ahead.
+    # Deliberately repository_dispatch instead of `gh workflow run` because
+    # GitHub has a caching bug where workflow_dispatch on a recently modified
+    # workflow returns HTTP 422 "Workflow does not have 'workflow_dispatch'
+    # trigger". GITHUB_TOKEN is exempt from the recursive-run block for
+    # workflow_dispatch/repository_dispatch, and the queue job already holds
+    # contents:write.
+    types: [merge-queue-chain]
 
 concurrency:
   group: merge-queue
@@ -50,10 +74,95 @@ jobs:
             echo "frozen=false" >> "$GITHUB_OUTPUT"
           fi
 
+  event-gate:
+    name: Event relevance gate (FAR-492)
+    # Cheap context-only filter so the heavy queue job only runs for relevant
+    # events. schedule/workflow_dispatch always pass; pull_request_review
+    # passes for an APPROVED review by a queue-recognized reviewer;
+    # check_suite passes when a successful suite belongs to the head of an
+    # open, approved PR; repository_dispatch (self-chain) honors the payload's
+    # not-before time so chained passes pace ~10 min apart - the wait happens
+    # HERE on a tiny idle runner, NOT inside the queue job, which would hold
+    # the merge-queue concurrency slot and delay real event-triggered merges.
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - name: Decide whether this trigger should run the queue
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+          CS_CONCLUSION: ${{ github.event.check_suite.conclusion }}
+          CS_HEAD_SHA: ${{ github.event.check_suite.head_sha }}
+          CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
+          CHAIN_READY_AT: ${{ github.event.client_payload.ready_at || 0 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Numeric hardening: expressions above default missing payload fields
+          # to 0, but reject anything non-numeric before bash arithmetic.
+          case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
+          case "$CHAIN_READY_AT" in ''|*[!0-9]*) CHAIN_READY_AT=0 ;; esac
+          SHOULD_RUN=false
+          case "$EVENT_NAME" in
+            schedule|workflow_dispatch)
+              SHOULD_RUN=true ;;
+            repository_dispatch)
+              # Self-chaining pass (FAR-492). Depth-capped: after 12 chained
+              # passes the loop re-anchors to the 15-min cron sweep instead of
+              # chaining forever.
+              if [ "$EVENT_ACTION" = "merge-queue-chain" ]; then
+                if [ "$CHAIN_DEPTH" -ge 12 ]; then
+                  echo "Self-chain depth cap reached - deferring to the cron sweep."
+                else
+                  NOW=$(date -u +%s)
+                  WAIT=$((CHAIN_READY_AT - NOW))
+                  if [ "$WAIT" -gt 660 ]; then
+                    # Malformed/foreign payload safety cap (11 min).
+                    WAIT=660
+                  fi
+                  if [ "$WAIT" -gt 0 ]; then
+                    echo "Chained pass not due yet - waiting ${WAIT}s (paced self-chain)."
+                    sleep "$WAIT"
+                  fi
+                  SHOULD_RUN=true
+                fi
+              fi ;;
+            pull_request_review)
+              # Same reviewer set the collect step accepts - anything else is
+              # not queue-relevant and must not wake the heavy job.
+              if [ "$REVIEW_STATE" = "APPROVED" ] && { [ "$REVIEW_AUTHOR" = "farnalabs" ] || [ "$REVIEW_AUTHOR" = "modulo-reviewbot" ]; }; then
+                SHOULD_RUN=true
+              fi ;;
+            check_suite)
+              # Run only when the successful suite belongs to the head of an
+              # open, approved PR - i.e. the PR just became mergeable.
+              if [ "$CS_CONCLUSION" = "success" ] && [ -n "$CS_HEAD_SHA" ]; then
+                MATCHES=$(gh pr list --state open --limit 100 \
+                  --json number,headRefOid,reviewDecision \
+                  --jq "[.[] | select(.headRefOid == \"$CS_HEAD_SHA\" and .reviewDecision == \"APPROVED\")] | length" \
+                  2>/dev/null || echo 0)
+                if [ "${MATCHES:-0}" -gt 0 ]; then
+                  SHOULD_RUN=true
+                fi
+              fi ;;
+          esac
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+          echo "Event gate: event=$EVENT_NAME action=${EVENT_ACTION:-n/a} -> should_run=$SHOULD_RUN"
+
   queue:
     name: Merge queue -> main
-    needs: freeze-gate
-    if: needs.freeze-gate.outputs.frozen == 'false'
+    needs: [freeze-gate, event-gate]
+    if: needs.freeze-gate.outputs.frozen == 'false' && needs.event-gate.outputs.should_run == 'true'
     timeout-minutes: 30
     permissions:
       contents: write
@@ -178,6 +287,7 @@ jobs:
           # Filter to only PRs approved by farnalabs or modulo-reviewbot
           APPROVED_COUNT=0
           echo "[]" > /tmp/prs.json
+          rm -f /tmp/ci_pending_prs.txt
 
           jq -c '.[]' /tmp/all_prs.json | while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
@@ -196,6 +306,15 @@ jobs:
               CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
               if [ "$CI_CONCLUSION" != "success" ]; then
                 echo "  skipping - CI not passing (latest: $CI_CONCLUSION)"
+                # FAR-492: a still-running/queued (or unknown) CI is a "waiting"
+                # state the self-chain step keeps pace with. A FAILED CI is
+                # deliberately NOT chained - the Branch Fixer loop owns that;
+                # its push fires the check_suite event that re-triggers the
+                # queue, so chaining here would only burn light passes.
+                case "$CI_CONCLUSION" in
+                  ""|null|unknown|in_progress|queued|pending|requested|waiting)
+                    echo "$NUM" >> /tmp/ci_pending_prs.txt ;;
+                esac
               else
                 echo "$pr" >> /tmp/approved_prs.json
                 APPROVED_COUNT=$((APPROVED_COUNT + 1))
@@ -204,6 +323,14 @@ jobs:
               echo "not approved yet -- skipping"
             fi
           done
+
+          # FAR-492: count via temp file - the while loop above runs in a
+          # pipeline subshell, so variable mutations there do not survive.
+          CI_PENDING=0
+          if [ -f /tmp/ci_pending_prs.txt ]; then
+            CI_PENDING=$(sort -u /tmp/ci_pending_prs.txt | grep -c . || true)
+          fi
+          echo "Approved PRs still waiting on CI: $CI_PENDING"
 
           # Combine approved PRs into the prs.json file
           if [ -f /tmp/approved_prs.json ]; then
@@ -214,6 +341,7 @@ jobs:
           echo "Approved PRs ready for queue: $PR_COUNT"
           echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
           echo "all_count=$ALL_COUNT" >> "$GITHUB_OUTPUT"
+          echo "ci_pending_count=$CI_PENDING" >> "$GITHUB_OUTPUT"
 
       - name: Exit early if no approved PRs
         if: steps.collect.outputs.pr_count == '0'
@@ -850,6 +978,37 @@ jobs:
         run: |
           git push origin --delete "refs/heads/${{ env.branch_ref }}" 2>/dev/null || true
           echo "Cleaned up merge-queue remote branch."
+
+      # FAR-492 self-chaining fallback - STATELESS design, chosen over the
+      # counter-based alternative because it needs no cross-run persisted
+      # state: the dispatch payload itself carries {depth, ready_at}; the
+      # event-gate job honors the not-before time (~10-min pacing on a tiny
+      # idle runner) and the depth cap (12, then re-anchor to the 15-min cron).
+      # Idle passes chain NOTHING - the next approval or CI-success event
+      # re-fires the queue - so the loop self-terminates when nothing waits.
+      - name: Self-chain next pass while approved PRs wait on CI (FAR-492)
+        if: success() && steps.collect.outputs.ci_pending_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
+          NEXT_DEPTH=$((CHAIN_DEPTH + 1))
+          READY_AT=$(( $(date -u +%s) + 600 ))
+          PAYLOAD=$(jq -n --argjson depth "$NEXT_DEPTH" --argjson ready_at "$READY_AT" \
+            '{event_type: "merge-queue-chain", client_payload: {depth: $depth, ready_at: $ready_at}}')
+          # repository_dispatch, NOT `gh workflow run`: GitHub 422s
+          # workflow_dispatch on a recently modified workflow ("Workflow does
+          # not have 'workflow_dispatch' trigger" caching bug). GITHUB_TOKEN is
+          # exempt from the recursive-run block for repository_dispatch.
+          if gh api -X POST "repos/${{ github.repository }}/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
+            echo "Chained next queue pass (~10 min out, depth $NEXT_DEPTH) - keeps pace while CI runs."
+          else
+            # Non-fatal: the 15-min cron sweep + PR/CI events still cover the queue.
+            echo "::warning::repository_dispatch chain failed - cron + events keep coverage."
+          fi
 
       # If CI failed or conflicts -- preserve for fixer
       - name: Preserve merge-queue branch on CI failure
