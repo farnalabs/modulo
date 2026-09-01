@@ -187,3 +187,40 @@ class TestTriggerPipelineToolRateLimit(_AuthContext):
         assert result["langgraph_thread_id"] == thread_id
         mock_get_pipeline.assert_awaited_once()
         mock_dispatch.assert_awaited_once()
+
+
+class TestTriggerPipelineSnapshotLockBusy(_AuthContext):
+    """FAR-527: a busy snapshot advisory lock used to return a fake
+    {"status": "queued"} with no run_id and nothing persisted — a silent drop
+    that told the caller a retry existed when none did. The tool must return
+    an honest, actionable error instead."""
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.dispatch_run")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_pipeline")
+    @patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph")
+    @patch("modulo.db.crud.run.create_run")
+    async def test_returns_snapshot_lock_busy_error_not_queued(
+        self,
+        mock_create_run: AsyncMock,
+        mock_snapshot: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_dispatch: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+        mock_snapshot.side_effect = SnapshotLockNotAvailableError("busy")
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await trigger_pipeline(pipeline_id=str(uuid.uuid4()))
+
+        assert result["error"] == "snapshot_lock_busy"
+        assert "retry" in result["detail"].lower()
+        assert result.get("status") != "queued"
+        assert "queued" not in result.get("detail", "")
+        assert "run_id" not in result
+        mock_create_run.assert_not_called()
+        mock_dispatch.assert_not_called()

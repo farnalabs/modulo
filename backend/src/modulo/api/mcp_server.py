@@ -2464,8 +2464,19 @@ async def trigger_pipeline(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except SnapshotLockNotAvailableError:
-        _log.info("trigger_pipeline queued — snapshot lock not available for pipeline %s", pipeline_id)
-        return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+        _log.warning(
+            "trigger_pipeline failed — snapshot lock not available for pipeline %s after %s attempts (FAR-527)",
+            pipeline_id,
+            SNAPSHOT_LOCK_ATTEMPTS,
+        )
+        return {
+            "error": "snapshot_lock_busy",
+            "detail": (
+                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the trigger"
+            ),
+        }
     except OrgDeletedError as exc:
         _log.exception("trigger_pipeline failed — organisation deleted or missing")
         if exc.deleted:

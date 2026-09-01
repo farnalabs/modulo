@@ -1,5 +1,6 @@
 """Create immutable execution snapshots from the editable pipeline graph."""
 
+import asyncio
 import copy
 import hashlib
 import uuid
@@ -34,6 +35,15 @@ def _pipeline_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
     key1 = int.from_bytes(digest[:4], "big", signed=True)
     key2 = int.from_bytes(digest[4:8], "big", signed=True)
     return (key1, key2)
+
+
+# FAR-527: bounded-wait acquisition of the snapshot advisory lock. Snapshot
+# creation is a fast graph copy, so contention between two near-simultaneous
+# run-starts resolves in milliseconds — a short retry loop nearly always
+# succeeds where a single pg_try_advisory_lock attempt raised and the caller
+# silently dropped the trigger. Module-level so tests can patch them.
+SNAPSHOT_LOCK_ATTEMPTS = 5
+SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS = 0.25
 
 
 async def _load_pipeline_and_edges(
@@ -364,15 +374,27 @@ async def create_snapshot_from_live_graph(
     keep the defaults and produce a ``version_kind='run'`` snapshot; live-edit
     saves go through ``create_snapshot_edit`` which passes ``version_kind='edit'``
     so the live-edit chain stays distinguishable from run-frozen snapshots.
+
+    FAR-527: lock acquisition retries up to ``SNAPSHOT_LOCK_ATTEMPTS`` times,
+    sleeping ``SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS`` between attempts, so a
+    near-simultaneous run-start (which holds the lock only for the fast graph
+    copy) no longer fails the trigger outright. Raises
+    SnapshotLockNotAvailableError only after the budget is exhausted.
     """
     # Acquire session-scoped advisory lock to serialise snapshot creation.
     key1, key2 = _pipeline_lock_keys(pipeline_id)
-    lock_result = await session.execute(
-        text("SELECT pg_try_advisory_lock(:key1, :key2)"),
-        {"key1": key1, "key2": key2},
-    )
-    if not lock_result.scalar_one():
-        raise SnapshotLockNotAvailableError(f"Cannot acquire snapshot lock for pipeline {pipeline_id}")
+    for attempt in range(1, SNAPSHOT_LOCK_ATTEMPTS + 1):
+        lock_result = await session.execute(
+            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
+        )
+        if lock_result.scalar_one():
+            break
+        if attempt == SNAPSHOT_LOCK_ATTEMPTS:
+            raise SnapshotLockNotAvailableError(
+                f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
+            )
+        await asyncio.sleep(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
 
     try:
         pipeline, nodes, edge_dicts = await _load_pipeline_and_edges(session, pipeline_id)

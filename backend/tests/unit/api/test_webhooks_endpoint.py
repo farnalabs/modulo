@@ -477,10 +477,11 @@ def test_receive_webhook_concurrent_limit_returns_429(client: TestClient) -> Non
     assert resp.status_code == 429
 
 
-def test_receive_webhook_snapshot_lock_busy_returns_202_queued(client: TestClient) -> None:
-    """Concurrent webhook delivery hitting the per-pipeline snapshot advisory
-    lock must 202 + {"status": "queued"} (like the MCP trigger path) instead of
-    falling through to the generic 500 handler. No fabricated run_id."""
+def test_receive_webhook_snapshot_lock_busy_returns_503_error(client: TestClient) -> None:
+    """FAR-527: a busy per-pipeline snapshot advisory lock used to ack 202
+    {"status": "queued"} while nothing was queued anywhere — a silent drop.
+    The endpoint must surface an honest 503 so well-behaved webhook
+    deliverers redeliver, and never fabricate a queued status."""
     from modulo.core.exceptions import SnapshotLockNotAvailableError
 
     with (
@@ -499,18 +500,19 @@ def test_receive_webhook_snapshot_lock_busy_returns_202_queued(client: TestClien
             headers={"X-Modulo-Timestamp": str(int(time.time()))},
         )
 
-    assert resp.status_code == 202
+    assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "queued"
-    assert body["detail"] == "Pipeline busy — queued for retry"
-    assert body.get("run_id") is None
+    assert "snapshot lock unavailable" in body["detail"]
+    assert "retry" in body["detail"].lower()
+    assert body["title"] == "Service Unavailable"
+    assert "run_id" not in body
     m.assert_not_called()
     dispatch.assert_not_called()
 
 
-def test_replay_webhook_snapshot_lock_busy_returns_202_queued(client: TestClient) -> None:
-    """Replay hitting the snapshot advisory lock behaves like receive_webhook:
-    202 + {"status": "queued"}, no fabricated run_id, engine never called."""
+def test_replay_webhook_snapshot_lock_busy_returns_503_error(client: TestClient) -> None:
+    """FAR-527: replay hitting the snapshot advisory lock returns an honest
+    503 (never a fabricated queued status), engine never called."""
     from modulo.core.exceptions import SnapshotLockNotAvailableError
 
     event_id = uuid.uuid4()
@@ -529,11 +531,11 @@ def test_replay_webhook_snapshot_lock_busy_returns_202_queued(client: TestClient
             headers=_auth_headers("admin"),
         )
 
-    assert resp.status_code == 202
+    assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "queued"
-    assert body["detail"] == "Pipeline busy — queued for retry"
-    assert body.get("run_id") is None
+    assert "snapshot lock unavailable" in body["detail"]
+    assert body["title"] == "Service Unavailable"
+    assert "run_id" not in body
     m.assert_not_called()
     dispatch.assert_not_called()
 

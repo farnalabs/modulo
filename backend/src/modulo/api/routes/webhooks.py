@@ -338,13 +338,22 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
-    except SnapshotLockNotAvailableError:
-        _log.info(
-            "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+    except SnapshotLockNotAvailableError as exc:
+        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+        _log.warning(
+            "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
+            SNAPSHOT_LOCK_ATTEMPTS,
         )
-        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
+                "retry the webhook delivery"
+            ),
+        ) from exc
     except ProgrammingError:
         _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
@@ -581,13 +590,22 @@ async def replay_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
-    except SnapshotLockNotAvailableError:
-        _log.info(
-            "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+    except SnapshotLockNotAvailableError as exc:
+        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+        _log.warning(
+            "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
+            SNAPSHOT_LOCK_ATTEMPTS,
         )
-        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
+                "retry the webhook delivery"
+            ),
+        ) from exc
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
