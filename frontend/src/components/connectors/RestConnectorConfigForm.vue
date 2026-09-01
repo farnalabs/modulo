@@ -78,7 +78,7 @@
             v-model="config.records_path"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-            :placeholder="$t('connectors.rest.records_path_placeholder')"
+            placeholder="data.items"
             data-testid="rest-connector-records-path"
             :aria-describedby="'restconn-records-path-help'"
           />
@@ -91,7 +91,7 @@
             v-model="config.allowed_hosts"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            :placeholder="$t('connectors.rest.allowed_hosts_placeholder')"
+            placeholder="api.example.com,cdn.example.com"
             data-testid="rest-connector-allowed-hosts"
             :aria-describedby="'restconn-allowed-hosts-help'"
           />
@@ -432,6 +432,14 @@ onMounted(() => {
   credsBaseline.value = secretSnapshot()
   identityBaseline.value = identitySnapshot()
   baselineAuthMode.value = credentials.value.auth_mode ?? null
+  // A fresh mount's prefill state IS the baseline, so dirtiness at mount time
+  // is definitionally false. Reset the shared flags here: when the parent
+  // remounts this form per edit target (:key), the PREVIOUS instance's
+  // watchers can flip them against ITS stale baseline before the remount
+  // lands, and without this reset B's untouched prefill would re-send
+  // credentials (silently clobbering B's stored secret) (FAR-466 QA fix 4).
+  credsDirty.value = false
+  credsIdentityDirty.value = false
 })
 watch(
   () => secretSnapshot(),

@@ -181,6 +181,8 @@ from modulo.connectors._rate_bucket import PerDestinationRateLimiter, TokenBucke
 from modulo.connectors._retry_headers import parse_retry_after
 from modulo.connectors._safe_page import safe_records_list
 from modulo.connectors.base import (
+    DEFAULT_ON_UNKNOWN,
+    ON_UNKNOWN_MODES,
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -195,16 +197,16 @@ _log = logging.getLogger(__name__)
 
 # Standard HTTP verbs the connector will issue (all else is rejected).
 _ALLOWED_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
-
-# FAR-458 connector-write idempotency gate: the per-op ``on_unknown`` modes.
-# Names the AMBIGUOUS (couldn't-confirm-delivery) decision: ``fail_open`` re-fires
-# the write (possible duplicate, usually recoverable), ``fail_closed`` SUPPRESSES
-# it (possible silent miss; operator reconciles), and ``off`` bypasses the gate
-# entirely. The default ``fail_open`` preserves the pre-existing fail-open gate
-# contract. Invalid values are rejected at config-parse time (never silently
-# adopted), so a typo is a loud configuration error rather than a surprise.
-_DEFAULT_ON_UNKNOWN = "fail_open"
-_ON_UNKNOWN_MODES = frozenset({"fail_open", "fail_closed", "off"})
+# FAR-458 connector-write idempotency gate: the per-op ``on_unknown`` modes and
+# default live in ONE place — ``modulo.connectors.base`` (a stdlib-only leaf
+# both this connector's config validation and the pipeline engine's gate read
+# import) so the mode set can never drift between the two. ``fail_open``
+# (default) re-fires a write whose prior delivery could not be confirmed
+# (possible duplicate, usually recoverable), ``fail_closed`` SUPPRESSES that
+# re-fire (possible silent miss; operator reconciles), and ``off`` bypasses the
+# gate entirely. Invalid values are rejected at config-parse time (never
+# silently adopted), so a typo is a loud configuration error rather than a
+# surprise.
 
 # Auth/transport headers the user/agent must never be able to override through a
 # rendered request header (FAR-408 injection guard). ``host``/``content-length``
@@ -249,20 +251,19 @@ SsrfValidator = Callable[[str], Awaitable[None] | None]
 
 def _normalise_on_unknown(value: Any) -> str:
     """Validate a REST ``on_unknown`` config value and return its canonical form.
-
-    ``None`` (absent) defaults to ``"fail_open"`` (the fail-open gate contract).
-    Any other value is normalised (lowercased, stripped) and must be one of
-    ``{"fail_open", "fail_closed", "off"}`` — an invalid value raises ``ValueError``
-    so a misconfigured ``on_unknown`` is a loud config error, never silently
-    adopted. Called at config-parse time (``__init__``) and per-operation
-    (``_operation_spec``) so BOTH a top-level and a per-resource override are
-    validated.
+    ``None`` (absent) defaults to ``DEFAULT_ON_UNKNOWN`` (``"fail_open"`` — the
+    fail-open gate contract). Any other value is normalised (lowercased,
+    stripped) and must be one of ``ON_UNKNOWN_MODES`` — an invalid value raises
+    ``ValueError`` so a misconfigured ``on_unknown`` is a loud config error,
+    never silently adopted. Called at config-parse time (``__init__``) and
+    per-operation (``_operation_spec``) so BOTH a top-level and a
+    per-resource override are validated.
     """
     if value is None:
-        return _DEFAULT_ON_UNKNOWN
+        return DEFAULT_ON_UNKNOWN
     v = str(value).strip().lower()
-    if v not in _ON_UNKNOWN_MODES:
-        raise ValueError(f"REST on_unknown must be one of {sorted(_ON_UNKNOWN_MODES)} — got {value!r}")
+    if v not in ON_UNKNOWN_MODES:
+        raise ValueError(f"REST on_unknown must be one of {sorted(ON_UNKNOWN_MODES)} — got {value!r}")
     return v
 
 
@@ -1015,7 +1016,7 @@ class RestConnector(ConnectorBase):
         try:
             return cast(str, self._operation_spec(resource, default_method="POST")["on_unknown"])
         except ValueError:
-            return _DEFAULT_ON_UNKNOWN
+            return DEFAULT_ON_UNKNOWN
 
     # ── Auth ───────────────────────────────────────────────────────────────
 
@@ -1046,9 +1047,18 @@ class RestConnector(ConnectorBase):
                 raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth['in']!r}")
             if auth["in"] == "header":
                 header_name = creds.get("header_name")
+                # An empty/whitespace-only name is UNSET, not a name: an empty
+                # header name makes every request fail (httpx rejects it), so
+                # coerce it to None and fall back to the default instead.
+                if isinstance(header_name, str) and not header_name.strip():
+                    header_name = None
                 auth["header_name"] = str(header_name) if header_name is not None else "X-API-Key"
             else:
                 query_param_name = creds.get("query_param_name")
+                # Same unset treatment for the query parameter name: an empty
+                # value must never be used verbatim as a query key.
+                if isinstance(query_param_name, str) and not query_param_name.strip():
+                    query_param_name = None
                 auth["query_param_name"] = str(query_param_name) if query_param_name is not None else "api_key"
         return auth
 

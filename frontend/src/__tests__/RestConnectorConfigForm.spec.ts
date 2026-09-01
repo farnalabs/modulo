@@ -250,8 +250,12 @@ describe('RestConnectorConfigForm', () => {
     const options = select.findAll('option').map(o => o.text())
     expect(options).toEqual(['fail_open', 'fail_closed', 'off'])
     expect(select.element.getAttribute('aria-describedby')).toContain('restconn-on-unknown-help')
-    expect(wrapper.text()).toContain('recover duplicates')
-    expect(wrapper.text()).toContain('possible duplicate')
+    // on_unknown is the per-operation duplicate-write policy (the
+    // connector-write idempotency gate) — NOT records extraction. The label and
+    // help copy must describe that semantic (FAR-466 QA fix 1).
+    expect(wrapper.text()).toContain('Duplicate-write policy')
+    expect(wrapper.text()).toContain("Re-fire the write when the previous attempt's delivery could not be confirmed")
+    expect(wrapper.text()).toContain('A duplicate delivery is possible; a silent miss is not.')
   })
 
   it('does not clobber the stored secret on an edit prefill round-trip', async () => {

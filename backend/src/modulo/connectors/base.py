@@ -5,6 +5,21 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+# FAR-458 connector-write idempotency gate: the per-op ``on_unknown`` policy
+# modes and their default — the SINGLE source of truth for the mode set. Both
+# consumers import from here so the set can never drift between the REST
+# connector's config validation and the pipeline engine's gate read:
+#   - ``modulo.connectors.rest`` validates the connector's ``on_unknown`` config
+#     value against :data:`ON_UNKNOWN_MODES` and defaults to
+#     :data:`DEFAULT_ON_UNKNOWN` when absent.
+#   - ``modulo.core.pipeline_engine.node_runner`` coerces a connector's
+#     ``on_unknown_for`` read to :data:`DEFAULT_ON_UNKNOWN` for any value
+#     outside :data:`ON_UNKNOWN_MODES`.
+# This module is a stdlib-only leaf, so importing it from either side cannot
+# create a cycle.
+ON_UNKNOWN_MODES = ("fail_open", "fail_closed", "off")
+DEFAULT_ON_UNKNOWN = "fail_open"
+
 
 class Capability(StrEnum):
     """Operations a connector can perform."""
@@ -518,7 +533,7 @@ class ConnectorBase(ABC):
         The default implements the fail-open contract of every other gate
         failure mode here; connectors override to declare a per-op policy.
         """
-        return "fail_open"
+        return DEFAULT_ON_UNKNOWN
 
     async def compensate(
         self,

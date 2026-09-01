@@ -66,6 +66,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
+from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
 from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
 
 if TYPE_CHECKING:
@@ -327,14 +328,15 @@ _IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
 # FAR-228: best-effort marker persist bounded inside a caught CancelledError
 # (5s — the node is being cancelled, the write must not delay the re-raise).
 _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
-# FAR-458: the per-connector-per-write ``on_unknown`` default. Governs the
-# connector-write idempotency gate's AMBIGUOUS (couldn't-confirm-delivery)
-# decision: ``fail_open`` (default) re-fires the write on ambiguity (possible
-# duplicate, usually recoverable); ``fail_closed`` SUPPRESSES it (possible
-# silent miss; the operator reconciles); ``off`` bypasses the gate entirely.
-# A CONFIRMED-delivered write (delivery_done + matching key) is ALWAYS suppressed
-# regardless of the mode (that is the point of dedup).
-_DEFAULT_CONNECTOR_ON_UNKNOWN = "fail_open"
+# FAR-458: the per-connector-per-write ``on_unknown`` modes and default live in
+# ONE place — ``modulo.connectors.base`` (a stdlib-only leaf imported by both
+# the pipeline engine's gate read and the REST connector's config validation)
+# so the mode set can never drift between the two. The default
+# ``DEFAULT_ON_UNKNOWN`` (``"fail_open"``) re-fires the write on ambiguity
+# (possible duplicate, usually recoverable); ``fail_closed`` SUPPRESSES it
+# (possible silent miss; the operator reconciles); ``off`` bypasses the gate
+# entirely. A CONFIRMED-delivered write (delivery_done + matching key) is
+# ALWAYS suppressed regardless of the mode (that is the point of dedup).
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
@@ -1458,6 +1460,14 @@ def _connector_write_payload_hash(resource: str, filters: dict[str, Any] | None,
     if provider_ref is None and isinstance(data, dict):
         provider_ref = data.get("provider_ref")
     identity: dict[str, Any] = {"resource": resource, "provider_ref": provider_ref, "data": data}
+    # ``json.dumps(..., default=str)`` would stringify set/frozenset members via
+    # ``str(set)``, whose ordering is PYTHONHASHSEED-dependent — so the gate and
+    # stamp sides could derive DIFFERENT keys across worker processes and the
+    # connector-write dedup would be silently defeated. Pre-canonicalise only the
+    # non-JSON-native set containers to sorted lists (everything else is passed
+    # through unchanged, so the primary ``default=str`` path keeps handling
+    # dates/Paths as before and existing non-set keys are unaffected).
+    identity = _canonicalize_sets(identity)
     try:
         return _json.dumps(identity, sort_keys=True, default=str)
     except (TypeError, ValueError):
@@ -1471,6 +1481,27 @@ def _connector_write_payload_hash(resource: str, filters: dict[str, Any] | None,
         return _json.dumps(_canonical_coerce(identity), sort_keys=True)
 
 
+def _canonicalize_sets(obj: Any) -> Any:
+    """Recursively convert set/frozenset containers to sorted lists.
+
+    ``json.dumps`` has no native encoding for sets and would otherwise fall back
+    to ``str(set)`` (via ``default=str``), whose member order depends on
+    ``PYTHONHASHSEED`` — producing different serialisations across worker
+    processes and silently defeating the connector-write dedup. Converting sets
+    to sorted lists (sorted by ``str`` of the coerced member, matching
+    :func:`_canonical_coerce`) makes the output byte-identical across processes.
+    All other containers and scalars are passed through unchanged so the primary
+    ``json.dumps(..., default=str)`` path keeps handling dates/Paths as before.
+    """
+    if isinstance(obj, dict):
+        return {k: _canonicalize_sets(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_canonicalize_sets(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return sorted((_canonicalize_sets(v) for v in obj), key=str)
+    return obj
+
+
 def _canonical_coerce(obj: Any) -> Any:
     """Deterministically coerce *obj* into a JSON-serialisable structure.
 
@@ -1481,8 +1512,14 @@ def _canonical_coerce(obj: Any) -> Any:
     """
     if isinstance(obj, dict):
         return {str(k): _canonical_coerce(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
-    if isinstance(obj, (list, tuple, set, frozenset)):
+    if isinstance(obj, (list, tuple)):
         return [_canonical_coerce(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        # Set iteration order is nondeterministic across processes
+        # (PYTHONHASHSEED); sort the coerced members so the serialisation stays
+        # byte-identical between the gate and stamp sides — otherwise two
+        # invocations could derive DIFFERENT keys and silently defeat the dedup.
+        return sorted((_canonical_coerce(v) for v in obj), key=str)
     return str(obj)
 
 
@@ -1513,7 +1550,7 @@ def _connector_on_unknown(connector: Any, resource: str) -> str:
     """
     reader = getattr(connector, "on_unknown_for", None)
     if not callable(reader):
-        return _DEFAULT_CONNECTOR_ON_UNKNOWN
+        return DEFAULT_ON_UNKNOWN
     try:
         mode = reader(resource)
     except Exception:
@@ -1521,8 +1558,8 @@ def _connector_on_unknown(connector: Any, resource: str) -> str:
             "connector.idempotency_gate.on_unknown_read_failed",
             extra={"resource": resource},
         )
-        return _DEFAULT_CONNECTOR_ON_UNKNOWN
-    return mode if mode in ("fail_open", "fail_closed", "off") else _DEFAULT_CONNECTOR_ON_UNKNOWN
+        return DEFAULT_ON_UNKNOWN
+    return mode if mode in ON_UNKNOWN_MODES else DEFAULT_ON_UNKNOWN
 
 
 async def _stamp_connector_write_delivered(

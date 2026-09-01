@@ -47,9 +47,12 @@ import types
 from typing import Self
 from unittest.mock import AsyncMock, patch
 
+from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
+from modulo.connectors.rest import _normalise_on_unknown
 from modulo.core.pipeline_engine.idempotency import node_idempotency_key, read_before_write_suppression
 from modulo.core.pipeline_engine.node_runner import (
     _connector_marker_attempt_key,
+    _connector_on_unknown,
     _connector_write_gate,
     _connector_write_payload_hash,
     _stamp_connector_write_delivered,
@@ -473,6 +476,30 @@ class TestConnectorWriteGateOnUnknown:
         assert result is None
 
 
+class TestOnUnknownModeSetSingleSource:
+    """The ``on_unknown`` mode set and default are defined ONCE — in
+    ``modulo.connectors.base`` (a stdlib-only leaf) — and both the REST
+    connector's config validation and the pipeline engine's gate read import
+    them. No local redefinition may drift from the shared set."""
+
+    def test_shared_constants_hold_the_contract(self) -> None:
+        assert ON_UNKNOWN_MODES == ("fail_open", "fail_closed", "off")
+        assert DEFAULT_ON_UNKNOWN == "fail_open"
+
+    def test_rest_connector_validates_against_the_shared_set(self) -> None:
+        assert _normalise_on_unknown(None) == DEFAULT_ON_UNKNOWN
+        for mode in ON_UNKNOWN_MODES:
+            assert _normalise_on_unknown(mode.upper()) == mode
+        assert _normalise_on_unknown(" off ") == "off"
+
+    def test_engine_gate_reader_uses_the_shared_set(self) -> None:
+        for mode in ON_UNKNOWN_MODES:
+            connector = types.SimpleNamespace(on_unknown_for=lambda _resource, _mode=mode: _mode)
+            assert _connector_on_unknown(connector, "res") == mode
+        invalid = types.SimpleNamespace(on_unknown_for=lambda _resource: "bogus")
+        assert _connector_on_unknown(invalid, "res") == DEFAULT_ON_UNKNOWN
+
+
 # ── newest-key promotion (MAJOR 1) ───────────────────────────────────────────
 
 
@@ -739,3 +766,67 @@ class TestConnectorFailedWriteNoStamp:
         h2 = _connector_write_payload_hash(resource="command", filters={"provider_ref": None}, data=hash_data)
         assert h1 == h2
         assert "weird" in h1
+
+    def test_payload_hash_set_order_deterministic(self) -> None:
+        """Set/frozenset members must be sorted in the deterministic fallback so
+        the hash is byte-identical across processes (PYTHONHASHSEED) — otherwise
+        the gate and stamp sides could derive DIFFERENT keys and silently defeat
+        the dedup."""
+        from modulo.core.pipeline_engine.node_runner import _canonical_coerce
+
+        s = {"gamma", "alpha", "beta", frozenset({"z", "a"})}
+        out = _canonical_coerce(s)
+        # Stable, sorted, str-coerced — independent of Python's set iteration order.
+        # (The nested frozenset coerces to a list whose str sorts before the
+        # plain strings, so it leads the sorted output.)
+        assert out == [["a", "z"], "alpha", "beta", "gamma"], out
+        assert len({str(_canonical_coerce(s)) for _ in range(50)}) == 1
+
+    def test_payload_hash_set_level_cross_pythonhashseed(self) -> None:
+        """Hash-level proof of the MAJOR finding: ``_connector_write_payload_hash``
+        must derive an identical key for set-valued ``data`` across two different
+        ``PYTHONHASHSEED`` values (i.e. across separate worker processes). The
+        primary ``json.dumps(..., default=str)`` path stringifies sets via
+        ``str(set)``, whose order is PYTHONHASHSEED-dependent — so we re-derive the
+        hash under two seeds in subprocesses and assert they match. This exercises
+        the observable invariant end-to-end, not just the ``_canonical_coerce``
+        fallback."""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        backend_src = str(Path(__file__).parents[3] / "src")
+        payload_src = (
+            "from modulo.core.pipeline_engine.node_runner import "
+            "_connector_write_payload_hash as h; "
+            "data={'items': {'z', 'a', 'm'}, 'scopes': frozenset({'read', 'write'}), "
+            "'nested': {'k': {'x', 'y'}}}; "
+            "print(h(resource='command', filters={'provider_ref': None}, data=data))"
+        )
+
+        def _hash_under_seed(seed: str) -> str:
+            proc = subprocess.run(  # noqa: S603 - payload_src is a trusted literal constant
+                [sys.executable, "-c", payload_src],
+                env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": backend_src},
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            assert proc.returncode == 0, proc.stderr
+            return proc.stdout.strip()
+
+        assert _hash_under_seed("0") == _hash_under_seed("1")
+        # And the value must be genuinely canonical: the same set rebuilt under a
+        # different insertion order yields the identical key within this process.
+        h_a = _connector_write_payload_hash(
+            resource="command",
+            filters={"provider_ref": None},
+            data={"items": {"z", "a", "m"}, "scopes": frozenset({"read", "write"})},
+        )
+        h_b = _connector_write_payload_hash(
+            resource="command",
+            filters={"provider_ref": None},
+            data={"items": {"m", "z", "a"}, "scopes": frozenset({"write", "read"})},
+        )
+        assert h_a == h_b

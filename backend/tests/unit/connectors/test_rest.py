@@ -254,6 +254,56 @@ def test_auth_api_key_query() -> None:
     assert captured["params"] == {"api_key": "k456"}
 
 
+def test_auth_api_key_empty_header_name_falls_back_to_default() -> None:
+    """An empty-string ``header_name`` is UNSET, not a name: it must fall back to
+    the ``X-API-Key`` default instead of passing through (httpx rejects an empty
+    header name, which would brick every request the connector issues)."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.headers))
+        return httpx.Response(200, json={})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "api_key", "api_key": "k789", "in": "header", "header_name": ""},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert captured.get("x-api-key") == "k789"
+
+
+def test_auth_api_key_whitespace_query_param_name_falls_back_to_default() -> None:
+    """A whitespace-only ``query_param_name`` is UNSET: it must fall back to the
+    ``api_key`` default instead of being used verbatim as a query key."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json={})
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "api_key", "api_key": "k456", "in": "query", "query_param_name": "   "},
+    )
+    c._transport = httpx.MockTransport(handler)
+    asyncio_run(c.query(ConnectorQuery(resource="default")))
+    assert captured["params"] == {"api_key": "k456"}
+
+
+def test_auth_api_key_explicit_non_empty_names_pass_through() -> None:
+    """Explicit non-empty ``header_name``/``query_param_name`` values pass
+    through verbatim — the empty/whitespace coercion never touches a real name."""
+    auth = RestConnector._normalise_auth(
+        {"auth_mode": "api_key", "api_key": "k1", "in": "header", "header_name": "X-Custom-Auth"}
+    )
+    assert auth["header_name"] == "X-Custom-Auth"
+    auth = RestConnector._normalise_auth(
+        {"auth_mode": "api_key", "api_key": "k1", "in": "query", "query_param_name": "auth_token"}
+    )
+    assert auth["query_param_name"] == "auth_token"
+
+
 def test_api_key_query_secret_not_screened() -> None:
     """A query-mode api_key with filter-triggering chars must never hit the injection filter.
 

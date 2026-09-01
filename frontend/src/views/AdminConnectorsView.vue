@@ -184,7 +184,12 @@
         </div>
       </details>
 
-      <div v-if="editConnectorId" class="card p-6">
+      <!-- :key forces a fresh remount per edit target: without it, switching
+           Edit from connector A to B reuses the component instance and B's form
+           inherits A's stale onMounted baselines (credsDirty, credsIdentityDirty,
+           baselineAuthMode) — spurious modeChanged then forces B's secret re-entry
+           or silently overwrites B's stored credential (FAR-466 QA fix 4). -->
+      <div v-if="editConnectorId" :key="editConnectorId" class="card p-6">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminConnectorsView.edit_connector') }}</h2>
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
@@ -317,7 +322,11 @@ function emptyForm(): ConnectorFormState {
 // The flat + advanced field lists come from the form component so they stay the
 // single source of truth (REST_FLAT_FIELDS / REST_ADVANCED_FIELDS).
 const AUTH_IDENTITY_FIELDS = ['auth_mode', 'in', 'header_name', 'query_param_name']
-const NON_ADVANCED_FIELDS = new Set<string>([...REST_FLAT_FIELDS, ...AUTH_IDENTITY_FIELDS])
+// `description` is a first-class form control (formData.description) with its
+// own input — it must never be snapshotted into the advanced JSON editor, or a
+// stale stored description would clobber the user's fresh edit on save
+// (FAR-466 QA fix 2).
+const NON_ADVANCED_FIELDS = new Set<string>([...REST_FLAT_FIELDS, ...AUTH_IDENTITY_FIELDS, 'description'])
 
 const REST_ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
 const REST_AUTH_MODE_OPTIONS = ['bearer', 'api_key', 'basic']
@@ -405,7 +414,22 @@ function prefillRestConfig(connector: ConnectorItem) {
 }
 
 function buildRestConfig(): Record<string, unknown> {
+  // Advanced-JSON keys are applied FIRST and the validated flat fields ON TOP
+  // (FAR-466 QA fix 3): an unvalidated hand-typed advanced-JSON entry must
+  // never override a value the form just validated (base_url, method,
+  // on_unknown, timeout_seconds, description, ...). Flat wins on overlap;
+  // only keys the form does not surface as first-class controls survive from
+  // advanced_json.
+  let advanced: Record<string, unknown> = {}
+  if (restConfig.value.advanced_json.trim()) {
+    try {
+      advanced = JSON.parse(restConfig.value.advanced_json) as Record<string, unknown>
+    } catch {
+      // validated in the form component; never reached here
+    }
+  }
   const cfg: Record<string, unknown> = {
+    ...advanced,
     description: formData.description.trim(),
     base_url: restConfig.value.base_url.trim(),
     method: String(restConfig.value.method).toUpperCase(),
@@ -414,23 +438,15 @@ function buildRestConfig(): Record<string, unknown> {
     on_unknown: restConfig.value.on_unknown,
     records_path: restConfig.value.records_path.trim(),
   }
-  // Always emit allowed_hosts (never omit) so an empty field is an explicit
-  // clear signal. The recursive masked-merge treats a fully-specified
-  // non-secret list as a whole-list replacement, so sending [] here lets a
-  // user shrink or empty the SSRF/egress allowlist via the UI (it can no
-  // longer be widened-but-never-narrowed). An absent key would instead
-  // preserve the stale stored value.
+  // ALWAYS send allowed_hosts (FAR-466 QA fix): the backend PATCH config merge
+  // only overrides keys present in the payload, so omitting it when the field
+  // is cleared would silently keep the stored egress allowlist. An empty array
+  // is a valid "no restriction" value for the REST connector (falsy check).
   cfg.allowed_hosts = restConfig.value.allowed_hosts
     .split(',')
     .map(s => s.trim())
     .filter(Boolean)
-  if (restConfig.value.advanced_json.trim()) {
-    try {
-      Object.assign(cfg, JSON.parse(restConfig.value.advanced_json) as Record<string, unknown>)
-    } catch {
-      // validated in the form component; never reached here
-    }
-  }
+
   // Echo the NON-SECRET auth identity into config_json so a subsequent edit can
   // prefill it. The secret VALUES are protected — they live only in the
   // credentials payload, never here. The connector reads auth from the
