@@ -970,6 +970,7 @@ export default {
       "retry_policy_stall": "Stall (executor_stalled)",
       "retry_policy_timeout": "Timeout (node_timeout)",
       "retry_policy_failure": "Failure",
+      "retry_policy_eval_failed": "Eval failed (guardrail blocked)",
       "retry_policy_warning_no_max": "Set Max retries to at least 1, or the selected retry events will never fire.",
       "retry_policy_update_failed": "Failed to update retry policy: ",
       "idempotent": "Idempotent",

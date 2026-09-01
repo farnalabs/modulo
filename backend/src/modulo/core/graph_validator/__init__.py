@@ -68,7 +68,10 @@ _KNOWN_SANDBOX_TEMPLATES = frozenset({"opencode", "modulo-opencode"})
 
 # Pipeline retry_policy events + budget bound (kept in sync with the API
 # schema in api/routes/pipelines.py and the executor's _retry_after_policy).
-_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
+# "eval_failed" re-dispatches a guardrail-blocked run (final_status
+# "eval_failed" / error_code "eval.blocked"); the FAR-228 idempotency gate
+# (guard A) makes that re-dispatch safe for delivery nodes.
+_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
 # REST connector fan-out effective defaults. The connector defaults
@@ -2695,7 +2698,7 @@ class GraphValidator:
     def check_retry_policy(policy: Any, result: ValidationResult) -> None:
         """Validate a pipeline's ``retry_policy``, emitting an ERROR when malformed.
 
-        Valid shape: ``{"on": ["stall"|"timeout"|"failure"], "max_retries": 0-5}``.
+        Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"], "max_retries": 0-5}``.
         ``None``/``{}`` (no policy) passes. A malformed policy would silently
         disable retries at run time, so it is surfaced as a hard error here.
         """
@@ -2704,14 +2707,15 @@ class GraphValidator:
         if not isinstance(policy, dict):
             result.error(
                 "RETRY_POLICY_MALFORMED",
-                "retry_policy must be an object like {'on': ['stall','timeout','failure'], 'max_retries': 0-5}",
+                "retry_policy must be an object like "
+                "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}",
             )
             return
         events = policy.get("on", [])
         if not isinstance(events, list) or any(not isinstance(e, str) for e in events):
             result.error(
                 "RETRY_POLICY_MALFORMED",
-                "retry_policy 'on' must be a list of strings from ['stall','timeout','failure']",
+                "retry_policy 'on' must be a list of strings from ['stall','timeout','failure','eval_failed']",
             )
         else:
             unknown = set(events) - _RETRY_POLICY_EVENTS
@@ -2719,7 +2723,7 @@ class GraphValidator:
                 result.error(
                     "RETRY_POLICY_MALFORMED",
                     f"retry_policy 'on' contains unknown values {sorted(unknown)}; "
-                    "allowed values are ['stall','timeout','failure']",
+                    "allowed values are ['stall','timeout','failure','eval_failed']",
                 )
         max_retries = policy.get("max_retries", 0)
         if not _is_valid_retry_budget(max_retries):

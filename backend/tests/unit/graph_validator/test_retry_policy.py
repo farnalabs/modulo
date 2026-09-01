@@ -80,6 +80,32 @@ def test_retry_policy_valid_policy_passes() -> None:
     assert result.is_valid
 
 
+def test_retry_policy_eval_failed_event_is_valid() -> None:
+    """FAR-503: "eval_failed" is a first-class retry event — a policy that
+    re-dispatches guardrail-blocked runs must pass validation."""
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": ["eval_failed"], "max_retries": 1}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
+def test_retry_policy_all_events_including_eval_failed_pass() -> None:
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 5}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
+def test_retry_policy_unknown_events_still_rejected_alongside_eval_failed() -> None:
+    """Adding eval_failed must not loosen the set: near-miss spellings stay malformed."""
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": ["eval_failed", "eval_fail"], "max_retries": 1}, result)
+    assert "RETRY_POLICY_MALFORMED" in _codes(result)
+    message = next(i.message for i in result.issues if i.code == "RETRY_POLICY_MALFORMED")
+    assert "eval_fail" in message
+    assert not result.is_valid
+
+
 def test_retry_policy_default_max_retries_is_valid() -> None:
     result = ValidationResult()
     GraphValidator.check_retry_policy({"on": ["stall"]}, result)

@@ -59,8 +59,8 @@ __all__ = [
 
 # The events a node (or edge transition) may retry on. The design (§4F) names
 # them ``on: [timeout, error, stall]`` — distinct from the RUN-level
-# ``retry_policy`` events (``stall`` / ``timeout`` / ``failure``) which describe
-# whether a whole RUN is re-dispatched. A node retry is a finer-grained,
+# ``retry_policy`` events (``stall`` / ``timeout`` / ``failure`` / ``eval_failed``)
+# which describe whether a whole RUN is re-dispatched. A node retry is a finer-grained,
 # within-run re-execution trigger.
 RETRY_EVENTS: frozenset[str] = frozenset({"timeout", "error", "stall"})
 
@@ -162,7 +162,7 @@ def resolve_node_retry(node: dict[str, Any] | None, pipeline_retry_policy: Any) 
 
     A node's own ``retry`` block overrides the pipeline-level ``retry_policy``
     default; a node with no ``retry`` config inherits the pipeline default. The
-    run-level ``retry_policy`` uses the ``{on: [stall|timeout|failure],
+    run-level ``retry_policy`` uses the ``{on: [stall|timeout|failure|eval_failed],
     max_retries}`` shape; node overrides use ``{max_attempts, backoff,
     on: [timeout|error|stall]}``. The two vocabularies are reconciled here so the
     executor never has to branch on both shapes.
@@ -182,9 +182,10 @@ def resolve_node_retry(node: dict[str, Any] | None, pipeline_retry_policy: Any) 
 def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy:
     """Translate a run-level ``retry_policy`` to a :class:`NodeRetryPolicy`.
 
-    A run-level policy that says retry on ``stall``/``timeout``/``failure``
+    A run-level policy that says retry on ``stall``/``timeout``/``failure``/``eval_failed``
     becomes a node-level retry on the corresponding node events (``stall`` maps
-    to ``stall``, ``timeout`` to ``timeout``, ``failure`` to ``error``). The
+    to ``stall``, ``timeout`` to ``timeout``, ``failure`` to ``error``; ``eval_failed``
+    is handled by the executor-level guardrail path, not by node-level retries). The
     run-level ``max_retries`` is the retry budget, so the attempt ceiling is
     ``max_retries + 1``.
     """

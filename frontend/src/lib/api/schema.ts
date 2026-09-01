@@ -12985,7 +12985,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing.
              */
             retry_policy?: {
                 [key: string]: unknown;
@@ -13449,7 +13449,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. Set to {} to clear.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. Set to {} to clear.
              */
             retry_policy?: {
                 [key: string]: unknown;

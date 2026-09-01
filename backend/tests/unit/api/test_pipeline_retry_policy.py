@@ -161,7 +161,7 @@ def test_create_pipeline_accepts_empty_retry_policy(client: TestClient) -> None:
 
 def test_create_pipeline_accepts_all_valid_events(client: TestClient) -> None:
     pipeline = _make_pipeline()
-    pipeline.retry_policy = {"on": ["stall", "timeout", "failure"], "max_retries": 5}
+    pipeline.retry_policy = {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 5}
 
     with (
         patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
@@ -170,7 +170,10 @@ def test_create_pipeline_accepts_all_valid_events(client: TestClient) -> None:
     ):
         resp = client.post(
             "/api/v1/pipelines",
-            json={"name": "Pipeline", "retry_policy": {"on": ["stall", "timeout", "failure"], "max_retries": 5}},
+            json={
+                "name": "Pipeline",
+                "retry_policy": {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 5},
+            },
         )
 
     assert resp.status_code == 201
@@ -218,6 +221,28 @@ def test_update_pipeline_clears_retry_policy_with_empty_dict(client: TestClient)
 
     assert resp.status_code == 200
     assert not resp.json()["retry_policy"]
+
+
+def test_update_pipeline_accepts_eval_failed_retry_event(client: TestClient) -> None:
+    """FAR-503: PATCH with the new "eval_failed" event is accepted."""
+    pipeline = _make_pipeline()
+    pipeline.retry_policy = {"on": ["eval_failed"], "max_retries": 1}
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"retry_policy": {"on": ["eval_failed"], "max_retries": 1}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["retry_policy"] == {"on": ["eval_failed"], "max_retries": 1}
 
 
 def test_update_pipeline_rejects_unknown_retry_event(client: TestClient) -> None:

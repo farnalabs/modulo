@@ -248,6 +248,45 @@ def test_retry_after_policy_stall_error_code_on_failed_status():
 
 
 # ---------------------------------------------------------------------------
+# FAR-503 — the "eval_failed" event and the node-deadline "timeout" alias
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_policy_eval_failed_match():
+    # FAR-503: an eval-blocked run terminalizes as final_status "eval_failed"
+    # with raw error_code "eval_blocked" — the new event re-dispatches it.
+    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "eval_failed", "eval_blocked") == 1
+
+
+def test_retry_after_policy_eval_failed_dotted_code_match():
+    # The canonical dotted spelling (eval.blocked) behaves identically.
+    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 2}, "eval_failed", "eval.blocked") == 2
+
+
+def test_retry_after_policy_eval_failed_stays_surgical():
+    # The new event must not hijack the pre-existing events: a "eval_failed"-
+    # only policy never retries a stall/timeout/generic-failure outcome, and a
+    # "failure"-only policy never retries an eval-blocked run (eval_failed is a
+    # distinct terminal status, not a generic failure).
+    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "boom") is None
+    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "node_timeout") is None
+    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "stalled", "executor_stalled") is None
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 1}, "eval_failed", "eval_blocked") is None
+
+
+def test_retry_after_policy_timeout_matches_node_deadline_exceeded():
+    # FAR-369: the absolute node-deadline watchdog terminalizes with
+    # "node_deadline_exceeded" — a {on: ["timeout"]} policy must re-dispatch it
+    # (the live gap: the deadline code was not in the timeout alias set).
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
+
+
+def test_retry_after_policy_timeout_matches_dotted_deadline_code():
+    # The dotted registry spelling resolves identically through map_legacy_code.
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "failed", "node.deadline_exceeded") == 2
+
+
+# ---------------------------------------------------------------------------
 # _graph_is_idempotent — FAR-295 (idempotent flag gates every retry path)
 # ---------------------------------------------------------------------------
 
@@ -605,6 +644,7 @@ async def _run_single_retry_attempt(
     *,
     node_attempt_count: int,
     retry_policy: dict[str, Any],
+    compiled: MagicMock | None = None,
 ) -> tuple[str, Any, list[str], AsyncMock]:
     """Run ONE execute() against a streaming _GenericFailureError with a FRESH
     mock session.
@@ -613,6 +653,8 @@ async def _run_single_retry_attempt(
     session_factory creates a new session per call), so each simulated attempt
     must build a fresh session mock — reusing one session mock across attempts
     exhausts its canned result iterator and silently corrupts later attempts.
+    ``compiled`` overrides the default _GenericFailureError graph (e.g. an
+    EvalBlockedError graph for the FAR-503 eval_failed tests).
 
     Returns ``(outcome, payload, statements, finalize_mock)`` where outcome is
     ``"retry"`` (RunRetryPolicyError raised — the run was reset to pending and
@@ -625,7 +667,8 @@ async def _run_single_retry_attempt(
     factory = _make_session_factory(session)
     registry = _mock_registry()
     settings = MagicMock(saq_run_retries=5)
-    compiled = _make_failure_compiled()
+    if compiled is None:
+        compiled = _make_failure_compiled()
 
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
@@ -726,6 +769,162 @@ async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
     assert mock_finalize.await_args.kwargs["status"] == "failed"
     assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-503 — eval_failed re-dispatch, budget exhaustion, deadline alias,
+# and the delivery-sentinel composition (guard A)
+# ---------------------------------------------------------------------------
+
+
+def _eval_blocked_compiled() -> MagicMock:
+    """A compiled graph raising EvalBlockedError — terminalizes as
+    final_status "eval_failed" / error_code "eval_blocked"."""
+    from modulo.core.eval_engine import EvalBlockedError
+
+    return _mock_compiled_raising(EvalBlockedError("quality", "score 0.3 below threshold 0.8"))
+
+
+async def test_execute_retry_policy_eval_failed_redispatches():
+    """FAR-503: a run terminalized eval_failed (EvalBlockedError) under
+    {on: ["eval_failed"], max_retries: 1} is re-dispatched — fenced
+    pending-reset + RunRetryPolicyError, no terminal finalization."""
+    kind, exc, statements, mock_finalize = await _run_single_retry_attempt(
+        node_attempt_count=1,
+        retry_policy={"on": ["eval_failed"], "max_retries": 1},
+        compiled=_eval_blocked_compiled(),
+    )
+    assert kind == "retry", f"eval_failed attempt 1 should retry; got {kind}"
+    assert exc.status == "eval_failed"
+    assert exc.max_retries == 1
+    resets = [s for s in statements if "status='pending'" in s]
+    assert len(resets) == 1
+    assert "claim_token=:tok" in resets[0]
+    mock_finalize.assert_not_awaited()
+
+
+async def test_execute_retry_policy_eval_failed_budget_exhaustion_terminalizes():
+    """FAR-503: max_retries counts RETRIES — attempt 1 (count <= budget 1)
+    re-dispatches; attempt 2 (count > budget) terminal-fails as
+    eval_failed/eval_blocked and stays failed (no second re-dispatch)."""
+    policy = {"on": ["eval_failed"], "max_retries": 1}
+
+    kind, exc, _statements, _mock_finalize = await _run_single_retry_attempt(
+        node_attempt_count=1, retry_policy=policy, compiled=_eval_blocked_compiled()
+    )
+    assert kind == "retry"
+    assert exc.status == "eval_failed"
+
+    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
+        node_attempt_count=2, retry_policy=policy, compiled=_eval_blocked_compiled()
+    )
+    assert kind2 == "terminal", f"attempt 2 should be terminal; got {kind2}"
+    assert not any("status='pending'" in s for s in statements2)
+    mock_finalize2.assert_awaited_once()
+    assert mock_finalize2.await_args.kwargs["status"] == "eval_failed"
+    assert mock_finalize2.await_args.kwargs["error_code"] == "eval_blocked"
+    assert result is not None
+
+
+async def test_execute_retry_policy_node_deadline_exceeded_redispatches_under_timeout():
+    """FAR-369 / FAR-503: a terminal outcome carrying the deadline code
+    re-dispatches under {on: ["timeout"]} — the code resolves into the timeout
+    event's alias set.
+
+    The generic-catch publishes ``type(exc).__name__`` as the error_code, so an
+    exception class renamed to the raw watchdog spelling exercises the exact
+    alias chain a deadline outcome produces (``node_deadline_exceeded`` ->
+    ``map_legacy_code`` -> ``node.deadline_exceeded`` -> timeout event). NOTE:
+    the watchdog itself currently terminal-fails the run directly and bypasses
+    this decision (see the known-limitation note on ``_retry_after_policy``) —
+    this test pins the alias chain, not the watchdog wiring."""
+
+    class _NodeDeadlineExceededError(Exception):
+        """Fake: renamed so its class name IS the raw FAR-369 watchdog code."""
+
+    # Rename the class so type(exc).__name__ == the raw watchdog code.
+    _NodeDeadlineExceededError.__name__ = "node_deadline_exceeded"
+
+    kind, exc, statements, mock_finalize = await _run_single_retry_attempt(
+        node_attempt_count=1,
+        retry_policy={"on": ["timeout"], "max_retries": 1},
+        compiled=_mock_compiled_raising(_NodeDeadlineExceededError("node blew its absolute deadline")),
+    )
+    assert kind == "retry", f"deadline death attempt 1 should retry; got {kind}"
+    assert exc.status == "failed"
+    assert exc.max_retries == 1
+    resets = [s for s in statements if "status='pending'" in s]
+    assert len(resets) == 1
+    assert "claim_token=:tok" in resets[0]
+    mock_finalize.assert_not_awaited()
+
+    # Budget exhaustion terminalizes (max_retries counts RETRIES).
+    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
+        node_attempt_count=2,
+        retry_policy={"on": ["timeout"], "max_retries": 1},
+        compiled=_mock_compiled_raising(_NodeDeadlineExceededError("node blew its absolute deadline")),
+    )
+    assert kind2 == "terminal"
+    assert not any("status='pending'" in s for s in statements2)
+    mock_finalize2.assert_awaited_once()
+    assert mock_finalize2.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert result is not None
+
+
+async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_composition():
+    """FAR-503 sentinel composition: a run whose node marker already carries
+    delivery_done=True that terminally fails eval_failed IS re-dispatched by
+    the policy (unlike a transient cancellation, which guard B suppresses), and
+    on re-execution guard A returns the SKIPPED envelope for that marker — the
+    delivered node never re-executes its side effect (no duplicate delivery).
+
+    The executor-level half proves the re-dispatch happens with the marker
+    present; the guard-A half proves the skipped envelope the re-executed node
+    returns (end-to-end guard-A behaviour is covered by
+    test_sandbox_output_retention.py::test_guard_a_skips_*)."""
+    from modulo.core.pipeline_engine.node_runner import (
+        _idempotency_gate_skipped_envelope,
+        _marker_delivery_done_for_node,
+    )
+
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    # A prior attempt of node-a already delivered: the marker carries
+    # delivery_done=True under the canonical attempt_key shape.
+    attempt_key = f"run:{run.id}:node:node-a:1"
+    run.raw_output_markers = {attempt_key: {"_modulo_marker": True, "delivery_done": True, "attempt_key": attempt_key}}
+    snapshot = _make_snapshot(
+        {
+            "nodes": [{"id": "node-a", "node_type": "sandbox_agent", "role": None}],
+            "edges": [],
+        }
+    )
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements, retry_policy={"on": ["eval_failed"], "max_retries": 1})
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, _eval_blocked_compiled(), registry, settings)
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunRetryPolicyError) as exc_info:
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+    # The eval_failed outcome IS re-dispatched despite the delivery marker
+    # (guard B only suppresses TRANSIENT cancellations, never the terminal
+    # retry-policy path).
+    assert exc_info.value.status == "eval_failed"
+    assert exc_info.value.max_retries == 1
+    resets = [s for s in statements if "status='pending'" in s]
+    assert len(resets) == 1
+    assert "claim_token=:tok" in resets[0]
+    mock_finalize.assert_not_awaited()
+    # On re-execution, guard A reads THIS marker and returns the skipped
+    # envelope — no sandbox provisioning, no duplicate side effect.
+    assert _marker_delivery_done_for_node(run.raw_output_markers, str(run.id), "node-a") is True
+    envelope = _idempotency_gate_skipped_envelope("node-a")
+    assert envelope["artifacts"][0]["status"] == "skipped"
+    assert envelope["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "email_sent"
+    assert envelope["artifacts"][0]["output"]["output_json"]["delivery_done"] is True
 
 
 # ---------------------------------------------------------------------------

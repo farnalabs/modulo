@@ -1241,6 +1241,7 @@ const retryPolicyOptions = [
   { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
   { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
   { value: 'failure', labelKey: 'views.PipelineEditorView.retry_policy_failure' },
+  { value: 'eval_failed', labelKey: 'views.PipelineEditorView.retry_policy_eval_failed' },
 ]
 const retryPolicyEventValues = retryPolicyOptions.map((o) => o.value)
 

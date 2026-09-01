@@ -159,11 +159,17 @@ _log = logging.getLogger(__name__)
 # Pipeline retry_policy events (must stay in sync with the API schema in
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
 #   - "stall":    run ended "stalled" / error_code "executor_stalled"
-#   - "timeout":  error_code "node_timeout" / "TimeoutError"
+#   - "timeout":  error_code "node_timeout" / "TimeoutError" / the FAR-369
+#                 absolute node-deadline code ("node_deadline_exceeded" —
+#                 raw watchdog spelling or dotted registry code)
 #   - "failure":  any other "failed" terminal status (excluding sandbox-agent
 #                 hang deaths — error_code "node_cancelled" + "likely hung" in
 #                 error_detail — see ``_retry_after_policy``, FAR-136)
-_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
+#   - "eval_failed": run terminalized "eval_failed" / error_code "eval.blocked"
+#                 (legacy raw "eval_blocked" included) — safe to re-dispatch
+#                 because the FAR-228 idempotency gate (guard A) skips an
+#                 already-delivered node on re-execution.
+_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
 # Canonical dotted error codes written at terminalization (agent-failure UX) and
@@ -171,6 +177,8 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # the failure write, and log names cannot drift (S1192).
 _ERROR_CODE_AGENT_FAILED = "agent.failed"
 _ERROR_CODE_NODE_TIMEOUT = "node.timeout"
+_ERROR_CODE_NODE_DEADLINE_EXCEEDED = "node.deadline_exceeded"
+_ERROR_CODE_EVAL_BLOCKED = "eval.blocked"
 _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"
 _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE = "harness.idempotency_gate"
 
@@ -268,8 +276,17 @@ def _retry_after_policy(
       - ``"stall"``:    ``final_status == "stalled"`` or the code resolves to
                         ``agent.stall`` (legacy ``executor_stalled`` included)
       - ``"timeout"``:  the code resolves to ``node.timeout`` / ``node.runaway``
-                        (legacy ``node_timeout`` / ``TimeoutError`` included)
+                        / ``node.deadline_exceeded`` (legacy ``node_timeout`` /
+                        ``TimeoutError`` included; the FAR-369 absolute
+                        node-deadline watchdog code ``node_deadline_exceeded``
+                        and its dotted registry spelling both resolve to
+                        ``node.deadline_exceeded``)
       - ``"failure"``:  ``final_status == "failed"`` and not a stall/timeout outcome
+      - ``"eval_failed"``: ``final_status == "eval_failed"`` or the code resolves
+                        to ``eval.blocked`` (legacy ``eval_blocked`` included).
+                        Re-dispatch is safe for delivery nodes: the FAR-228
+                        idempotency gate (guard A) returns the skipped envelope
+                        when a delivery_done-marked node re-executes.
 
     Codes are matched BOTH literally (legacy codes stay backward compatible) and
     through the shared ``map_legacy_code`` alias table, so dotted registry codes
@@ -291,6 +308,15 @@ def _retry_after_policy(
     stream block before this decision runs) is NOT retried. See
     ``docs/troubleshooting.md`` (``executor_stalled`` row) — the zombie watchdog's
     terminal fail is documented as "never re-dispatched".
+
+    Same-shaped limitation for the FAR-369 deadline alias above: the absolute
+    node-deadline watchdog terminal-fails the run DIRECTLY (``fail_run_terminal``
+    with ``node_deadline_exceeded``) and cancels ``execute()``, so a watchdog
+    kill currently bypasses this decision exactly like the zombie stall. The
+    ``"timeout"`` alias still matters: any deadline outcome that DOES reach this
+    decision (raw watchdog spelling via the generic catch, dotted registry
+    spelling, or a future wiring of watchdog-killed runs into the retry
+    decision) now matches the ``"timeout"`` event instead of falling through.
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
@@ -314,6 +340,8 @@ def _retry_after_policy(
         return max_retries
     if _timeout_event_matches(event_set, code, mapped):
         return max_retries
+    if _eval_failed_event_matches(event_set, final_status, code, mapped):
+        return max_retries
     if _failure_event_matches(event_set, final_status, code, mapped, error_detail):
         return max_retries
     return None
@@ -325,9 +353,29 @@ def _stall_event_matches(event_set: set[Any], final_status: str, code: str, mapp
 
 
 def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
-    """``timeout`` event matches a node.timeout / node.runaway code."""
+    """``timeout`` event matches a node.timeout / node.runaway / node.deadline_exceeded code.
+
+    FAR-369: the absolute node-deadline watchdog terminalizes with
+    ``node_deadline_exceeded`` (raw) / ``node.deadline_exceeded`` (dotted) —
+    both resolve to ``node.deadline_exceeded`` through ``map_legacy_code``, so a
+    ``{on: ["timeout"]}`` policy re-dispatches a deadline death exactly like a
+    per-node timeout.
+    """
     return "timeout" in event_set and (
-        code in ("node_timeout", "TimeoutError") or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway")
+        code in ("node_timeout", "TimeoutError")
+        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", _ERROR_CODE_NODE_DEADLINE_EXCEEDED)
+    )
+
+
+def _eval_failed_event_matches(event_set: set[Any], final_status: str, code: str, mapped: str) -> bool:
+    """``eval_failed`` event matches a guardrail/eval-blocked outcome.
+
+    The executor terminalizes an ``EvalBlockedError`` as final_status
+    ``"eval_failed"`` with raw error_code ``"eval_blocked"`` (which maps to the
+    canonical ``eval.blocked``), so all three spellings match the event.
+    """
+    return "eval_failed" in event_set and (
+        final_status == "eval_failed" or code == "eval_blocked" or mapped == _ERROR_CODE_EVAL_BLOCKED
     )
 
 

@@ -347,7 +347,7 @@ async def _handle_graph_write_denials(
     ) from None
 
 
-_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
+_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
 
@@ -361,16 +361,17 @@ def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | Non
         return value
     if not isinstance(value, dict):
         raise ValueError(
-            "retry_policy must be an object like {'on': ['stall','timeout','failure'], 'max_retries': 0-5}"
+            "retry_policy must be an object like "
+            "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}"
         )
     on = value.get("on", [])
     if not isinstance(on, list) or any(not isinstance(e, str) for e in on):
-        raise ValueError("retry_policy 'on' must be a list of strings from ['stall','timeout','failure']")
+        raise ValueError("retry_policy 'on' must be a list of strings from ['stall','timeout','failure','eval_failed']")
     unknown = set(on) - _RETRY_POLICY_EVENTS
     if unknown:
         raise ValueError(
             f"retry_policy 'on' contains unknown values {sorted(unknown)}; "
-            "allowed values are ['stall','timeout','failure']"
+            "allowed values are ['stall','timeout','failure','eval_failed']"
         )
     max_retries = value.get("max_retries", 0)
     if isinstance(max_retries, bool) or not isinstance(max_retries, int):
@@ -406,7 +407,7 @@ class PipelineCreate(TeamVisibilityMixin):
     retry_policy: dict[str, Any] | None = Field(
         None,
         description=(
-            "Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. "
+            "Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. "
             "When a run ends in a configured state and retries remain, the run is "
             "re-dispatched automatically instead of terminal-failing."
         ),
@@ -452,7 +453,7 @@ class PipelineUpdate(TeamVisibilityMixin):
     )
     retry_policy: dict[str, Any] | None = Field(
         None,
-        description="Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. Set to {} to clear.",
+        description="Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. Set to {} to clear.",
     )
     graph_json: PipelineGraphUpdate | None = Field(
         None,

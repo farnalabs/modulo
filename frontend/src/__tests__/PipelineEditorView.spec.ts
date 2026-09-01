@@ -176,28 +176,26 @@ describe('PipelineEditorView', () => {
     expect(panel.exists()).toBe(true)
 
     // Only the events the backend allowlist accepts are offered in the UI.
-    const supportedEvents = ['stall', 'timeout', 'failure']
+    // eval_failed became backend-supported in FAR-503: the API allowlist
+    // (_RETRY_POLICY_EVENTS in api/routes/pipelines.py), the graph validator and
+    // the executor's retry matching all accept it in lockstep, so the editor
+    // offers it as a selectable event.
+    const supportedEvents = ['stall', 'timeout', 'failure', 'eval_failed']
     for (const event of supportedEvents) {
       const checkbox = wrapper.find(`[data-testid="pipeline-editor-retry-event-${event}"]`)
       expect(checkbox.exists(), `retry event checkbox for ${event}`).toBe(true)
     }
 
-    // eval_failed is NOT a selectable option: the backend retry_policy allowlist
-    // (api/routes/pipelines.py) rejects it and the engine never auto-resurrects
-    // guardrail-blocked runs (core/pipeline_engine/recovery.py), so offering it
-    // would be a no-op trap where every save fails with 422.
-    const evalCheckbox = wrapper.find('[data-testid="pipeline-editor-retry-event-eval_failed"]')
-    expect(evalCheckbox.exists()).toBe(false)
-
-    // round-trip: a policy persisted with an unsupported event (e.g. eval_failed)
-    // or a bogus value is loaded safely — unknown events are dropped, supported
-    // ones are kept, and the editor never crashes on stale payloads.
+    // round-trip: a persisted policy is loaded safely — the allowlist is derived
+    // from retryPolicyOptions, so every backend-supported event (including
+    // eval_failed) survives a reload while genuinely unknown values are dropped
+    // and the editor never crashes on stale payloads.
     ;(wrapper.vm as any).pipeline = {
       retry_policy: { on: ['eval_failed', 'stall', 'bogus_event'], max_retries: 2 },
     }
     ;(wrapper.vm as any).syncRetryPolicyFromPipeline()
     await nextTick()
-    expect((wrapper.vm as any).retryPolicyEvents).toEqual(['stall'])
+    expect((wrapper.vm as any).retryPolicyEvents).toEqual(['eval_failed', 'stall'])
     const stallCheckbox = wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]')
     expect((stallCheckbox.element as HTMLInputElement).checked).toBe(true)
   })
