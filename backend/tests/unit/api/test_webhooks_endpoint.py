@@ -11,13 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, create_access_token
+from modulo.core.trigger_engine import TriggerNotFoundError
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -76,54 +77,6 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _make_mock_system_session(
-    *,
-    trigger_found: bool = True,
-    trigger_config: dict | None = None,
-    pipeline_org_id: uuid.UUID | None = None,
-) -> AsyncMock:
-    """System-session mock for the bootstrap trigger/org resolution.
-
-    The bootstrap reads ``triggers`` (and, when no principal org is available,
-    ``pipelines``) via the system session before any RLS org context exists.
-    """
-    system_session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    system_session.begin = MagicMock(return_value=begin_cm)
-
-    trigger_mock = None
-    if trigger_found:
-        trigger_mock = MagicMock()
-        trigger_mock.pipeline_id = uuid.uuid4()
-        trigger_mock.active = True
-        trigger_mock.config_json = trigger_config
-
-    pipeline_mock = None
-    if pipeline_org_id is not None:
-        pipeline_mock = MagicMock()
-        pipeline_mock.organisation_id = pipeline_org_id
-
-    async def _execute_side_effect(stmt: object, *args: object, **kwargs: object) -> MagicMock:
-        result = MagicMock()
-        if isinstance(stmt, Select):
-            froms = stmt.get_final_froms()
-            table = getattr(froms[0], "name", "") if froms else ""
-            if table == "triggers":
-                result.scalar_one_or_none.return_value = trigger_mock
-            elif table == "pipelines":
-                result.scalar_one_or_none.return_value = pipeline_mock
-            else:
-                result.scalar_one_or_none.return_value = None
-        else:
-            result.scalar_one_or_none.return_value = None
-        return result
-
-    system_session.execute = AsyncMock(side_effect=_execute_side_effect)
-    return system_session
-
-
 def _make_hmac_session() -> AsyncMock:
     """Session whose trigger carries a real hmac_secret (route-level HMAC runs)."""
     session = AsyncMock()
@@ -165,7 +118,7 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
-    mock_system_session = _make_mock_system_session(pipeline_org_id=_ORG_ID)
+    mock_system_session = make_system_session_mock(trigger_org_id=_ORG_ID)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -294,7 +247,7 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
     secret lives on the trigger row, which the route loads via the SYSTEM
     session bootstrap (FAR-523), so the override targets the system session."""
     session = _make_hmac_session()
-    system_session = _make_mock_system_session(trigger_config={"hmac_secret": "test-hmac-secret"})
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": "test-hmac-secret"})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -649,7 +602,7 @@ def test_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     rejected at the route level (401). HMAC-less triggers remain public by design.
     The secret lives on the trigger loaded via the SYSTEM session bootstrap."""
     session = _make_hmac_session()
-    system_session = _make_mock_system_session(trigger_config={"hmac_secret": "test-hmac-secret"})
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": "test-hmac-secret"})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -742,7 +695,7 @@ def test_receive_webhook_bootstrap_reads_trigger_via_system_session(client: Test
     system session, BEFORE any app-session RLS org context exists — a
     pre-context read of the org-scoped ``triggers`` table on the app session
     matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
-    system_mock = _make_mock_system_session(pipeline_org_id=_ORG_ID)
+    system_mock = make_system_session_mock(trigger_org_id=_ORG_ID)
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
@@ -773,7 +726,7 @@ def test_receive_webhook_bootstrap_reads_trigger_via_system_session(client: Test
 
 def test_receive_webhook_missing_trigger_returns_404(client: TestClient) -> None:
     """A trigger absent from the SYSTEM (instance-global) read is a real 404."""
-    system_mock = _make_mock_system_session(trigger_found=False)
+    system_mock = make_system_session_mock(trigger_found=False)
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
@@ -793,17 +746,34 @@ def test_receive_webhook_missing_trigger_returns_404(client: TestClient) -> None
     assert resp.json()["detail"] == "Trigger not found"
 
 
-def test_receive_webhook_unresolvable_org_returns_401(client: TestClient) -> None:
-    """Fail-closed: a trigger whose pipeline cannot resolve an org (and no
-    principal) is rejected 401 — never fall through to an unscoped run."""
-    system_mock = _make_mock_system_session(pipeline_org_id=None)
+def test_receive_webhook_other_org_trigger_returns_404_no_writes(client: TestClient) -> None:
+    """Cross-tenant isolation (FAR-523): an authenticated org-A principal
+    referencing an org-B trigger gets the same 404 as a missing trigger —
+    fail closed, no cross-org enumeration. No snapshot is created, the engine
+    is never reached, and nothing is written on the app session."""
+    other_org = uuid.uuid4()
+    system_mock = make_system_session_mock(trigger_org_id=other_org)
+    app_session = _make_mock_session()
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
 
+    async def override_app() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    from modulo.api.dependencies import get_current_tenant_user_optional
+
     app.dependency_overrides[get_system_db_session] = override_system
+    app.dependency_overrides[get_db_session] = override_app
+    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
+        username="tester", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
     try:
-        with patch("modulo.api.routes.webhooks.set_rls_org"):
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/webhook",
                 json={"event": "test"},
@@ -811,6 +781,16 @@ def test_receive_webhook_unresolvable_org_returns_401(client: TestClient) -> Non
             )
     finally:
         app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+        app.dependency_overrides.pop(get_current_tenant_user_optional, None)
 
-    assert resp.status_code == 401
-    assert resp.json()["detail"] == "Could not resolve organization"
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+    m.assert_not_called()
+    snap.assert_not_called()
+    app_session.add.assert_not_called()
+    # The bootstrap 404 aborted the transaction (aexit saw the exception ->
+    # rollback), so nothing the route touched could have been persisted.
+    aexit = app_session.begin.return_value.__aexit__
+    assert aexit.await_count == 1
+    assert aexit.await_args.args[0] is TriggerNotFoundError

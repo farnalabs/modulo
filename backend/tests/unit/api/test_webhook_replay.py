@@ -22,6 +22,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -86,52 +87,6 @@ def _make_mock_session(*, trigger_config: dict | None = None, stored_payload: bo
     return session
 
 
-def _make_mock_system_session(
-    *,
-    trigger_found: bool = True,
-    trigger_config: dict | None = None,
-    pipeline_org_id: uuid.UUID | None = _ORG_ID,
-) -> AsyncMock:
-    """System-session mock for the bootstrap trigger/org resolution.
-
-    Mirrors the app-session mock's table dispatch for ``triggers`` and
-    ``pipelines`` (the bootstrap reads); the stored-payload lookup stays on the
-    app session under RLS.
-    """
-    system_session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    system_session.begin = MagicMock(return_value=begin_cm)
-
-    trigger_mock = None
-    if trigger_found:
-        trigger_mock = MagicMock()
-        trigger_mock.id = _TRIGGER_ID
-        trigger_mock.pipeline_id = uuid.uuid4()
-        trigger_mock.config_json = trigger_config
-
-    pipeline_mock = None
-    if pipeline_org_id is not None:
-        pipeline_mock = MagicMock()
-        pipeline_mock.organisation_id = pipeline_org_id
-
-    async def _system_execute_side_effect(stmt: Select, *args: object, **kwargs: object) -> MagicMock:
-        result = MagicMock()
-        froms = stmt.get_final_froms()
-        table = getattr(froms[0], "name", "") if froms else ""
-        if table == "triggers":
-            result.scalar_one_or_none.return_value = trigger_mock
-        elif table == "pipelines":
-            result.scalar_one_or_none.return_value = pipeline_mock
-        else:
-            result.scalar_one_or_none.return_value = None
-        return result
-
-    system_session.execute = AsyncMock(side_effect=_system_execute_side_effect)
-    return system_session
-
-
 def _auth_headers(role: str = "admin") -> dict[str, str]:
     settings = _make_settings()
     token = create_access_token(
@@ -165,7 +120,7 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
-    mock_system_session = _make_mock_system_session(trigger_config={"hmac_secret": _HMAC_SECRET})
+    mock_system_session = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -341,7 +296,7 @@ def test_replay_webhook_unauthenticated_hmacless_trigger_denied(client: TestClie
     (and its secret) is resolved on the SYSTEM session bootstrap, so the
     override targets ``get_system_db_session``.
     """
-    mock_system_session = _make_mock_system_session(trigger_config=None)
+    mock_system_session = make_system_session_mock(trigger_config=None)
 
     async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_system_session
@@ -364,7 +319,7 @@ def test_replay_webhook_bootstrap_reads_trigger_via_system_session(client: TestC
     system session BEFORE any app-session RLS org context exists — a
     pre-context read of the org-scoped ``triggers`` table on the app session
     matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
-    system_mock = _make_mock_system_session(trigger_config={"hmac_secret": _HMAC_SECRET})
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET})
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
@@ -394,7 +349,7 @@ def test_replay_webhook_bootstrap_reads_trigger_via_system_session(client: TestC
 
 def test_replay_webhook_missing_trigger_returns_404(client: TestClient) -> None:
     """A trigger absent from the SYSTEM (instance-global) read is a real 404."""
-    system_mock = _make_mock_system_session(trigger_found=False)
+    system_mock = make_system_session_mock(trigger_found=False)
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
         yield system_mock
@@ -410,3 +365,84 @@ def test_replay_webhook_missing_trigger_returns_404(client: TestClient) -> None:
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Trigger not found"
+
+
+def _make_org_aware_app_session(*, payload_org_id: uuid.UUID) -> AsyncMock:
+    """App-session mock whose stored-payload lookup is org-faithful.
+
+    The payload row "lives" in ``payload_org_id``. The lookup finds it only
+    when the route's query does NOT constrain ``organisation_id`` (the
+    regression condition this guards) or pins the payload's own org; pinning
+    any OTHER org (what the route does for another org's trigger) misses
+    exactly like the real RLS-scoped lookup.
+    """
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    payload_mock = MagicMock()
+    payload_mock.raw_body = _STORED_BODY
+    payload_row = MagicMock()
+    payload_row.scalar_one_or_none = MagicMock(return_value=payload_mock)
+    empty_row = MagicMock()
+    empty_row.scalar_one_or_none = MagicMock(return_value=None)
+
+    async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        if isinstance(stmt, Select):
+            froms = stmt.get_final_froms()
+            table = getattr(froms[0], "name", "") if froms else ""
+            if table == "webhook_payloads":
+                params = stmt.compile().params
+                org_param = next((v for k, v in params.items() if k.startswith("organisation_id")), None)
+                if org_param is None or org_param == payload_org_id:
+                    return payload_row
+                return empty_row
+        return empty_row
+
+    session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()
+    return session
+
+
+def test_replay_other_org_event_unauthenticated_returns_404_no_disclosure(client: TestClient) -> None:
+    """Cross-tenant isolation (FAR-523): an unauthenticated replay referencing
+    ANOTHER org's event_id gets a bare 404 — the org-scoped stored-payload
+    lookup misses (the session is pinned to the trigger's org), so the other
+    org's raw payload is never disclosed and no run is created. If the org
+    predicate were dropped from the lookup, this test FAILS (the payload would
+    be "found" and the replay would proceed to 202)."""
+    other_org = uuid.uuid4()
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET}, trigger_org_id=other_org)
+    # The stored payload belongs to org-A; the route pins the session to
+    # org-B (derived from the trigger), so the lookup must miss.
+    app_session = _make_org_aware_app_session(payload_org_id=_ORG_ID)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    async def override_app() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    app.dependency_overrides[get_db_session] = override_app
+    event_id = uuid.uuid4()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{event_id}",
+                headers=_hmac_headers(),
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger event not found"
+    assert _STORED_BODY.decode() not in resp.text
+    m.assert_not_called()

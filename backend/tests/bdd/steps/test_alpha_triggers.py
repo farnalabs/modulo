@@ -21,12 +21,13 @@ with contextlib.suppress(FileNotFoundError, OSError):
 
 from collections.abc import AsyncGenerator
 
+from modulo.api.dependencies import get_system_db_session
+from modulo.api.main import app
 from tests.bdd.conftest import (
-    _system_session_override,
     make_mock_pipeline,
     make_mock_run,
     make_mock_snapshot,
-    make_mock_system_session,
+    make_system_session_mock,
 )
 
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -158,41 +159,37 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         patch("modulo.api.routes.webhooks.verify_timestamp", return_value=1700000000),
         patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
     ):
+        headers = {
+            "X-Modulo-Timestamp": "1700000000",
+            "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
+        }
         if trigger_missing:
             # The bootstrap trigger read runs on the SYSTEM session (FAR-523):
             # a missing trigger must be absent from the instance-global read.
-            from modulo.api.dependencies import get_system_db_session
-            from modulo.api.main import app
-
-            missing_row = MagicMock()
-            missing_row.scalar_one_or_none.return_value = None
-
-            system_mock = make_mock_system_session()
-            system_mock.execute = AsyncMock(side_effect=lambda stmt, *a, **kw: missing_row)
+            missing_system = make_system_session_mock(trigger_found=False)
 
             async def _missing_system_override() -> AsyncGenerator[AsyncMock, None]:
-                yield system_mock
+                yield missing_system
 
+            previous = app.dependency_overrides.get(get_system_db_session)
             app.dependency_overrides[get_system_db_session] = _missing_system_override
             try:
                 resp = client.post(
                     f"/api/v1/triggers/{request.node._trigger_name}/webhook",
                     json=payload,
-                    headers={
-                        "X-Modulo-Timestamp": "1700000000",
-                        "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
-                    },
+                    headers=headers,
                 )
             finally:
-                app.dependency_overrides[get_system_db_session] = _system_session_override
+                # pop-or-restore: put back whatever the client fixture installed.
+                if previous is None:
+                    app.dependency_overrides.pop(get_system_db_session, None)
+                else:
+                    app.dependency_overrides[get_system_db_session] = previous
         else:
             resp = client.post(
                 f"/api/v1/triggers/{request.node._trigger_name}/webhook",
                 json=payload,
-                headers={
-                    "X-Modulo-Timestamp": "1700000000",
-                    "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
-                },
+                headers=headers,
             )
     request.node._resp = resp
 

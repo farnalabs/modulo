@@ -21,6 +21,7 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _VALID_32 = "a" * 32
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -111,60 +112,16 @@ def make_mock_session() -> AsyncMock:
 def make_mock_system_session() -> AsyncMock:
     """System-session mock for pre-auth bootstrap reads (FAR-523).
 
-    Table-aware:
-
-    * ``sso_providers`` reads return NO rows so SSO resolution falls through to
-      the env-var provider config (which is what the SSO BDD scenarios
-      configure) — a truthy MagicMock here would make the code think a DB
-      provider exists and try to parse MagicMock SAML metadata.
-    * ``triggers``/``pipelines`` reads return a trigger/pipeline row so the
-      webhook + Slack bootstrap (which must resolve the trigger BEFORE any RLS
-      org context exists — see ``webhooks._load_trigger_and_org_global``)
-      reaches the patched engine instead of 404ing.
-    * everything else falls through to an empty row.
+    Delegates to the ONE shared parameterized factory
+    (:func:`tests.unit.api.conftest.make_system_session_mock`) — table-aware:
+    ``triggers`` reads return a trigger row owned by :data:`ORG_ID` so the
+    webhook + Slack bootstrap (which must resolve the trigger BEFORE any RLS
+    org context exists) reaches the patched engine instead of 404ing, and
+    every other table (``sso_providers`` included) falls through to an empty
+    row so SSO resolution uses the env-var provider config the SSO scenarios
+    configure.
     """
-    session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-
-    empty_row = AsyncMock()
-    empty_row.scalar_one_or_none = MagicMock(return_value=None)
-    empty_row.scalar_one = AsyncMock(return_value=0)
-    empty_row.scalar = AsyncMock(return_value=0)
-    empty_scalars = MagicMock()
-    empty_scalars.all = MagicMock(return_value=[])
-    empty_row.scalars = MagicMock(return_value=empty_scalars)
-    empty_row.first = MagicMock(return_value=None)
-    empty_row.all = MagicMock(return_value=[])
-
-    trigger_mock = MagicMock()
-    trigger_mock.pipeline_id = uuid.uuid4()
-    trigger_mock.active = True
-    trigger_mock.config_json = {}
-    trigger_row = MagicMock()
-    trigger_row.scalar_one_or_none = MagicMock(return_value=trigger_mock)
-
-    pipeline_mock = MagicMock()
-    pipeline_mock.organisation_id = ORG_ID
-    pipeline_row = MagicMock()
-    pipeline_row.scalar_one_or_none = MagicMock(return_value=pipeline_mock)
-
-    async def _execute(stmt: object, *_a: object, **_kw: object) -> MagicMock:
-        if isinstance(stmt, Select):
-            froms = stmt.get_final_froms()
-            table = getattr(froms[0], "name", "") if froms else ""
-            if table == "triggers":
-                return trigger_row
-            if table == "pipelines":
-                return pipeline_row
-        return empty_row
-
-    session.execute = AsyncMock(side_effect=_execute)
-    session.scalar = AsyncMock(return_value=0)
-    session.scalar_one = AsyncMock(return_value=0)
-    return session
+    return make_system_session_mock(trigger_org_id=ORG_ID)
 
 
 async def _system_session_override() -> AsyncGenerator[AsyncMock, None]:
@@ -322,7 +279,6 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 # ---------------------------------------------------------------------------
 
 from pytest_bdd import given, parsers, then, when  # noqa: E402
-from sqlalchemy.sql import Select  # noqa: E402
 
 
 def _make_mock_pipeline_full(name: str = "Test Pipeline", **kwargs: Any) -> MagicMock:

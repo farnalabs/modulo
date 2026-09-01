@@ -24,6 +24,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_s
 from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -70,36 +71,10 @@ def _make_trigger_session() -> AsyncMock:
     return session
 
 
-def _make_system_session(*, trigger_found: bool = True) -> AsyncMock:
-    """System-session mock for the bootstrap trigger/org resolution.
-
-    The bootstrap trigger read (which carries the signing secret) runs on the
-    system session BEFORE any app-session RLS org context exists (FAR-523).
-    """
-    session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-
-    trigger_result = MagicMock()
-    if trigger_found:
-        trigger_mock = MagicMock()
-        trigger_mock.pipeline_id = uuid.uuid4()
-        trigger_mock.active = True
-        trigger_mock.trigger_type = "slack_app_mention"
-        trigger_mock.config_json = {"signing_secret": _SECRET}
-        trigger_result.scalar_one_or_none.return_value = trigger_mock
-    else:
-        trigger_result.scalar_one_or_none.return_value = None
-    session.execute = AsyncMock(return_value=trigger_result)
-    return session
-
-
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_trigger_session()
-    mock_system_session = _make_system_session()
+    mock_system_session = make_system_session_mock(trigger_config={"signing_secret": _SECRET}, trigger_org_id=_ORG_ID)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -301,7 +276,7 @@ def test_trigger_not_found_returns_404(client: TestClient) -> None:
     real 404 (FAR-523: the bootstrap runs on the system session)."""
     body = _event_body()
     ts = str(int(time.time()))
-    system_session = _make_system_session(trigger_found=False)
+    system_session = make_system_session_mock(trigger_found=False)
 
     async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
         yield system_session
@@ -343,3 +318,40 @@ def test_app_mention_duplicate_event_returns_400(client: TestClient) -> None:
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Duplicate Slack event"
+
+
+def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) -> None:
+    """Cross-tenant isolation (FAR-523): an org-A principal referencing an
+    org-B trigger gets the same 404 as a missing trigger — fail closed, no
+    cross-org enumeration, and no run is created."""
+    other_org = uuid.uuid4()
+    system_session = make_system_session_mock(trigger_config={"signing_secret": _SECRET}, trigger_org_id=other_org)
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    from modulo.api.dependencies import get_current_tenant_user_optional
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
+        username="attacker", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    body = _event_body()
+    ts = str(int(time.time()))
+    try:
+        with (
+            patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.slack.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/slack",
+                content=body,
+                headers={**_headers(ts, body), "Content-Type": "application/json"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_current_tenant_user_optional, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+    m.assert_not_called()
