@@ -3485,7 +3485,6 @@ export default {
       "section_operational": "Operational configuration",
       "section_credentials": "Credentials (authentication)",
       "section_advanced": "Advanced (templated)",
-      "on_unknown": "On unknown response shape",
       "on_unknown": "On ambiguous write delivery (idempotency mode)",
       "on_unknown_invalid": "Invalid on_unknown {value}; expected one of {options}",
       "on_unknown_fail_open": "fail_open",

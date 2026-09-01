@@ -578,12 +578,11 @@ async def update_connector_endpoint(
                     # posts credentials: null) — skip the credential write. Never
                     # 500 on a null credentials payload.
                     credentials_updated = False
-                # ``credentials_updated is True`` here implies ``new_credentials is
-                # not None``: the sole-field ``credentials: null`` case raised 422
-                # before this block, and the multi-field ``credentials: null`` case
-                # set ``credentials_updated = False`` pre-transaction.
-                assert new_credentials is not None
-                if existing.connector_type_id == "rest":
+                elif existing.connector_type_id == "rest":
+                    # Fresh credentials clear the degraded marker (FAR-495) — the
+                    # stored skip error described the OLD credentials, not the new ones.
+                    updates["degraded_at"] = None
+                    updates["last_skip_error"] = None
                     # Partial credential update (FAR-466) — REST connector only.
                     # The connector reads auth identity (auth_mode, in,
                     # header_name, query_param_name) from the DECRYPTED credential

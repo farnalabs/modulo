@@ -859,7 +859,10 @@ REST_INTEGRATION: dict[str, Any] = {
                 "enum": ["fail_open", "fail_closed", "off"],
                 "default": "fail_open",
                 "description": (
-                    "Behaviour when the response shape is unknown or no records can be extracted at records_path."
+                    "Connector-write idempotency mode for the FAR-458 read-before-write "
+                    "dedup gate. Controls what happens to a write whose prior delivery "
+                    "could not be confirmed (ambiguous). Inert unless the opt-in "
+                    "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled."
                 ),
                 "help": (
                     "fail_open (default): re-fire the write on ambiguous delivery — "
