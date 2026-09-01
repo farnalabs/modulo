@@ -14,6 +14,7 @@ untouched for other integration tests.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -46,15 +47,27 @@ async def _set_run_json_column_type(db_engine: AsyncEngine, col_type: str) -> No
 
     Runs on a dedicated ``db_engine`` connection with an explicit begin/commit so
     the DDL survives the function-scoped ``db_session`` rollback and takes
-    effect within the same DB the fenced write executes against. Other
-    integration tests never observe the temporary downgrade because the caller
-    restores the columns in a ``finally``.
+    effect within the same DB the fenced write executes against.
+
+    The ALTER TABLE requires an ACCESS EXCLUSIVE lock on ``runs``; under parallel
+    execution (``-n 2``) another worker may briefly hold a conflicting lock. Set a
+    short ``lock_timeout`` and retry instead of blocking until the per-test
+    pytest timeout fires (observed 300s hang).
     """
-    async with db_engine.connect() as conn, conn.begin():
+    async with db_engine.connect() as conn:
         for column in _JSON_COLUMNS:
-            await conn.execute(
-                text(f"ALTER TABLE runs ALTER COLUMN {column} TYPE {col_type} USING {column}::{col_type}")
-            )
+            for _attempt in range(30):
+                try:
+                    async with conn.begin():
+                        await conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+                        await conn.execute(
+                            text(f"ALTER TABLE runs ALTER COLUMN {column} TYPE {col_type} USING {column}::{col_type}")
+                        )
+                    break
+                except Exception:
+                    if _attempt == 29:
+                        raise
+                    await asyncio.sleep(1)
 
 
 async def test_fenced_update_run_status_succeeds_on_plain_json_columns(

@@ -118,7 +118,7 @@ async def correction_rig(
             {
                 "id": str(pipeline_id),
                 "oid": str(test_org),
-                "name": "FAR-210 Correction Pipeline",
+                "name": f"FAR-210 Correction Pipeline {pipeline_id.hex[:8]}",
                 "uid": str(test_user),
                 "graph": json.dumps(graph),
             },
@@ -133,6 +133,17 @@ async def correction_rig(
                 "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
             ),
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org), "graph": json.dumps(graph)},
+        )
+        # Materialise the graph node so the eval_definitions.node_id FK (which
+        # the graph JSON alone does not satisfy) resolves. ON CONFLICT keeps
+        # this safe if a trigger has already created the row.
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
+                "VALUES (:nid, :oid, :pid, 'correction-node', :aid, 300) "
+                "ON CONFLICT (id) DO NOTHING"
+            ),
+            {"nid": node_id, "oid": str(test_org), "pid": str(pipeline_id), "aid": str(test_user)},
         )
         guardrail_id = uuid.uuid4()
         await conn.execute(

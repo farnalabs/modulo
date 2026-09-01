@@ -64,7 +64,7 @@ async def evidence_tenant(db_engine: AsyncEngine, test_user: uuid.UUID) -> _Evid
             text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
             {
                 "id": str(tenant.org_id),
-                "name": "Evidence Tenant Anchor Org",
+                "name": f"Evidence Tenant Anchor Org {tenant.org_id.hex[:8]}",
                 "slug": f"evid-{tenant.org_id.hex[:12]}",
             },
         )
