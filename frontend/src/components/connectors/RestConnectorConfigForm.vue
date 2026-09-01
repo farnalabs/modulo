@@ -79,7 +79,6 @@
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
             :placeholder="$t('connectors.rest.records_path_placeholder')"
-            placeholder="data.items"
             data-testid="rest-connector-records-path"
             :aria-describedby="'restconn-records-path-help'"
           />
@@ -93,7 +92,6 @@
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             :placeholder="$t('connectors.rest.allowed_hosts_placeholder')"
-            placeholder="api.example.com,cdn.example.com"
             data-testid="rest-connector-allowed-hosts"
             :aria-describedby="'restconn-allowed-hosts-help'"
           />
@@ -223,7 +221,6 @@
           rows="8"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
           :placeholder="$t('connectors.rest.advanced_json_placeholder')"
-          placeholder='{ "path": "/items", "headers": { "Accept": "application/json" }, "operations": {}, "fan_out": {} }'
           data-testid="rest-connector-advanced-json"
           :aria-invalid="!!errors.advanced_json"
           :aria-describedby="errors.advanced_json ? 'restconn-advanced-error' : 'restconn-advanced-help'"
