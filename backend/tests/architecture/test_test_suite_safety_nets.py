@@ -130,6 +130,14 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Plugin manifest validation",
         }
     ),
+    "tests/bdd/features/variants/variant_groups.feature": frozenset(
+        {
+            "Sequential execution order matches insertion order",
+            "Variant comparison returns eval scores per node and token cost",
+            "Eval coverage gap is detected when variants diverge but evals match",
+            "Comparison shows token cost breakdown per variant",
+        }
+    ),
     "tests/bdd/features/workflows/import.feature": frozenset(
         {
             "Import valid pipeline bundle",

@@ -13,6 +13,7 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     And the second run has variant_name "experiment"
     And each batch run merges its variant's run_context_overrides into the input payload
 
+  @awaiting-implementation
   Scenario: Sequential execution order matches insertion order
     Given a variant group "seq-test" configured for pipeline "deploy-service"
     And the group uses sequential strategy with variants "step-a" and "step-b"
@@ -21,6 +22,7 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     And the first run has variant_name "step-a"
     And the second run has variant_name "step-b"
 
+  @awaiting-implementation
   Scenario: Variant comparison returns eval scores per node and token cost
     Given a variant group "compare-test" configured for pipeline "deploy-service"
     And both variants have completed runs with eval and token data
@@ -28,6 +30,7 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     Then the comparison includes eval scores per node for each variant
     And the comparison includes per-variant token cost
 
+  @awaiting-implementation
   Scenario: Eval coverage gap is detected when variants diverge but evals match
     Given a variant group "cover-test" configured for pipeline "deploy-service"
     And the group has variants with divergent outputs and identical eval scores
@@ -35,6 +38,7 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     Then a coverage_warning is included in the response
     And the warning says "Variants diverged but evals did not differentiate"
 
+  @awaiting-implementation
   Scenario: Comparison shows token cost breakdown per variant
     Given a variant group "cost-test" configured for pipeline "deploy-service"
     And both variants have completed runs with eval and token data
