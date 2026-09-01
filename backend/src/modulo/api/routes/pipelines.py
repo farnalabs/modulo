@@ -162,9 +162,9 @@ async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) ->
     await set_rls_user_context(session, principal.account_id, principal.org_role)
 
 
-def _raise_db_migration_error() -> None:
+def _raise_db_migration_error(exc: ProgrammingError) -> None:
     """Raise the 501 'feature not available' response for a ProgrammingError."""
-    logger.exception(_CODE_ROUTES_PIPELINES)
+    logger.error(_CODE_ROUTES_PIPELINES, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
@@ -1343,8 +1343,8 @@ async def list_pipelines_endpoint(
                 include_archived=include_archived,
                 folder_id=folder_id,
             )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     return PipelineListResponse(
         items=[_pipeline_list_item(p) for p in result.items],
@@ -1387,8 +1387,8 @@ async def create_pipeline_endpoint(
                 # The model default ({}) applies when omitted; an explicit value
                 # is persisted on the returned ORM row within this transaction.
                 pipeline.retry_policy = req.retry_policy
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     return PipelineResponse.model_validate(pipeline)
 
@@ -1405,8 +1405,8 @@ async def get_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1424,8 +1424,8 @@ async def get_pipeline_graph_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             graph = await get_pipeline_graph(session, pipeline_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1625,8 +1625,8 @@ async def replace_pipeline_graph_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1859,8 +1859,8 @@ async def update_pipeline_endpoint(
         )
     except PipelineHasActiveRunsError as exc:
         _raise_active_runs_conflict(exc)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1881,8 +1881,8 @@ async def delete_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             deleted = await soft_delete_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1904,8 +1904,8 @@ async def restore_pipeline_endpoint(
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await restore_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -1925,8 +1925,8 @@ async def archive_pipeline_endpoint(
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await archive_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -1946,8 +1946,8 @@ async def unarchive_pipeline_endpoint(
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await unarchive_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -2068,8 +2068,8 @@ async def clone_pipeline_endpoint(
                 org_role=principal.org_role,
                 requested_name=req.name,
             )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
     return PipelineResponse.model_validate(cloned)
@@ -2191,8 +2191,8 @@ async def save_as_composite_endpoint(
                 version="0.1.0",
             )
 
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     return {
         "id": str(template.id),
@@ -2273,8 +2273,8 @@ async def trigger_quality_report(
             deliveries: list[dict[str, Any]] = []
             if recipient_urls:
                 deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     return QualityReportResponse(
         period=report["period"],
@@ -2417,8 +2417,8 @@ async def list_snapshot_endpoint(
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
@@ -2466,8 +2466,8 @@ async def save_edit_snapshot_endpoint(
                 draft=req.draft,
                 channel=channel,
             )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
@@ -2492,8 +2492,8 @@ async def get_snapshot_detail_endpoint(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
             )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
@@ -2514,8 +2514,8 @@ async def tag_snapshot_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
@@ -2560,8 +2560,8 @@ async def rollback_snapshot_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if new_snapshot is None:
         raise HTTPException(
@@ -2597,8 +2597,8 @@ async def delete_snapshot_endpoint(
             if snapshot is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
             deleted = await delete_snapshot(session, snapshot_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if not deleted:
         raise HTTPException(
@@ -2623,8 +2623,8 @@ async def diff_snapshot_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
 
     if result is None:
         raise HTTPException(
@@ -2660,8 +2660,8 @@ async def move_pipeline_to_folder_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         ) from None
-    except ProgrammingError:
-        _raise_db_migration_error()
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
@@ -2750,7 +2750,7 @@ async def _finalize_locked_graph_save(
             detail=exc.detail,
         ) from exc
     if isinstance(exc, ProgrammingError):
-        logger.exception(_CODE_ROUTES_PIPELINES)
+        logger.error(_CODE_ROUTES_PIPELINES, exc_info=exc)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,

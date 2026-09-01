@@ -22,6 +22,7 @@ def _changed_unit_tests() -> list[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         return []
@@ -47,7 +48,7 @@ def main() -> int:
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
     cmd = ["uv", "run", "--no-sync", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
-    result = subprocess.run(cmd, cwd=BACKEND_DIR)
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False)
     if result.returncode != 0:
         print("FAILED: Changed tests did not pass", file=sys.stderr)
         return 1

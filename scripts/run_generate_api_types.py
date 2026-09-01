@@ -49,7 +49,7 @@ def _run(cmd: list[str], cwd: str) -> int:
         exe = shutil.which(cmd[0])
         if exe and exe.lower().endswith((".cmd", ".bat")):
             cmd = ["cmd.exe", "/c", *cmd]
-    return subprocess.run(cmd, cwd=cwd).returncode
+    return subprocess.run(cmd, cwd=cwd, check=False).returncode
 
 
 def main() -> int:

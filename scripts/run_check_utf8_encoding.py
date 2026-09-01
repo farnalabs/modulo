@@ -42,6 +42,7 @@ def _tracked_files() -> list[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         return []

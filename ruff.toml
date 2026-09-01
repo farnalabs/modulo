@@ -182,6 +182,17 @@ select = [
     "PT025",  # no erroneous use_fixtures() marker on a fixture
     "PT030",  # pytest.warns() too broad (bare Exception) — narrow to the concrete warning
     "PT031",  # pytest.warns() with multiple statements — assert inside the block
+    # Ninth wave of defensive gate-strengthening: unlike the pass-to-enable waves
+    # above, these rules had a small existing backlog that this PR FIXED, so the
+    # gate now also locks the fixes in against future regressions (verified zero
+    # remaining violations with ruff==0.16.5 under both the backend and repo-root
+    # gates: `ruff check . --select LOG004,LOG014,PLW1510,ARG003,ARG004
+    # --statistics`). Mirrors the backend/pyproject.toml gate.
+    "LOG004",  # logger.exception() must not be used outside an exception handler
+    "LOG014",  # exc_info= must carry the real exception, not rely on ambient state
+    "PLW1510", # subprocess.run() needs an explicit `check=` argument
+    "ARG003",  # unused class-method argument
+    "ARG004",  # unused static-method argument
 ]
 ignore = [
     "S101",

@@ -295,6 +295,7 @@ def _run_gh_once(path: str):
             capture_output=True,
             text=True,
             timeout=_API_TIMEOUT_SECONDS,
+            check=False,
         )
     except OSError:
         # gh cannot even be launched (e.g. PermissionError) -> requests.

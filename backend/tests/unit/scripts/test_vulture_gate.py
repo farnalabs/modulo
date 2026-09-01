@@ -81,6 +81,7 @@ def _run_gate() -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
 
 

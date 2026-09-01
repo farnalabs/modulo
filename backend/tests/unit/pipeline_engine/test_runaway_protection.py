@@ -43,7 +43,7 @@ class _Clock:
     now_value = _T0
 
     @classmethod
-    def now(cls, tz=None) -> datetime:
+    def now(cls, _tz=None) -> datetime:
         return cls.now_value
 
 

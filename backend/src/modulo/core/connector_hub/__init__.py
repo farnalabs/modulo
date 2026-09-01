@@ -188,14 +188,14 @@ def _handle_settings_read_failure(exc: Exception, org_id: str | None) -> None:
     if org_id:
         logger.error(
             "Settings could not be read on the tenant path — fail-closed (no local-bucket fallback)",
-            exc_info=True,
+            exc_info=exc,
         )
         raise SharedBudgetUnavailableError(
             f"settings could not be read to wire the shared rate-limit budget: {exc}"
         ) from exc
     logger.warning(
         "Unable to read settings for the shared Redis rate limiter — using the local bucket",
-        exc_info=True,
+        exc_info=exc,
     )
 
 

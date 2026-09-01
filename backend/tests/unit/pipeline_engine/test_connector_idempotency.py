@@ -812,6 +812,7 @@ class TestConnectorFailedWriteNoStamp:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                check=False,
             )
             assert proc.returncode == 0, proc.stderr
             return proc.stdout.strip()

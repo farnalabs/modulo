@@ -135,7 +135,7 @@ class TestRunawayGuard:
 
         class _FakeDatetime:
             @staticmethod
-            def now(tz=None):
+            def now(_tz=None):
                 return fake_time
 
         monkeypatch.setattr("modulo.core.pipeline_engine.runaway_protection.datetime", _FakeDatetime)

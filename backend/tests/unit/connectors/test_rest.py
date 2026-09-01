@@ -318,11 +318,11 @@ def test_api_key_query_secret_not_screened() -> None:
             super().__init__(validate_url=self._noop_validate, filter_strings=self._track_filter)
 
         @staticmethod
-        async def _noop_validate(url: str) -> None:
+        async def _noop_validate(_url: str) -> None:
             return None
 
         @staticmethod
-        def _track_filter(values: list[str], resource: str) -> None:
+        def _track_filter(values: list[str], _resource: str) -> None:
             screened.extend(values)
 
     captured: dict[str, Any] = {}
@@ -419,11 +419,11 @@ def test_query_benign_injection_phrase_not_rejected() -> None:
             super().__init__(validate_url=self._noop_validate, filter_strings=self._reject)
 
         @staticmethod
-        async def _noop_validate(url: str) -> None:
+        async def _noop_validate(_url: str) -> None:
             return None
 
         @staticmethod
-        def _reject(values: list[str], resource: str) -> None:
+        def _reject(values: list[str], _resource: str) -> None:
             for value in values:
                 for trigger in ("import os", "eval(", "ignore previous instructions"):
                     if trigger in value:
@@ -2108,11 +2108,11 @@ def test_write_surface_screens_injection_terms() -> None:
             super().__init__(validate_url=self._noop_validate, filter_strings=self._reject)
 
         @staticmethod
-        async def _noop_validate(url: str) -> None:
+        async def _noop_validate(_url: str) -> None:
             return None
 
         @staticmethod
-        def _reject(values: list[str], resource: str) -> None:
+        def _reject(values: list[str], _resource: str) -> None:
             for value in values:
                 if "ignore previous instructions" in value:
                     raise OutputRejectedError("rejected injection")

@@ -136,6 +136,7 @@ def _run_script(script: str, workspace: str, env: dict[str, str] | None = None) 
         env=run_env,
         cwd=workspace,
         timeout=60,
+        check=False,
     )
 
 
@@ -202,6 +203,7 @@ def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
         text=True,
         env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
         timeout=60,
+        check=False,
     )
     assert allowed.returncode == 0
     assert f"password={token}" in allowed.stdout
@@ -212,6 +214,7 @@ def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
         text=True,
         env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
         timeout=60,
+        check=False,
     )
     assert denied.returncode == 0
     assert "password=" not in denied.stdout

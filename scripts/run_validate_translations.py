@@ -50,12 +50,14 @@ def _files_changed(diff_range: str | None) -> bool:
             ["git", "diff", "--name-only", "--diff-filter=ACMR", diff_range],
             capture_output=True,
             text=True,
+            check=False,
         )
     else:
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
             capture_output=True,
             text=True,
+            check=False,
         )
     changed = set()
     for line in result.stdout.splitlines():
