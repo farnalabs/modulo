@@ -1,6 +1,6 @@
 """Unit tests for DeepSeekBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ def test_chat_openai_uses_deepseek_base_url():
             model="deepseek-chat",
             api_key="sk-test",
             base_url="https://api.deepseek.com/v1",
+            http_async_client=ANY,
         )
 
 

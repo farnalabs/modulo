@@ -22,7 +22,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.ssrf import validate_outbound_url_async
+from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
     create_provider,
     delete_provider,
@@ -425,7 +425,7 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
         return SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with await pinned_async_client(provider.discovery_url) as client:
             resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
@@ -468,7 +468,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
         except ValueError as exc:
             return SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
         try:
-            async with httpx.AsyncClient() as client:
+            async with await pinned_async_client(provider.metadata_url) as client:
                 resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
                 resp.raise_for_status()
                 metadata_xml = resp.text

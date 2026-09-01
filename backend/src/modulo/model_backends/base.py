@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from modulo.core.ssrf import validate_outbound_url_async
+from modulo.core.ssrf import pinned_async_client_sync
 
 logger = logging.getLogger(__name__)
 
@@ -32,23 +32,26 @@ async def openai_compatible_health_check(
     For Bearer-auth endpoints, pass *api_key*. For providers that use
     custom auth headers (x-api-key, x-goog-api-key, api-key), pass the
     key via *extra_headers* and set *api_key* to None.
+
+    PINNED TRANSPORT (FAR-512): the probe uses a pinned-IP client so the
+    validated address is pinned onto the connection (never re-resolved at
+    connect time, closing the DNS-rebinding window), with ``trust_env=False``
+    so a proxy cannot re-resolve the destination server-side.
     """
     url = f"{base_url.rstrip('/')}/models"
-    try:
-        await validate_outbound_url_async(base_url)
-    except ValueError as exc:
-        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     if extra_headers:
         headers.update(extra_headers)
     try:
-        async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
+        async with pinned_async_client_sync(base_url, trust_env=False, timeout=HEALTH_CHECK_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             if response.is_success:
                 return HealthResult(ok=True)
             return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
+    except ValueError as exc:
+        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
     except httpx.TimeoutException:
         logger.warning("Health check timed out for %s", url)
         return HealthResult(ok=False, detail="Health check timed out")

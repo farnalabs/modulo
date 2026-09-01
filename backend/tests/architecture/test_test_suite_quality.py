@@ -812,6 +812,21 @@ regression that silently weakens the suite:
   disjunction, so the ``object`` element alone forces the whole check ALWAYS
   True). A check that can never change its outcome is dead assertion code —
   assert against a specific type or drop the check entirely
+- ``assert <verdict-A> if <cond> else <verdict-B>`` — a conditional expression
+  (ternary ``IfExp``) standing as the *entire* assertion verdict, where both
+  branches are themselves full boolean verdicts (plain comparisons, boolean
+  combinations of them, or a ``not``-wrapped verdict — or a literal ``True``/
+  ``False`` constant on one side). Two expectations are being pinned by one
+  assertion whose outcome depends on ``<cond>``: when it fails pytest reports
+  the whole ternary as an opaque boolean and cannot say which branch broke, and
+  a reader cannot see which expectation each branch requires. A literal
+  ``True``/``False`` branch is worse — it makes the assertion a fixed outcome
+  whenever that branch is selected, the IfExp twin of the constant-absorbed
+  boolean hazard. Conditional *operands* are deliberately left alone:
+  ``assert x in (err if err else "")`` computes a single value and then asserts
+  one fact about it, which is the legitimate form. Compute the expected value
+  first (``expected = ... if ... else ...`` followed by ``assert x ==
+  expected``) or split into one ``assert`` per branch
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -11485,3 +11500,140 @@ def test_noop_typecheck_lens_flags_fixed_verdicts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _noop_typecheck_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _conditional_verdict_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose *entire*
+    verdict is a conditional expression whose branches are both boolean
+    verdicts (``assert a == 1 if c else b == 2``).
+
+    An ``assert VERDICT_A if COND else VERDICT_B`` pins two different
+    expectations behind one assertion, selected at runtime by ``COND``. If it
+    fails, pytest rewrites the whole ternary and reports the resulting boolean
+    as one opaque expression — it cannot say which branch broke, and a reader
+    cannot see which expectation each branch requires. A literal ``True``/
+    ``False`` branch makes the hazard concrete: whenever ``COND`` selects that
+    branch the assertion ALWAYS passes (or ALWAYS fails) no matter how broken
+    the behaviour under test is — the IfExp twin of the constant-absorbed
+    boolean hazard, which only recognises the ``BoolOp`` shape. The legitimate
+    spellings are the conditional-*value* form (``expected = ... if ... else
+    ...`` then ``assert x == expected``) or one ``assert`` per branch.
+
+    Conditional *operands* are deliberately not matched: ``assert x in (err if
+    err else "")`` computes a single value and then asserts one fact about it.
+    A branch that is a bare variable/attribute (``assert pending if c else a
+    == 1``, ``assert result.ok if c else result.valid``) is the legitimate
+    conditional-truthiness idiom — it tests two independent boolean *values*,
+    neither of which is a comparison the lens can prove diverges — and is left
+    alone too."""
+    found = []
+
+    def _is_verdict(node: ast.AST) -> bool:
+        """True when ``node`` evaluates to a boolean outcome rather than a value:
+        a comparison, a ``not``-wrapped verdict, a boolean combination of
+        verdicts, or a nested conditional whose branches are verdicts."""
+        if isinstance(node, ast.Compare):
+            return True
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return _is_verdict(node.operand)
+        if isinstance(node, ast.BoolOp):
+            return bool(node.values) and all(_is_verdict(v) for v in node.values)
+        if isinstance(node, ast.IfExp):
+            return all(_is_verdict(v) for v in (node.body, node.orelse))
+        return False
+
+    def _is_bool_constant(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, bool)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if isinstance(test, ast.IfExp):
+            branches = (test.body, test.orelse)
+            both_outcomes = all(_is_verdict(b) or _is_bool_constant(b) for b in branches)
+            if both_outcomes:
+                verdict_pin = (
+                    "both branches are full boolean verdicts"
+                    if not any(_is_bool_constant(b) for b in branches)
+                    else "a branch is a literal True/False constant"
+                )
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(test)} — {verdict_pin}, so the assert's outcome is "
+                        "chosen at runtime by the condition and the failure is reported as one "
+                        "opaque boolean (pytest cannot say which branch broke), while a literal "
+                        "True/False branch is a fixed outcome whenever it is selected. Compute the "
+                        "expected value first (`expected = ... if ... else ...`) then assert "
+                        "`x == expected`, or split into one assert per branch",
+                    )
+                )
+    return found
+
+
+def test_no_conditional_verdict_asserts():
+    """An assertion whose entire verdict is a *conditional expression* —
+    ``assert a == 1 if c else b == 2`` — pins two different expectations
+    behind one assertion. The branch taken (and therefore which expectation
+    must hold) is picked at runtime by the condition, so a failure is reported
+    as a single opaque boolean that pytest cannot attribute to either branch,
+    and — when one branch is a literal ``True``/``False`` — the assert is a
+    fixed outcome whenever the condition selects that branch (the IfExp twin
+    of the constant-absorbed boolean hazard). Conditional *operands* (``assert
+    x in (err if err else "")``) and conditional truthiness between two
+    boolean *values* (``assert result.ok if c else result.valid``) are the
+    legitimate forms and are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _conditional_verdict_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} conditional-verdict assert(s).\n"
+        "An 'assert X if C else Y' where X and Y are both boolean verdicts pins two expectations\n"
+        "in one assertion: pytest reports the whole ternary as an opaque boolean and cannot say\n"
+        "which branch broke, and a literal True/False branch is a fixed outcome whenever the\n"
+        "condition selects it. Compute the expected value first (expected = ... if ... else ...)\n"
+        "then assert x == expected, or split into one assert per branch.\n" + "\n".join(violations)
+    )
+
+
+def test_conditional_verdict_lens_flags_opaque_branches():
+    """Synthetic positive/negative control for the conditional-verdict lens: it
+    must flag a conditional expression standing as the whole assertion verdict
+    whose branches are verdicts (comparisons, boolean combinations, a
+    ``not``-wrapped verdict, or a literal True/False constant) — in either
+    branch order — and ignore the conditional-*operand* form, conditional
+    truthiness between two boolean values, a conditional feeding an expected
+    value, and any plain assertion."""
+    positive_sources = [
+        "def test_foo():\n    assert a == 1 if c else b == 2\n",
+        "def test_foo():\n    assert x != 3 if flag else y < 1\n",
+        "def test_foo():\n    assert (a == 1 and b > 0) if c else (a == 2 or b < 0)\n",
+        "def test_foo():\n    assert not (x is None) if ready else y is not None\n",
+        "def test_foo():\n    assert a == 1 if c else True\n",
+        "def test_foo():\n    assert False if c else a == 1\n",
+        "def test_foo():\n    assert b == 2 if ready else a == 1\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _conditional_verdict_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert a == 1\n",
+        "def test_foo():\n    assert x in (err if isinstance(err, str) else str(err))\n",
+        "def test_foo():\n    assert result.ok if c else result.valid\n",
+        "def test_foo():\n    assert pending or done if c else a == 1\n",
+        "def test_foo():\n    expected = 501 if isinstance(exc, ProgrammingError) else 503\n"
+        "    assert resp.status_code == expected\n",
+        "def test_foo():\n    assert (x if c else y) == 1\n",
+        "def test_foo():\n    assert len(x) if c else len(y)\n",
+        "def test_foo():\n    assert a == 1 if c else b\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _conditional_verdict_assert_violations(tree), f"lens should NOT flag:\n{source}"

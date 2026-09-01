@@ -33,7 +33,7 @@ Nullable optional strings omit `min_length` so `None` is accepted.
 |---|---|
 | Page number | `ge=1` |
 | Page size | `ge=1, le=100` (default 20) |
-| Timeout seconds | `ge=60, le=86400` |
+| Timeout seconds | `ge=60, le=604800` |
 | Token budget | `ge=0` |
 | Weight | `ge=0` |
 | Claim expiry minutes | `ge=1, le=1440` |

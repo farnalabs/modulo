@@ -26,6 +26,7 @@ from modulo.connectors.base import (
     health_check_failure,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.core.ssrf import pinned_async_client_sync
 
 _SLACK_API = "https://slack.com/api"
 
@@ -98,7 +99,16 @@ class SlackConnector(ConnectorBase):
         return {"Authorization": f"Bearer {self._bot_token}"}
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=_SLACK_API, headers=self._headers(), timeout=30)
+        # PINNED TRANSPORT (FAR-512): validate + resolve the Slack API host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). ``trust_env=False``
+        # stops a proxy from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            _SLACK_API,
+            base_url=_SLACK_API,
+            headers=self._headers(),
+            timeout=30,
+        )
 
     async def _send_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         async with self._client() as client:

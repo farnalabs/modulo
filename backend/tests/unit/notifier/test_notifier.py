@@ -849,6 +849,71 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
     mapper_instance.create_from_event.assert_not_called()
 
 
+async def test_dispatch_pins_client_to_validated_endpoint(notifier: Notifier) -> None:
+    """FAR-517: the webhook dispatch client is built through pinned_async_client,
+    keyed to the saved endpoint URL, so the connection is pinned to the address
+    validated at save time rather than re-resolved at dispatch."""
+    ep = _fake_endpoint()
+
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get,
+        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
+        patch("modulo.core.notifier.pinned_async_client") as mock_pinned,
+    ):
+        mock_dispatch.return_value = DispatchResult(
+            endpoint_id=ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
+        )
+        mock_pinned.return_value = AsyncMock()
+
+        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
+
+    assert len(results) == 1
+    assert results[0].status == "delivered"
+    # The dispatch client was built with the saved endpoint URL (not re-resolved).
+    mock_pinned.assert_awaited_once_with(ep.url)
+    mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=None)
+
+
+async def test_dispatch_rejects_ssrf_rebind_to_metadata(notifier: Notifier) -> None:
+    """FAR-517 regression: a saved webhook URL whose host re-resolves to cloud
+    metadata (169.254.169.254) at dispatch must NOT be connected. The dispatch
+    client construction re-resolves + re-validates via pinned_async_client; a
+    rebind to a blocked address fails closed and dead-letters the endpoint rather
+    than connecting to the unvalidated metadata address."""
+    ep = _fake_endpoint()
+
+    async def _fake_pinned(_url: str) -> httpx.AsyncClient:
+        raise ValueError(
+            "URL hostname hooks.example.com resolves to a private/internal address "
+            "(169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow "
+            "this target, or use a public URL."
+        )
+
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])),
+        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
+        patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()) as mock_dead,
+        patch("modulo.core.notifier.pinned_async_client", _fake_pinned),
+    ):
+        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
+
+    assert len(results) == 1
+    assert results[0].status == "dead_lettered"
+    assert "169.254.169.254" in (results[0].last_error or "")
+    assert results[0].attempt_count == 0
+    # The HTTP request must never be issued for the rebind-to-metadata host.
+    mock_dispatch.assert_not_called()
+    mock_record.assert_awaited_once()
+    mock_dead.assert_awaited_once()
+    delivery = mock_record.await_args.args
+    assert delivery[3] == "dead_lettered"  # status
+    assert "169.254.169.254" in delivery[6]
+
+
 async def test_dispatch_event_retains_payload_end_to_end(notifier: Notifier) -> None:
     """retain_payload must flow from dispatch_event through _dispatch_inline to the
     delivery log, encrypting the actual body that was POSTed (incl. timestamp)."""

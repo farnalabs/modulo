@@ -5668,8 +5668,15 @@ async def infer_schema(
             from modulo.core.model_backend_hub import ModelBackendHub
             from modulo.core.secrets_backend import create_secrets_backend
 
-            secrets_backend = create_secrets_backend(fernet_key=get_settings().fernet_key)
+            secrets_backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=s)
             async with ModelBackendHub() as mh:
+                # Model-backend credential decrypt needs the org-scoped RLS
+                # context in the SAME transaction as the secrets read —
+                # set_config(..., true) is transaction-local, so re-assert
+                # set_rls_org here (inside the ``_session`` transaction that
+                # wraps this body) before the decrypt. Without the session the
+                # tool 500s with "Failed to infer schema".
+                await set_rls_org(s, org_id)
                 await mh.initialise(mbs.items, secrets_backend=secrets_backend)
                 backend = await mh.get(mbs.items[0].id)
 

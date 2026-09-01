@@ -460,6 +460,32 @@ class TestObservabilityTestEndpoint:
         assert body["success"] is False
         assert "required" in body["message"].lower()
 
+    def test_test_rejects_ssrf_rebind_on_pinned_client(self, free_client: TestClient) -> None:
+        """FAR-517: the OTLP test connection must be built through pinned_async_client,
+        so a tenant-supplied endpoint whose host re-resolves to a blocked internal
+        address (169.254.169.254) is rejected (fail closed) rather than connected
+        with a plain unpinned client."""
+
+        async def _fake_pinned(_url: str) -> httpx.AsyncClient:
+            raise ValueError(
+                "URL hostname collector.example.com resolves to a private/internal "
+                "address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES "
+                "to allow this target, or use a public URL."
+            )
+
+        with (
+            patch("modulo.api.routes.observability.pinned_async_client", new=_fake_pinned),
+        ):
+            resp = free_client.post(
+                "/api/v1/settings/observability/test",
+                json={"otlp_endpoint": "http://collector.example.com:4318"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "Rejected" in body["message"]
+        assert "169.254.169.254" in body["message"]
+
     def test_test_handles_timeout(self, free_client: TestClient) -> None:
         with (
             patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("timed out")),

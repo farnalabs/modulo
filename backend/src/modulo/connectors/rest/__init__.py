@@ -189,6 +189,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.rest import rest_metrics
+from modulo.core.ssrf import pinned_async_transport_sync
 
 _log = logging.getLogger(__name__)
 
@@ -643,19 +644,43 @@ class RestConnector(ConnectorBase):
         return ConnectorType.REST
 
     def _client(self) -> httpx.AsyncClient:
-        """Return the lazily-created, connection-pooled client (never closed here)."""
+        """Return the lazily-created, connection-pooled client (never closed here).
+
+        The transport is PINNED (FAR-512) to the tenant-supplied ``base_url``
+        host unless a ``transport`` test seam was injected: the SSRF guard (or
+        ``ssrf_validator`` seam) validated the rendered URL in
+        :meth:`_build_request` / :meth:`_build_health_request`, and this transport
+        connects to the validated address while keeping the original hostname for
+        TLS SNI/cert — so the connection never re-resolves the host at connect
+        time (closes the DNS-rebinding window). ``trust_env=False`` stops a proxy
+        from re-resolving the destination server-side and defeating the pin.
+        Redirects are not followed, so a hop that escapes the pin map is refused
+        by the transport (``UnpinnedHostError``) rather than silently followed.
+        """
         if self._cached_client is None:
             kwargs: dict[str, Any] = {
                 "timeout": self._timeout,
                 "verify": self._verify_tls,
                 "follow_redirects": False,
-                "limits": httpx.Limits(
-                    max_connections=self._max_connections,
-                    max_keepalive_connections=self._max_keepalive,
-                ),
             }
+            limits = httpx.Limits(
+                max_connections=self._max_connections,
+                max_keepalive_connections=self._max_keepalive,
+            )
             if self._transport is not None:
+                # Test seam: honour the injected transport (MockTransport).
                 kwargs["transport"] = self._transport
+            else:
+                # Production: pin the base_url host onto a pinned transport. The
+                # transport is pinned per validated host; REST forwards every
+                # request to the base_url host, so a single pinned host is the
+                # complete reachable set (any other host is refused fail-closed).
+                kwargs["transport"] = pinned_async_transport_sync(
+                    self._base_url,
+                    verify=self._verify_tls,
+                    trust_env=False,
+                    limits=limits,
+                )
             self._cached_client = httpx.AsyncClient(**kwargs)
         return self._cached_client
 

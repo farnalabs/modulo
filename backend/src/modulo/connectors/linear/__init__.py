@@ -35,6 +35,7 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
+from modulo.core.ssrf import pinned_async_client_sync
 
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
@@ -82,7 +83,13 @@ class LinearConnector(TicketTrackerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        # PINNED TRANSPORT (FAR-512): validate + resolve the GraphQL endpoint's
+        # host and pin the validated IP onto the transport so the connection
+        # never re-resolves at connect time (closes DNS-rebind).
+        # ``trust_env=False`` stops a proxy from re-resolving the destination
+        # and defeating the pin.
+        return pinned_async_client_sync(
+            _LINEAR_GRAPHQL_URL,
             headers=self._headers(),
             timeout=30,
         )

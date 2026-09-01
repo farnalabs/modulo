@@ -35,6 +35,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.ssrf import pinned_async_client
 from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
 from modulo.db.models.account import Account
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
@@ -359,9 +360,8 @@ class Notifier:
                 default=str,
                 separators=(",", ":"),
             ).encode()
-            http_client = await self._get_client()
             for ep in endpoints:
-                result = await self._dispatch_to_endpoint(http_client, ep, event_type, body, run_id, retain_payload)
+                result = await self._dispatch_endpoint_pinned(ep, event_type, body, run_id, retain_payload)
                 results.append(result)
 
         # Create in-app notification record alongside webhook dispatches
@@ -385,6 +385,63 @@ class Notifier:
             )
 
         return results
+
+    async def _build_dispatch_client(self, url: str) -> httpx.AsyncClient:
+        """Build the dispatch HTTP client for one endpoint URL, pinned to its
+        resolved address.
+
+        Each endpoint URL is validated at save time. A validate-at-save check
+        alone leaves the DNS-rebinding window open (the URL can be re-resolved
+        to an internal/metadata address between save and dispatch). Building the
+        client via :func:`pinned_async_client` re-resolves and re-validates the
+        URL at dispatch and pins the TCP connection to the validated address
+        while keeping the original hostname for TLS SNI/cert. If the URL now
+        resolves to a blocked/internal address, this raises ValueError and the
+        dispatch fails CLOSED (no request is made to the unvalidated host). A
+        fresh per-endpoint client is used so each URL gets its own pin.
+        """
+        client = await pinned_async_client(url)
+        client.timeout = httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0)
+        return client
+
+    async def _dispatch_endpoint_pinned(
+        self,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        body: bytes,
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+    ) -> DispatchResult:
+        """Send one notification to one endpoint via a pinned, re-validated client.
+
+        Wraps the retry loop in :meth:`_dispatch_to_endpoint` with an SSRF-safe
+        dispatch client. If re-validating the saved URL at dispatch time fails
+        (the host now resolves to an internal/private address — the DNS-rebinding
+        residual), the endpoint is dead-lettered and no request is made.
+        """
+        try:
+            client = await self._build_dispatch_client(endpoint.url)
+        except ValueError as exc:
+            _log.warning(
+                "notifier.dispatch_endpoint_ssrf_rejected",
+                extra={
+                    "endpoint_id": str(endpoint.id),
+                    "org_id": str(endpoint.organisation_id),
+                    "error": str(exc),
+                },
+            )
+            await self._record_delivery(endpoint, event_type, run_id, "dead_lettered", 0, None, str(exc), None)
+            await self._increment_dead_letter(endpoint)
+            return DispatchResult(
+                endpoint_id=endpoint.id,
+                status="dead_lettered",
+                attempt_count=0,
+                last_error=str(exc),
+            )
+        try:
+            return await self._dispatch_to_endpoint(client, endpoint, event_type, body, run_id, retain_payload)
+        finally:
+            await client.aclose()
 
     async def _dispatch_to_endpoint(
         self,

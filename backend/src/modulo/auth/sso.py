@@ -688,8 +688,9 @@ async def _resolve_saml_config(
     for the env path.
 
     Admin-configured ``metadata_url`` (DB path) is SSRF-validated and fetched
-    with explicit error handling; the env path is unchanged for backward
-    compatibility (unit tests use example.com).
+    with explicit error handling; the env path is fetched with the same pinned
+    client (FAR-517) so the connect is pinned to the validated address rather
+    than re-resolved at request time.
     """
     db_saml = await _read_system_saml_provider(system_session)
     if db_saml is None and app_session is not None:
@@ -918,7 +919,7 @@ async def _saml_fetch_idp_metadata(settings: Settings) -> str:
     if settings.modulo_saml_idp_metadata_xml:
         return settings.modulo_saml_idp_metadata_xml
     if settings.modulo_saml_idp_metadata_url:
-        async with httpx.AsyncClient() as client:
+        async with await pinned_async_client(settings.modulo_saml_idp_metadata_url) as client:
             resp = await client.get(settings.modulo_saml_idp_metadata_url, timeout=httpx.Timeout(15.0, connect=5.0))
             resp.raise_for_status()
             return resp.text

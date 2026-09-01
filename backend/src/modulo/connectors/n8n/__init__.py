@@ -18,7 +18,7 @@ from modulo.connectors.base import (
     health_check_failure,
 )
 from modulo.connectors.security import CredentialRedactor, redacting
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import pinned_async_client_sync
 
 # Repeated REST path (S1192).
 _WORKFLOWS_PATH = "/rest/workflows"
@@ -35,8 +35,12 @@ class N8NConnector(ConnectorBase):
         return ConnectorType.N8N
 
     def _client(self) -> httpx.AsyncClient:
-        validate_outbound_url(self._base_url)
-        return httpx.AsyncClient(
+        # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host and
+        # pin the validated IP onto the transport so the connection never
+        # re-resolves at connect time (closes DNS-rebind). ``trust_env=False``
+        # stops a proxy from re-resolving the destination and defeating the pin.
+        return pinned_async_client_sync(
+            self._base_url,
             base_url=self._base_url,
             headers={
                 "Authorization": f"Bearer {self._token}",

@@ -109,13 +109,16 @@ def put_observability_settings(client, ctx, request):
 @when("I POST /api/v1/settings/observability/test")
 def step_otel_connection(client, ctx, request):
     endpoint = ctx.get("otlp_endpoint", "http://otel-collector:4318")
-    with patch("modulo.api.routes.observability.httpx.AsyncClient") as mock_client_cls:
+    with patch(
+        "modulo.api.routes.observability.pinned_async_client",
+        new_callable=AsyncMock,
+    ) as mock_pinned:
         mock_client = MagicMock()
-        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.aclose = AsyncMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_pinned.return_value = mock_client
 
         resp = client.post(
             "/api/v1/settings/observability/test",

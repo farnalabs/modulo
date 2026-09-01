@@ -16,7 +16,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.ssrf import validate_outbound_url_async
+from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.observability import get_otel_config, update_otel_config
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -286,8 +286,13 @@ async def test_otel_connection(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json=test_span, headers=req.otlp_headers or {})
+        client = await pinned_async_client(url)
+        client.timeout = httpx.Timeout(10.0)
+    except ValueError as exc:
+        return TestSpanResult(success=False, message=f"Rejected: {exc}")
+
+    try:
+        resp = await client.post(url, json=test_span, headers=req.otlp_headers or {})
         if resp.status_code < 500:
             return TestSpanResult(
                 success=True,
@@ -310,6 +315,8 @@ async def test_otel_connection(
     except Exception as exc:
         _log.exception("observability.test_otel_connection")
         return TestSpanResult(success=False, message=f"Connection failed: {exc}")
+    finally:
+        await client.aclose()
 
 
 @router.get("/preview", dependencies=[require_feature("observability")])
