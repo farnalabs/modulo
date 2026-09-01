@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json, merge_masked_config_json
+from modulo.api.middleware.sensitive_mask import (
+    SENSITIVE_VALUE_MASK,
+    mask_config_json,
+    merge_masked_config_json,
+)
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType

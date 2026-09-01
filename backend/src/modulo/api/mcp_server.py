@@ -50,7 +50,7 @@ from modulo.api.dependencies import (
     get_or_create_session_factory,
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from modulo.api.middleware.sensitive_mask import merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for
 from modulo.auth.api_key import (
@@ -4413,19 +4413,9 @@ def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None)
     if config_json is None:
         return
     # MERGE into the existing blob — never wholesale replace.
-    current_cfg = trigger.config_json or {}
-    merged_cfg = dict(current_cfg)
-    for k, v in config_json.items():
-        if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-            # A masked placeholder must never clobber the stored secret
-            # (read-modify-write round-trip guard). Keep the existing value.
-            continue
-        if v is None:
-            # Explicit null clears the key; a missing key leaves it intact.
-            merged_cfg.pop(k, None)
-        else:
-            merged_cfg[k] = v
-    trigger.config_json = merged_cfg
+    # A masked placeholder must never clobber the stored secret
+    # (read-modify-write round-trip guard). Keep the existing value.
+    trigger.config_json = merge_masked_config(trigger.config_json, config_json)
 
 
 async def _apply_trigger_field_updates(

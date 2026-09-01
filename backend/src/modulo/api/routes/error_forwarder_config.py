@@ -20,7 +20,7 @@ from modulo.api.dependencies import (
     require_feature,
     require_permission,
 )
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from modulo.api.middleware.sensitive_mask import merge_masked_config
 from modulo.api.models.error_forwarder_config import (
     ForwarderConfigResponse,
     ForwarderConfigUpdate,
@@ -169,17 +169,7 @@ def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> b
 
 def _merge_sensitive_config(current: dict[str, Any] | None, update: dict[str, Any]) -> dict[str, Any]:
     """MERGE forwarder config — a masked placeholder never clobbers a stored secret."""
-    merged = dict(current or {})
-    for k, v in update.items():
-        if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-            # A masked placeholder must never clobber the stored secret
-            # (read-modify-write round-trip guard). Keep the existing value.
-            continue
-        if v is None:
-            merged.pop(k, None)
-        else:
-            merged[k] = v
-    return merged
+    return merge_masked_config(current, update)
 
 
 def _validate_config_or_raise(forwarder_type: str, config_json: dict[str, Any] | None) -> None:
