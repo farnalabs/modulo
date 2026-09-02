@@ -166,6 +166,14 @@ def _eval_calculated(
                 "tokens_input": int(telemetry.tokens_input),
                 "tokens_output": int(telemetry.tokens_output),
                 "nodes_estimated": telemetry.nodes_estimated,
+                # Agent-reported token sums (FAR-491) — DISPLAY-ONLY basis
+                # surfacing; never an input to the system's built-in money
+                # math (operator formulas may reference these identifiers).
+                "tokens_input_reported": int(telemetry.tokens_input_reported),
+                "tokens_output_reported": int(telemetry.tokens_output_reported),
+                "tokens_total_reported": int(telemetry.tokens_total_reported),
+                "tokens_cache_read_reported": int(telemetry.tokens_cache_read_reported),
+                "tokens_cache_write_reported": int(telemetry.tokens_cache_write_reported),
             }
         )
         amount = amount.quantize(_QUANT, rounding=ROUND_HALF_UP)

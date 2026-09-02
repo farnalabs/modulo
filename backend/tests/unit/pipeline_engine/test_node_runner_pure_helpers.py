@@ -14,6 +14,8 @@ import pytest
 from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
     _build_model_cost_fields,
+    _build_sandbox_node_envelope,
+    _build_token_usage_fields,
     _claim_token_attempt_suffix,
     _combine_log_entries,
     _compile_delivery_sentinel_pattern,
@@ -167,6 +169,146 @@ class TestSelfReportedCost:
         assert fields["model_cost_raw_usd"] == 5
         assert fields["model_cost_clamped"] is False
         assert fields["model_cost_out_of_band_high"] is False
+
+
+# ---------------------------------------------------------------------------
+# _build_token_usage_fields — agent-reported token usage (FAR-491)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentReportedTokenUsage:
+    def test_non_dict_output_json_omits_everything(self) -> None:
+        assert not _build_token_usage_fields(None)
+        assert not _build_token_usage_fields("nope")
+        assert not _build_token_usage_fields(42)
+
+    def test_token_usage_absent_or_non_dict_omits_everything(self) -> None:
+        assert not _build_token_usage_fields({})
+        assert not _build_token_usage_fields({"other": 1})
+        assert not _build_token_usage_fields({"token_usage": "not-a-dict"})
+        assert not _build_token_usage_fields({"token_usage": None})
+
+    def test_valid_report_full_including_cache_keys(self) -> None:
+        fields = _build_token_usage_fields(
+            {"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100, "cache_write": 8}}
+        )
+        assert fields == {
+            "model_tokens_input": 1234,
+            "model_tokens_output": 567,
+            "model_tokens_total": 1801,
+            "model_tokens_cache_read": 100,
+            "model_tokens_cache_write": 8,
+        }
+
+    def test_valid_report_without_cache_keys_omits_cache_fields(self) -> None:
+        fields = _build_token_usage_fields({"token_usage": {"input": 10, "output": 5, "total": 15}})
+        assert fields == {"model_tokens_input": 10, "model_tokens_output": 5, "model_tokens_total": 15}
+        assert "model_tokens_cache_read" not in fields
+        assert "model_tokens_cache_write" not in fields
+
+    @pytest.mark.parametrize("bad_value", ["123", 1.5, None, True, False, {"a": 1}, [1]])
+    def test_invalid_value_omits_only_that_key(self, bad_value: object) -> None:
+        fields = _build_token_usage_fields({"token_usage": {"input": bad_value, "output": 5, "total": 15}})
+        assert "model_tokens_input" not in fields
+        assert fields["model_tokens_output"] == 5
+        assert fields["model_tokens_total"] == 15
+
+    @pytest.mark.parametrize("negative_field", ["input", "output", "total", "cache_read", "cache_write"])
+    def test_negative_value_omits_that_key(self, negative_field: str) -> None:
+        usage: dict[str, int] = {"input": 10, "output": 5, "total": 15, "cache_read": 2, "cache_write": 1}
+        usage[negative_field] = -1
+        fields = _build_token_usage_fields({"token_usage": usage})
+        producer_to_field = {
+            "input": "model_tokens_input",
+            "output": "model_tokens_output",
+            "total": "model_tokens_total",
+            "cache_read": "model_tokens_cache_read",
+            "cache_write": "model_tokens_cache_write",
+        }
+        assert producer_to_field[negative_field] not in fields
+        # The remaining four keys still extract.
+        assert len(fields) == 4
+
+    def test_valid_zero_is_a_real_report_and_is_written(self) -> None:
+        fields = _build_token_usage_fields({"token_usage": {"input": 0, "output": 0, "total": 0}})
+        assert fields == {"model_tokens_input": 0, "model_tokens_output": 0, "model_tokens_total": 0}
+
+    def test_envelope_carries_reported_tokens_in_both_views(self) -> None:
+        """The envelope's inner (artifact) and outer (telemetry) views both
+        carry the extracted fields; a node without a report carries none."""
+        output = nr._SandboxNodeOutput(
+            status="completed",
+            summary="did the thing",
+            exit_code=0,
+            wall_clock_time_ms=1200,
+            cost_estimate_usd=0.01,
+            cost_source={"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100}},
+        )
+        envelope = _build_sandbox_node_envelope(node_id="n1", output=output)
+        inner = envelope["artifacts"][0]["output"]
+        outer = envelope["output"]
+        for view in (inner, outer):
+            assert view["model_tokens_input"] == 1234
+            assert view["model_tokens_output"] == 567
+            assert view["model_tokens_total"] == 1801
+            assert view["model_tokens_cache_read"] == 100
+            assert "model_tokens_cache_write" not in view
+
+        silent = nr._SandboxNodeOutput(
+            status="completed",
+            summary="no report",
+            exit_code=0,
+            wall_clock_time_ms=50,
+            cost_estimate_usd=0.0,
+            cost_source={"summary": "nothing"},
+        )
+        quiet_envelope = _build_sandbox_node_envelope(node_id="n2", output=silent)
+        assert not any(key.startswith("model_tokens_") for key in quiet_envelope["artifacts"][0]["output"])
+        assert not any(key.startswith("model_tokens_") for key in quiet_envelope["output"])
+
+    def test_schema_drift_suppresses_token_report(self) -> None:
+        """A truthy producer ``schema_drift`` flag suppresses the token report
+        entirely (returns ``{}``) — mirroring ``_extract_reported_cost``: a
+        drifted-schema node reports NO tokens."""
+        assert not _build_token_usage_fields(
+            {"schema_drift": True, "token_usage": {"input": 10, "output": 5, "total": 15}}
+        )
+
+    def test_clean_producer_report_extracts_normally(self) -> None:
+        fields = _build_token_usage_fields(
+            {"schema_drift": False, "token_usage": {"input": 10, "output": 5, "total": 15}}
+        )
+        assert fields == {"model_tokens_input": 10, "model_tokens_output": 5, "model_tokens_total": 15}
+
+    def test_drifted_producer_tokens_not_folded_into_envelope(self) -> None:
+        """A drifted producer's ``token_usage`` is NOT folded into the node
+        output (no ``model_tokens_*`` in either view — so no ``reported_*``
+        keys ever fold downstream), while a clean producer's is."""
+        drifted = nr._SandboxNodeOutput(
+            status="completed",
+            summary="drifted producer",
+            exit_code=0,
+            wall_clock_time_ms=1200,
+            cost_estimate_usd=0.01,
+            cost_source={"schema_drift": True, "token_usage": {"input": 1234, "output": 567, "total": 1801}},
+        )
+        drifted_envelope = _build_sandbox_node_envelope(node_id="n1", output=drifted)
+        for view in (drifted_envelope["artifacts"][0]["output"], drifted_envelope["output"]):
+            assert not any(key.startswith("model_tokens_") for key in view)
+
+        clean = nr._SandboxNodeOutput(
+            status="completed",
+            summary="clean producer",
+            exit_code=0,
+            wall_clock_time_ms=1200,
+            cost_estimate_usd=0.01,
+            cost_source={"schema_drift": False, "token_usage": {"input": 1234, "output": 567, "total": 1801}},
+        )
+        clean_envelope = _build_sandbox_node_envelope(node_id="n2", output=clean)
+        for view in (clean_envelope["artifacts"][0]["output"], clean_envelope["output"]):
+            assert view["model_tokens_input"] == 1234
+            assert view["model_tokens_output"] == 567
+            assert view["model_tokens_total"] == 1801
 
 
 # ---------------------------------------------------------------------------

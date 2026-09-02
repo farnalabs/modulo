@@ -576,6 +576,54 @@ def _extract_reported_cost(
     return raw, clamped, was_clamped, out_of_band_high
 
 
+#: Producer output.json ``token_usage`` key -> node-output field. The producer
+#: contract (FAR-491) pins ``token_usage: {input, output, total, cache_read?,
+#: cache_write?}`` — producer semantics are ``total = input + output`` and the
+#: cache keys appear only when the sandbox's opencode.db exposes the columns.
+_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("model_tokens_input", "input"),
+    ("model_tokens_output", "output"),
+    ("model_tokens_total", "total"),
+    ("model_tokens_cache_read", "cache_read"),
+    ("model_tokens_cache_write", "cache_write"),
+)
+
+
+def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
+    """Build the node-output agent-reported token-usage fields (FAR-491).
+
+    Reads ``token_usage`` from the sandbox agent's output.json (the same
+    ``cost_source`` the self-reported cost extraction reads) and extracts
+    ``model_tokens_input`` / ``model_tokens_output`` / ``model_tokens_total``
+    / ``model_tokens_cache_read`` / ``model_tokens_cache_write``. A truthy
+    producer ``schema_drift`` flag returns ``{}`` (no report) — a
+    drifted-schema node reports NO tokens, mirroring
+    ``_extract_reported_cost``. Tri-state per key: absent / non-int / bool /
+    negative → the key is OMITTED (never a ``0`` or ``null`` placeholder —
+    mirrors ``_build_model_cost_fields``). A valid ``0`` report is a real
+    report and IS written. These fields are DISPLAY-ONLY: they feed
+    ``node_telemetry_json`` and the union's ``reported_*`` analytics fields,
+    never an input to the system's built-in money math (operator-defined
+    formulas may reference them).
+    """
+    if not isinstance(output_json, dict):
+        return {}
+    if output_json.get("schema_drift"):
+        return {}
+    usage = output_json.get("token_usage")
+    if not isinstance(usage, dict):
+        return {}
+    fields: dict[str, Any] = {}
+    for field_name, usage_key in _TOKEN_USAGE_FIELD_MAP:
+        value = usage.get(usage_key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if value < 0:
+            continue
+        fields[field_name] = value
+    return fields
+
+
 def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
     """Build the node-output model-cost fields (audit + display + flags).
 
@@ -4490,6 +4538,7 @@ def _build_sandbox_node_envelope(
         "wall_clock_time_ms": output.wall_clock_time_ms,
         "cost_estimate_usd": output.cost_estimate_usd,
         **_build_model_cost_fields(output.cost_source),
+        **_build_token_usage_fields(output.cost_source),
     }
     if output.output_json is not _UNSET:
         inner["output_json"] = output.output_json

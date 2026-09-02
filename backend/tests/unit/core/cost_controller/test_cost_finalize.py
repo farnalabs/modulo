@@ -22,6 +22,7 @@ from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_
 from modulo.core.cost_controller.finalize import (
     _derive_total_tokens,
     _enrich_union,
+    _fold_token_usage,
     _legacy_sandbox_cost,
     _merge,
     _split_merge_outputs,
@@ -229,6 +230,143 @@ def test_enrich_union_schema_drift_detected_from_split_telemetry() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _fold_token_usage — agent-reported token usage, DISTINCT reported_* keys (FAR-491)
+# ---------------------------------------------------------------------------
+
+_REPORTED_TOKENS = {
+    "model_tokens_input": 1234,
+    "model_tokens_output": 567,
+    "model_tokens_total": 1801,
+    "model_tokens_cache_read": 100,
+    "model_tokens_cache_write": 8,
+}
+
+
+def test_enrich_union_folds_reported_tokens_display_only() -> None:
+    """A sandbox node's agent-reported tokens fold into the DISTINCT
+    ``reported_*`` union keys while the SERVER token entries stay 0 — the
+    reported values never overwrite ``input_tokens`` / ``output_tokens`` /
+    ``total_tokens``."""
+    usage = {"node-a": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {"node-a": {"summary": "agent summary"}}  # pure return
+    telemetry = {"node-a": {"status": "completed", **_REPORTED_TOKENS}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    entry = union["node-a"]
+    assert entry["reported_input_tokens"] == 1234
+    assert entry["reported_output_tokens"] == 567
+    assert entry["reported_total_tokens"] == 1801
+    assert entry["reported_cache_read_tokens"] == 100
+    assert entry["reported_cache_write_tokens"] == 8
+    # Server-measured fields untouched by the fold.
+    assert entry["input_tokens"] == 0
+    assert entry["output_tokens"] == 0
+    assert entry["total_tokens"] == 0
+    assert _derive_total_tokens(union) == 0
+
+
+def test_enrich_union_sandbox_without_report_has_no_reported_keys() -> None:
+    """A sandbox node whose telemetry carries NO model_tokens_* fields gets NO
+    reported_* keys (never a 0 placeholder)."""
+    usage = {"node-a": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {"node-a": {"summary": "agent summary"}}
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 1200}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    assert not any(key.startswith("reported_") for key in union["node-a"])
+
+
+def test_fold_token_usage_output_absent_keeps_stored_reported() -> None:
+    """Branch 3 (output ABSENT): the stored-union reported_* values are the
+    fallback authority — left untouched, mirroring ``_fold_model_cost``."""
+    node_dict = {"reported_input_tokens": 5, "reported_total_tokens": 5}
+    _fold_token_usage(node_dict, None)
+    assert node_dict["reported_input_tokens"] == 5
+    assert node_dict["reported_total_tokens"] == 5
+
+
+def test_fold_token_usage_output_without_fields_pops_stale_reported() -> None:
+    """A node output present but lacking model_tokens_* pops any previously
+    folded reported_* values — a stale fold can never survive a re-enrich."""
+    node_dict = {"reported_input_tokens": 5, "reported_total_tokens": 5}
+    _fold_token_usage(node_dict, {"status": "completed"})
+    assert not any(key.startswith("reported_") for key in node_dict)
+
+
+def test_fold_token_usage_invalid_values_treated_absent() -> None:
+    """Tri-state at the fold: bool / non-int / negative stored values are
+    treated as ABSENT (popped, never a 0 placeholder); valid 0 is a real
+    report."""
+    node_dict: dict[str, Any] = {}
+    _fold_token_usage(
+        node_dict,
+        {
+            "model_tokens_input": True,
+            "model_tokens_output": "many",
+            "model_tokens_total": -3,
+            "model_tokens_cache_read": 0,
+            "model_tokens_cache_write": 4,
+        },
+    )
+    assert "reported_input_tokens" not in node_dict
+    assert "reported_output_tokens" not in node_dict
+    assert "reported_total_tokens" not in node_dict
+    assert node_dict["reported_cache_read_tokens"] == 0
+    assert node_dict["reported_cache_write_tokens"] == 4
+
+
+def test_fold_token_usage_prove_the_fix_end_to_end() -> None:
+    """PROVE-THE-FIX: the full chain only the real path exercises — a
+    producer output.json ``token_usage`` flows through node_runner envelope
+    extraction → the split telemetry view → the union fold → the telemetry
+    sum, ending as display-only analytics with server tokens untouched."""
+    from modulo.core.cost_controller.breakdown.params import build_telemetry
+    from modulo.core.node_output_split import split_node_output
+    from modulo.core.pipeline_engine.node_runner import (
+        _build_sandbox_node_envelope,
+        _SandboxNodeOutput,
+    )
+
+    output = _SandboxNodeOutput(
+        status="completed",
+        summary="did the thing",
+        exit_code=0,
+        wall_clock_time_ms=1200,
+        cost_estimate_usd=0.01,
+        cost_source={"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100, "cache_write": 8}},
+    )
+    envelope = _build_sandbox_node_envelope(node_id="node-a", output=output)
+    _return_value, telemetry = split_node_output(envelope, "sandbox_agent", None)
+
+    # Sandbox nodes have NO server-measured token entries at all.
+    union = _enrich_union(
+        {},
+        {"node-a": {"summary": "agent summary"}},
+        {"node-a": "sandbox_agent"},
+        is_terminal=True,
+        merged_telemetry={"node-a": telemetry},
+    )
+    entry = union["node-a"]
+    assert entry["input_tokens"] == 0
+    assert entry["output_tokens"] == 0
+    assert entry["total_tokens"] == 0
+    assert entry["reported_input_tokens"] == 1234
+    assert entry["reported_output_tokens"] == 567
+    assert entry["reported_total_tokens"] == 1801
+    assert entry["reported_cache_read_tokens"] == 100
+    assert entry["reported_cache_write_tokens"] == 8
+
+    tele, per_node_cost = build_telemetry(union, [])
+    assert tele.tokens_input_reported == 1234
+    assert tele.tokens_output_reported == 567
+    assert tele.tokens_total_reported == 1801
+    assert tele.tokens_cache_read_reported == 100
+    assert tele.tokens_cache_write_reported == 8
+    assert tele.tokens_input == 0
+    assert tele.tokens_output == 0
+    assert tele.tokens_estimated == 0
+    assert per_node_cost["node-a"] == Decimal(0)
+
+
+# ---------------------------------------------------------------------------
 # _write_back_node_cost / _derive_total_tokens / derive_node_type_map
 # ---------------------------------------------------------------------------
 
@@ -241,9 +379,19 @@ def test_write_back_node_cost_single_authority() -> None:
 
 
 def test_derive_total_tokens_server_measured_only() -> None:
+    """FAR-491 evolved pin: a sandbox node contributes 0 SERVER tokens (the
+    union's ``input/output/total_tokens`` stay server-measured) — but its
+    agent-reported ``reported_*`` fields are populated in the union and are
+    IGNORED by ``_derive_total_tokens`` (display-only)."""
     enriched = {
         "node-a": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-        "node-b": {},  # sandbox node contributes 0
+        "node-b": {  # sandbox node: server tokens 0, agent-reported tokens real
+            "reported_input_tokens": 100,
+            "reported_output_tokens": 50,
+            "reported_total_tokens": 150,
+            "reported_cache_read_tokens": 20,
+            "reported_cache_write_tokens": 4,
+        },
     }
     assert _derive_total_tokens(enriched) == 15
 

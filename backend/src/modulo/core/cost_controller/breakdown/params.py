@@ -9,8 +9,13 @@ The telemetry builder (``build_telemetry``) is the SINGLE classification
 authority: a node is self-reporting iff (1) positive ``model_cost_usd`` >=
 floor, (2) ``sandbox_by_map`` (from the run-frozen node-type map via the
 enriched union), and (3) an enabled consuming ``self_reported`` component's
-``report_key`` matches. Token sums are SERVER-MEASURED ONLY — agent-supplied
-``token_usage`` is never folded in.
+``report_key`` matches. Token sums come in TWO flavours: ``tokens_input`` /
+``tokens_output`` / ``tokens_estimated`` are SERVER-MEASURED ONLY, while the
+``tokens_*_reported`` family sums the agent-supplied ``token_usage`` folded
+into the union's ``reported_*`` keys (FAR-491, sandbox nodes included). The
+reported family is DISPLAY-ONLY: it surfaces in the breakdown ``basis`` and
+operator formulas, but never feeds a cost calculation the system itself
+computes — the ``llm_tokens`` money math stays server-measured.
 """
 
 from __future__ import annotations
@@ -57,12 +62,39 @@ _PARAM_REGISTRY: dict[str, tuple[str, str, str]] = {
     "tokens_input": ("int", "sum over ESTIMATED nodes (server-measured only)", "llm_tokens"),
     "tokens_output": ("int", "sum over ESTIMATED nodes (server-measured only)", "llm_tokens"),
     "tokens_estimated": ("int", "estimated-only token total (formula input)", "llm_tokens basis"),
+    "tokens_input_reported": (
+        "int",
+        "sum of agent-reported input tokens (display-only; never a system money-math input; formula-visible)",
+        "breakdown basis + operator formulas",
+    ),
+    "tokens_output_reported": (
+        "int",
+        "sum of agent-reported output tokens (display-only; never a system money-math input; formula-visible)",
+        "breakdown basis + operator formulas",
+    ),
+    "tokens_total_reported": (
+        "int",
+        "sum of agent-reported total tokens (display-only; never a system money-math input; formula-visible)",
+        "breakdown basis + operator formulas",
+    ),
+    "tokens_cache_read_reported": (
+        "int",
+        "sum of agent-reported cache-read tokens (display-only; never a system money-math input; formula-visible)",
+        "breakdown basis + operator formulas",
+    ),
+    "tokens_cache_write_reported": (
+        "int",
+        "sum of agent-reported cache-write tokens (display-only; never a system money-math input; formula-visible)",
+        "breakdown basis + operator formulas",
+    ),
     "node_count": ("int", "count of completed nodes", "llm_tokens basis + operator formulas"),
     "nodes_estimated": ("int", "count of estimated nodes", "llm_tokens basis + operator formulas"),
     "reported": ("Decimal", "sum of report_key across self-reporting nodes (self_reported kind only)", "model_tokens"),
 }
 
 # Dead params — assert ABSENT (grep-asserted in tests).
+# FAR-491 retired ``tokens_input_reported`` / ``tokens_output_reported`` from
+# this set: they are REGISTERED now (display-only agent-reported sums).
 _DEAD_PARAMS = frozenset(
     {
         "minutes_per_hour",
@@ -70,8 +102,6 @@ _DEAD_PARAMS = frozenset(
         "wall_clock_minutes",
         "nodes_reported",
         "tokens_total",
-        "tokens_input_reported",
-        "tokens_output_reported",
     }
 )
 
@@ -116,6 +146,14 @@ class RunCostTelemetry:
     tokens_input: int = 0
     tokens_output: int = 0
     tokens_estimated: int = 0
+    # Agent-reported token sums (FAR-491) — folded from the union's
+    # ``reported_*`` keys. DISPLAY-ONLY: never an input to the system's
+    # built-in money math (operator formulas may reference them).
+    tokens_input_reported: int = 0
+    tokens_output_reported: int = 0
+    tokens_total_reported: int = 0
+    tokens_cache_read_reported: int = 0
+    tokens_cache_write_reported: int = 0
     node_count: int = 0
     nodes_estimated: int = 0
     # Count of sandbox-by-map nodes (the class that CAN self-report). Used to
@@ -206,6 +244,27 @@ def _record_self_reported(
     per_node_cost[node_id] = amount
 
 
+def _record_reported_tokens(telemetry: RunCostTelemetry, entry: dict[str, Any]) -> None:
+    """Accumulate one node's agent-reported token usage (DISPLAY-ONLY, FAR-491).
+
+    Sums the union's ``reported_*`` keys — validated tri-state (bool /
+    non-int / negative are skipped; a valid ``0`` contributes 0). These
+    counters never feed a cost calculation the system itself computes
+    (operator formulas may reference them).
+    """
+    for union_key, counter in (
+        ("reported_input_tokens", "tokens_input_reported"),
+        ("reported_output_tokens", "tokens_output_reported"),
+        ("reported_total_tokens", "tokens_total_reported"),
+        ("reported_cache_read_tokens", "tokens_cache_read_reported"),
+        ("reported_cache_write_tokens", "tokens_cache_write_reported"),
+    ):
+        value = entry.get(union_key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            continue
+        setattr(telemetry, counter, getattr(telemetry, counter) + value)
+
+
 def _record_estimated_node(
     telemetry: RunCostTelemetry,
     entry: dict[str, Any],
@@ -255,6 +314,11 @@ def build_params(
         "tokens_input": Decimal(telemetry.tokens_input),
         "tokens_output": Decimal(telemetry.tokens_output),
         "tokens_estimated": Decimal(telemetry.tokens_estimated),
+        "tokens_input_reported": Decimal(telemetry.tokens_input_reported),
+        "tokens_output_reported": Decimal(telemetry.tokens_output_reported),
+        "tokens_total_reported": Decimal(telemetry.tokens_total_reported),
+        "tokens_cache_read_reported": Decimal(telemetry.tokens_cache_read_reported),
+        "tokens_cache_write_reported": Decimal(telemetry.tokens_cache_write_reported),
         "node_count": Decimal(telemetry.node_count),
         "nodes_estimated": Decimal(telemetry.nodes_estimated),
     }
@@ -295,8 +359,9 @@ def build_telemetry(
     ``node_token_usage`` is the ENRICHED union (per-node dicts carrying
     ``wall_clock_time_ms``, ``model_cost_usd``, ``model_cost_raw_usd``,
     ``model_cost_clamped``, ``model_cost_out_of_band_high``,
-    ``is_sandbox_for_wallclock``, ``sandbox_by_map``, and the SERVER token
-    entries). The union is a telemetry input ONLY in this enriched shape —
+    ``is_sandbox_for_wallclock``, ``sandbox_by_map``, the SERVER token
+    entries, and — FAR-491 — the agent-reported ``reported_*`` token keys).
+    The union is a telemetry input ONLY in this enriched shape —
     ``outputs_json`` is never read directly.
 
     Returns ``(telemetry, per_node_cost)`` where ``per_node_cost`` is the
@@ -337,6 +402,7 @@ def build_telemetry(
             )
         else:
             _record_self_reported(telemetry, entry, node_id, per_node_cost, consuming_comp, reported_usd, raw_usd)
+        _record_reported_tokens(telemetry, entry)
         telemetry.node_count += 1
 
     _mark_missing_report_keys(telemetry, consuming)

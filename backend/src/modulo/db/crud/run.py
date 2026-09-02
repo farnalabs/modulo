@@ -20,7 +20,7 @@ from typing import Any, TypeGuard
 from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
@@ -1335,6 +1335,34 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: 
     return result.scalar_one_or_none()
 
 
+# Heavy per-run payload columns that NO list consumer reads. Each is written by
+# the executor (outputs, telemetry, compensation/classification records, sandbox
+# dispatch state) and can carry megabytes per row on sandbox-heavy orgs, so the
+# runs-list SELECT must omit them entirely (deferred columns are excluded from
+# the emitted SQL — the DB never detoasts them for a 20-row page).
+#
+# Deliberately NOT deferred:
+# * ``input_payload`` — masked into every REST list item (runs.py _build_list_item).
+# * ``cost_breakdown`` — read by the MCP ``modulo://pipelines/{id}/runs`` resource
+#   (mcp_server._format_run_line) on DETACHED instances outside the session, so a
+#   deferred access there would raise instead of lazy-loading.
+# Every consumer of ``list_runs`` (REST runs route, MCP list_runs tool, MCP
+# pipeline-runs resource, viewmodel RunSummary) was audited against this tuple —
+# test_runs_list_query_deferral.py pins it.
+_RUNS_LIST_DEFERRED_COLUMNS: tuple[str, ...] = (
+    "node_token_usage",
+    "outputs_json",
+    "node_telemetry_json",
+    "raw_output_markers",
+    "run_classification",
+    "blocked_partial_summary",
+    "guardrail_summary_json",
+    "work_item_refs",
+    "variant_config_snapshot",
+    "sandbox_dispatch_state",
+)
+
+
 async def list_runs(
     session: AsyncSession,
     *,
@@ -1356,10 +1384,16 @@ async def list_runs(
     filters on ``organisation_id`` so cross-tenant access is impossible even
     if RLS is misconfigured. ``variant_group_id`` and ``batch_id`` narrow to
     a variant group's runs or a single fired batch (FAR-332 3e).
+
+    Heavy payload columns (see ``_RUNS_LIST_DEFERRED_COLUMNS``) are deferred so
+    a page SELECT never detoasts megabyte-scale JSONB the responses never read.
     """
     q = (
         select(Run)
-        .options(selectinload(Run.pipeline))
+        .options(
+            selectinload(Run.pipeline),
+            *(defer(getattr(Run, name)) for name in _RUNS_LIST_DEFERRED_COLUMNS),
+        )
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )

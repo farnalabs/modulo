@@ -66,3 +66,13 @@ Rules:
 ### Sandbox node timeout_seconds must stay under the E2B 1-hour cap (2026-08-31)
 
 The e2b SDK upgrade shipped in the Aug 30 deploy (Python 3.14) began enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with timeout_seconds=3600 now fails provisioning with `400: Timeout cannot be greater than 1 hours` (previously accepted). GraphValidator rejects >3300 at save time (headroom for provisioning). A sandbox-provisioning failure must never be maskable as a completed run - the Prompt-to-PR pipeline's blocking output-contract eval is the reference mitigation; the failure envelope now carries the provider error.
+
+### Bot PR closures must leave a loud, auditable reason (2026-08-31)
+
+PR #2092 (deliver/FAR-438) was closed by `github-actions[bot]` in the 2026-08-31 00:11 UTC merge-queue tick and the closure reason was invisible at first glance: the `closed` timeline event carries no reason field, and the one bot comment that DID carry it (the duplicate-close comment) sat buried in a 50+ event thread behind hours of Branch Fixer churn. A later delivery session nearly re-raised work that had already piggybacked into main because "why was this closed?" took hours to answer. Every close site in `.github/workflows/merge-queue.yml` also used `gh pr close --comment "..." 2>/dev/null || true` - a comment-posting failure is silently swallowed, producing exactly the no-reason closure that is indistinguishable from a buggy or malicious one.
+
+Rules:
+
+1. Every bot-driven PR closure must post a closure comment stating the reason. The `closed` event has no reason field, so the comment IS the audit trail: post the reason with `gh pr comment` before closing (or pass `--comment` on the close), never a bare close.
+2. Comment-posting failures must never be silenced - `2>/dev/null || true` on a close+comment command hides exactly the failure that makes closures un-auditable. Post the comment separately from the close: if `gh pr comment` fails, still proceed with the close but emit a visible `::warning::closure comment failed for PR $NUM - audit trail missing` annotation (reference pattern: the "Close duplicate PRs" and post-merge close steps in `.github/workflows/merge-queue.yml`).
+3. When auditing "who closed this PR", read the issue-timeline `commented` events immediately BEFORE the `closed` event: `gh pr close --comment` posts the comment ~1 second before the close event, and `gh pr view --json` / the bare `closed` event alone make the closure look reason-less even when the comment posted (this exact false lead cost the #2092 investigation).

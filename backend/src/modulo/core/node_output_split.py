@@ -79,6 +79,14 @@ TELEMETRY_FIELDS = frozenset(
         "model_cost_clamped",
         "model_cost_out_of_band_high",
         "model_cost_display_usd",
+        # FAR-491 agent-reported token usage (display-only — never an input to
+        # the system's built-in money math; operator formulas may reference
+        # them).
+        "model_tokens_input",
+        "model_tokens_output",
+        "model_tokens_total",
+        "model_tokens_cache_read",
+        "model_tokens_cache_write",
         "agent_stdout",
         "agent_stderr",
         "stdout_length",
