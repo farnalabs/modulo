@@ -65,9 +65,11 @@ class GitLabCIRunner(CIRunnerBase):
         status = _STATUS_MAP.get(raw_status, CIRunStatus.UNKNOWN)
         duration = raw.get("duration")
         user = raw.get("user")
+        raw_id = raw.get("id")
+        raw_project_id = raw.get("project_id")
         return CIRun(
-            id=str(raw.get("id", "")),
-            pipeline_id=str(raw.get("project_id", "")),
+            id=str(raw_id) if raw_id is not None else "",
+            pipeline_id=str(raw_project_id) if raw_project_id is not None else "",
             status=status,
             url=raw.get("web_url", ""),
             branch=raw.get("ref", ""),

@@ -187,6 +187,12 @@ def test_parse_run_corrupt_actor(cc_runner):
     assert not run.triggered_by
 
 
+def test_parse_run_null_id_maps_to_empty_string(cc_runner):
+    run = cc_runner._parse_run({"id": None, "project_slug": "gh/owner/repo"})
+    assert not run.id
+    assert "None" not in run.id
+
+
 # ---------------------------------------------------------------------------
 # get_run_logs
 # ---------------------------------------------------------------------------
