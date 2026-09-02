@@ -33,8 +33,11 @@ from modulo.api.dependencies import (
     get_current_tenant_user_optional,
     get_db_session,
     get_or_create_engine,
+    get_system_db_session,
     require_permission,
+    system_engine_is_fallback,
 )
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -51,6 +54,8 @@ from modulo.core.trigger_engine import (  # noqa: F401
     PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
+    TriggerBusyError,
+    TriggerConfigInvalidError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -62,6 +67,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     verify_timestamp,
 )
 from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
+from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -166,6 +172,7 @@ async def receive_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -188,6 +195,7 @@ async def receive_webhook(
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
     trigger: Trigger | None = None
+    org_id: uuid.UUID | None = None
     guardrail_block_detail: str | None = None
 
     try:
@@ -201,26 +209,27 @@ async def receive_webhook(
             detail="Request body must be a JSON object",
         ) from exc
 
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("webhooks.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-            trigger = trigger_row.scalar_one_or_none()
-            if trigger is None:
-                raise TriggerNotFoundError(trigger_id=trigger_id)
-
-            # Resolve org_id from trigger pipeline (for unauth webhooks) or from auth principal
-            org_id = principal.organisation_id if principal else None
-            if org_id is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe.scalar_one_or_none()
-                if pipeline:
-                    org_id = pipeline.organisation_id
-            if org_id is None:
-                raise HTTPException(status_code=401, detail="Could not resolve organization")
+            # Bootstrap via the shared system-session helper (FAR-523): the
+            # trigger read must precede any RLS org context on Postgres; the
+            # helper 404s a principal referencing another org's trigger.
+            trigger, org_id = await load_trigger_and_org_global(
+                system_session, trigger_id, principal.organisation_id if principal else None
+            )
 
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -230,7 +239,9 @@ async def receive_webhook(
             # hmac_secret are validated here — HMAC-less triggers accept
             # unauthenticated deliveries by design. Failure events for these
             # typed errors are rolled back with the request (documented
-            # pre-existing limitation).
+            # pre-existing limitation). config_json shape was validated by the
+            # shared bootstrap helper (TriggerConfigInvalidError → 400 below),
+            # so ``.get`` here cannot AttributeError.
             cfg = trigger.config_json or {}
             hmac_secret_raw: str | None = cfg.get("hmac_secret")
             hmac_secret: str | None = None
@@ -315,6 +326,15 @@ async def receive_webhook(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "webhooks.receive_webhook.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -356,6 +376,40 @@ async def receive_webhook(
                 "retry the webhook delivery"
             ),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy delivery is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event + the raw payload, making it
+        # visible in the event log and replayable). The 2xx ack is honest
+        # because of that recording: 2xx suppresses sender retries (Slack) BY
+        # DESIGN, and replay is the recovery path, not a sender retry.
+        _log.info(
+            "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                payload_hash=sha256_hex(raw_body),
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org. If it somehow did not, there is nothing to
+        # record against — refuse so the sender retries (never a false ack).
+        _log.error("webhooks.receive_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
@@ -428,6 +482,7 @@ async def replay_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -460,26 +515,28 @@ async def replay_webhook(
             ) from exc
 
     trigger: Trigger | None = None
+    org_id: uuid.UUID | None = None
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("webhooks.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-            trigger = trigger_row.scalar_one_or_none()
-            if trigger is None:
-                raise TriggerNotFoundError(trigger_id=trigger_id)
-
-            # Resolve org_id from trigger pipeline (for unauth webhooks) or from auth principal
-            org_id = principal.organisation_id if principal else None
-            if org_id is None:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-                pipeline = pipe.scalar_one_or_none()
-                if pipeline:
-                    org_id = pipeline.organisation_id
-            if org_id is None:
-                raise HTTPException(status_code=401, detail="Could not resolve organization")
+            # Bootstrap via the shared system-session helper (FAR-523): the
+            # trigger read must precede any RLS org context on Postgres; the
+            # helper 404s a principal referencing another org's trigger.
+            trigger, org_id = await load_trigger_and_org_global(
+                system_session, trigger_id, principal.organisation_id if principal else None
+            )
 
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -490,6 +547,10 @@ async def replay_webhook(
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
                 ts = verify_timestamp(modulo_timestamp)
+                # config_json shape was validated by the shared bootstrap
+                # helper (TriggerConfigInvalidError → 400 below) — this read
+                # runs for authenticated replays too, so the guard cannot be
+                # skipped on any path.
                 cfg = trigger.config_json or {}
                 hmac_secret_raw: str | None = cfg.get("hmac_secret")
                 if hmac_secret_raw is None:
@@ -584,6 +645,15 @@ async def replay_webhook(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "webhooks.replay_webhook.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except DuplicateWebhookError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -610,6 +680,35 @@ async def replay_webhook(
                 "retry the webhook delivery"
             ),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy replay is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event carrying the original event's
+        # payload hash). The 2xx ack is honest because of that recording.
+        _log.info(
+            "webhooks.replay_webhook.trigger_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                source_event_id=event_id,
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org — refuse loudly rather than false-ack.
+        _log.error("webhooks.replay_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(

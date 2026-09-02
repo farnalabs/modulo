@@ -480,8 +480,11 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     ``app`` machines), so the cron_helpers in-process stats dict is invisible
     here. This check reads the shared Redis key the cron persists every tick —
     "never run" now means the cron genuinely has not run (or its persistence
-    failed). Fail-open on Redis read errors (never degrade a healthy machine on
-    a transient read).
+    failed, or the key has expired: the write carries a self-expiring TTL —
+    cron_helpers.DISPATCHER_RECONCILE_STATS_TTL_SECONDS — so a dead worker's
+    key self-expires; a missing key returns the SAME "unavailable" tier as a
+    stale key, so expiry is signal-equivalent). Fail-open on Redis read errors
+    (never degrade a healthy machine on a transient read).
 
     Tiering (FAR-199): the dispatcher gates readiness ONLY at its unavailable
     tier. A last_run_at older than the 60s cadence reports "stale" (degraded)

@@ -164,19 +164,19 @@
         <div class="flex items-center gap-2">
           <button
             type="button"
-            :disabled="page <= 1"
+            :disabled="!canGoPrev"
             data-testid="runs-list-prev-page"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="prevPage"
           >
             {{ $t('views.RunsListView.previous') }}
           </button>
-          <span class="text-sm text-muted-foreground">
-            {{ $t('views.RunsListView.page_label', { page }) }}
+          <span v-if="positionKnown" class="text-sm text-muted-foreground">
+            {{ $t('views.RunsListView.page_label', { page: pagePosition }) }}
           </span>
           <button
             type="button"
-            :disabled="page * pageSize >= total"
+            :disabled="!canGoNext"
             data-testid="runs-list-next-page"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
             @click="nextPage"
@@ -220,25 +220,33 @@ const cancellingIds = ref(new Set<string>())
 const cancelErrors = ref<Record<string, string>>({})
 
 const pageSize = 20
-const page = ref(parsePageParam(route.query.page))
-
 const FILTER_STORAGE_KEY = 'runs-list-filters'
+
+// Cursor-based pagination: the list walks pages via the opaque `next_cursor`
+// the backend returns (keyset pagination), never via deep-page OFFSET. "Prev"
+// pops a stack of previously visited cursors; there is no absolute page jump.
+const cursor = ref(parseCursorParam(route.query.cursor))
+const cursorStack = ref<Array<string | null>>([])
+const pagePosition = ref(1)
+// The visited-page count is only meaningful for in-session navigation — a
+// deep link straight onto a cursor has no known position, so the label hides.
+const positionKnown = ref(false)
 
 const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
 const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
 const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
 const filterPipelineId = ref(route.query.pipeline_id as string || '')
 
-function parsePageParam(raw: unknown): number {
-  const n = Number(raw)
-  if (!Number.isInteger(n) || n < 1) return 1
-  return n
+function parseCursorParam(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
 }
 
 function syncQuery() {
   const query: LocationQuery = { ...route.query }
-  if (page.value > 1) query.page = String(page.value)
-  else delete query.page
+  // `page` is the retired offset param — scrub it so stale deep links clean up.
+  delete query.page
+  if (cursor.value) query.cursor = cursor.value
+  else delete query.cursor
   if (filterStatus.value) query.status = filterStatus.value
   else delete query.status
   if (filterTriggerType.value) query.trigger_type = filterTriggerType.value
@@ -251,7 +259,8 @@ function syncQuery() {
 }
 
 function buildParams(): FetchRunsParams {
-  const params: FetchRunsParams = { page: page.value, page_size: pageSize }
+  const params: FetchRunsParams = { page_size: pageSize }
+  if (cursor.value) params.cursor = cursor.value
   if (filterStatus.value) params.status = filterStatus.value
   if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
   if (filterSearch.value) params.search = filterSearch.value
@@ -259,16 +268,27 @@ function buildParams(): FetchRunsParams {
   return params
 }
 
-const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items: RunListItem[]; total: number }>(
+const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items: RunListItem[]; total: number; next_cursor: string | null; has_more: boolean }>(
   () => fetchRuns(buildParams()).then(
     d => ({ data: d }),
     e => ({ error: { detail: t('views.RunsListView.failed_to_load_runs', { detail: formatApiError(e) }) } }),
   ),
-  { initialValue: { items: [] as RunListItem[], total: 0 } },
+  { initialValue: { items: [] as RunListItem[], total: 0, next_cursor: null, has_more: false } },
 )
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
+const nextCursor = computed(() => runsData.value?.next_cursor ?? null)
+const hasMore = computed(() => runsData.value?.has_more ?? false)
+const canGoNext = computed(() => hasMore.value && !!nextCursor.value)
+const canGoPrev = computed(() => cursorStack.value.length > 0)
+
+function resetPagination() {
+  cursor.value = null
+  cursorStack.value = []
+  pagePosition.value = 1
+  positionKnown.value = true
+}
 
 // Live elapsed runtime for executing runs: a 1-second tick re-renders the
 // duration cell only while non-terminal runs with a started_at are visible.
@@ -343,7 +363,7 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 watch(filterSearch, () => {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(() => {
-    page.value = 1
+    resetPagination()
     loadRuns()
     syncQuery()
   }, SEARCH_DEBOUNCE_MS)
@@ -352,21 +372,28 @@ watch(filterSearch, () => {
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'status') filterStatus.value = value
   else if (key === 'trigger_type') filterTriggerType.value = value
-  page.value = 1
+  resetPagination()
   loadRuns()
   syncQuery()
 }
 
 function nextPage() {
-  if (page.value * pageSize >= total.value) return
-  page.value++
+  if (!canGoNext.value) return
+  cursorStack.value = [...cursorStack.value, cursor.value]
+  cursor.value = nextCursor.value
+  pagePosition.value += 1
+  positionKnown.value = true
   loadRuns()
   syncQuery()
 }
 
 function prevPage() {
-  if (page.value <= 1) return
-  page.value--
+  if (cursorStack.value.length === 0) return
+  const stack = [...cursorStack.value]
+  cursor.value = stack.pop() ?? null
+  cursorStack.value = stack
+  pagePosition.value = Math.max(1, pagePosition.value - 1)
+  positionKnown.value = true
   loadRuns()
   syncQuery()
 }

@@ -3,14 +3,17 @@
 Two worker processes (plan F1/F2):
 
 * ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
-  larger — see :func:`_effective_redis_pool_size`), no web UI. Executes
+  default 5, deployed at 20 in prod and 2 in staging — staging right-sized in
+  the 2026-09 Redis audit because SAQ's blocking dequeue issues one poll per
+  concurrency slot every 5s, making idle staging poll at prod volume; the
+  Redis pool must stay strictly larger — see :func:`_effective_redis_pool_size`),
+  no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``/
   ``fire_ongoing_trigger``).
 * ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
-  larger — see :func:`_effective_redis_pool_size`), web UI on 8081 bound
+  default 5, deployed at 20 in prod and 2 in staging — see
+  :func:`_effective_redis_pool_size`), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
@@ -773,10 +776,14 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             if run is None:
                 _log.warning("SAQ execute_suite_run: suite_run %s not found", rid)
                 return {"status": "missing"}
-            # modulo_app is BYPASSRLS, so ``session.get`` is NOT org-scoped — the
-            # explicit predicate is the isolation control. Verify the loaded run
-            # belongs to the job's org before executing it (defense-in-depth):
-            # a cross-org suite_run_id must never be executed.
+            # modulo_app is NOBYPASSRLS (bootstrap_role.py asserts
+            # ``rolbypassrls = false``), so on PostgreSQL ``session.get`` IS
+            # org-scoped by the ``rls_org_isolation`` policy via the org
+            # context set above — a cross-org row would already be invisible.
+            # The explicit predicate is defense-in-depth for non-RLS backends
+            # (SQLite/MariaDB, where the get is NOT org-scoped): verify the
+            # loaded run belongs to the job's org before executing it — a
+            # cross-org suite_run_id must never be executed.
             if run.organisation_id != oid:
                 _log.warning("SAQ execute_suite_run: suite_run %s belongs to a different org", rid)
                 return {"status": "missing"}
@@ -982,6 +989,17 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
 async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — purge old webhook trigger events (30-day retention).
 
+    The purge is CROSS-ORG by design (age-based retention over every org's
+    events), so on PostgreSQL it runs on the system session factory
+    (modulo_system role, LOGIN, BYPASSRLS — FAR-523). ``trigger_events``
+    carries the ``rls_org_isolation`` policy and ``modulo_app`` is
+    NOBYPASSRLS, so the previous plain-factory session — which never set
+    ``app.organisation_id`` — silently matched ZERO rows and deleted nothing:
+    an invisible no-op that let retention grow unbounded. Do NOT swap back to
+    ``_make_session_factory`` on PostgreSQL. On non-PostgreSQL backends (no
+    RLS, no modulo_system role) the plain factory is correct and used instead
+    (see ``_cleanup_session_factory``).
+
     The system session factory is ``autobegin=False`` (the codebase DI
     convention), so every batch needs an explicit transaction: the first
     ``session.execute`` would otherwise raise ``InvalidRequestError: Autobegin
@@ -992,7 +1010,7 @@ async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     from modulo.core.cleanup_jobs.webhook_dedup_cleanup import BATCH_SIZE, cleanup_old_webhook_events
 
     total = 0
-    async with _make_session_factory()() as session:
+    async with _cleanup_session_factory()() as session:
         while True:
             async with session.begin():
                 deleted = await cleanup_old_webhook_events(session)
@@ -1010,6 +1028,16 @@ async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     in bounded batches. The retention comfortably exceeds the webhook replay
     window, so replayable events are never purged.
 
+    The purge is CROSS-ORG by design, so on PostgreSQL it runs on the system
+    session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523).
+    ``trigger_events`` is an ``OrgScoped`` table under the
+    ``rls_org_isolation`` policy and ``modulo_app`` is NOBYPASSRLS: the
+    previous plain-factory session never set ``app.organisation_id``, so every
+    batch silently matched ZERO rows and the retention never deleted anything.
+    Do NOT swap back to ``_make_session_factory`` on PostgreSQL. On
+    non-PostgreSQL backends (no RLS, no modulo_system role) the plain factory
+    is correct and used instead (see ``_cleanup_session_factory``).
+
     Mirrors ``webhook_dedup_cleanup``: the system session factory is
     ``autobegin=False`` (the codebase DI convention), so every batch needs an
     explicit transaction — the first ``session.execute`` would otherwise raise
@@ -1020,7 +1048,7 @@ async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     from modulo.core.cleanup_jobs.trigger_events_cleanup import BATCH_SIZE, cleanup_old_trigger_events
 
     total = 0
-    async with _make_session_factory()() as session:
+    async with _cleanup_session_factory()() as session:
         while True:
             async with session.begin():
                 deleted = await cleanup_old_trigger_events(session)
@@ -1039,6 +1067,13 @@ STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
 # The sweep runs every 5 min; a last_run_at older than 15 min means at least two
 # ticks were missed -> report "stale" (advisory).
 STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
+# TTL for the stats key: one sweep past the stale window (2026-09 Redis audit).
+# The key is a liveness marker refreshed every 5 min, so a live worker never
+# lets it expire; a dead worker's key self-expires instead of persisting a dead
+# timestamp forever. /healthz/ready's _check_stale_run_recovery treats a missing
+# key as the equivalent "never run" advisory (fail-open, never gates readiness),
+# so expiry is signal-equivalent and strictly more hygienic.
+STALE_RUN_RECOVERY_STATS_TTL_SECONDS = STALE_RUN_RECOVERY_STALE_SECONDS + 60
 
 
 async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -1061,7 +1096,11 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
 
         redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
         try:
-            await redis_client.set(STALE_RUN_RECOVERY_STATS_KEY, json.dumps(stats))
+            await redis_client.set(
+                STALE_RUN_RECOVERY_STATS_KEY,
+                json.dumps(stats),
+                ex=STALE_RUN_RECOVERY_STATS_TTL_SECONDS,
+            )
         finally:
             with contextlib.suppress(Exception):
                 await redis_client.aclose()
@@ -1305,6 +1344,29 @@ def _make_system_session_factory() -> Any:
     return async_sessionmaker(_get_system_async_engine(), expire_on_commit=False, autobegin=False)
 
 
+def _cleanup_session_factory() -> Any:
+    """Session factory for the age-based retention cleanup crons
+    (``webhook_dedup_cleanup`` / ``trigger_events_cleanup``).
+
+    On PostgreSQL the purge is CROSS-ORG by design, so it MUST run on the
+    system session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523):
+    the plain ``modulo_app`` factory is NOBYPASSRLS and a batch without
+    ``app.organisation_id`` silently matches zero rows. Do NOT swap back on
+    PostgreSQL. On non-PostgreSQL backends (SQLite/MariaDB/MySQL) there is no
+    RLS and no modulo_system role, so the plain factory is both correct and
+    the only option — the cross-org purge is exactly right there.
+
+    The dialect is read from ``settings.modulo_db`` — the same signal
+    :func:`_get_async_engine` uses — WITHOUT connecting: on PostgreSQL the
+    system-engine path still fails LOUD when ``MODULO_SYSTEM_DATABASE_URL``
+    is unset (RuntimeError from :func:`_get_system_async_engine`), while
+    non-PostgreSQL backends never touch the system engine at all.
+    """
+    if get_settings().modulo_db.lower() != "postgres":
+        return _make_session_factory()
+    return _make_system_session_factory()
+
+
 def _runs_functions() -> list[tuple[str, Any]]:
     """Functions registered on the ``runs`` worker.
 
@@ -1401,7 +1463,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=2,
             ttl=300,
         ),
-        # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
+        # webhook-dedup cleanup: hourly.
         CronJob(
             webhook_dedup_cleanup,
             cron=_CRON_HOURLY,

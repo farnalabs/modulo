@@ -180,6 +180,24 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(fitButton.text()).toContain('Fit to View')
   })
 
+  it('sizes the toolbar node-type Select to the uniform h-7 row height', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    // PrimeVue's Select keeps its default ~2.5rem height inside the h-7
+    // toolbar row; the toolbar-select class (scoped style) is what sizes it
+    // back to 1.75rem. Both the canvas-tools Select and the empty-state
+    // Select (which share the visual row) must carry it — dialog/aside
+    // Selects must not.
+    const toolbarSelect = wrapper.find('[data-testid="pipeline-editor-node-type-select"]')
+    expect(toolbarSelect.exists()).toBe(true)
+    expect(toolbarSelect.classes()).toContain('toolbar-select')
+
+    // flowNodes is empty at mount, so the empty-state overlay renders its own
+    // node-type picker for the same row.
+    expect(wrapper.findAll('.toolbar-select').length).toBeGreaterThanOrEqual(2)
+  })
+
   it('anchors the node-type dropdown overlay to its trigger', async () => {
     const wrapper = mountEditor()
     await flushPromises()

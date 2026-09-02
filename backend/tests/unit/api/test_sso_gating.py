@@ -224,6 +224,41 @@ class TestSsoAuthGating:
         assert resp.status_code == 200
         assert resp.json() == {"oidc": [], "saml": False}
 
+    def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A session that cannot run the anonymous plan resolution (TypeError
+        from ``session.begin()``, as with test-double sessions) degrades to
+        CommunityTier AND logs a warning — the fallback must not be silent
+        (mirrors get_plan_context's warning in dependencies.py)."""
+        app.dependency_overrides.clear()
+        broken_session = MagicMock()
+
+        def _begin_raises() -> None:
+            raise TypeError("test-double session does not support begin()")
+
+        broken_session.begin.side_effect = _begin_raises
+
+        async def override_session() -> AsyncGenerator[MagicMock, None]:
+            yield broken_session
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        try:
+            client = TestClient(app)
+            with (
+                caplog.at_level("WARNING", logger="modulo.api.routes.sso"),
+                patch("modulo.core.license.get_license", return_value=None),
+                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            ):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        fallback_warnings = [rec for rec in caplog.records if "returning CommunityTier" in rec.message]
+        assert fallback_warnings, "anonymous plan fallback must log a warning, not degrade silently"
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
     def test_sso_providers_lists_env_providers_when_enabled(self, client_with_sso: TestClient) -> None:
         """SSO licensed/enabled -> 200 with the configured OIDC providers."""
         settings = Settings(

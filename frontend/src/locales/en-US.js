@@ -940,6 +940,23 @@ export default {
       "template": "Template",
       "command": "Command",
       "commands": "Commands",
+      "commands_single": "Single command",
+      "commands_single_placeholder": "e.g. opencode run --auto",
+      "commands_single_hint": "Used when no command list is set below",
+      "commands_single_disabled_hint": "Add the list below, or remove all its rows, to edit the single command",
+      "commands_list_hint": "One command per row — rows are joined into a single command when the pipeline runs",
+      "commands_list_disabled_hint": "Disabled while a single command is set — clear it above to edit the list",
+      "commands_list_empty": "No commands yet — add one row per command",
+      "commands_add": "Add command",
+      "commands_row_label": "Command {n}",
+      "commands_row_remove": "Remove command {n}",
+      "commands_row_move_up": "Move command {n} up",
+      "commands_row_move_down": "Move command {n} down",
+      "commands_join_operator": "Join operator",
+      "commands_join_operator_hint": "Inserted between commands when the pipeline runs",
+      "commands_join_operator_placeholder": " && ",
+      "commands_effective_preview": "Effective command",
+      "commands_concatenated_with": "Concatenated with:",
       "timeout": "Timeout",
       "stall_timeout": "Stall Timeout",
       "heartbeat": "Heartbeat",
@@ -1002,7 +1019,58 @@ export default {
       "capability_scope_widen_warning": "Some selected connectors are not granted to the node's Agent and may be rejected: ",
       "capability_scope_scoped_badge": "Scoped",
       "capability_scope_remove_tool": "Remove {name}",
-      "capability_scope_remove_context": "Remove {name}"
+      "capability_scope_remove_context": "Remove {name}",
+      "node_manual_badge": "MANUAL",
+      "node_agent_badge": "AGENT",
+      "llm_badge": "LLM",
+      "id_label": "ID",
+      "pipeline_fallback_title": "Pipeline",
+      "empty_state_hint": "no components in pipeline",
+      "run_label": "Run",
+      "close": "Close",
+      "enter_node_label": "Enter node label",
+      "optional_description": "Optional description",
+      "edge_type": "Edge type",
+      "jmespath_expression_placeholder": "JMESPath expression (e.g. score > `0.5`)",
+      "max_iterations_placeholder": "0 = unlimited (RunawayGuard applies)",
+      "max_iterations_hint": "Maximum number of times this loop can repeat before exiting. 0 means no limit.",
+      "routing_label_placeholder": "e.g. retry, escalate, complete",
+      "hitl_gate": "HITL Gate",
+      "hitl_label_placeholder": "e.g. Review before deploy",
+      "hitl_description_placeholder": "Describe what the reviewer should check",
+      "aria_checkbox": "checkbox",
+      "jmespath_condition": "JMESPath Condition",
+      "jmespath_condition_placeholder": "e.g. score > `0.5`",
+      "jmespath_condition_hint": "Evaluated against pipeline state. If truthy, gate activates.",
+      "eval_name_placeholder": "e.g. quality-check",
+      "eval_operator_placeholder": "lt (score < threshold)",
+      "eval_operator_lt": "lt (score < threshold)",
+      "eval_operator_gt": "gt (score > threshold)",
+      "eval_operator_lte": "lte (score ≤ threshold)",
+      "eval_operator_gte": "gte (score ≥ threshold)",
+      "eval_operator_eq": "eq (score == threshold)",
+      "eval_operator_neq": "neq (score != threshold)",
+      "eval_condition_hint": "If condition is true, gate fires. If false, gate is skipped.",
+      "save_edge": "Save Edge",
+      "convert": "Convert",
+      "input_label": "Input:",
+      "output_label": "Output:",
+      "save_as_composite": "Save as Composite",
+      "save_as_composite_description": "Extracts selected nodes from this pipeline into a reusable composite template. Parameter placeholders ({'{'}{'{'}parameter.*{'}'}{'}'}) in agent prompts are auto-detected.",
+      "name_required": "Name *",
+      "composite_name_placeholder": "My Composite",
+      "node_fallback_label": "Node {id}",
+      "pipeline_name_placeholder": "Pipeline name",
+      "delete_pipeline_title": "Delete Pipeline",
+      "delete_pipeline_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
+      "new_node_label": "New Node",
+      "empty_run_warning": "No input provided — this pipeline will run with an empty input payload. Are you sure?",
+      "failed_to_load_graph": "Failed to load graph: {error}",
+      "failed_to_load_pipeline": "Failed to load pipeline: {error}",
+      "failed_to_archive_pipeline": "Failed to archive pipeline: {error}",
+      "failed_to_unarchive_pipeline": "Failed to unarchive pipeline: {error}",
+      "failed_to_update_max_duration": "Failed to update max duration: {error}",
+      "failed_to_save_graph": "Failed to save graph: {error}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
@@ -3529,9 +3597,11 @@ export default {
   }
 }
 
-// NOTE (FAR-412): the `connectors.rest.*` keys above are the structured-config
-// schema for a Generic REST connector. No view wires a label lookup to them yet —
-// the connector's config_json is authored as a bare JSON map. Kept as the i18n
-// surface for the upcoming structured-config form; remove only if the product
-// drops that plan. (Trailing comment — the manifest parser reads the object
-// literal and tolerates nothing inside it.)
+// NOTE (FAR-412 / FAR-504): the `connectors.rest.*` keys above are the
+// structured-config schema for a Generic REST connector. AdminConnectorsView now
+// wires the structured-config form (RestConnectorConfigForm) and the
+// `credentials_write_only` label to them — these keys are the live label surface
+// for the REST connector config + credential form, not a dead schema. Kept here
+// as the single i18n surface the form reads from; remove only if the product
+// drops the structured-config form. (Trailing comment — the manifest parser
+// reads the object literal and tolerates nothing inside it.)

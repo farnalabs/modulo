@@ -21,6 +21,7 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _VALID_32 = "a" * 32
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -109,33 +110,18 @@ def make_mock_session() -> AsyncMock:
 
 
 def make_mock_system_session() -> AsyncMock:
-    """System-session mock for pre-auth SSO provider resolution.
+    """System-session mock for pre-auth bootstrap reads (FAR-523).
 
-    The system session (``modulo_system`` role) is only used by the SSO routes
-    to read instance-global IdP config from the ``sso_providers`` table. It must
-    return NO rows so the resolution falls through to the env-var provider
-    config (which is what the SSO BDD scenarios configure) — a truthy MagicMock
-    here would make the code think a DB provider exists and try to parse
-    MagicMock SAML metadata.
+    Delegates to the ONE shared parameterized factory
+    (:func:`tests.unit.api.conftest.make_system_session_mock`) — table-aware:
+    ``triggers`` reads return a trigger row owned by :data:`ORG_ID` so the
+    webhook + Slack bootstrap (which must resolve the trigger BEFORE any RLS
+    org context exists) reaches the patched engine instead of 404ing, and
+    every other table (``sso_providers`` included) falls through to an empty
+    row so SSO resolution uses the env-var provider config the SSO scenarios
+    configure.
     """
-    session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-    empty_row = AsyncMock()
-    empty_row.scalar_one_or_none = MagicMock(return_value=None)
-    empty_row.scalar_one = AsyncMock(return_value=0)
-    empty_row.scalar = AsyncMock(return_value=0)
-    empty_scalars = MagicMock()
-    empty_scalars.all = MagicMock(return_value=[])
-    empty_row.scalars = MagicMock(return_value=empty_scalars)
-    empty_row.first = MagicMock(return_value=None)
-    empty_row.all = MagicMock(return_value=[])
-    session.execute.return_value = empty_row
-    session.scalar = AsyncMock(return_value=0)
-    session.scalar_one = AsyncMock(return_value=0)
-    return session
+    return make_system_session_mock(trigger_org_id=ORG_ID)
 
 
 async def _system_session_override() -> AsyncGenerator[AsyncMock, None]:

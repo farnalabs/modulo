@@ -1343,14 +1343,20 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: 
 #
 # Deliberately NOT deferred:
 # * ``input_payload`` — masked into every REST list item (runs.py _build_list_item).
-# * ``cost_breakdown`` — read by the MCP ``modulo://pipelines/{id}/runs`` resource
-#   (mcp_server._format_run_line) on DETACHED instances outside the session, so a
-#   deferred access there would raise instead of lazy-loading.
+#
+# ``cost_breakdown`` IS deferred. Its only list-path reader is the MCP
+# ``modulo://pipelines/{id}/runs`` resource (mcp_server._format_run_line), which
+# now loads it through ``get_run_cost_breakdowns`` — ONE awaited query keyed by
+# run id. Note a plain attribute read of a deferred column is never viable here:
+# under asyncio the implicit lazy load raises ``MissingGreenlet`` even while the
+# session is open, so the value must be loaded by an awaited query (or
+# ``session.refresh``), not merely read "before the session closes".
 # Every consumer of ``list_runs`` (REST runs route, MCP list_runs tool, MCP
 # pipeline-runs resource, viewmodel RunSummary) was audited against this tuple —
 # test_runs_list_query_deferral.py pins it.
 _RUNS_LIST_DEFERRED_COLUMNS: tuple[str, ...] = (
     "node_token_usage",
+    "cost_breakdown",
     "outputs_json",
     "node_telemetry_json",
     "raw_output_markers",
@@ -1498,6 +1504,31 @@ async def get_child_run_rollup(
             int(count),
         )
     return rollup
+
+
+async def get_run_cost_breakdowns(
+    session: AsyncSession,
+    run_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, Any]:
+    """Fetch ``cost_breakdown`` for the given runs in ONE awaited query.
+
+    ``cost_breakdown`` is deferred by :func:`list_runs`
+    (``_RUNS_LIST_DEFERRED_COLUMNS``), so list-path consumers that need it must
+    load it explicitly. A plain attribute read on a deferred column is NOT an
+    option under asyncio: the implicit lazy load attempts IO outside a greenlet
+    and raises ``MissingGreenlet`` — this happens even while the session is
+    still open, so "read it before the session closes" does not help. Only an
+    awaited load (this query, or ``session.refresh``) works.
+
+    Returns ``{run_id: cost_breakdown}`` for every requested run, including
+    runs whose breakdown is ``NULL`` (mapped to ``None``); callers treat a
+    missing key as ``None``. ONE query for the whole page — never a per-row
+    load (avoids N+1).
+    """
+    if not run_ids:
+        return {}
+    result = await session.execute(select(Run.id, Run.cost_breakdown).where(Run.id.in_(run_ids)))
+    return {uuid.UUID(str(run_id)): breakdown for run_id, breakdown in result.all()}
 
 
 _COST_BREAKDOWN_SENTINEL: Any = object()

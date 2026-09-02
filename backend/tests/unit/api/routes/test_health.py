@@ -42,7 +42,7 @@ class _FakeStatsRedis:
             raise RuntimeError("redis down")
         return self._blob
 
-    async def set(self, _key: str, value: str) -> None:
+    async def set(self, _key: str, value: str, ex: int | None = None) -> None:
         self._blob = value.encode()
 
     async def aclose(self) -> None:

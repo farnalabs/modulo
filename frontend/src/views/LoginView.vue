@@ -104,8 +104,10 @@ interface SsoProvidersResponse {
 }
 
 // SSO is a licensed (team-tier) surface; the login page renders its provider
-// buttons only when the instance advertises configured providers. A 402 (feature
-// not available) or any fetch failure keeps the page on password login.
+// buttons only when the instance advertises configured providers. Since #2325
+// the endpoint answers 200 with an empty providers list when SSO is disabled
+// (oidc: [], saml: false) — that, any non-200, or a fetch failure keeps the
+// page on password login.
 const ssoState = ref<'unknown' | 'available' | 'unavailable'>('unknown')
 const oidcProviders = ref<SsoProviderInfo[]>([])
 const samlEnabled = ref(false)

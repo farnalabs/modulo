@@ -40,6 +40,7 @@ export interface FetchRunsParams {
   pipeline_id?: string
   page?: number
   page_size?: number
+  cursor?: string
 }
 
 type GetRuns = (
@@ -55,6 +56,7 @@ export async function fetchRuns(params: FetchRunsParams = {}): Promise<RunListRe
   if (params.pipeline_id) q.pipeline_id = params.pipeline_id
   if (params.page !== undefined) q.page = params.page
   if (params.page_size !== undefined) q.page_size = params.page_size
+  if (params.cursor) q.cursor = params.cursor
   // Isolate openapi-fetch's recursive path inference for this broad list response.
   const getRuns = api.GET as unknown as GetRuns
   return throwOnError(await getRuns('/api/v1/runs', {

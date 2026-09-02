@@ -150,6 +150,70 @@ class TestInstrumentRegistration:
         assert "modulo_rest_ssrf_blocked_total" in counters
         assert "modulo_rest_redaction_events_total" in counters
 
+    def test_get_meter_returns_none_when_provider_missing(self) -> None:
+        """``_get_meter`` short-circuits to ``None`` when no provider is
+        configured so every init/record call degrades to a no-op."""
+        with patch("opentelemetry.metrics.get_meter_provider", return_value=None) as mock_provider:
+            assert rest_metrics._get_meter() is None
+        mock_provider.assert_called_once()
+
+    def test_get_meter_swallows_sdk_exception(self) -> None:
+        """An OTel SDK import/provider lookup failure must never surface as a
+        connector/metric failure — ``_get_meter`` returns ``None``."""
+        with patch.dict("sys.modules", {"opentelemetry": None}):
+            assert rest_metrics._get_meter() is None
+
+    def test_init_is_idempotent(self) -> None:
+        """Once the histogram + counter handles are registered, a second
+        ``_init`` returns immediately instead of re-registering instruments."""
+        meter, histograms, counters = _storage_meter()
+        with patch.object(rest_metrics, "_get_meter", return_value=meter):
+            rest_metrics._init()
+            rest_metrics._init()
+        assert meter.create_histogram.call_count == 1
+        assert meter.create_counter.call_count == 4
+        assert len(histograms) == 1
+        assert len(counters) == 4
+
+    def test_init_swallows_histogram_creation_failure_and_keeps_going(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A failing histogram creation must not abort registration of the
+        remaining counters — each instrument is created independently."""
+        meter = MagicMock()
+        meter.create_histogram.side_effect = RuntimeError("no sdk")
+        meter.create_counter.side_effect = lambda name, **kw: MagicMock()
+        with patch.object(rest_metrics, "_get_meter", return_value=meter):
+            rest_metrics._init()
+        assert rest_metrics._requests_histogram is None
+        assert rest_metrics._outcome_total is not None
+        assert rest_metrics._retry_total is not None
+        assert rest_metrics._ssrf_blocked_total is not None
+        assert rest_metrics._redaction_total is not None
+        assert "rest_metrics.request_histogram_failed" in caplog.text
+
+    def test_init_swallows_each_counter_creation_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Each counter's creation failure is swallowed independently with its
+        own WARNING, leaving the sibling handles untouched."""
+        meter = MagicMock()
+        meter.create_histogram.side_effect = lambda name, **kw: MagicMock()
+        meter.create_counter.side_effect = RuntimeError("no sdk")
+        with patch.object(rest_metrics, "_get_meter", return_value=meter):
+            rest_metrics._init()
+        assert rest_metrics._requests_histogram is not None
+        assert all(getattr(rest_metrics, h) is None for h in _HANDLE_NAMES[1:])
+        for tag in ("outcome", "retry", "ssrf", "redaction"):
+            assert f"rest_metrics.{tag}_counter_failed" in caplog.text
+
+    def test_record_helpers_noop_when_instrument_creation_failed(self) -> None:
+        """When an instrument failed to register, the corresponding record
+        helper degrades to a silent no-op rather than raising."""
+        meter = MagicMock()
+        meter.create_histogram.side_effect = RuntimeError("no sdk")
+        meter.create_counter.side_effect = lambda name, **kw: MagicMock()
+        with patch.object(rest_metrics, "_get_meter", return_value=meter):
+            rest_metrics.record_request_duration(1.0, host="h", method="GET", outcome="success")
+        assert rest_metrics._requests_histogram is None
+        assert rest_metrics._outcome_total is not None
+
 
 # ── record helpers ──────────────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -354,6 +355,25 @@ def test_get_pipeline_returns_200(client: TestClient) -> None:
     assert resp.json()["id"] == str(_PIPELINE_ID)
 
 
+def test_get_pipeline_detail_returns_node_count_from_graph(client: TestClient) -> None:
+    """Prove-the-fix: the detail response derives node_count from the row's
+    stored graph_nodes_json, matching the list endpoint's contract. Without
+    the shared response-builder change, GET /pipelines/{id} serializes the
+    additive default (0) for a 3-node pipeline and this test fails."""
+    pipeline = _make_pipeline()
+    pipeline.graph_nodes_json = [{"id": "n1"}, {"id": "n2"}, {"id": "n3"}]
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["node_count"] == 3
+
+
 def test_get_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
@@ -571,6 +591,88 @@ def test_pipeline_graph_node_idempotent_round_trip() -> None:
 
     legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
     assert legacy.idempotent is True
+
+
+def test_pipeline_graph_node_agent_commands_round_trip() -> None:
+    """The sandbox commands list + join operator survive the graph save path.
+
+    The save path serialises nodes with ``model_dump(mode="json")`` and the GET
+    path re-validates the stored dicts, so a list authored in the editor must
+    survive validate -> dump -> validate unchanged (and the joiner must default
+    to the runtime's " && " for nodes that never configure it).
+    """
+    node = PipelineGraphNode.model_validate(
+        {
+            **_sandbox_node_json(),
+            "agent_command": None,
+            "agent_commands": ["opencode run", "--model oxf"],
+            "commands_concatenation_string": " ; ",
+        }
+    )
+    assert node.agent_commands == ["opencode run", "--model oxf"]
+    assert node.commands_concatenation_string == " ; "
+
+    dumped = node.model_dump(mode="json")
+    assert dumped["agent_commands"] == ["opencode run", "--model oxf"]
+    assert dumped["commands_concatenation_string"] == " ; "
+
+    # Re-validating the dumped dict (the GET path) round-trips the list.
+    reread = PipelineGraphNode.model_validate(dumped)
+    assert reread.agent_commands == ["opencode run", "--model oxf"]
+    assert reread.commands_concatenation_string == " ; "
+
+
+def test_pipeline_graph_node_agent_commands_defaults() -> None:
+    """Legacy nodes without the fields read as "no list, default joiner", and an
+    explicitly null/empty joiner is normalised to the runtime default instead of
+    persisting a value that would crash sandbox_mode's join."""
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.agent_commands is None
+    assert legacy.commands_concatenation_string == " && "
+
+    for raw_joiner in (None, ""):
+        normalised = PipelineGraphNode.model_validate(
+            {
+                **_sandbox_node_json(),
+                "agent_command": None,
+                "agent_commands": ["opencode run"],
+                "commands_concatenation_string": raw_joiner,
+            }
+        )
+        assert normalised.commands_concatenation_string == " && "
+
+    # Legacy non-sandbox nodes never carried the key either.
+    agent_node = PipelineGraphNode.model_validate(_minimal_node())
+    assert agent_node.agent_commands is None
+    assert agent_node.commands_concatenation_string == " && "
+
+
+def test_pipeline_graph_node_agent_commands_sandbox_only() -> None:
+    """agent_commands / a custom joiner are rejected on non-sandbox nodes —
+    the runtime only reads them for sandbox_agent nodes, so a set-but-unenforced
+    field on another node type would be a silent no-op."""
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set agent_commands"):
+        PipelineGraphNode.model_validate({**_minimal_node(), "agent_commands": ["echo hi"]})
+
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set commands_concatenation_string"):
+        PipelineGraphNode.model_validate({**_minimal_node(), "commands_concatenation_string": " ; "})
+
+    # The default joiner is indistinguishable from "not set" on non-sandbox nodes.
+    ok = PipelineGraphNode.model_validate(_minimal_node())
+    assert ok.commands_concatenation_string == " && "
+
+
+def test_pipeline_graph_node_agent_command_and_list_mutually_exclusive() -> None:
+    """A sandbox node sets agent_command OR agent_commands — mirroring the Agent
+    create/update schemas. Both set would silently drop the scalar at runtime
+    (the list wins), so authoring it is rejected instead."""
+    both = {
+        **_sandbox_node_json(),
+        "agent_command": "opencode run",
+        "agent_commands": ["opencode run", "--model oxf"],
+    }
+    with pytest.raises(ValidationError, match="cannot set both agent_command and agent_commands"):
+        PipelineGraphNode.model_validate(both)
 
 
 def test_pipeline_graph_node_stall_detector_round_trip() -> None:

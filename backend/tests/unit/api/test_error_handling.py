@@ -15,11 +15,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.sql import Select, Update
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from modulo.api.dependencies import (
+    _get_engine,
+    _get_session_factory,
+    get_db_session,
+    get_plan_context,
+    get_system_db_session,
+)
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -79,11 +86,24 @@ def client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    # The trigger-delivery routes bootstrap the trigger and its org through the
+    # SYSTEM session (FAR-523) before any app-session RLS context exists. Left
+    # un-overridden it opens a real connection to the (absent) system DB and
+    # raises a bare OSError from inside the route body, masking the route's own
+    # ProgrammingError/SQLAlchemyError mapping behind a generic 500. Mock it so
+    # the bootstrap read succeeds and the injected app-session failure is what
+    # the handler actually trips over.
+    mock_system_session = make_system_session_mock(trigger_org_id=_ORG_ID)
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_system_session
+
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",

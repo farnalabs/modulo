@@ -507,10 +507,10 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     snapshot_count: int = 0
-    # Additive, backward-compatible: the pipelines list surfaces the stored
-    # graph's node count as a table column. Populated by the list endpoint's
-    # response builder (which already holds the full rows); other endpoints
-    # that reuse this model leave the additive default.
+    # Additive, backward-compatible: every response builder derives node_count
+    # from the row's stored graph via _pipeline_response, so detail/create/
+    # patch/clone responses report the real node count (not just the list).
+    # The default stays 0 for stand-ins that lack graph_nodes_json.
     node_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
@@ -642,6 +642,17 @@ class PipelineGraphNode(BaseModel):
     # with the full run input at /home/user/input.json).
     mode: Literal["llm", "script"] = "llm"
     agent_command: str | None = None
+    # Sandbox commands list: the legible alternative to one long agent_command
+    # string. Joined at runtime by commands_concatenation_string
+    # (sandbox_mode._validate_sandbox_mode_config) and Jinja-validated as a
+    # whole by validate_sandbox_agent_command_jinja. Mutually exclusive with
+    # agent_command (the runtime resolves the list first; authoring UIs keep
+    # one or the other).
+    agent_commands: list[str] | None = None
+    commands_concatenation_string: str = Field(
+        default=" && ",
+        description="Joiner inserted between agent_commands entries when the pipeline runs.",
+    )
     agent_prompt: str | None = None
     script_command: str | None = None
     # FAR-296 Phase 3: egress control + resource-limit config surface.
@@ -758,6 +769,20 @@ class PipelineGraphNode(BaseModel):
         "None => backfilled with a single default 'out' port at compile time.",
     )
 
+    @field_validator("commands_concatenation_string", mode="before")
+    @classmethod
+    def _default_commands_concatenation_string(cls, v: Any) -> Any:
+        """Normalise an absent/empty/null joiner to the runtime default.
+
+        sandbox_mode resolves the joiner with ``node_def.get("commands_concatenation_string", " && ")``
+        — the default only applies when the KEY is absent, so a persisted
+        ``null`` would crash the run-time join (``None.join(...)``) and an
+        empty string would join the commands with no separator at all.
+        Coercing both to " && " keeps "no joiner configured" and "the default
+        joiner" the same state at rest, for every writer (REST, MCP, templates).
+        """
+        return v if isinstance(v, str) and v else " && "
+
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:
         node_validators = {
@@ -782,12 +807,17 @@ class PipelineGraphNode(BaseModel):
         # A non-sandbox node that sets them is rejected — the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
         # agents, and a declared-but-unenforced field on another node type would
-        # be a silent no-op.
+        # be a silent no-op. agent_commands / commands_concatenation_string get
+        # the same treatment: the runtime only reads them for sandbox nodes.
         if self.node_type != "sandbox_agent":
             if self.read_only:
                 raise ValueError("Only sandbox_agent nodes can set read_only=True")
             if self.git_credentials is not None:
                 raise ValueError("Only sandbox_agent nodes can set git_credentials")
+            if self.agent_commands is not None:
+                raise ValueError("Only sandbox_agent nodes can set agent_commands")
+            if self.commands_concatenation_string != " && ":
+                raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
         if (
@@ -857,6 +887,16 @@ class PipelineGraphNode(BaseModel):
         )
 
         _validate_sandbox_mode_config(self.model_dump())
+        # Node-level mutual exclusion, mirroring the Agent create/update schemas
+        # (routes/agents.py): a node sets agent_command OR agent_commands, never
+        # both. The runtime resolves the list first, so a both-set node would
+        # silently ignore its scalar command — reject it at authoring time
+        # instead. (agent_command/agent_commands vs script_command exclusivity
+        # is already covered by _validate_sandbox_mode_config above.)
+        if self.agent_commands and self.agent_command and self.agent_command.strip():
+            raise ValueError(
+                "sandbox_agent node cannot set both agent_command and agent_commands — set one or the other"
+            )
         _validate_sandbox_egress_config(self.model_dump())
         _validate_sandbox_egress_allowlist_config(
             self.egress_policy,
@@ -1308,17 +1348,27 @@ async def _resolve_graph_references(
     return schema_pins, model_backend_pins
 
 
-def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
-    """Build a list-item response, deriving node_count from the stored graph.
+def _pipeline_response(pipeline: Pipeline) -> PipelineResponse:
+    """Build a PipelineResponse, deriving node_count from the stored graph.
 
-    The CRUD list already loads the full rows, so ``len(graph_nodes_json)``
-    is cheap (no extra query). Defensive against partial ORM stand-ins that
-    lack the attribute (tests, internal callers).
+    Shared by every endpoint that returns a single PipelineResponse (detail,
+    create, patch, archive/restore/unarchive, clone, folder move) so the
+    serialized node_count always matches the real graph, not the additive
+    default. ``graph_nodes_json`` is a plain JSON column loaded with the row
+    (``expire_on_commit=False`` keeps it readable after the endpoint's
+    transaction closes), so ``len(...)`` is cheap — no extra query, no lazy
+    load in async context. Defensive against partial ORM stand-ins that lack
+    the attribute (tests, internal callers).
     """
     response = PipelineResponse.model_validate(pipeline)
     nodes = getattr(pipeline, "graph_nodes_json", None)
     response.node_count = len(nodes) if isinstance(nodes, list) else 0
     return response
+
+
+def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
+    """Build a list-item response (derives node_count via _pipeline_response)."""
+    return _pipeline_response(pipeline)
 
 
 @router.get("", responses={401: {"description": "Unauthorized"}})
@@ -1390,7 +1440,7 @@ async def create_pipeline_endpoint(
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.get("/{pipeline_id}")
@@ -1410,7 +1460,7 @@ async def get_pipeline_endpoint(
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.get("/{pipeline_id}/graph")
@@ -1864,7 +1914,7 @@ async def update_pipeline_endpoint(
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    response = PipelineResponse.model_validate(pipeline)
+    response = _pipeline_response(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
 
@@ -1908,7 +1958,7 @@ async def restore_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.post("/{pipeline_id}/archive")
@@ -1929,7 +1979,7 @@ async def archive_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.post("/{pipeline_id}/unarchive")
@@ -1950,7 +2000,7 @@ async def unarchive_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 # ---------------------------------------------------------------------------
@@ -2072,7 +2122,7 @@ async def clone_pipeline_endpoint(
         _raise_db_migration_error(exc)
 
     logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
-    return PipelineResponse.model_validate(cloned)
+    return _pipeline_response(cloned)
 
 
 # ---------------------------------------------------------------------------
@@ -2664,7 +2714,7 @@ async def move_pipeline_to_folder_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 # ---------------------------------------------------------------------------

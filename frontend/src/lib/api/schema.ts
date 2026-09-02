@@ -1163,7 +1163,9 @@ export interface paths {
          *     auth error. Plan/feature resolution is anonymous (via
          *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
          *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-         *     (no 401/402) so the login page simply renders no SSO options.
+         *     (no 401/402) so the login page simply renders no SSO options. The
+         *     anonymous path resolves system-level licenses only — org-level licenses
+         *     are unreachable pre-auth.
          *
          *     OIDC providers are merged from the sso_providers DB table (preferred) and
          *     the env-var fallback, deduplicated by provider_id. The DB read goes through
@@ -7734,7 +7736,10 @@ export interface paths {
          *     * Rate-limited to 1 request per 60 seconds per IP.
          *     * Daily cap of 100 events per IP.
          *     * Max request body size 10,000 bytes.
-         *     * Events are stored as orphaned records (no organisation scoping).
+         *     * Events are stored in a dedicated orphan-org partition: the ingest
+         *       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
+         *       migration 0171) that tenant sessions can never see (org-only RLS
+         *       policies), so unattributed frontend errors never leak across tenancy.
          *     * A future cleanup job will prune events older than 48 hours (TTL).
          */
         post: operations["ingest_errors_public_api_v1_errors_ingest_public_post"];
@@ -13149,6 +13154,14 @@ export interface components {
             mode: "llm" | "script";
             /** Agent Command */
             agent_command?: string | null;
+            /** Agent Commands */
+            agent_commands?: string[] | null;
+            /**
+             * Commands Concatenation String
+             * @description Joiner inserted between agent_commands entries when the pipeline runs.
+             * @default &&
+             */
+            commands_concatenation_string: string;
             /** Agent Prompt */
             agent_prompt?: string | null;
             /** Script Command */
@@ -25711,6 +25724,8 @@ export interface operations {
                 search?: string | null;
                 page?: number;
                 page_size?: number;
+                /** @description Cursor from previous response */
+                cursor?: string | null;
                 variant_group_id?: string | null;
                 batch_id?: string | null;
                 _fresh?: boolean;

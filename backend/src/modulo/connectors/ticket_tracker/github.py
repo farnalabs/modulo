@@ -159,8 +159,9 @@ class GitHubTicketTracker(TicketTrackerBase):
         label_objects = [label for label in (raw.get("labels") or []) if isinstance(label, dict)]
         labels = [label.get("name", "") for label in label_objects]
         assignee = raw.get("assignee")
+        number = raw.get("number")
         return Ticket(
-            id=str(raw.get("number", "")),
+            id=str(number) if number is not None else "",
             title=raw.get("title", ""),
             description=raw.get("body"),
             status="open" if not raw.get("closed_at") else "closed",

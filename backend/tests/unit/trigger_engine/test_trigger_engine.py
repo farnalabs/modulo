@@ -58,19 +58,28 @@ from modulo.db.models.trigger import Trigger
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+# The org owning the ``webhook_client`` fixture's trigger row. The FAR-523
+# bootstrap read derives the org FROM the trigger and 404s an authenticated
+# principal that references another org's trigger, so the replay JWT below must
+# be minted for this same org — a random per-call org would be a legitimate
+# cross-tenant rejection, not a routing success.
+_WEBHOOK_ORG_ID = uuid.uuid4()
+
 
 def _replay_auth_headers() -> dict[str, str]:
     """Bearer JWT for the replay route (ADR 017: runner-or-HMAC).
 
     The route uses ``get_current_tenant_user_optional``, which decodes the
-    Bearer directly — a token signed with the test secret_key is enough.
+    Bearer directly — a token signed with the test secret_key is enough. The
+    principal is scoped to :data:`_WEBHOOK_ORG_ID` so it owns the fixture's
+    trigger.
     """
     from modulo.auth.jwt import create_access_token
 
     token = create_access_token(
         "ci@test.local",
         _VALID_32,
-        organisation_id=str(uuid.uuid4()),
+        organisation_id=str(_WEBHOOK_ORG_ID),
         account_id=str(uuid.uuid4()),
         org_role="admin",
     )
@@ -249,7 +258,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
         sys.modules["langchain_google_vertexai"] = _mock_lgv
 
     try:
-        from modulo.api.dependencies import _get_engine, get_db_session
+        from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
         from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
@@ -284,6 +293,10 @@ def webhook_client() -> Generator[TestClient, None, None]:
     trigger_mock.active = True
     trigger_mock.config_json = {}
     trigger_mock.max_concurrent_runs = 5
+    # The bootstrap read derives the delivery's org from the trigger row
+    # (OrgScoped, NOT NULL) — a bare MagicMock attribute would never equal the
+    # replay JWT's org and every authenticated replay would 404 as cross-tenant.
+    trigger_mock.organisation_id = _WEBHOOK_ORG_ID
 
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = trigger_mock
@@ -309,6 +322,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = _settings
     app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_system_db_session] = _session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = _principal
 
@@ -316,6 +330,12 @@ def webhook_client() -> Generator[TestClient, None, None]:
         patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
         patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
         patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        # Present a PROVISIONED system role. The predicate reads a process-global
+        # flag set when the system engine is first built, so without this patch
+        # the answer depends on which test module initialised the engine first
+        # (unset MODULO_SYSTEM_DATABASE_URL here → fallback → every delivery
+        # 503s). The dedicated 503 test patches this same seam to True.
+        patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=False),
     ):
         yield TestClient(app, raise_server_exceptions=False)
 

@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
 
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 
+FUTURE_SUNSET = "2099-12-31"
+PAST_SUNSET = "2020-01-01"
+
 
 def _future_sunset(days: int = 30) -> str:
     """Return an ISO date string safely in the future relative to today.
@@ -134,7 +137,7 @@ class TestDeprecationHeaderMiddleware:
 
     def test_410_gone_when_sunset_past(self):
         """A deprecated route whose sunset date has passed returns 410 Gone."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2020-01-01")
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=PAST_SUNSET)
         app = _make_app()
         with TestClient(app) as client:
             resp = client.get("/api/v1/old-endpoint")
@@ -145,13 +148,13 @@ class TestDeprecationHeaderMiddleware:
 
     def test_200_with_headers_when_sunset_future(self):
         """A deprecated route with a future sunset date returns 200 with headers."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2099-12-31")
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=FUTURE_SUNSET)
         app = _make_app()
         with TestClient(app) as client:
             resp = client.get("/api/v1/old-endpoint")
         assert resp.status_code == 200
         assert resp.headers.get("Deprecation") == "true"
-        assert resp.headers.get("Sunset") == "2099-12-31"
+        assert resp.headers.get("Sunset") == FUTURE_SUNSET
 
     def test_410_includes_deprecation_header(self):
         """410 Gone response still includes Deprecation: true header."""
@@ -165,7 +168,7 @@ class TestDeprecationHeaderMiddleware:
 
     def test_non_matching_path_no_410(self):
         """Unrelated paths should not trigger 410 even if a deprecation exists."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2020-01-01")
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=PAST_SUNSET)
         app = _make_app()
         with TestClient(app) as client:
             resp = client.get("/api/v2/new-endpoint")

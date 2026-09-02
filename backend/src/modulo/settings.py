@@ -284,11 +284,14 @@ class Settings(BaseSettings):
     # via secrets; the code guard makes any smaller pool self-correcting.
     saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
-    # Default 5; prod/staging pin this to 20 via fly.toml — the accepted
+    # Default 5; prod pins this to 20 via fly.toml — the accepted
     # design target (20 per worker x up to 5 machines = up to 100 concurrent
     # runs), verified-safe against the prod Postgres 300-connection cap (only
     # ~40 in use; SAQ is asyncio single-engine so concurrency does not multiply
-    # the DB pool). Must stay strictly below the effective Redis pool — see
+    # the DB pool). Staging is right-sized to 2 (2026-09 Redis audit: SAQ's
+    # blocking dequeue issues one poll per concurrency slot every 5s, so
+    # staging's idle 40-slot polling matched prod's command volume). Must stay
+    # strictly below the effective Redis pool — see
     # saq_redis_pool_size (blocking dequeue holds one pool connection per
     # concurrent task; a pool <= concurrency wedges the worker).
     saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
