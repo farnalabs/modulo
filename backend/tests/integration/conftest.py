@@ -114,9 +114,16 @@ def db_url(
     # falls back to the scoped app role and system_engine_is_fallback() becomes
     # True, so pre-auth paths (webhook trigger delivery, cross-org reads) refuse
     # with 503 (system_bootstrap_degraded) and every integration test that
-    # exercises them fails. The testcontainer superuser has BYPASSRLS, so the
-    # system engine works correctly here.
-    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", url)
+    # exercises them fails.
+    #
+    # Point it at the modulo_system role (NOT the admin URL): bootstrap_role.py
+    # derives the system role NAME from MODULO_SYSTEM_DATABASE_URL, so pointing it
+    # at the admin URL would provision the admin role instead and leave
+    # modulo_system uncreated — which fails the break-glass deploy gate's
+    # "modulo_system has BYPASSRLS" posture assertion. bootstrap_roles creates
+    # modulo_system (LOGIN BYPASSRLS) with these credentials, so the system engine
+    # connects correctly and the gate's posture check passes.
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "modulo_system", "syspass"))
     return url
 
 
