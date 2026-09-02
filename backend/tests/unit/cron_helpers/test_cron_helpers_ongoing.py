@@ -706,6 +706,48 @@ class TestFireOngoingTrigger:
         assert not second["dispatched"]
         redis_client.aclose.assert_awaited()
 
+    @pytest.mark.asyncio
+    async def test_stats_write_sets_self_expiring_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-09 Redis audit: the per-trigger debug summary key
+        (``saq:cron:stats:ongoing:{trigger_id}``) carries a TTL so keys for
+        DELETED triggers self-expire instead of accumulating forever (the
+        unbounded keyspace-growth offender). No consumer gates on this key —
+        debug-only — so expiry loses no signal."""
+        _patch_env(monkeypatch)
+        session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=2))
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_ongoing_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_org_is_paused_degraded", new_callable=AsyncMock, return_value=False),
+            patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, side_effect=_make_run_side_effect),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "_dispatch_ongoing_runs", new_callable=AsyncMock, return_value=[]),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            await ch.fire_ongoing_trigger(
+                trigger_id=TRIGGER_ID,
+                org_id=ORG,
+                pipeline_id=PIPELINE_ID,
+                latest_snapshot_id=str(uuid.uuid4()),
+            )
+
+        stats_sets = [
+            c for c in redis_client.set.await_args_list if c.args[0] == f"{ch._ONGOING_STATS_KEY_PREFIX}:{TRIGGER_ID}"
+        ]
+        assert stats_sets, "fire_ongoing_trigger must persist its per-trigger summary"
+        assert stats_sets[0].kwargs["ex"] == ch._ONGOING_STATS_TTL_SECONDS
+        # Derived from the ongoing cadence floor, not magic: a live trigger
+        # refires at most every ONGOING_MIN_INTERVAL_SECONDS, so the TTL (10x)
+        # always outlasts the refresh gap and a live trigger's key never
+        # lapses between fires.
+        assert ch._ONGOING_STATS_TTL_SECONDS > ch.ONGOING_MIN_INTERVAL_SECONDS
+
     def test_never_dispatched_pending_matches_reconcile_predicate(self) -> None:
         """A committed-but-never-dispatched pending run (dispatched_at IS NULL)
         is admitted by the first dispatcher_reconcile recovery branch."""

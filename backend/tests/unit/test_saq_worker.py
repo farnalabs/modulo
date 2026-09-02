@@ -1303,6 +1303,13 @@ class TestSystemJobDelegates:
         from_url.assert_called_once()
         redis_client.set.assert_awaited_once()
         assert redis_client.set.await_args.args[0] == sw.STALE_RUN_RECOVERY_STATS_KEY
+        # The stats key carries a TTL one sweep past the stale window (2026-09
+        # Redis audit): a dead worker's key self-expires instead of persisting a
+        # dead timestamp forever, and /healthz/ready treats a missing key as the
+        # equivalent "never run" advisory. The TTL must exceed the stale window
+        # so a live worker's 5-min refresh cycle never lets it lapse.
+        assert redis_client.set.await_args.kwargs["ex"] == sw.STALE_RUN_RECOVERY_STATS_TTL_SECONDS
+        assert sw.STALE_RUN_RECOVERY_STATS_TTL_SECONDS > sw.STALE_RUN_RECOVERY_STALE_SECONDS
         import json as _json
 
         stats = _json.loads(redis_client.set.await_args.args[1])

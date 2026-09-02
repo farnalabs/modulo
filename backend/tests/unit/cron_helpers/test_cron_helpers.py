@@ -2715,7 +2715,7 @@ class _StatsRedis:
     async def get(self, _key: str) -> bytes | None:
         return self._blob
 
-    async def set(self, _key: str, value: str) -> None:
+    async def set(self, _key: str, value: str, ex: int | None = None) -> None:
         self._blob = value.encode()
 
 
@@ -2748,10 +2748,27 @@ class TestDispatcherReconcileSharedStats:
     @pytest.mark.asyncio
     async def test_write_failure_never_raises(self) -> None:
         class _BrokenRedis:
-            async def set(self, _key: str, _value: str) -> None:
+            async def set(self, _key: str, _value: str, ex: int | None = None) -> None:
                 raise RuntimeError("redis down")
 
         assert (await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})) is None
+
+    @pytest.mark.asyncio
+    async def test_write_sets_self_expiring_ttl(self) -> None:
+        """2026-09 Redis audit: the shared stats key carries a TTL so a dead
+        system worker's key self-expires instead of persisting a dead
+        timestamp forever. A live worker refreshes it every 60s tick and never
+        lets it lapse; /healthz/ready reports a missing key as "never run" —
+        the SAME readiness-gating "unavailable" tier a stale key gets."""
+        r = AsyncMock()
+        await ch.write_dispatcher_reconcile_stats(r, {"scanned": 1, "repaired": 0, "skipped": 1})
+        assert r.set.await_args.kwargs["ex"] == ch.DISPATCHER_RECONCILE_STATS_TTL_SECONDS
+        # Derived, not magic: the TTL must cover the reconcile cron's full
+        # two-tier diagnostic window (60s tick; readiness gates at the 300s
+        # unavailable tier = 5 ticks, health._RECONCILE_UNAVAILABLE_SECONDS)
+        # plus one tick of margin.
+        assert ch.DISPATCHER_RECONCILE_TICK_SECONDS == 60
+        assert ch.DISPATCHER_RECONCILE_STATS_TTL_SECONDS > 5 * ch.DISPATCHER_RECONCILE_TICK_SECONDS
 
 
 # ---------------------------------------------------------------------------

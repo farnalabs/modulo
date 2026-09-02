@@ -120,6 +120,18 @@ ONGOING_MAX_ENQUEUE_PER_TICK = 50
 ONGOING_MAX_CONSECUTIVE_FAILURES = 5
 _ONGOING_FAILURE_COUNTER_TTL = 6 * 3600  # 6h
 
+# Per-trigger fire summary written by fire_ongoing_trigger:
+# ``saq:cron:stats:ongoing:{trigger_id}``. Debug-only — no consumer gates on it
+# (grep-verified 2026-09: nothing in backend/src reads this key and it is NOT
+# wired to /healthz/ready), so a TTL is pure hygiene. Consecutive fires of one
+# trigger are >= ONGOING_MIN_INTERVAL_SECONDS apart (next_fire_at is floored at
+# the scan interval), so a live trigger refreshes the key 10x inside the TTL and
+# never lets it lapse; a DELETED trigger's key stops refreshing and self-expires
+# instead of persisting forever (the unbounded keyspace-growth offender in the
+# 2026-09 Redis audit).
+_ONGOING_STATS_KEY_PREFIX = "saq:cron:stats:ongoing"
+_ONGOING_STATS_TTL_SECONDS = ONGOING_MIN_INTERVAL_SECONDS * 10  # 600s
+
 
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
@@ -284,6 +296,20 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
 # to the health check, so the cron persists its outcome here every tick and the
 # health check reads this key.
 DISPATCHER_RECONCILE_STATS_KEY = "saq:cron:stats:dispatcher_reconcile"
+# The reconcile cron runs on the 60s system-cron tick (_CRON_EVERY_MINUTE in
+# saq_worker._system_cron_jobs); /healthz/ready's FAR-199 two-tier gate reports
+# "stale" past one tick (health._RECONCILE_STALE_SECONDS = 60) and flips to the
+# readiness-gating "unavailable" tier past 5 min (health.
+# _RECONCILE_UNAVAILABLE_SECONDS = 300 = 5 ticks). TTL for the stats key (2026-09
+# Redis audit): one tick past the unavailable window, so a live worker's 60s
+# refresh never lets it lapse while a dead worker's key self-expires instead of
+# persisting a dead timestamp forever. Missing-key semantics are unchanged:
+# /healthz/ready reports a missing key as "never run" — the SAME "unavailable"
+# tier a stale key gets — so expiry is signal-equivalent; only the diagnostic
+# detail text differs.
+DISPATCHER_RECONCILE_TICK_SECONDS = 60
+# 360s = the 300s unavailable window + 1 tick margin.
+DISPATCHER_RECONCILE_STATS_TTL_SECONDS = DISPATCHER_RECONCILE_TICK_SECONDS * 6
 
 
 async def write_dispatcher_reconcile_stats(redis_client: AsyncRedis, stats: dict[str, Any]) -> None:
@@ -298,7 +324,11 @@ async def write_dispatcher_reconcile_stats(redis_client: AsyncRedis, stats: dict
     payload: dict[str, Any] = dict(stats)
     payload["last_run_at"] = datetime.now(UTC).isoformat()
     try:
-        await redis_client.set(DISPATCHER_RECONCILE_STATS_KEY, json.dumps(payload))
+        await redis_client.set(
+            DISPATCHER_RECONCILE_STATS_KEY,
+            json.dumps(payload),
+            ex=DISPATCHER_RECONCILE_STATS_TTL_SECONDS,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -2060,10 +2090,15 @@ async def fire_ongoing_trigger(
                 "in_flight": outcome.get("in_flight"),
                 "target": outcome.get("target"),
             }
-        # Per-item outcome persistence (debug-only — NOT wired to /healthz/ready).
-        # Best-effort: a stats write failure must never fail the fire job.
+        # Per-item outcome persistence (debug-only — NOT wired to /healthz/ready;
+        # self-expiring TTL, see _ONGOING_STATS_TTL_SECONDS). Best-effort: a
+        # stats write failure must never fail the fire job.
         try:
-            await redis_client.set(f"saq:cron:stats:ongoing:{trigger_id}", json.dumps(summary))
+            await redis_client.set(
+                f"{_ONGOING_STATS_KEY_PREFIX}:{trigger_id}",
+                json.dumps(summary),
+                ex=_ONGOING_STATS_TTL_SECONDS,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:

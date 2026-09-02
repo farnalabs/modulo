@@ -3,14 +3,17 @@
 Two worker processes (plan F1/F2):
 
 * ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
-  larger — see :func:`_effective_redis_pool_size`), no web UI. Executes
+  default 5, deployed at 20 in prod and 2 in staging — staging right-sized in
+  the 2026-09 Redis audit because SAQ's blocking dequeue issues one poll per
+  concurrency slot every 5s, making idle staging poll at prod volume; the
+  Redis pool must stay strictly larger — see :func:`_effective_redis_pool_size`),
+  no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``/
   ``fire_ongoing_trigger``).
 * ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
-  larger — see :func:`_effective_redis_pool_size`), web UI on 8081 bound
+  default 5, deployed at 20 in prod and 2 in staging — see
+  :func:`_effective_redis_pool_size`), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
@@ -1064,6 +1067,13 @@ STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
 # The sweep runs every 5 min; a last_run_at older than 15 min means at least two
 # ticks were missed -> report "stale" (advisory).
 STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
+# TTL for the stats key: one sweep past the stale window (2026-09 Redis audit).
+# The key is a liveness marker refreshed every 5 min, so a live worker never
+# lets it expire; a dead worker's key self-expires instead of persisting a dead
+# timestamp forever. /healthz/ready's _check_stale_run_recovery treats a missing
+# key as the equivalent "never run" advisory (fail-open, never gates readiness),
+# so expiry is signal-equivalent and strictly more hygienic.
+STALE_RUN_RECOVERY_STATS_TTL_SECONDS = STALE_RUN_RECOVERY_STALE_SECONDS + 60
 
 
 async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -1086,7 +1096,11 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
 
         redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
         try:
-            await redis_client.set(STALE_RUN_RECOVERY_STATS_KEY, json.dumps(stats))
+            await redis_client.set(
+                STALE_RUN_RECOVERY_STATS_KEY,
+                json.dumps(stats),
+                ex=STALE_RUN_RECOVERY_STATS_TTL_SECONDS,
+            )
         finally:
             with contextlib.suppress(Exception):
                 await redis_client.aclose()

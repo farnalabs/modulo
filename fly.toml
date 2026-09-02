@@ -121,16 +121,22 @@ primary_region = 'lhr'
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   SAQ_WORKER_CONCURRENCY = "20"
-  # Redis pool must exceed SAQ worker concurrency (blocking dequeue holds one
-  # pool connection per concurrent task). Must stay > SAQ_WORKER_CONCURRENCY.
+  # Code-accurate invariant: the effective pool is >= SAQ_WORKER_CONCURRENCY
+  # + 5 (max() floor in saq_worker._effective_redis_pool_size — every
+  # concurrent blocking dequeue holds one pool connection, plus a 5-connection
+  # reserve for the upkeep ops schedule/sweep/abort/worker_info).
   SAQ_REDIS_POOL_SIZE = "50"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
-  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) — NOT pay-as-you-go.
-  # (2026-08: PAYG projected ~$87/mo at ~46M commands; Fixed 250MB is flat $15/mo
-  # with 250MB data + 50GB bandwidth. Enable auto-upgrade on the add-on as a
-  # safety net: `flyctl redis update <name>` → select plan, then enable auto-upgrade.)
+  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) — NOT pay-as-you-go
+  # (2026-08 decision, verified 2026-09-02 via `flyctl redis list`). Prod keeps
+  # SAQ_WORKER_CONCURRENCY=20 / SAQ_REDIS_POOL_SIZE=50 (ADR 017 design target —
+  # up to 5 worker machines x 20 slots) and stays cheapest on Fixed while prod
+  # traffic is real. See fly.staging.toml for the CANONICAL command-volume
+  # audit derivation that sized these knobs (staging runs the right-sized 2/10).
+  # Enable auto-upgrade on the add-on as a safety net:
+  # `flyctl redis update <name>` → select plan, then enable auto-upgrade.
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
 
 [[vm]]
