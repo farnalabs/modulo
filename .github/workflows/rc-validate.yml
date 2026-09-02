@@ -32,7 +32,7 @@ jobs:
       BASE_URL: https://app.modulo.run
       RC_TAG: ${{ inputs.rc_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
