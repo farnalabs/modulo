@@ -1377,7 +1377,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
-    { name = "pytest-bdd", git = "https://github.com/pytest-dev/pytest-bdd?rev=refs%2Fpull%2F827%2Fhead" },
+    { name = "pytest-bdd", url = "https://github.com/pytest-dev/pytest-bdd/archive/60f6625b71b5552af02a4830e3d520f5ab6838e4.tar.gz" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-playwright", specifier = ">=0.8.0" },
     { name = "pytest-recording", specifier = ">=0.13.0" },
@@ -4673,7 +4673,7 @@ wheels = [
 [[package]]
 name = "pytest-bdd"
 version = "8.1.0"
-source = { git = "https://github.com/pytest-dev/pytest-bdd?rev=refs%2Fpull%2F827%2Fhead#60f6625b71b5552af02a4830e3d520f5ab6838e4" }
+source = { url = "https://github.com/pytest-dev/pytest-bdd/archive/60f6625b71b5552af02a4830e3d520f5ab6838e4.tar.gz" }
 dependencies = [
     { name = "gherkin-official" },
     { name = "mako" },
@@ -4681,6 +4681,18 @@ dependencies = [
     { name = "parse" },
     { name = "parse-type" },
     { name = "pytest" },
+    { name = "typing-extensions" },
+]
+sdist = { hash = "sha256:f19c50954be58251ed4f7fffb4c1cbc6c55e63a388024cc76c8d641fbb68aa6c" }
+
+[package.metadata]
+requires-dist = [
+    { name = "gherkin-official", specifier = ">=29.0.0,!=31.0.0,!=32.0.0" },
+    { name = "mako" },
+    { name = "packaging" },
+    { name = "parse" },
+    { name = "parse-type" },
+    { name = "pytest", specifier = ">=7.0.0" },
     { name = "typing-extensions" },
 ]
 
