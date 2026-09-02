@@ -69,7 +69,10 @@ def fresh_migration_db(monkeypatch):
     """
     pg = PostgresContainer("postgres:16-alpine")
     pg.start()
-    raw = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
+    # Testcontainers' PostgresContainer returns a ``postgresql+psycopg2://`` URL,
+    # so the bare ``postgresql://`` replace below misses it. Mirror conftest.py and
+    # also swap the ``psycopg2`` driver for ``asyncpg`` (psycopg2 is not installed).
+    raw = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
 
     async def _provision():
         eng = create_async_engine(raw)
