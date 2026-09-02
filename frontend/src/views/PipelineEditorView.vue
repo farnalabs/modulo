@@ -674,21 +674,16 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.template') }}</dt>
               <dd class="font-mono text-xs select-all" :title="selectedNodeData.template_id">{{ shortId(selectedNodeData.template_id) }}</dd>
             </div>
-            <div v-if="selectedNodeData.agent_command">
+            <div data-testid="pipeline-editor-node-commands">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
-              <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
-            </div>
-            <template v-else-if="selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
-              <dd>
-                <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
-                  <li v-for="(cmd, idx) in selectedNodeData.agent_commands" :key="idx">{{ cmd }}</li>
-                </ul>
-                <div v-if="selectedNodeData.commands_concatenation_string" class="text-[10px] text-muted-foreground mt-1">
-                  Concatenated with: <code class="font-mono">{{ selectedNodeData.commands_concatenation_string }}</code>
-                </div>
+              <dd class="mt-1">
+                <SandboxCommandsEditor
+                  v-model:scalar-command="selectedNodeData.agent_command"
+                  v-model:commands="selectedNodeData.agent_commands"
+                  v-model:joiner="selectedNodeData.commands_concatenation_string"
+                />
               </dd>
-            </template>
+            </div>
             <div v-if="selectedNodeData.timeout_seconds">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.timeout') }}</dt>
               <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
@@ -725,6 +720,28 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.prompt') }}</dt>
               <dd class="text-xs text-muted-foreground italic whitespace-pre-wrap max-h-32 overflow-y-auto">{{ selectedNodeData.agent_prompt.substring(0, 300) }}{{ selectedNodeData.agent_prompt.length > 300 ? '...' : '' }}</dd>
             </div>
+          </template>
+          <!-- Non-sandbox nodes: commands are read-only. The authoring editor is
+               sandbox-only — a scalar typed on an agent node would flow into the
+               graph save and FAR-488a would then overwrite the bound Agent's row
+               command. What the graph already carries is displayed, never edited. -->
+          <div
+            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_command"
+            data-testid="pipeline-editor-node-commands-readonly"
+          >
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
+            <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
+          </div>
+          <template v-else-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
+            <dd>
+              <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
+                <li v-for="(cmd, idx) in selectedNodeData.agent_commands" :key="idx">{{ cmd }}</li>
+              </ul>
+              <div v-if="selectedNodeData.commands_concatenation_string" class="text-[10px] text-muted-foreground mt-1">
+                {{ $t('views.PipelineEditorView.commands_concatenated_with') }} <code class="font-mono">{{ selectedNodeData.commands_concatenation_string }}</code>
+              </div>
+            </dd>
           </template>
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
@@ -1173,6 +1190,7 @@ import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
+import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
@@ -1911,37 +1929,7 @@ async function saveEdgeConfig() {
     await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
-        nodes: rawNodes.value.map((n: any) => ({
-          id: n.id,
-          node_type: n.node_type || 'agent',
-          router_config: n.router_config ?? null,
-          hitl_config: n.hitl_config ?? null,
-          mode: n.mode || 'llm',
-          label: n.label || null,
-          description: n.description || null,
-          agent_id: n.agent_id || null,
-          connector_binding: n.connector_binding || null,
-          output_schema_id: n.output_schema_id || null,
-          model_backend_id: n.model_backend_id || null,
-          role: n.role || null,
-          idempotent: n.idempotent !== false,
-          timeout_seconds: n.timeout_seconds || null,
-          stall_timeout_seconds: n.stall_timeout_seconds || null,
-          enable_heartbeat: n.enable_heartbeat !== false,
-          watch_log_path: n.watch_log_path || null,
-          stdout_percentage_delta: n.stdout_percentage_delta ?? null,
-          watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
-          position: n.position || null,
-          read_only: !!n.read_only,
-          git_credentials: n.git_credentials ?? null,
-          parameter_set_id: n.parameter_set_id || null,
-          parameter_overrides: n.parameter_overrides || null,
-          fan_out: n.fan_out ?? null,
-          collect: n.collect ?? null,
-          aggregate: n.aggregate ?? null,
-          join_partial_policy: n.join_partial_policy || 'collect_and_proceed',
-          capability_scope: n.capability_scope || null,
-        })),
+        nodes: rawNodes.value.map(buildNodePayload),
         edges: updatedEdges,
       },
       signal,
@@ -2215,6 +2203,75 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRunDialogKeydown)
 })
 
+// Sandbox command authoring → graph-save payload. The graph save REPLACES
+// graph_nodes_json wholesale, so every command field must be serialised here
+// or it is wiped. Mirrors the backend contract (routes/pipelines.py +
+// sandbox_mode): agent_command XOR agent_commands on sandbox_agent nodes
+// (the save clears the scalar when a non-empty list is present; empty list ==
+// no commands), and the joiner is persisted as a non-empty string — a null
+// joiner would crash the runtime join (None.join), so an unset joiner saves
+// the " && " default. Non-sandbox nodes never gain command mutations here:
+// the commands editor is sandbox-gated and the spread round-trips whatever
+// the graph already carried (FAR-488a syncs a bound Agent's row from a
+// node-level command — the editor must not fabricate one).
+function nodeCommandFields(n: any): {
+  agent_command?: string | null
+  agent_commands?: string[] | null
+  commands_concatenation_string?: string | null
+} {
+  if (n.node_type !== 'sandbox_agent') {
+    return {}
+  }
+  const scalar = typeof n.agent_command === 'string' && n.agent_command.trim() !== '' ? n.agent_command : null
+  const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
+    .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
+    .filter((c: string) => c.trim() !== '')
+  if (rows.length === 0) {
+    return { agent_command: scalar, agent_commands: null, commands_concatenation_string: null }
+  }
+  const joiner = typeof n.commands_concatenation_string === 'string' && n.commands_concatenation_string.length > 0
+    ? n.commands_concatenation_string
+    : ' && '
+  return { agent_command: null, agent_commands: rows, commands_concatenation_string: joiner }
+}
+
+// View-only / UI-only keys that must never leak into a graph-save payload.
+// rawNodes come from the GET /graph response (every key is a PipelineGraphNode
+// field) or addNode, so none occur in practice today — this block is durable
+// insurance against UI-state markers (VueFlow node fields like type/data/
+// selected/dragging/dimensions, editor conveniences like hasCapabilityScope)
+// ever being merged into rawNodes and silently persisted. model_backend_id is
+// an Agent-level field (convert-to-agent endpoint), not a PipelineGraphNode
+// field; the model tolerates extras, but it is omitted for hygiene.
+const VIEW_ONLY_NODE_KEYS = new Set([
+  'type',
+  'data',
+  'selected',
+  'dragging',
+  'dimensions',
+  'hasCapabilityScope',
+  'model_backend_id',
+])
+
+// Build one node's save payload by spreading the raw node data — the GET
+// response is typed by PipelineGraphNode, so every model-accepted field
+// (template_id, composite_*, schema pins, ports, egress/resource/sandbox
+// config, autonomy_recommendation, command/prompt fields, ...) survives the
+// save — then layering the command normalisation on top. Position flows
+// through the spread exactly as the previous hand-maintained map sent it
+// (n.position, the graph's {x, y} — VueFlow drag state is not synced).
+// Return is `any` because the payload is dynamically spread from the (any)
+// raw node data; the generated client's node body type cannot express that.
+function buildNodePayload(n: any): any {
+  const payload: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(n)) {
+    if (!VIEW_ONLY_NODE_KEYS.has(key)) payload[key] = value
+  }
+  payload.node_type = n.node_type || 'agent'
+  Object.assign(payload, nodeCommandFields(n))
+  return payload
+}
+
 async function saveGraph() {
   savingGraph.value = true
   saveGraphError.value = null
@@ -2229,37 +2286,7 @@ async function saveGraph() {
     await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
-        nodes: rawNodes.value.map((n: any) => ({
-          id: n.id,
-          node_type: n.node_type || 'agent',
-          router_config: n.router_config ?? null,
-          hitl_config: n.hitl_config ?? null,
-          mode: n.mode || 'llm',
-          label: n.label || null,
-          description: n.description || null,
-          agent_id: n.agent_id || null,
-          connector_binding: n.connector_binding || null,
-          output_schema_id: n.output_schema_id || null,
-          model_backend_id: n.model_backend_id || null,
-          role: n.role || null,
-          idempotent: n.idempotent !== false,
-          timeout_seconds: n.timeout_seconds || null,
-          stall_timeout_seconds: n.stall_timeout_seconds || null,
-          enable_heartbeat: n.enable_heartbeat !== false,
-          watch_log_path: n.watch_log_path || null,
-          stdout_percentage_delta: n.stdout_percentage_delta ?? null,
-          watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
-          position: n.position || null,
-          read_only: !!n.read_only,
-          git_credentials: n.git_credentials ?? null,
-          parameter_set_id: n.parameter_set_id || null,
-          parameter_overrides: n.parameter_overrides || null,
-          fan_out: n.fan_out ?? null,
-          collect: n.collect ?? null,
-          aggregate: n.aggregate ?? null,
-          join_partial_policy: n.join_partial_policy || 'collect_and_proceed',
-          capability_scope: n.capability_scope || null,
-        })),
+        nodes: rawNodes.value.map(buildNodePayload),
         edges: rawEdges.value.map((e: any) => ({
           id: e.id,
           source_node_id: e.source_node_id,

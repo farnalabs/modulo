@@ -642,6 +642,17 @@ class PipelineGraphNode(BaseModel):
     # with the full run input at /home/user/input.json).
     mode: Literal["llm", "script"] = "llm"
     agent_command: str | None = None
+    # Sandbox commands list: the legible alternative to one long agent_command
+    # string. Joined at runtime by commands_concatenation_string
+    # (sandbox_mode._validate_sandbox_mode_config) and Jinja-validated as a
+    # whole by validate_sandbox_agent_command_jinja. Mutually exclusive with
+    # agent_command (the runtime resolves the list first; authoring UIs keep
+    # one or the other).
+    agent_commands: list[str] | None = None
+    commands_concatenation_string: str = Field(
+        default=" && ",
+        description="Joiner inserted between agent_commands entries when the pipeline runs.",
+    )
     agent_prompt: str | None = None
     script_command: str | None = None
     # FAR-296 Phase 3: egress control + resource-limit config surface.
@@ -758,6 +769,20 @@ class PipelineGraphNode(BaseModel):
         "None => backfilled with a single default 'out' port at compile time.",
     )
 
+    @field_validator("commands_concatenation_string", mode="before")
+    @classmethod
+    def _default_commands_concatenation_string(cls, v: Any) -> Any:
+        """Normalise an absent/empty/null joiner to the runtime default.
+
+        sandbox_mode resolves the joiner with ``node_def.get("commands_concatenation_string", " && ")``
+        — the default only applies when the KEY is absent, so a persisted
+        ``null`` would crash the run-time join (``None.join(...)``) and an
+        empty string would join the commands with no separator at all.
+        Coercing both to " && " keeps "no joiner configured" and "the default
+        joiner" the same state at rest, for every writer (REST, MCP, templates).
+        """
+        return v if isinstance(v, str) and v else " && "
+
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:
         node_validators = {
@@ -782,12 +807,17 @@ class PipelineGraphNode(BaseModel):
         # A non-sandbox node that sets them is rejected — the enforcement surface
         # (read-only workspace, git-credential scope) only exists for sandbox
         # agents, and a declared-but-unenforced field on another node type would
-        # be a silent no-op.
+        # be a silent no-op. agent_commands / commands_concatenation_string get
+        # the same treatment: the runtime only reads them for sandbox nodes.
         if self.node_type != "sandbox_agent":
             if self.read_only:
                 raise ValueError("Only sandbox_agent nodes can set read_only=True")
             if self.git_credentials is not None:
                 raise ValueError("Only sandbox_agent nodes can set git_credentials")
+            if self.agent_commands is not None:
+                raise ValueError("Only sandbox_agent nodes can set agent_commands")
+            if self.commands_concatenation_string != " && ":
+                raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
         if (
@@ -857,6 +887,16 @@ class PipelineGraphNode(BaseModel):
         )
 
         _validate_sandbox_mode_config(self.model_dump())
+        # Node-level mutual exclusion, mirroring the Agent create/update schemas
+        # (routes/agents.py): a node sets agent_command OR agent_commands, never
+        # both. The runtime resolves the list first, so a both-set node would
+        # silently ignore its scalar command — reject it at authoring time
+        # instead. (agent_command/agent_commands vs script_command exclusivity
+        # is already covered by _validate_sandbox_mode_config above.)
+        if self.agent_commands and self.agent_command and self.agent_command.strip():
+            raise ValueError(
+                "sandbox_agent node cannot set both agent_command and agent_commands — set one or the other"
+            )
         _validate_sandbox_egress_config(self.model_dump())
         _validate_sandbox_egress_allowlist_config(
             self.egress_policy,

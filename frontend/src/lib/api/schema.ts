@@ -13149,6 +13149,14 @@ export interface components {
             mode: "llm" | "script";
             /** Agent Command */
             agent_command?: string | null;
+            /** Agent Commands */
+            agent_commands?: string[] | null;
+            /**
+             * Commands Concatenation String
+             * @description Joiner inserted between agent_commands entries when the pipeline runs.
+             * @default &&
+             */
+            commands_concatenation_string: string;
             /** Agent Prompt */
             agent_prompt?: string | null;
             /** Script Command */

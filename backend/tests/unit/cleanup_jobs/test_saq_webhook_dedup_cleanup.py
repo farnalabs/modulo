@@ -3,7 +3,14 @@
 The ``webhook_dedup_cleanup`` job in ``modulo.core.saq_worker`` wraps
 ``cleanup_old_webhook_events`` in a drain loop and reports the total deleted
 count. It previously had no coverage — the direct module tests only exercised
-``cleanup_old_webhook_events`` and the in-process scheduler loop.
+``cleanup_old_webhook_events``.
+
+Every test here also pins the session factory: on PostgreSQL the job must
+drain on the SYSTEM session factory (via ``_cleanup_session_factory`` →
+``_make_system_session_factory``, FAR-523) because the purge is cross-org by
+design and the plain ``modulo_app`` factory is NOBYPASSRLS — under it the
+retention silently matched zero rows. On non-PostgreSQL backends (no RLS)
+the plain factory is correct and the job must select it.
 """
 
 import uuid
@@ -46,7 +53,8 @@ class TestWebhookDedupCleanup:
         factory, _ = _make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
                 new_callable=AsyncMock,
@@ -55,6 +63,7 @@ class TestWebhookDedupCleanup:
         ):
             result = await sw.webhook_dedup_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": BATCH_SIZE * 2 + 3}
         assert mock_cleanup.await_count == 3
 
@@ -62,7 +71,8 @@ class TestWebhookDedupCleanup:
         factory, _ = _make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
                 new_callable=AsyncMock,
@@ -71,6 +81,7 @@ class TestWebhookDedupCleanup:
         ):
             result = await sw.webhook_dedup_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 0}
         mock_cleanup.assert_awaited_once()
 
@@ -79,7 +90,8 @@ class TestWebhookDedupCleanup:
         factory, _ = _make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
                 new_callable=AsyncMock,
@@ -88,6 +100,30 @@ class TestWebhookDedupCleanup:
             pytest.raises(RuntimeError, match="db down"),
         ):
             await sw.webhook_dedup_cleanup({})
+
+        mock_factory.assert_called()
+
+    @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql"])
+    async def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
+        """On non-PostgreSQL backends (no RLS, no modulo_system role) the job
+        must drain on the PLAIN factory and never touch the system engine."""
+        factory, _ = _make_factory_with_session()
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db=non_pg_db)),
+            patch.object(sw, "_make_session_factory", return_value=factory) as mock_plain,
+            patch.object(sw, "_make_system_session_factory") as mock_system,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+        ):
+            result = await sw.webhook_dedup_cleanup({})
+
+        mock_plain.assert_called()
+        mock_system.assert_not_called()
+        assert result == {"deleted": 0}
 
 
 class TestWebhookDedupCleanupAutobeginTransaction:
@@ -133,15 +169,77 @@ class TestWebhookDedupCleanupAutobeginTransaction:
         async with autobegin_false_factory() as session, session.begin():
             session.add(old_event)
 
-        with patch.object(sw, "_make_session_factory", return_value=autobegin_false_factory):
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory) as mock_factory,
+        ):
             result = await sw.webhook_dedup_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 1}
 
     async def test_cron_zero_batch_against_autobegin_false_session(self, autobegin_false_factory) -> None:
         """Even an empty table must not raise: the SELECT needs an active
         transaction on an autobegin=False session."""
-        with patch.object(sw, "_make_session_factory", return_value=autobegin_false_factory):
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory) as mock_factory,
+        ):
             result = await sw.webhook_dedup_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 0}
+
+
+class TestCleanupSessionFactory:
+    """``_cleanup_session_factory`` picks the session factory by dialect.
+
+    PostgreSQL (RLS, modulo_app NOBYPASSRLS) → the system session factory,
+    still failing LOUD when ``MODULO_SYSTEM_DATABASE_URL`` is unset.
+    Non-PostgreSQL (SQLite/MariaDB/MySQL — no RLS, no system role) → the
+    plain factory; the system engine is never touched.
+    """
+
+    def test_postgres_uses_system_factory(self) -> None:
+        sentinel = MagicMock(name="system_factory")
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=sentinel) as mock_system,
+        ):
+            factory = sw._cleanup_session_factory()
+
+        mock_system.assert_called_once()
+        assert factory is sentinel
+
+    @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql", "SQLite", "MariaDB"])
+    def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
+        sentinel = MagicMock(name="plain_factory")
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db=non_pg_db)),
+            patch.object(sw, "_make_session_factory", return_value=sentinel) as mock_plain,
+            patch.object(sw, "_make_system_session_factory") as mock_system,
+        ):
+            factory = sw._cleanup_session_factory()
+
+        mock_plain.assert_called_once()
+        mock_system.assert_not_called()
+        assert factory is sentinel
+
+    def test_postgres_with_unset_system_url_fails_loud(self) -> None:
+        """The PG fail-closed path is preserved: an unset
+        ``MODULO_SYSTEM_DATABASE_URL`` raises RuntimeError instead of silently
+        running the cross-org purge as modulo_app."""
+        settings = MagicMock(modulo_db="postgres")
+        settings.modulo_system_database_url = ""
+
+        with (
+            patch.object(sw, "get_settings", return_value=settings),
+            patch.object(sw, "_SYSTEM_ASYNC_ENGINE", None),
+            patch.object(sw, "_make_session_factory") as mock_plain,
+            pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+        ):
+            sw._cleanup_session_factory()
+
+        mock_plain.assert_not_called()

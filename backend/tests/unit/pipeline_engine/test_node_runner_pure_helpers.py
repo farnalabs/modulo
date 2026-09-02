@@ -8,6 +8,7 @@ required-team-id normaliser.
 """
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -27,6 +28,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _marker_delivery_done_for_node,
     _normalize_marker_text,
     _normalize_required_team_id,
+    _run_identity_strs,
     _source_contains_delivery_sentinel,
 )
 
@@ -422,3 +424,33 @@ class TestMarkerTextAndSentinel:
         markers = {"k1": {"delivery_done": True, "attempt_key": "run:run-11:node:node-a:1"}}
         # run-1 must NOT match run-11 (delimiter trap).
         assert _marker_delivery_done_for_node(markers, "run-1", "node-a") is False
+
+
+# ---------------------------------------------------------------------------
+# _run_identity_strs
+# ---------------------------------------------------------------------------
+
+
+class TestRunIdentityStrs:
+    """gh-1802: internal state identity keys never render as the string "None".
+
+    An explicit ``None`` value in state must produce the same result a missing
+    key produces (the empty string) — the sandbox agent's run/pipeline/org
+    identity strings are derived from these keys on every node execution.
+    """
+
+    def test_missing_keys_yield_empty_strings(self) -> None:
+        assert _run_identity_strs({}) == ("", "", "")
+
+    def test_explicit_none_yields_empty_strings(self) -> None:
+        state: dict[str, Any] = {"_run_id": None, "_pipeline_id": None, "_org_id": None}
+        assert _run_identity_strs(state) == ("", "", "")
+
+    def test_string_values_pass_through(self) -> None:
+        state = {"_run_id": "run-1", "_pipeline_id": "pipe-2", "_org_id": "org-3"}
+        assert _run_identity_strs(state) == ("run-1", "pipe-2", "org-3")
+
+    def test_uuid_and_int_values_coerce_to_str(self) -> None:
+        run_uuid = uuid.uuid4()
+        state: dict[str, Any] = {"_run_id": run_uuid, "_pipeline_id": 7, "_org_id": None}
+        assert _run_identity_strs(state) == (str(run_uuid), "7", "")

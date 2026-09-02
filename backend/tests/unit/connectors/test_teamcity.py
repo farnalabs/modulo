@@ -78,6 +78,16 @@ async def test_trigger_run(teamcity):
 
 
 @respx.mock
+async def test_trigger_run_null_id_maps_to_empty_string(teamcity):
+    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
+        return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild", "href": ""})
+    )
+    run = await teamcity.trigger_run(pipeline_id="MyBuild")
+    assert not run.id
+    assert "None" not in run.id
+
+
+@respx.mock
 async def test_trigger_run_with_branch(teamcity):
     route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
         return_value=httpx.Response(
@@ -184,6 +194,14 @@ def test_run_from_build_null_build_type(teamcity):
 def test_run_from_build_corrupt_duration(teamcity):
     run = teamcity._run_from_build({"id": 42, "duration": "not-a-number"})
     assert run.duration_seconds == 0
+
+
+def test_run_from_build_null_dates_map_to_empty_strings(teamcity):
+    run = teamcity._run_from_build({"id": 42, "startDate": None, "finishDate": None})
+    assert not run.created_at
+    assert not run.updated_at
+    assert "None" not in run.created_at
+    assert "None" not in run.updated_at
 
 
 @respx.mock
@@ -461,6 +479,17 @@ async def test_write_build(teamcity):
     assert result["id"] == "42"
     assert result["buildTypeId"] == "MyBuild"
     assert route.called
+
+
+@respx.mock
+async def test_write_build_null_id_maps_to_empty_string(teamcity):
+    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
+        return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild"})
+    )
+    payload = ConnectorPayload(resource="build", data={"buildTypeId": "MyBuild"})
+    result = await teamcity.write(payload)
+    assert not result["id"]
+    assert result["buildTypeId"] == "MyBuild"
 
 
 @respx.mock

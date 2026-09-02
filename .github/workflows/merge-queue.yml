@@ -437,9 +437,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # Audit trail: every bot closure must post its reason, and a comment
+          # failure must never be silenced -- a silent close is indistinguishable
+          # from a buggy or malicious one (see AGENTS.md Lessons Learned, PR #2092).
           for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
             echo "  Closing duplicate PR #$NUM (changes already on main)..."
-            gh pr close "$NUM" --comment "Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review." 2>/dev/null || true
+            CLOSE_REASON="Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review."
+            if ! gh pr comment "$NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
+              echo "::warning::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
+            fi
+            gh pr close "$NUM" 2>/dev/null || true
           done
 
       - name: Notify fixer of conflicts
@@ -804,9 +811,17 @@ jobs:
             fi
           done
 
-          # For any PRs that couldn't be merged via gh, close with a reference
+          # For any PRs that couldn't be merged via gh, close with a truthful
+          # reason. This loop is ONLY reached from the failure branch above, so
+          # these PRs were NOT merged -- never claim otherwise in the comment.
+          # The run URL carries the authoritative outcome and logs.
           for NUM in $FAILED; do
-            gh pr close "$NUM" --comment "Merged via merge queue (commit on main)." 2>/dev/null || true
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            CLOSE_REASON="Auto-closed by the merge queue: its squash-merge attempt for this PR did not succeed. See run $RUN_URL for the outcome and logs."
+            if ! gh pr comment "$NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
+              echo "::warning::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
+            fi
+            gh pr close "$NUM" 2>/dev/null || true
           done
 
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
