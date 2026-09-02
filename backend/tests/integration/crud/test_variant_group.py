@@ -131,7 +131,7 @@ async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
                 "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
             ),
-            {"id": str(pipeline_id), "org_id": str(org_id), "name": "variant-test-pipeline", "uid": str(test_user)},
+            {"id": str(pipeline_id), "org_id": str(org_id), "name": f"variant-test-pipeline-{pipeline_id.hex[:8]}", "uid": str(test_user)},
         )
     return pipeline_id
 
