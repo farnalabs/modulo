@@ -16,12 +16,11 @@ are never purged) in bounded batches. Mirrors ``webhook_dedup_cleanup``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.trigger_event import TriggerEvent
 
@@ -68,39 +67,3 @@ async def cleanup_old_trigger_events(
 
     _log.info("Cleaned up %d old trigger_events", len(ids))
     return len(ids)
-
-
-# ---------------------------------------------------------------------------
-# In-process scheduler loop
-# ---------------------------------------------------------------------------
-
-_CLEANUP_INTERVAL_SECONDS = 3600  # run once per hour
-
-
-async def cleanup_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> None:
-    """Periodic background loop that purges old trigger_events rows.
-
-    Runs every ``_CLEANUP_INTERVAL_SECONDS`` with exponential backoff on
-    failure. Intended to be started as an ``asyncio.Task`` alongside the
-    cron/polling scheduler loops.
-    """
-    backoff = 1
-    while True:
-        try:
-            total = 0
-            async with factory() as session:
-                while True:
-                    deleted = await cleanup_old_trigger_events(session)
-                    total += deleted
-                    if deleted < BATCH_SIZE:
-                        break
-            if total > 0:
-                _log.info("Scheduled cleanup removed %d old trigger_events", total)
-            backoff = 1
-            await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("Trigger events cleanup loop error")
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, _CLEANUP_INTERVAL_SECONDS)

@@ -211,6 +211,15 @@ class Notifier:
         (team_id IS NULL) endpoints.
 
         When ``team_id`` is None, returns only org-wide endpoints.
+
+        The read runs under the org's RLS context (FAR-523):
+        ``notification_endpoints`` carries the ``rls_org_isolation`` policy and
+        ``modulo_app`` is NOBYPASSRLS, so a query without
+        ``app.organisation_id`` set silently matches ZERO rows — the webhook
+        dispatch would deliver to nobody. The team scope is applied explicitly
+        in the WHERE clause (team rows first, org-wide fallback), matching the
+        background-machinery contract: org RLS context, team-blind execution
+        context, team semantics in SQL.
         """
 
         async def _query(team_filter: uuid.UUID | None) -> list[NotificationEndpoint]:
@@ -219,7 +228,8 @@ class Notifier:
                 NotificationEndpoint.team_id.is_(team_filter),
                 NotificationEndpoint.auto_disabled.is_(False),
             )
-            async with self._session_factory() as session:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
                 result = await session.execute(stmt)
                 return self._filter_subscribed(list(result.scalars()), event_type)
 

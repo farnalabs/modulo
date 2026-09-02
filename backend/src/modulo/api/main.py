@@ -120,7 +120,6 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
-from modulo.core.cleanup_jobs import cleanup_scheduler_loop
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
@@ -1033,12 +1032,12 @@ async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
     claim_expiry_job = ClaimExpiryJob(db_engine)
     await claim_expiry_job.start()
 
-    # Start webhook trigger event cleanup loop (30-day retention).
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
-    trigger_event_cleanup_task = asyncio.create_task(
-        cleanup_scheduler_loop(async_sessionmaker(db_engine, expire_on_commit=False))
-    )
+    # NOTE: no in-process trigger-event cleanup loop here (FAR-523). The SAQ
+    # system crons ``webhook_dedup_cleanup`` / ``trigger_events_cleanup`` own
+    # retention, running hourly on the modulo_system session factory. The
+    # removed web-process loop ran on the plain app factory with no RLS org
+    # context, so on Postgres every batch silently matched zero rows — a
+    # duplicated no-op.
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
     from modulo.api.mcp_server import mcp
@@ -1050,7 +1049,6 @@ async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
 
     return {
         "retention_task": retention_task,
-        "trigger_event_cleanup_task": trigger_event_cleanup_task,
         "watchdog_task": watchdog_task,
         "claim_expiry_job": claim_expiry_job,
         "mcp_tg": mcp_tg,
@@ -1061,20 +1059,16 @@ async def _teardown_tasks(tasks: dict[str, Any]) -> None:
     """Cancel/stop all lifespan background tasks and shut down registered resources."""
     mcp_tg = tasks["mcp_tg"]
     retention_task = tasks["retention_task"]
-    trigger_event_cleanup_task = tasks["trigger_event_cleanup_task"]
     watchdog_task = tasks["watchdog_task"]
     claim_expiry_job = tasks["claim_expiry_job"]
 
     await mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
-    trigger_event_cleanup_task.cancel()
     if watchdog_task is not None:
         watchdog_task.cancel()
     await claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
-    with suppress(asyncio.CancelledError):
-        await trigger_event_cleanup_task
     if watchdog_task is not None:
         with suppress(asyncio.CancelledError):
             await watchdog_task
