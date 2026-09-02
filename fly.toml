@@ -7,9 +7,9 @@ app = 'app-modulo'
 # Standing footprint (verified live 2026-09-02 via `fly scale show` / `fly machines
 # list`): 1 x app (2 CPU, 2gb) + 2 x worker (1 CPU, 2gb each; one is a stopped cold
 # standby of the other) = 3 machines. The [[vm]] blocks below match the live machines
-# exactly. NOTE: min_machines_running=2 does NOT create or keep a second app machine -
-# the August 2026 invoice (2x CPU line = 2.06 machine-months) proves prod ran ONE app
-# machine all month. If app-group HA is wanted that is a manual `fly scale count
+# exactly. NOTE: prod runs ONE standing app machine (agreed 2026-09-02) - the
+# August 2026 invoice (2x CPU line = 2.06 machine-months) proves it ran that way
+# all month. If app-group HA is ever wanted that is a manual `fly scale count
 # app=2 -a app-modulo` (+1 x 2-CPU machine), not a config change.
 # Whole-org standing (verified 2026-09-02): 11 machines across 7 apps in org
 # `personal`, ~8 started 24/7: app-modulo 3 + staging-modulo 2 + modulo-telemetry 2
@@ -63,7 +63,13 @@ primary_region = 'lhr'
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  # Prod runs ONE standing app machine (agreed 2026-09-02): rolling deploys bring up
+  # the N+1 replacement before draining the old machine, so releases never cause
+  # downtime; machine failure is covered by the /healthz/ready watchdog (Fly
+  # replaces the machine on persistent 503) and the entrypoint crash-loop guard.
+  # Inert while auto_stop_machines is false, but kept truthful for when auto-stop
+  # is ever enabled.
+  min_machines_running = 1
   max_machines_running = 5
   processes = ['app']
   # Graceful worker drain window (plan F8): SIGTERM drains 30s + hard deadline

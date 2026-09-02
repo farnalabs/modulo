@@ -247,7 +247,7 @@ def _build_queue(queue_name: str) -> RedisQueue:
                 "concurrency": settings.saq_worker_concurrency,
             },
         )
-    redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
+    redis_client = aioredis.from_url(
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,
@@ -722,7 +722,7 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
     from saq.queue.redis import RedisQueue
 
     settings = get_settings()
-    redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
+    redis_client = aioredis.from_url(
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,

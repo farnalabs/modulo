@@ -17,6 +17,18 @@ Deploy-safety: every FK is added ``NOT VALID`` then ``VALIDATE``-d, mirroring
 ``ADD CONSTRAINT ... FOREIGN KEY NOT VALID`` takes only a brief
 ``AccessExclusive`` lock and does NOT scan existing rows, so a populated table
 never aborts the upgrade on pre-existing orphans; the ``VALIDATE`` is online.
+
+0170-round-2 correction (deploy-integration rot, 2026-09-02): the three
+``*_node_id`` FKs this migration originally added referenced the ``nodes``
+table — the DEPRECATED composite-template table (see ``db/models/node.py``).
+Pipeline graph nodes live ONLY in ``pipelines.graph_nodes_json`` /
+``pipeline_snapshots.graph_nodes_json``; the node IDs carried by
+``run_evidence``, ``node_observations`` and ``snapshot_schema_pins`` are
+JSON-embedded graph node IDs and never materialise into ``nodes``, so those
+constraints were unsatisfiable by design (any run-evidence / observation /
+schema-pin write would violate the FK). They are dropped from this migration
+entirely — same rationale and same edit-in-place safety argument as the 0164
+correction. The two FKs that reference real, populated tables remain.
 """
 
 from __future__ import annotations
@@ -31,9 +43,6 @@ depends_on: tuple[str, ...] | None = None
 
 # (constraint, table, columns, ref_table, ref_columns, ondelete)
 _FKS: tuple[tuple[str, str, list[str], str, list[str], str], ...] = (
-    ("run_evidence_node_id_fkey", "run_evidence", ["node_id"], "nodes", ["id"], "RESTRICT"),
-    ("node_observations_node_id_fkey", "node_observations", ["node_id"], "nodes", ["id"], "RESTRICT"),
-    ("snapshot_schema_pins_node_id_fkey", "snapshot_schema_pins", ["node_id"], "nodes", ["id"], "RESTRICT"),
     ("journeys_map_id_fkey", "journeys", ["map_id"], "lifecycle_maps", ["id"], "SET NULL"),
     ("lifecycle_maps_updated_by_fkey", "lifecycle_maps", ["updated_by"], "accounts", ["id"], "SET NULL"),
 )

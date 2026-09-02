@@ -1817,14 +1817,9 @@ def check_docker_available():
 @when("I run docker compose up")
 def start_compose_stack(ctx):
     """Start Postgres and Redis via testcontainers, configure app, start TestClient."""
-    import warnings
-
     from fastapi.testclient import TestClient
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from testcontainers.community.postgres import PostgresContainer
-        from testcontainers.redis import RedisContainer
+    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.community.redis import RedisContainer
 
     from modulo.api.main import app
 

@@ -126,15 +126,21 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
         assert result.status == "complete"
 
         # Read the persisted row back and assert the four values round-tripped.
-        row = (
-            await db_session.execute(
-                text(
-                    "SELECT outputs_json, node_telemetry_json, node_token_usage, cost_breakdown "
-                    "FROM runs WHERE id = :rid"
-                ),
-                {"rid": str(run_id)},
-            )
-        ).first()
+        # NOTE: run the read on a dedicated db_engine connection with an explicit
+        # begin/commit — a plain db_session.execute() autobegins a transaction
+        # that stays open (until the fixture teardown rollback, AFTER the
+        # ``finally`` below), and its ACCESS SHARE lock on ``runs`` blocks the
+        # finally's ACCESS EXCLUSIVE restore ALTER for the full retry budget.
+        async with db_engine.connect() as conn, conn.begin():
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT outputs_json, node_telemetry_json, node_token_usage, cost_breakdown "
+                        "FROM runs WHERE id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).first()
         assert row is not None
         assert _as_json(row[0]) == outputs_json
         assert _as_json(row[1]) == node_telemetry_json

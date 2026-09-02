@@ -360,6 +360,8 @@ class TestEventLoopStallRefusal:
 
 class TestFireDueTriggersSingleFire:
     async def test_two_concurrent_ticks_enqueue_exactly_one_fire_job(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
         trigger_id = uuid.uuid4()
         pipeline_id = uuid.uuid4()
         cron_row = SimpleNamespace(
@@ -368,6 +370,14 @@ class TestFireDueTriggersSingleFire:
             config_json={"snapshot_id": str(uuid.uuid4())},
             cron_expression="0 0 1 1 *",
             cron_timezone="UTC",
+            # Consumed by _enqueue_cron_fire's catchup marker:
+            # int(row.next_fire_at.timestamp()); a UTC datetime is required.
+            next_fire_at=datetime.now(UTC) + timedelta(days=365),
+            # Also read by the catch-up scan the fake session answers (both
+            # SELECTs contain "cron_expression"). Fresh last_fired_at makes the
+            # yearly-cadence row catch-up-INELIGIBLE, so this test keeps
+            # exercising only the single-fire advance path.
+            last_fired_at=datetime.now(UTC) - timedelta(hours=1),
         )
 
         advance_wins = {"n": 0}
@@ -516,9 +526,14 @@ class TestSaqAlerting:
             created_at=now - timedelta(days=1),
         )
         et._missed_fire_cooldowns.clear()
+        redis = AsyncMock()  # set() truthy -> cooldown acquired; aclose() awaited
         with (
             patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=_FakeFactory([stale])),
             patch.object(rls, "set_rls_org", AsyncMock()),
+            # check_missed_fire_alerts builds its cooldown client from
+            # get_settings().redis_url — the integration conftest intentionally
+            # sets REDIS_URL="" (no real Redis for these fully-mocked tests).
+            patch.object(et.AsyncRedis, "from_url", return_value=redis),
             patch.object(et, "create_error_event", AsyncMock()) as create,
         ):
             emitted = await et.check_missed_fire_alerts(MagicMock(), org_id=_ORG)
@@ -552,9 +567,11 @@ class TestSaqAlerting:
             created_at=now - timedelta(minutes=10),  # younger than period+grace
         )
         et._missed_fire_cooldowns.clear()
+        redis = AsyncMock()
         with (
             patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=_FakeFactory([fresh, brand_new])),
             patch.object(rls, "set_rls_org", AsyncMock()),
+            patch.object(et.AsyncRedis, "from_url", return_value=redis),
             patch.object(et, "create_error_event", AsyncMock()) as create,
         ):
             emitted = await et.check_missed_fire_alerts(MagicMock(), org_id=_ORG)

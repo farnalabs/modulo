@@ -27,7 +27,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
-from modulo.connectors.base import ConnectorType
+from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
@@ -92,7 +92,11 @@ def _encrypt(credentials: str, fernet_key: str) -> bytes:
 # the historical FULL-REPLACE semantics (see update_connector_endpoint).
 # A credential dict splits into "secret" fields (replaced only when a real value
 # is supplied) and everything else (identity + legacy keys, always overlaid).
-_CRED_SECRET_FIELDS = {"token", "api_key", "username", "password"}
+# ``secret`` is included because the REST connector's own secret collection
+# (``RestConnector._secret_values``) treats it as secret material — a masked
+# ``secret`` echo must preserve the stored value, never be overlaid as identity
+# (FAR-532).
+_CRED_SECRET_FIELDS = {"token", "api_key", "username", "password", "secret"}
 # The secret fields that legitimately belong to each REST ``auth_mode``. Used by
 # ``_credential_overlay`` to drop stale secrets left behind by an auth-mode switch.
 _AUTH_MODE_SECRET_FIELDS: dict[str, set[str]] = {
@@ -201,6 +205,103 @@ def _rest_credential_complete(parsed: dict[str, Any]) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _validate_rest_config(config_json: dict[str, Any]) -> None:
+    """Validate the REST ``config_json`` contract at the API boundary (FAR-532).
+
+    An invalid ``on_unknown`` currently bricks every bound node at run time —
+    ``RestConnector.__init__`` raises on a bad mode — so it must be rejected
+    here (422) instead of being saved. Mirrors the connector's own
+    normalisation (case-insensitive, whitespace-tolerant) and uses the SHARED
+    ``ON_UNKNOWN_MODES`` constant from ``modulo.connectors.base`` (a stdlib-only
+    leaf) — never a second copy of the mode set.
+    """
+    value = config_json.get("on_unknown")
+    if value is None:
+        return
+    if str(value).strip().lower() not in ON_UNKNOWN_MODES:
+        raise ValueError(f"config_json['on_unknown'] must be one of {sorted(ON_UNKNOWN_MODES)} — got {value!r}")
+
+
+def _reconcile_rest_credentials(existing: Any, incoming_credentials: str, settings: Settings) -> bytes:
+    """Reconcile an incoming REST credential payload against the stored one.
+
+    Extracted from ``update_connector_endpoint`` as a one-concern seam (REST
+    credential reconciliation → the ciphertext to persist); behaviour is
+    unchanged. Returns the ciphertext to store, or raises ``HTTPException``:
+
+    * A COMPLETE payload (every carried secret a real, non-empty, non-masked
+      value that satisfies the connector's auth contract) is encrypted
+      verbatim WITHOUT decrypting the stored credential — the recovery path
+      for legacy rows whose stored ciphertext is undecryptable.
+    * Otherwise the stored credential is decrypted and the incoming
+      identity/non-secret fields are overlaid onto it (secret fields replaced
+      only on a real value — the FAR-466 anti-wipe guarantee), then
+      re-validated against the connector's auth contract.
+    * Failure paths: 500 when the stored credential is undecryptable; 422 when
+      the overlay violates the auth contract or the payload is not a JSON
+      object.
+    """
+    try:
+        parsed = json.loads(incoming_credentials)
+    except (ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict) and _rest_credential_complete(parsed):
+        # COMPLETE replacement: every required secret is present with a real,
+        # non-empty, non-masked value. Encrypt the incoming payload verbatim
+        # WITHOUT decrypting the stored credential — a full replacement never
+        # needs the stored value, so this restores the recovery path for legacy
+        # rows whose stored ciphertext is undecryptable (previously a permanent
+        # 500 even for full replacement). The completeness check has already
+        # validated the connector's auth contract.
+        return _encrypt(json.dumps(parsed), settings.fernet_key)  # nosemgrep: credential-not-in-state
+    # Partial credential update (FAR-466) — REST connector only. The connector
+    # reads auth identity (auth_mode, in, header_name, query_param_name) from
+    # the DECRYPTED credential payload, so an identity-only edit must reach
+    # the stored credentials while preserving the secret. Overlay the supplied
+    # identity/non-secret fields onto the stored credential so an identity-only
+    # edit applies, while a secret field that is absent/empty/masked is left
+    # intact (the anti-wipe guarantee for partial updates).
+    try:
+        stored = _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key)
+    except StoredCredentialDecryptError:
+        logger.exception(
+            "connectors.update.stored_credential_decrypt_failed",
+            extra={"connector_id": str(existing.id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Cannot update connector: stored credentials could not be decrypted.",
+        ) from None
+    merged: dict[str, Any] | None = None
+    if isinstance(parsed, dict):
+        merged = _credential_overlay(stored, parsed)
+        # FAR-466: enforce the connector's auth contract at the API boundary so
+        # a direct PATCH cannot save a credential the connector will reject at
+        # run time (e.g. overlaying auth_mode=bearer onto an api_key connector,
+        # preserving the key but supplying no token — the UI blocks this, the
+        # API must not silently save a broken credential). The raw non-JSON
+        # token path below keeps its historical semantics.
+        try:
+            RestConnector.validate_credentials(merged)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Invalid REST credentials: {exc}",
+            ) from None
+    if merged is not None:
+        return _encrypt(json.dumps(merged), settings.fernet_key)  # nosemgrep: credential-not-in-state
+    # FAR-466: a REST connector's credentials are ALWAYS a JSON object. A raw
+    # non-JSON credential payload (e.g. a bare token) is a malformed REST
+    # credential — the connector reads identity via `.get()` on the decrypted
+    # dict, so a bare string would blow up on the first run. Reject it at the
+    # API boundary instead of encrypting it verbatim. The raw-string encryption
+    # path is legit ONLY for non-REST connectors (e.g. github), not REST.
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
+    )
 
 
 class ConnectorCreate(TeamVisibilityMixin):
@@ -396,6 +497,16 @@ async def create_connector_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid REST credentials: {exc}",
             ) from None
+        # FAR-532: also validate the config contract at the create boundary —
+        # an invalid on_unknown would otherwise be saved and brick every bound
+        # node at run time (RestConnector.__init__ raises).
+        try:
+            _validate_rest_config(req.config_json)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Invalid REST config: {exc}",
+            ) from None
 
     ciphertext = _encrypt(req.credentials, settings.fernet_key)
     try:
@@ -566,6 +677,17 @@ async def update_connector_endpoint(
             if existing is not None and "config_json" in updates and updates["config_json"] is not None:
                 current_cfg = existing.config_json or {}
                 updates["config_json"] = merge_masked_config_json(current_cfg, updates["config_json"])
+                if existing.connector_type_id == "rest":
+                    # FAR-532: validate the merged REST config at the boundary —
+                    # an invalid on_unknown would otherwise be saved and brick
+                    # every bound node at run time (RestConnector.__init__ raises).
+                    try:
+                        _validate_rest_config(updates["config_json"])
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=f"Invalid REST config: {exc}",
+                        ) from None
             if credentials_updated and existing is not None:
                 if new_credentials is None:
                     # No credential change supplied (e.g. an empty config textarea
@@ -577,82 +699,11 @@ async def update_connector_endpoint(
                     # stored skip error described the OLD credentials, not the new ones.
                     updates["degraded_at"] = None
                     updates["last_skip_error"] = None
-                    incoming: dict[str, Any] | None = None
-                    try:
-                        parsed = json.loads(new_credentials)
-                    except (ValueError, TypeError):
-                        parsed = None
-                    if isinstance(parsed, dict) and _rest_credential_complete(parsed):
-                        # COMPLETE replacement: every required secret is present
-                        # with a real, non-empty, non-masked value. Encrypt the
-                        # incoming payload verbatim WITHOUT decrypting the stored
-                        # credential — a full replacement never needs the stored
-                        # value, so this restores the recovery path for legacy
-                        # rows whose stored ciphertext is undecryptable
-                        # (previously a permanent 500 even for full replacement).
-                        # The completeness check has already validated the
-                        # connector's auth contract — centralized on the
-                        # connector (RestConnector.validate_credentials, FAR-504).
-                        updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                            json.dumps(parsed), settings.fernet_key
+                    updates["credentials_ciphertext"] = (
+                        _reconcile_rest_credentials(  # nosemgrep: credential-not-in-state
+                            existing, new_credentials, settings
                         )
-                    else:
-                        # Partial credential update (FAR-466) — REST connector
-                        # only. The connector reads auth identity (auth_mode, in,
-                        # header_name, query_param_name) from the DECRYPTED
-                        # credential payload, so an identity-only edit must reach
-                        # the stored credentials while preserving the secret.
-                        # Overlay the supplied identity/non-secret fields onto
-                        # the stored credential so an identity-only edit applies,
-                        # while a secret field that is absent/empty/masked is
-                        # left intact (the anti-wipe guarantee for partial
-                        # updates).
-                        try:
-                            stored = _decrypt_credentials(existing.credentials_ciphertext, settings.fernet_key)
-                        except StoredCredentialDecryptError:
-                            logger.exception(
-                                "connectors.update.stored_credential_decrypt_failed",
-                                extra={"connector_id": str(connector_id)},
-                            )
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="Cannot update connector: stored credentials could not be decrypted.",
-                            ) from None
-                        if isinstance(parsed, dict):
-                            incoming = _credential_overlay(stored, parsed)
-                            # FAR-466 / FAR-504: enforce the connector's auth
-                            # contract at the API boundary so a direct PATCH
-                            # cannot save a credential the connector will reject
-                            # at run time (e.g. overlaying auth_mode=bearer onto
-                            # an api_key connector, preserving the key but
-                            # supplying no token — the UI blocks this, the API
-                            # must not silently save a broken credential). The
-                            # contract lives on the connector as the single
-                            # source of truth (RestConnector.validate_credentials).
-                            try:
-                                RestConnector.validate_credentials(incoming)
-                            except ValueError as exc:
-                                raise HTTPException(
-                                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                    detail=f"Invalid REST credentials: {exc}",
-                                ) from None
-                        if incoming is not None:
-                            updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                                json.dumps(incoming), settings.fernet_key
-                            )
-                        else:
-                            # FAR-466: a REST connector's credentials are ALWAYS a JSON
-                            # object. A raw non-JSON credential payload (e.g. a bare
-                            # token) is a malformed REST credential — the connector
-                            # reads identity via `.get()` on the decrypted dict, so a
-                            # bare string would blow up on the first run. Reject it at
-                            # the API boundary instead of encrypting it verbatim. The
-                            # raw-string encryption path is legit ONLY for non-REST
-                            # connectors (e.g. github), not REST.
-                            raise HTTPException(
-                                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
-                            )
+                    )
                 else:
                     # Fresh credentials clear the degraded marker (FAR-495).
                     updates["degraded_at"] = None
@@ -664,7 +715,16 @@ async def update_connector_endpoint(
                         new_credentials, settings.fernet_key
                     )
             if existing is not None and existing.connector_type_id == "github" and credentials_updated:
-                assert new_credentials is not None
+                if new_credentials is None:
+                    # Defensive: the credential block above clears
+                    # credentials_updated when no payload was supplied, so this
+                    # is unreachable in practice — but a bare `assert` is
+                    # stripped under `python -O` and would then hand None to
+                    # GitHubConnector (FAR-532). Fail loudly instead.
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Credential payload missing during GitHub token verification.",
+                    )
                 temp = GitHubConnector(token=new_credentials)
                 try:
                     missing = await temp.verify_scopes()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
 import redis.asyncio as aioredis
@@ -58,13 +58,10 @@ class RedisEventBroker:
         return url
 
     def _make_client(self) -> aioredis.Redis:
-        return cast(
-            "aioredis.Redis",
-            aioredis.from_url(  # type: ignore[no-untyped-call]  # redis-py omits this annotation
-                self._redis_url,
-                decode_responses=True,
-                **self._REDIS_TIMEOUTS,
-            ),
+        return aioredis.from_url(
+            self._redis_url,
+            decode_responses=True,
+            **self._REDIS_TIMEOUTS,
         )
 
     async def _close_clients(self, pub: aioredis.Redis | None, sub: aioredis.Redis | None) -> None:

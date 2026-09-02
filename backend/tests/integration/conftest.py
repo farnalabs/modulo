@@ -113,7 +113,7 @@ def db_url(
 
 
 @pytest.fixture(scope="session")
-def migrated_db_url(db_url: str) -> str:
+def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
     # script_location is CWD-relative in alembic.ini; pin it to the absolute
@@ -161,6 +161,12 @@ def migrated_db_url(db_url: str) -> str:
 
     app_url = _with_credentials(db_url, "modulo_app", "apppass")
     bg_url = _with_credentials(db_url, "modulo_breakglass", "bgpass")
+    # modulo_system: cross-org system-cron role (fail-closed since #2162 —
+    # cron_helpers/saq_worker raise RuntimeError when MODULO_SYSTEM_DATABASE_URL
+    # is unset). Provision it with a KNOWN password (bootstrap_role.py parses
+    # the role/password out of this URL) and expose it to the session so
+    # get_settings() resolves the system engine exactly as in production.
+    sys_url = _with_credentials(db_url, "modulo_system", "syspass")
 
     # Run the PRODUCTION bootstrap_role.py BEFORE and AFTER alembic (deliverable
     # A: the boundary must survive every boot). Before alembic it only creates
@@ -175,6 +181,7 @@ def migrated_db_url(db_url: str) -> str:
             "DATABASE_URL": db_url,
             "DATABASE_ADMIN_URL": db_url,
             "MODULO_BREAK_GLASS_DATABASE_URL": bg_url,
+            "MODULO_SYSTEM_DATABASE_URL": sys_url,
         },
     ):
         asyncio.run(bootstrap_roles(db_url, app_url))
@@ -182,6 +189,11 @@ def migrated_db_url(db_url: str) -> str:
         # CI env var pointing at the service postgres.
         command.upgrade(config, "heads")
         asyncio.run(bootstrap_roles(db_url, app_url))
+
+    # Persist for the session: settings consumers (cron_helpers/saq_worker
+    # system engine) read get_settings().modulo_system_database_url at test
+    # time, after the per-test get_settings.cache_clear().
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
 
     async def _patch_schema() -> None:
         """Add the test-only schema surface the migrations don't cover.

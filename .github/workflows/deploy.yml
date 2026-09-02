@@ -25,6 +25,9 @@ jobs:
   deploy-throttle:
     name: Deploy throttle (batch deploys)
     runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      actions: read
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
     steps:
@@ -36,7 +39,11 @@ jobs:
           # cannot read the Actions runs API (GitHub returns 404, not 403, for
           # resources a token can't see), which made the in-progress check below
           # fail and starve production deploys behind green checkmarks. The
-          # workflow runtime token always has Actions read on its own repo.
+          # workflow's github.token has Actions read ONLY via the job-level
+          # permissions block above — this repo's default workflow permissions
+          # are restricted (contents: read), which is why MODULO_REVIEWBOT_TOKEN
+          # (no Actions scope) returned 404 for the Actions runs API (GitHub
+          # returns 404, not 403, for resources a token cannot see).
           # Other steps keep MODULO_REVIEWBOT_TOKEN (PR Reviewer needs that
           # identity for cross-identity PR comments).
           GH_TOKEN: ${{ github.token }}
@@ -55,13 +62,16 @@ jobs:
           # anchor below still gates the second run behind the last real deploy.
           # FAR-528: an API error here used to fall through to "in progress" (the 404
           # body leaked into the notice as the run id) — fail-closed on unknown state
-          # silently starved production for 2 days. The check now fails OPEN and
-          # loudly: a duplicate concurrent deploy is recoverable; silent starvation
-          # is not. An API error can NEVER become "in progress".
+          # silently starved production for 2 days. The check now fails LOUD and
+          # closed: an API error can NEVER become "in progress" (the original
+          # starvation bug) and NEVER silently proceeds (fail-open replaced per
+          # human directive 2026-09-02). A duplicate concurrent deploy is
+          # recoverable; silent starvation is not — but a red X plus the Branch
+          # Fixer/retry loop is the chosen recovery path, and force_deploy=true
+          # always bypasses (it exits before this check).
           if ! IN_PROGRESS="$(gh api "repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?status=in_progress&branch=${{ github.ref_name }}" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id] | .[0] // empty' 2>/dev/null)"; then
-            echo "::warning::Deploy throttle in-progress check FAILED (gh api error) — proceeding with deploy. A duplicate concurrent deploy is recoverable; silent starvation is not."
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::Deploy throttle in-progress check FAILED (gh api error) — failing loudly rather than risk a duplicate deploy or a silent skip. Re-run, or use workflow_dispatch force_deploy=true to bypass."
+            exit 1
           fi
           if [ -n "$IN_PROGRESS" ]; then
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
