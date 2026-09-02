@@ -106,7 +106,7 @@ class TestDeprecationHeaderMiddleware:
 
     def test_clear_resets_registry(self):
         """Calling clear() should remove all registered deprecation rules."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2026-09-01")
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2099-12-31")
         DeprecationHeaderMiddleware.clear()
         app = _make_app()
         with TestClient(app) as client:
