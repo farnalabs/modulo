@@ -111,6 +111,17 @@ class TestToTicket:
         assert ticket.created_at is None
         assert ticket.updated_at is None
 
+    def test_null_number_maps_to_empty_string(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"number": None})
+        ticket = tracker._to_ticket(raw)
+        assert not ticket.id
+        assert "None" not in ticket.id
+
+    def test_falsy_number_is_preserved(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"number": 0})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.id == "0"
+
 
 class TestListTickets:
     @patch("httpx.AsyncClient")

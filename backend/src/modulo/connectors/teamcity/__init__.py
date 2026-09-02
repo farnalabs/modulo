@@ -81,6 +81,8 @@ class TeamCityConnector(ConnectorBase):
         bt = data.get("buildType")
         build_type_id = cast("str", bt.get("buildTypeId", bt.get("id", ""))) if isinstance(bt, dict) else ""
         response_id = data.get("id")
+        start_date = data.get("startDate")
+        finish_date = data.get("finishDate")
         duration = data.get("duration")
         return CIRun(
             id=str(response_id if response_id is not None else fallback_run_id),
@@ -89,8 +91,8 @@ class TeamCityConnector(ConnectorBase):
             url=f"{self._base_url}{href}" if href else "",
             branch=data.get("branchName", ""),
             commit_sha=data.get("revision", ""),
-            created_at=str(data.get("startDate", "")),
-            updated_at=str(data.get("finishDate", "")),
+            created_at=str(start_date) if start_date is not None else "",
+            updated_at=str(finish_date) if finish_date is not None else "",
             duration_seconds=_safe_int(duration) if duration is not None else None,
             triggered_by="",
         )
@@ -135,7 +137,8 @@ class TeamCityConnector(ConnectorBase):
             r = await client.post("/app/rest/buildQueue", json=body)
             r.raise_for_status()
             data = r.json()
-            build_id = str(data.get("id", ""))
+            raw_build_id = data.get("id")
+            build_id = str(raw_build_id) if raw_build_id is not None else ""
             href = data.get("href", "")
             return CIRun(
                 id=build_id,
@@ -243,7 +246,11 @@ class TeamCityConnector(ConnectorBase):
                     r = await client.post("/app/rest/buildQueue", json=body)
                     r.raise_for_status()
                     data = r.json()
-                    return {"id": str(data.get("id", "")), "buildTypeId": build_type_id}
+                    raw_build_id = data.get("id")
+                    return {
+                        "id": str(raw_build_id) if raw_build_id is not None else "",
+                        "buildTypeId": build_type_id,
+                    }
             case "buildType":
                 build_type_id = payload.data.get("buildTypeId", "")
                 project_id = payload.data.get("projectId", "")

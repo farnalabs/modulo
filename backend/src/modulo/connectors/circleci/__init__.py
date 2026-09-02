@@ -57,6 +57,7 @@ class CircleCIConnector(CIRunnerBase):
         return pinned_async_client_sync(_CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30)
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+        raw_id = raw.get("id")
         raw_state = raw.get("state", "")
         status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
         vcs = raw.get("vcs")
@@ -70,7 +71,7 @@ class CircleCIConnector(CIRunnerBase):
             else ""
         )
         return CIRun(
-            id=str(raw.get("id", "")),
+            id=str(raw_id) if raw_id is not None else "",
             pipeline_id=project_slug,
             status=status,
             url=pipeline_url,
