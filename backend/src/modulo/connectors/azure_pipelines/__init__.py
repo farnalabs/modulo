@@ -80,6 +80,7 @@ class AzurePipelinesConnector(ConnectorBase):
         return f"/{self._organization}/{self._project}/_apis/pipelines"
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+        raw_id = raw.get("id")
         raw_state = raw.get("state", "unknown")
         raw_result = raw.get("result", "")
         if raw_state == "completed" and raw_result:
@@ -96,7 +97,7 @@ class AzurePipelinesConnector(ConnectorBase):
         links = raw.get("_links")
         web = links.get("web") if isinstance(links, dict) else None
         return CIRun(
-            id=str(raw.get("id", "")),
+            id=str(raw_id) if raw_id is not None else "",
             pipeline_id=str(pipeline.get("id") or "") if isinstance(pipeline, dict) else "",
             status=status,
             url=web.get("href", "") if isinstance(web, dict) else "",

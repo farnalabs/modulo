@@ -131,3 +131,29 @@ class TestHumanEvalSetRegistry:
             from modulo.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
 
             HUMAN_EVAL_SETS.pop("broken_set_tmp", None)
+
+    def test_assertion_none_detail_renders_empty_string(self) -> None:
+        """gh-1802: an explicit ``None`` assertion detail renders "" (never the
+        string "None") in the failure message."""
+
+        def _none_detail(output, config):
+            return {"passed": False, "detail": None}
+
+        from modulo.core.eval_engine.human_eval_sets import HumanAssertion, HumanEvalSet
+
+        none_detail_set = HumanEvalSet(
+            name="none_detail_tmp",
+            version="v1",
+            description="test",
+            assertions=[HumanAssertion("none_detail", _none_detail)],
+        )
+        register_human_eval_set(none_detail_set)
+        try:
+            eval_def = _make_human_eval_def({"set_name": "none_detail_tmp"})
+            result = run_human_eval_set("none_detail_tmp", {"output": "x"}, eval_def=eval_def)
+            assert result.passed is False
+            assert "None" not in result.detail
+        finally:
+            from modulo.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
+
+            HUMAN_EVAL_SETS.pop("none_detail_tmp", None)

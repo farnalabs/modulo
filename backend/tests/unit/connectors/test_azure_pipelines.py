@@ -198,6 +198,17 @@ def test_parse_run_non_dict_template_parameters(ap_runner):
     assert not run.triggered_by
 
 
+def test_parse_run_null_id_maps_to_empty_string(ap_runner):
+    run = ap_runner._parse_run({"id": None})
+    assert not run.id
+    assert "None" not in run.id
+
+
+def test_parse_run_falsy_int_id_preserved(ap_runner):
+    run = ap_runner._parse_run({"id": 0})
+    assert run.id == "0"
+
+
 @respx.mock
 async def test_get_run_status_cancelled(ap_runner):
     respx.get(
