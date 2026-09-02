@@ -7,7 +7,7 @@
   ],
   "timezone": "Europe/London",
   "schedule": [
-    "after 1am and before 7am every day"
+    "after 1am and before 7am"
   ],
   "dependencyDashboard": true,
   "dependencyDashboardTitle": "Dependency updates",
