@@ -2055,7 +2055,16 @@ elements:
       - testid: pipeline-editor-retry-policy-max
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-delay
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-multiplier
+        type: input
+        dynamic_testid: false
       - testid: pipeline-editor-retry-policy-warning
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-schedule-warning
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-retry-policy-error

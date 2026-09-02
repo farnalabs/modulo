@@ -202,6 +202,155 @@ describe('PipelineEditorView', () => {
     expect((stallCheckbox.element as HTMLInputElement).checked).toBe(true)
   })
 
+  describe('FAR-525 retry backoff schedule round-trip', () => {
+    async function mountWithPolicy(retryPolicy: Record<string, unknown>) {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = mountEditor()
+      await flushPromises()
+      ;(wrapper.vm as any).pipeline = { retry_policy: retryPolicy }
+      ;(wrapper.vm as any).syncRetryPolicyFromPipeline()
+      await nextTick()
+      return wrapper
+    }
+
+    function lastPatchBody(): any {
+      const calls = vi.mocked(api.PATCH).mock.calls
+      expect(calls.length).toBeGreaterThan(0)
+      // PATCH(url, { params, body, signal }) — the request body lives on the
+      // second argument.
+      return (calls[calls.length - 1][1] as any).body
+    }
+
+    it('loads backoff_schedule delay/multiplier into the panel and preserves the legacy backoff on save', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['failure'],
+        max_retries: 2,
+        backoff: 12,
+        backoff_schedule: { delay_seconds: 30, multiplier: 1.5 },
+      })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyDelaySeconds).toBe(30)
+      expect(vm.retryPolicyMultiplier).toBe(1.5)
+
+      // change only max_retries, then save: schedule AND legacy backoff survive
+      vm.retryPolicyMaxRetries = 3
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        on: ['failure'],
+        max_retries: 3,
+        backoff: 12,
+        backoff_schedule: { delay_seconds: 30, multiplier: 1.5 },
+      })
+    })
+
+    it('save in the disable direction sends on: [] and preserves schedule and legacy backoff (not {})', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['failure', 'stall'],
+        max_retries: 2,
+        backoff: 7,
+        backoff_schedule: { delay_seconds: 90, multiplier: 2 },
+      })
+      const vm = wrapper.vm as any
+      vm.retryPolicyEvents = []
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        on: [],
+        max_retries: 2,
+        backoff: 7,
+        backoff_schedule: { delay_seconds: 90, multiplier: 2 },
+      })
+    })
+
+    it('rebuilds backoff_schedule from panel state, dropping junk inner keys (enable direction)', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['failure'],
+        max_retries: 2,
+        backoff_schedule: { delay_seconds: 45, multiplier: 2, junk_key: 'hand-edited' },
+      })
+      const vm = wrapper.vm as any
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy.backoff_schedule).toEqual({
+        delay_seconds: 45,
+        multiplier: 2,
+      })
+    })
+
+    it('rebuilds backoff_schedule from panel state, dropping junk inner keys (disable direction)', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['timeout'],
+        max_retries: 1,
+        backoff_schedule: { delay_seconds: 20, multiplier: 3, junk_key: 'hand-edited' },
+      })
+      const vm = wrapper.vm as any
+      vm.retryPolicyEvents = []
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        on: [],
+        max_retries: 1,
+        backoff_schedule: { delay_seconds: 20, multiplier: 3 },
+      })
+    })
+
+    it('sends the default 45s x 2.0 schedule when no schedule is stored, without a legacy backoff key', async () => {
+      const wrapper = await mountWithPolicy({ on: ['failure'], max_retries: 2 })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyDelaySeconds).toBe(45)
+      expect(vm.retryPolicyMultiplier).toBe(2)
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        on: ['failure'],
+        max_retries: 2,
+        backoff_schedule: { delay_seconds: 45, multiplier: 2 },
+      })
+    })
+
+    it('clamps out-of-range stored schedule values and surfaces the runtime fail-open warning', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['failure'],
+        max_retries: 1,
+        backoff_schedule: { delay_seconds: 1000, multiplier: 25 },
+      })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyDelaySeconds).toBe(300)
+      expect(vm.retryPolicyMultiplier).toBe(10)
+
+      // open the panel (toggle re-syncs from the same stored policy) and check
+      // the warning states the ACTUAL runtime behaviour: fail-open to default.
+      await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+      await nextTick()
+      const warning = wrapper.find('[data-testid="pipeline-editor-retry-policy-schedule-warning"]')
+      expect(warning.exists()).toBe(true)
+      expect(warning.text()).toContain('fails open')
+    })
+
+    it('does not warn for in-range or absent schedules', async () => {
+      const wrapper = await mountWithPolicy({
+        on: ['failure'],
+        max_retries: 1,
+        backoff_schedule: { delay_seconds: 60 },
+      })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyDelaySeconds).toBe(60)
+      expect(vm.retryPolicyMultiplier).toBe(2)
+      expect(vm.retryPolicyScheduleWarning).toBeNull()
+
+      await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+      await nextTick()
+      expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-schedule-warning"]').exists()).toBe(false)
+    })
+  })
+
   it('shows the sandbox commands editor for a node with a pre-existing command list', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

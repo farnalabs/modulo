@@ -185,14 +185,24 @@ _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE = "harness.idempotency_gate"
 # Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
 # retry must NOT re-fire back-to-back — the run is re-dispatched only after a
 # jittered, capped exponential delay. ``base`` is the first-attempt wait; the
-# delay doubles per attempt and is capped at ``cap``. Jitter spreads re-dispatch
+# delay grows per attempt and is capped at ``cap``. Jitter spreads re-dispatch
 # across the fleet (a herd of failing pipelines must not all re-fire together).
-_RETRY_BACKOFF_BASE_SECONDS = 45.0
+# FAR-525 qa gate: the DEFAULT base/multiplier are SINGLE-SOURCED to
+# retry_compensation.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS/_MULTIPLIER (the
+# resolver's absent-path defaults) — the executor-local aliases below exist
+# only as named references and must never drift from the rc constants (pinned
+# by test_retry_backoff_defaults_single_sourced_from_retry_compensation).
+_RETRY_BACKOFF_BASE_SECONDS = float(rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS)
 _RETRY_BACKOFF_CAP_SECONDS = 300.0
 # Jitter range as a fraction of the current schedule value; uniform in
 # [0, fraction * delay] so the schedule keeps its exponential shape while
 # still decorrelating concurrent retries. Capped against ``_RETRY_BACKOFF_CAP_SECONDS``.
 _RETRY_BACKOFF_JITTER_FRACTION = 0.25
+# FAR-525: the growth factor of the in-job sleep schedule — single-sourced to
+# the resolver's default (2.0 matches the pre-FAR-525 hardcoded doubling so
+# "present with defaults" == "absent"); a run-level ``backoff_schedule`` may
+# override it in [1.0, 10.0] (fixed delay at 1.0).
+_RETRY_BACKOFF_DEFAULT_MULTIPLIER = float(rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER)
 
 
 def _sanitize_detail(detail: Any, limit: int = 5000) -> str:
@@ -224,17 +234,23 @@ def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
 def _retry_backoff_seconds(
     attempt_n: int,
     *,
-    base: float = _RETRY_BACKOFF_BASE_SECONDS,
+    base: float = rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS,
     cap: float = _RETRY_BACKOFF_CAP_SECONDS,
     jitter_fraction: float = _RETRY_BACKOFF_JITTER_FRACTION,
+    multiplier: float = rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER,
 ) -> float:
     """Jittered, capped exponential backoff delay for a retry_policy retry.
 
     ``attempt_n`` is the 1-based node execution attempt count (attempt 1 = the
     first real execution). The deterministic schedule is
-    ``min(base * 2 ** (attempt_n - 1), cap)`` and a uniform jitter term in
+    ``min(base * multiplier ** (attempt_n - 1), cap)`` and a uniform jitter term in
     ``[0, jitter_fraction * delay]`` is added (clamped so the total never
     exceeds ``cap``). A 0/negative ``attempt_n`` is clamped to 1.
+    ``base``/``multiplier`` (FAR-525) default to the SINGLE-SOURCED
+    ``retry_compensation.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS`` /
+    ``RETRY_SCHEDULE_DEFAULT_MULTIPLIER`` (45.0 / 2.0) so "present with
+    defaults" is behaviourally identical to "absent" — the pre-FAR-525
+    exponential schedule.
 
     The schedule is bounded by the retry budget at the decision site: the
     executor only re-dispatches while ``node_attempt_count <= max_retries``,
@@ -243,10 +259,78 @@ def _retry_backoff_seconds(
     unit-testable without touching the async retry path.
     """
     n = max(int(attempt_n), 1)
-    exponential: float = min(float(base) * float(2 ** (n - 1)), cap)
+    exponential: float = min(float(base) * float(multiplier) ** (n - 1), cap)
     # Jitter is NOT crypto — it only decorrelates concurrent retries (S311).
     jitter = float(random.uniform(0.0, exponential * max(jitter_fraction, 0.0)))  # noqa: S311  # nosec B311 — non-cryptographic retry jitter only
     return min(exponential + jitter, cap)
+
+
+# --- FAR-525 observability: retry re-dispatch counter -----------------------
+# Inline-lazy OTel counter (house pattern: classify._record_classification_failure)
+# with a `_get_meter`-style indirection seam (rest_metrics pattern) so tests can
+# inject a fake meter. Never raises — a metrics failure must never prevent the
+# re-raise that re-dispatches the run.
+
+_RETRY_REDISPATCH_COUNTER_NAME = "runs_retry_redispatch_total"
+
+
+def _get_otel_meter() -> Any:
+    """Indirection seam for tests: returns the ``modulo.pipeline_engine`` meter.
+
+    No-ops (returns None) without a meter provider; never raises.
+    """
+    try:
+        from opentelemetry import metrics as _otel_metrics
+
+        provider = _otel_metrics.get_meter_provider()
+        if provider is None:
+            return None
+        return provider.get_meter("modulo.pipeline_engine", version="0.1.0")
+    except Exception:
+        return None
+
+
+def _retry_delay_bucket(delay_seconds: float) -> str:
+    """Bucket a resolved post-cap post-jitter sleep for counter cardinality."""
+    if delay_seconds < 1.0:
+        return "<1s"
+    if delay_seconds < 10.0:
+        return "1-10s"
+    if delay_seconds < 60.0:
+        return "10-60s"
+    if delay_seconds < 300.0:
+        return "60-300s"
+    return "300s+"
+
+
+def _record_retry_redispatch(*, reason: str, schedule_state: str, delay_seconds: float) -> None:
+    """Best-effort counter increment after a CONFIRMED fenced pending-reset.
+
+    Attributes: ``reason`` (the terminal event that triggered the retry),
+    ``schedule_state`` ("absent" | "valid" | "failopen"), and ``delay_bucket``
+    (coarse bucket of the effective post-cap post-jitter sleep). Emission is
+    wrapped no-throw with a warning log (a metrics failure must never prevent
+    the re-raise).
+    """
+    try:
+        meter = _get_otel_meter()
+        if meter is None:
+            return
+        counter = meter.create_counter(
+            name=_RETRY_REDISPATCH_COUNTER_NAME,
+            description="Run-level retry_policy re-dispatches, by reason/schedule-state/delay bucket",
+            unit="1",
+        )
+        counter.add(
+            1,
+            {
+                "reason": str(reason)[:120],
+                "schedule_state": schedule_state,
+                "delay_bucket": _retry_delay_bucket(delay_seconds),
+            },
+        )
+    except Exception:
+        _log.warning("pipeline.retry_policy.metrics_unavailable", exc_info=True)
 
 
 class RunRetryPolicyError(NodeCancelledError):
@@ -3622,9 +3706,23 @@ class PipelineExecutor:
             retry_policy_check = ValidationResult()
             _retry_policy_value = getattr(pipeline, "retry_policy", None)
             if isinstance(_retry_policy_value, dict):
+                # Core shape faults (on / max_retries) stay HARD errors at run
+                # start — a malformed core policy silently disables retries.
                 GraphValidator.check_retry_policy(_retry_policy_value, retry_policy_check)
                 if not retry_policy_check.is_valid:
                     raise GraphValidationError(retry_policy_check.issues, run_id)
+                # FAR-525: the OPTIONAL backoff_schedule is validated SEPARATELY
+                # and is NON-BLOCKING at run start — the runtime resolver
+                # fail-opens to the hardcoded default schedule, so a faulting
+                # schedule must warn loudly but never brick the run (direct DB
+                # writes and future bounds tightening must not strand runs).
+                schedule_check = ValidationResult()
+                GraphValidator.check_retry_policy_schedule(_retry_policy_value, schedule_check)
+                for issue in schedule_check.issues:
+                    _log.warning(
+                        "pipeline.retry_policy_schedule_malformed",
+                        extra={"run_id": str(run_id), "code": issue.code, "detail": issue.message},
+                    )
         return run, pipeline, snapshot, graph_json, node_type_map
 
     def _capture_execution_scalars(self, pipeline: Pipeline, run: Run) -> dict[str, Any]:
@@ -4037,17 +4135,21 @@ class PipelineExecutor:
                 )
         return script_lease_ok
 
-    async def _fenced_pending_reset(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    async def _fenced_pending_reset(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> int:
         """Fenced pending-reset: a conditional UPDATE guarded by OUR captured
         claim token + status='running' so a superseded original cannot demote
         the successor's running row, a stalled (watchdog-cancelled) executor
         cannot resurrect a run the watchdog just failed, and a cancellation
         cannot be reversed.
+
+        Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
+        0 = fence lost) so callers can distinguish a confirmed reset from a
+        lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
-            await session.execute(
+            result = await session.execute(
                 text(
                     "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
                     "WHERE id=:rid AND claim_token=:tok AND status='running' "
@@ -4055,6 +4157,7 @@ class PipelineExecutor:
                 ),
                 {"rid": str(run_id), "tok": self._claim_token},
             )
+            return int(getattr(result, "rowcount", 0) or 0)
 
     async def _cleanup_run_resources(
         self,
@@ -4208,6 +4311,35 @@ class PipelineExecutor:
                     extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
                 )
         if _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
+            from modulo.settings import get_settings
+
+            # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
+            # computation MUST happen BEFORE the fenced pending-reset so a
+            # resolver defect can never strand a run that was already reset.
+            # Total fail-open: an invalid/out-of-bounds schedule falls back to
+            # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
+            schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(
+                pipeline_retry_policy
+            )
+            if schedule_reason is not None:
+                _log.warning(
+                    "pipeline.retry_policy_schedule_fail_open",
+                    extra={
+                        "run_id": str(run_id),
+                        "reason": schedule_reason,
+                        "offending": rc.sanitize_retry_policy_snippet(
+                            pipeline_retry_policy.get("backoff_schedule")
+                            if isinstance(pipeline_retry_policy, dict)
+                            else None
+                        ),
+                    },
+                )
+            schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
+            # ONE jitter draw: the delay is computed ONCE here and threaded to
+            # BOTH the log line and the asyncio.sleep below (no re-resolution).
+            effective_sleep = _retry_backoff_seconds(
+                node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
+            )
             _log.warning(
                 "pipeline.retry_policy",
                 extra={
@@ -4216,9 +4348,14 @@ class PipelineExecutor:
                     "error_code": error_code,
                     "attempt": node_attempt_count,
                     "budget": retry_budget,
+                    # FAR-525 observability: the effective post-cap post-jitter
+                    # sleep, the schedule state, and the SAQ delay component.
+                    "sleep_seconds": round(effective_sleep, 3),
+                    "schedule_state": schedule_state,
+                    "saq_retry_delay": int(getattr(get_settings(), "saq_retry_delay", 0)),
                 },
             )
-            await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+            reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
             # The re-raise below propagates out of execute() BEFORE the
             # post-stream try/finally, so run its cleanup here: clear the
             # cancellation check + hubs and close the run's broker so the
@@ -4234,7 +4371,15 @@ class PipelineExecutor:
             # node_attempt_count <= retry_budget), so the schedule can never
             # extend beyond max_retries. `_retry_backoff_seconds` is a pure
             # function of the attempt number — covered by unit tests.
-            await asyncio.sleep(_retry_backoff_seconds(node_attempt_count))
+            # FAR-525: the delay honours the run-level ``backoff_schedule``
+            # (resolved EARLY above; fail-open to the hardcoded default).
+            if reset_rowcount:
+                # FAR-525 observability: count only CONFIRMED resets — a fence
+                # loss (rowcount 0) means a successor already owns the run.
+                _record_retry_redispatch(
+                    reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep
+                )
+            await asyncio.sleep(effective_sleep)
             raise RunRetryPolicyError(final_status, retry_budget)
         if not script_retry_probe_ok:
             # FAR-296 Phase 2: the lease probe blocked the requeue — a

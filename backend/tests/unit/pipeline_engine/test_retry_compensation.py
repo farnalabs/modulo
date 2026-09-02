@@ -323,3 +323,271 @@ def test_policy_from_pipeline_default_fail_closed_on_missing_vocabulary() -> Non
         policy = rc._policy_from_pipeline_default(bad)
         assert policy.max_attempts == 1
         assert not policy.events
+
+
+# ---------------------------------------------------------------------------
+# FAR-525 — resolve_backoff_schedule (run-level backoff_schedule, total fail-open)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_backoff_schedule_absent_variants() -> None:
+    """null / {} / missing key / non-dict policy = NO schedule (absent)."""
+    for policy in (
+        None,
+        {},
+        {"on": ["failure"], "max_retries": 2},
+        {"backoff_schedule": None},
+        {"backoff_schedule": {}},
+    ):
+        present, delay, mult, reason = rc.resolve_backoff_schedule(policy)
+        assert present is False
+        assert reason is None
+        # Absent hands the executor's own hardcoded defaults back.
+        assert delay == 45.0
+        assert mult == 2.0
+
+
+def test_resolve_backoff_schedule_valid_fixed_and_growth() -> None:
+    present, delay, mult, reason = rc.resolve_backoff_schedule(
+        {"backoff_schedule": {"delay_seconds": 30, "multiplier": 1.0}}
+    )
+    assert (present, delay, mult, reason) == (True, 30.0, 1.0, None)
+
+    present, delay, mult, reason = rc.resolve_backoff_schedule(
+        {"backoff_schedule": {"delay_seconds": 10, "multiplier": 3}}
+    )
+    assert (present, delay, mult, reason) == (True, 10.0, 3.0, None)
+
+
+def test_resolve_backoff_schedule_multiplier_defaults_to_2() -> None:
+    present, delay, mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 45}})
+    assert (present, delay, mult, reason) == (True, 45.0, 2.0, None)
+
+
+def test_resolve_backoff_schedule_canonicalizes_types() -> None:
+    """Integral floats -> int-valued floats; ints -> floats — the resolved
+    values are type-stable so a re-resolve is deterministic."""
+    _present, delay, mult, _reason = rc.resolve_backoff_schedule(
+        {"backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}}
+    )
+    assert delay == 300.0
+    assert isinstance(mult, float) and mult == 2.0
+
+
+def test_resolve_backoff_schedule_fail_open_matrix() -> None:
+    """ANY structural fault -> the hardcoded default schedule + a reason.
+    ALL-OR-NOTHING: no partial application of a partially valid schedule."""
+    fail_cases = [
+        {"delay_seconds": 0},
+        {"delay_seconds": -5},
+        {"delay_seconds": 1000},
+        {"delay_seconds": 0.5},
+        {"delay_seconds": 301},
+        # Non-integral IN-RANGE delays are rejected by the write-site
+        # validator, so the resolver must fail open — never silently truncate.
+        {"delay_seconds": 2.5},
+        {"delay_seconds": 45.5},
+        {"delay_seconds": True},
+        {"delay_seconds": "45"},
+        {"delay_seconds": None},
+        # Huge JSON int literals parse to arbitrary-precision Python ints
+        # whose float() conversion raises OverflowError — must fail open,
+        # never raise.
+        {"delay_seconds": 10**309},
+        {"delay_seconds": 10**400},
+        {"multiplier": 2.0},  # missing delay_seconds
+        {"delay_seconds": 45, "multiplier": 0.5},
+        {"delay_seconds": 45, "multiplier": 100},
+        {"delay_seconds": 45, "multiplier": 10**400},
+        {"delay_seconds": 45, "multiplier": True},
+        {"delay_seconds": 45, "multiplier": "2"},
+        {"delay_seconds": 45, "nope": 1},  # unknown inner key
+        {"delay_seconds": float("nan")},
+        {"delay_seconds": float("inf")},
+    ]
+    for schedule in fail_cases:
+        present, delay, mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": schedule})
+        assert present is True, schedule
+        assert delay == 45.0, schedule
+        assert mult == 2.0, schedule
+        assert reason, schedule
+
+
+def test_resolve_backoff_schedule_huge_int_delay_fail_open_reason() -> None:
+    """FAR-525 qa gate: a huge-int delay_seconds (>308 digits) fails open with
+    an out-of-representable-range reason instead of raising OverflowError."""
+    for huge in (10**309, 10**400, -(10**309)):
+        _present, _delay, _mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": huge}})
+        assert reason is not None
+        assert "representable range" in reason
+
+
+def test_resolve_backoff_schedule_non_integral_in_range_delay_fail_open_reason() -> None:
+    """FAR-525 qa gate: a non-integral IN-RANGE delay fails open with the
+    integrality reason (aligned with the write-site validator) — never a
+    silent float->int truncation."""
+    for delay in (2.5, 45.5):
+        _present, _delay, _mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": delay}})
+        assert reason is not None
+        assert "must be an integer" in reason
+
+
+def test_resolve_backoff_schedule_fail_open_non_dict_schedule() -> None:
+    present, delay, mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": 45})
+    assert (present, delay, mult) == (True, 45.0, 2.0)
+    assert reason
+
+
+def test_resolve_backoff_schedule_legacy_backoff_coexistence() -> None:
+    """The legacy numeric `backoff` key coexists: the resolver ignores it (it
+    is node-default-inherited), and the node-inheritance path still reads it."""
+    policy = {"on": ["failure"], "max_retries": 2, "backoff": 1.5}
+    present, _delay, _mult, reason = rc.resolve_backoff_schedule(policy)
+    assert present is False
+    assert reason is None
+    node_policy = rc._policy_from_pipeline_default(policy)
+    assert node_policy.backoff_seconds == 1.5  # node inheritance path UNCHANGED
+
+
+def test_policy_from_pipeline_default_huge_backoff_overflows_to_zero_default() -> None:
+    """FAR-525 iteration 2: the legacy numeric `backoff` key has the same
+    OverflowError hole as `backoff_schedule` — a direct-DB-written
+    ``10**400`` must fail open to the documented invalid-backoff default
+    (0.0, the same treatment as a non-numeric backoff), never escape as a
+    raw OverflowError that bricks every pipeline run at graph compile."""
+    policy = {"on": ["stall"], "max_retries": 3, "backoff": 10**400}
+    policy_obj = rc._policy_from_pipeline_default(policy)
+    assert policy_obj.backoff_seconds == 0.0
+    assert policy_obj.max_attempts == 4  # retry budget path UNCHANGED
+    assert policy_obj.events == frozenset({"stall"})
+
+
+def test_parse_node_retry_huge_backoff_raises_typed_error() -> None:
+    """FAR-525 iteration 2: a node-level ``retry.backoff`` of ``10**400``
+    (graph JSON) must raise the TYPED RetryConfigError — the same message
+    shape as the other invalid-backoff cases — so
+    ``validate_node_retry_config``'s ``except RetryConfigError`` surfaces a
+    validation error, never a raw OverflowError (graph-save 500)."""
+    with pytest.raises(rc.RetryConfigError, match="must be a number of seconds"):
+        rc.parse_node_retry({"max_attempts": 3, "backoff": 10**400, "on": ["timeout"]})
+
+
+def test_validate_node_retry_config_huge_backoff_emits_validation_error_not_exception() -> None:
+    """End-to-end through the validator entry point: the overflow backoff
+    becomes a typed graph-validation error, not an escaping exception."""
+    node = {"id": "n1", "retry": {"max_attempts": 3, "backoff": 10**400, "on": ["timeout"]}}
+    result = ValidationResult()
+    rc.validate_node_retry_config(node, "n1", result)
+    assert not result.is_valid
+
+
+def test_resolve_backoff_schedule_accepted_resolves_cross_check() -> None:
+    """Property: every schedule the WRITE-SITE validator accepts, the resolver
+    resolves without fail-open (and vice versa for well-typed in-bounds rows).
+    INTEGRAL delay values only (2, 45, 300): the validator rejects
+    non-integral in-range delays, and the resolver now fail-opens on them —
+    the accepted surface is integral-valued."""
+    from modulo.core.graph_validator import GraphValidator
+    from modulo.core.graph_validator._types import ValidationResult
+
+    for delay in (1, 45, 300, 300.0):
+        for mult in (1, 2, 10, 10.0):
+            policy = {"backoff_schedule": {"delay_seconds": delay, "multiplier": mult}}
+            result = ValidationResult()
+            GraphValidator.check_retry_policy_schedule(policy, result)
+            assert result.is_valid, (delay, mult)
+            present, _delay, _mult, reason = rc.resolve_backoff_schedule(policy)
+            assert present is True, (delay, mult)
+            assert reason is None, (delay, mult)
+
+
+def test_sanitize_retry_policy_snippet_bounded_and_redacted() -> None:
+    from modulo.core.pipeline_engine.retry_compensation import sanitize_retry_policy_snippet
+
+    snippet = sanitize_retry_policy_snippet({"delay_seconds": 1000, "api_key": "sk-super-secret", "nested": {"a": 1}})
+    assert len(snippet) <= 120
+    assert "sk-super-secret" not in snippet
+    assert "[REDACTED]" in snippet
+    assert "1000" in snippet
+    # Non-dict input renders a type tag only (never raw unbounded input).
+    assert sanitize_retry_policy_snippet("x" * 10000) == "<str>"
+    assert len(sanitize_retry_policy_snippet({"a": {"deep": {"deeper": 1}}})) <= 120
+
+
+def test_resolve_backoff_schedule_default_schedule_value_matches_executor_defaults(monkeypatch) -> None:
+    """The fail-open defaults ARE the hardcoded executor schedule: pinning the
+    jitter seam, the resolved deterministic component reproduces the legacy
+    exponential exactly."""
+    from modulo.core.pipeline_engine import executor as executor_module
+
+    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    for attempt in (1, 2, 3, 4, 5):
+        _present, delay, mult, _reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 0}})
+        assert (delay, mult) == (45.0, 2.0)
+        assert executor_module._retry_backoff_seconds(attempt, base=delay, multiplier=mult) == min(
+            45.0 * 2.0 ** (attempt - 1), 300.0
+        )
+
+
+# ---------------------------------------------------------------------------
+# FAR-525 qa gate — canonicalise_backoff_schedule (the SINGLE write-site helper)
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalise_backoff_schedule_absent_variants() -> None:
+    assert rc.canonicalise_backoff_schedule(None) is None
+    assert rc.canonicalise_backoff_schedule({}) is None
+    assert rc.canonicalise_backoff_schedule("nope") is None
+
+
+def test_canonicalise_backoff_schedule_round_trip() -> None:
+    """Integral float delay -> int; int multiplier -> float; other keys and
+    non-integral values pass through untouched; input never mutated."""
+    schedule = {"delay_seconds": 300.0, "multiplier": 2, "extra": "kept"}
+    canonical = rc.canonicalise_backoff_schedule(schedule)
+    assert canonical == {"delay_seconds": 300, "multiplier": 2.0, "extra": "kept"}
+    assert isinstance(canonical["delay_seconds"], int)
+    assert isinstance(canonical["multiplier"], float)
+    assert schedule == {"delay_seconds": 300.0, "multiplier": 2, "extra": "kept"}
+    # Non-integral delay untouched; int delay untouched (already canonical).
+    assert rc.canonicalise_backoff_schedule({"delay_seconds": 1.5}) == {"delay_seconds": 1.5}
+    assert rc.canonicalise_backoff_schedule({"delay_seconds": 45}) == {"delay_seconds": 45}
+    assert rc.canonicalise_backoff_schedule({"delay_seconds": 45, "multiplier": 2.0}) == {
+        "delay_seconds": 45,
+        "multiplier": 2.0,
+    }
+
+
+def test_canonicalise_backoff_schedule_huge_int_raises_standard_message() -> None:
+    """Defense: a huge int that cannot be float-converted raises ValueError
+    with the standard validator message shape — never OverflowError."""
+    with pytest.raises(ValueError, match="must be an integer between"):
+        rc.canonicalise_backoff_schedule({"delay_seconds": 10**400})
+
+
+def test_write_sites_produce_identical_canonical_stored_output() -> None:
+    """FAR-525 qa gate: BOTH write sites (API _validate_retry_policy and the
+    import sanitiser) produce IDENTICAL stored output for the same inputs —
+    the canonicalisation invariant has ONE implementation."""
+    from modulo.api.routes.pipelines import _validate_retry_policy
+    from modulo.core.workflow_import_export import _sanitize_retry_policy
+
+    for schedule in (
+        {"delay_seconds": 300.0, "multiplier": 2},
+        {"delay_seconds": 300, "multiplier": 2.0},
+        {"delay_seconds": 45.0},
+        {"delay_seconds": 1, "multiplier": 10},
+    ):
+        api_out = _validate_retry_policy({"on": ["failure"], "max_retries": 2, "backoff_schedule": dict(schedule)})
+        import_out, fault = _sanitize_retry_policy(
+            {"on": ["failure"], "max_retries": 2, "backoff_schedule": dict(schedule)}
+        )
+        assert fault is None, schedule
+        assert api_out is not None, schedule
+        assert import_out is not None, schedule
+        assert api_out["backoff_schedule"] == import_out["backoff_schedule"], schedule
+    # Spot-check the canonical spellings survive both sites identically.
+    api_out = _validate_retry_policy(
+        {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}}
+    )
+    assert api_out["backoff_schedule"] == {"delay_seconds": 300, "multiplier": 2.0}
