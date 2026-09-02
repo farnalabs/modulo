@@ -12,8 +12,11 @@ vi.mock('../lib/api/client', () => ({
   getAuthHeaders: vi.fn().mockReturnValue({}),
 }))
 
+import Select from 'primevue/select'
+
 import AdminRunRetentionView from '../views/AdminRunRetentionView.vue'
 import { api } from '../lib/api/client'
+import { RUN_STATUS } from '../constants/filters'
 
 const mockPipelines = {
   items: [
@@ -159,6 +162,53 @@ describe('AdminRunRetentionView', () => {
 
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="admin-run-retention-purge"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('renders the shared empty state with guidance when no candidates match', async () => {
+    const noRuns = {
+      runs: [],
+      total_count: 0,
+      total_estimated_bytes: 0,
+      terminal_total: 0,
+      terminal_estimated_bytes: 0,
+    }
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/pipelines') return { data: mockPipelines, error: undefined }
+      if (url === '/api/v1/admin/run-retention/candidates') return { data: noRuns, error: undefined }
+      return { data: null, error: undefined }
+    })
+
+    const wrapper = await mountView()
+    const empty = wrapper.find('[data-testid="admin-run-retention-empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-run-retention-candidates-table"]').exists()).toBe(false)
+    // The empty state must explain what to do next, not just state the absence.
+    expect(empty.text()).toContain('No runs match the current filters.')
+    expect(empty.text()).toContain('Adjust the date, pipeline, or status filters to find purgable runs.')
+  })
+
+  it('localises the status filter options instead of showing raw status values', async () => {
+    const wrapper = await mountView()
+    const statusSelect = wrapper
+      .findAllComponents(Select)
+      .find(s => s.find('[data-testid="admin-run-retention-status"]').exists())
+    expect(statusSelect).toBeTruthy()
+
+    const options = statusSelect!.props('options') as Array<{ value: string; label: string }>
+    // Every RUN_STATUS value is offered, each with a human-readable label.
+    expect(options).toHaveLength(Object.values(RUN_STATUS).length)
+    expect(options).toEqual(
+      expect.arrayContaining([
+        { value: 'budget_exceeded', label: 'Budget Exceeded' },
+        { value: 'awaiting_human', label: 'Awaiting Human' },
+        { value: 'complete', label: 'Complete' },
+      ]),
+    )
+    // No label may leak an unresolved i18n key or a raw snake_case value.
+    for (const option of options) {
+      expect(option.label).not.toContain('views.')
+      expect(option.label).not.toContain('_')
+    }
   })
 
   it('exports the filtered set via a streaming download', async () => {
