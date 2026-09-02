@@ -19,13 +19,13 @@ depends-on:
 status: covered
 ---
 
-# Home Dashboard, Metrics Overview & Saved Views
+# Home Dashboard & Metrics Overview
 
-The org home dashboard (`/`) and its admin views surface (`/admin/views`): a summary
+The org home dashboard (`/`): a summary
 of run counts, active pipelines, per-team metrics, eval pass rate, 7-day trend,
 recent runs and config warnings, plus trend series (run counts, eval pass rate, token
-spend, HITL volume/rejection/correlation, feedback volume), daily run counts broken
-down by status, and saved run-list views. Summary responses are cached per
+spend, HITL volume/rejection/correlation, feedback volume), and daily run counts broken
+down by status. Summary responses are cached per
 org/`days` to keep the landing page fast.
 
 ## Behaviours
@@ -42,8 +42,9 @@ org/`days` to keep the landing page fast.
       status with default/custom `days` bounds (`test_daily_run_counts.py`)
 - [x] HITL volume / rejection-rate / correlation series over the trend window (§8.20)
       are asserted by `hitl_trends.feature`
-- [x] Saved views: `GET/POST/DELETE /api/v1/views` (and by id) persist run-list
-      views with filters under the owning org (`views.feature`, `test_views.py`)
+- _Saved Views (`/admin/views`, `GET/POST/DELETE /api/v1/views`) deferred from the MVP
+  nav (hidden via `visibility: private_preview`). Behaviour detail removed for the MVP
+  cut — restore from git history when re-enabling. See FAR-546._
 - [x] All summary/trend endpoints are org-RLS scoped and permission-gated
       (`dashboard.summary` / `dashboard.trends`)
 

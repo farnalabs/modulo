@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Admin Audit Log', { tag: "@regression" }, () => {
   test('renders the Audit Log page', { tag: "@regression" }, async ({ page, env }) => {
@@ -53,6 +53,7 @@ test.describe('Admin Pipelines', { tag: "@regression" }, () => {
 
 test.describe('Admin Plugins', { tag: "@regression" }, () => {
   test('renders the Plugins page', { tag: "@regression" }, async ({ page, env }) => {
+    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/feature-flags*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'v2' }, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
