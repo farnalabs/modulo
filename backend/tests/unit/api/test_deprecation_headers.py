@@ -9,7 +9,7 @@ from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddlewar
 
 # A sunset date safely in the future, so the "sunset header is set" assertions
 # keep exercising the not-yet-expired path regardless of when the suite runs.
-FUTURE_SUNSET = (date.today() + timedelta(days=30)).isoformat()
+_FUTURE_SUNSET = (date.today() + timedelta(days=365)).isoformat()
 
 
 def _make_app() -> FastAPI:
@@ -55,12 +55,12 @@ class TestDeprecationHeaderMiddleware:
 
     def test_deprecated_route_gets_sunset_header_when_set(self):
         """Sunset header should be added when sunset date is provided."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=FUTURE_SUNSET)
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=_FUTURE_SUNSET)
         app = _make_app()
         with TestClient(app) as client:
             resp = client.get("/api/v1/old-endpoint")
         assert resp.status_code == 200
-        assert resp.headers.get("Sunset") == FUTURE_SUNSET
+        assert resp.headers.get("Sunset") == _FUTURE_SUNSET
 
     def test_deprecated_route_gets_link_header_when_migration_url_set(self):
         """Link header should be added when migration_url is provided."""
@@ -75,7 +75,7 @@ class TestDeprecationHeaderMiddleware:
         """All three headers should appear when sunset and migration_url are set."""
         DeprecationHeaderMiddleware.deprecate(
             "/api/v1/old-endpoint",
-            sunset=FUTURE_SUNSET,
+            sunset=_FUTURE_SUNSET,
             migration_url="/docs/migrations/v2",
         )
         app = _make_app()
@@ -83,7 +83,7 @@ class TestDeprecationHeaderMiddleware:
             resp = client.get("/api/v1/old-endpoint")
         assert resp.status_code == 200
         assert resp.headers.get("Deprecation") == "true"
-        assert resp.headers.get("Sunset") == FUTURE_SUNSET
+        assert resp.headers.get("Sunset") == _FUTURE_SUNSET
         assert resp.headers.get("Link") == '/docs/migrations/v2; rel="deprecation"'
 
     def test_path_prefix_matches_subpaths(self):
