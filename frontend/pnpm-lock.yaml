@@ -8,7 +8,7 @@ overrides:
   esbuild: '>=0.28.1'
   qs: '>=6.15.3'
   '@hono/node-server': '>=2.0.5'
-  js-yaml: ^4.3.0
+  js-yaml: ^5.0.0
   postcss>nanoid: ^6.0.0
   rollup: 4.63.1
   '@tanstack/query-core': 5.102.8
@@ -152,8 +152,8 @@ importers:
         specifier: ^3.2.0
         version: 3.2.0
       js-yaml:
-        specifier: ^4.3.0
-        version: 4.3.2
+        specifier: ^5.0.0
+        version: 5.4.1
       jsdom:
         specifier: ^30.0.0
         version: 30.0.1
@@ -2308,12 +2308,8 @@ packages:
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
 
-  js-yaml@4.3.1:
-    resolution: {integrity: sha512-CY6crGq313MX8GkwvB7tzgp99vjQxY1++5y10/BKN/GUfHqWaOGQMNZkBvqSzsZKWk/ijwHlWzzkLulsGHhjWQ==}
-    hasBin: true
-
-  js-yaml@4.3.2:
-    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
+  js-yaml@5.4.1:
+    resolution: {integrity: sha512-28R/k+NAjeuf7+CKlTxWZVExJGwVVLwY06DgEnOMz2gEpfNkDcD7QvyiVPT0xy0XXhU8vHsd4Ot42OOPdJG7dQ==}
     hasBin: true
 
   jsdom@30.0.1:
@@ -4037,7 +4033,7 @@ snapshots:
       colorette: 1.4.0
       https-proxy-agent: 7.0.6(supports-color@10.2.2)
       js-levenshtein: 1.1.6
-      js-yaml: 4.3.1
+      js-yaml: 5.4.1
       minimatch: 5.1.9
       pluralize: 8.0.0
       yaml-ast-parser: 0.0.43
@@ -4094,7 +4090,7 @@ snapshots:
   '@rollup/plugin-yaml@5.0.0(rollup@4.63.1)':
     dependencies:
       '@rollup/pluginutils': 5.4.0(rollup@4.63.1)
-      js-yaml: 4.3.2
+      js-yaml: 5.4.1
       tosource: 2.0.0-alpha.3
     optionalDependencies:
       rollup: 4.63.1
@@ -5337,11 +5333,7 @@ snapshots:
 
   js-tokens@9.0.1: {}
 
-  js-yaml@4.3.1:
-    dependencies:
-      argparse: 2.0.1
-
-  js-yaml@4.3.2:
+  js-yaml@5.4.1:
     dependencies:
       argparse: 2.0.1
 
