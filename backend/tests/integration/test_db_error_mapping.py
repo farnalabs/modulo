@@ -94,7 +94,7 @@ class TestDbErrorMapping:
     """
 
     @pytest.fixture
-    def _patch_progress(self, monkeypatch: pytest.MonkeyPatch):
+    def patch_progress(self, monkeypatch: pytest.MonkeyPatch):
         import modulo.api.routes.onboarding as onboarding
 
         def _apply(exc: Exception) -> None:
@@ -108,11 +108,11 @@ class TestDbErrorMapping:
     async def test_programming_error_maps_to_501_not_500(
         self,
         integration_client: AsyncClient,
-        _patch_progress,
+        patch_progress,
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        _patch_progress(ProgrammingError("stmt", {}, Exception("mock: table does not exist")))
+        patch_progress(ProgrammingError("stmt", {}, Exception("mock: table does not exist")))
         resp = await integration_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {_token(org_a, user_a)}"},
@@ -123,11 +123,11 @@ class TestDbErrorMapping:
     async def test_sqlalchemy_error_maps_to_503_not_500(
         self,
         integration_client: AsyncClient,
-        _patch_progress,
+        patch_progress,
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        _patch_progress(SQLAlchemyError("mock: connection lost"))
+        patch_progress(SQLAlchemyError("mock: connection lost"))
         resp = await integration_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {_token(org_a, user_a)}"},
@@ -138,11 +138,11 @@ class TestDbErrorMapping:
     async def test_integrity_error_maps_to_409_not_500(
         self,
         integration_client: AsyncClient,
-        _patch_progress,
+        patch_progress,
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        _patch_progress(IntegrityError("stmt", {}, Exception("mock: duplicate key")))
+        patch_progress(IntegrityError("stmt", {}, Exception("mock: duplicate key")))
         resp = await integration_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {_token(org_a, user_a)}"},
@@ -153,11 +153,11 @@ class TestDbErrorMapping:
     async def test_generic_exception_maps_to_500(
         self,
         integration_client: AsyncClient,
-        _patch_progress,
+        patch_progress,
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        _patch_progress(RuntimeError("mock: unexpected"))
+        patch_progress(RuntimeError("mock: unexpected"))
         resp = await integration_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {_token(org_a, user_a)}"},

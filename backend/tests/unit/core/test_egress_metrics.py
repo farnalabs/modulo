@@ -118,7 +118,10 @@ class TestEgressFactoryWiring:
     def test_blocked_literal_emits_rejected(self) -> None:
         """A blocked (private/link-local) destination emits ``rejected`` with reason=blocked."""
         meter, counters = _storage_meter()
-        with patch.object(egress_metrics, "_get_meter", return_value=meter), pytest.raises(ValueError):
+        with (
+            patch.object(egress_metrics, "_get_meter", return_value=meter),
+            pytest.raises(ValueError, match="private/internal network"),
+        ):
             ssrf.pinned_async_client_sync("http://169.254.169.254/latest/meta-data/", connector_type="rest")
         rejected = counters["modulo_egress_rejected_total"]
         assert rejected.add.call_count == 1
@@ -134,7 +137,10 @@ class TestEgressFactoryWiring:
 
     def test_bad_scheme_emits_rejected_bad_scheme(self) -> None:
         meter, counters = _storage_meter()
-        with patch.object(egress_metrics, "_get_meter", return_value=meter), pytest.raises(ValueError):
+        with (
+            patch.object(egress_metrics, "_get_meter", return_value=meter),
+            pytest.raises(ValueError, match="must use http"),
+        ):
             ssrf.pinned_async_client_sync("ftp://example.com/file", connector_type="rest")
         _, kwargs = counters["modulo_egress_rejected_total"].add.call_args
         assert kwargs["attributes"]["reason"] == "bad-scheme"
@@ -167,7 +173,10 @@ class TestEgressFactoryWiring:
 
         monkeypatch.setattr(ssrf, "_resolve_all_sync", _timeout)
 
-        with patch.object(egress_metrics, "_get_meter", return_value=meter), pytest.raises(ValueError):
+        with (
+            patch.object(egress_metrics, "_get_meter", return_value=meter),
+            pytest.raises(ValueError, match="timed out"),
+        ):
             ssrf.pinned_async_client_sync("http://slow.example/", connector_type="rest")
         _, kwargs = counters["modulo_egress_rejected_total"].add.call_args
         assert kwargs["attributes"]["reason"] == "dns-timeout"

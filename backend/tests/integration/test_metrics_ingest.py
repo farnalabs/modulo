@@ -393,13 +393,13 @@ class TestRlsBlocksCrossTenantInsert:
         try:
             # The insert under org A's RLS context with a forged org B id must be
             # rejected by the policy's WITH CHECK.
-            with pytest.raises(SQLAlchemyError):
-                async with db_engine.connect() as conn, conn.begin():
-                    await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
-                    await conn.execute(
-                        text("SELECT set_config('app.organisation_id', :oid, true)"),
-                        {"oid": str(org_a)},
-                    )
+            async with db_engine.connect() as conn, conn.begin():
+                await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
+                await conn.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_a)},
+                )
+                with pytest.raises(SQLAlchemyError):
                     await conn.execute(
                         text(
                             "INSERT INTO metrics_staging (organisation_id, event_id, event_type) "

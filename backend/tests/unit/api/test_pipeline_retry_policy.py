@@ -3,6 +3,7 @@
 Covers create persistence, create/update validation rejection, and clearing.
 """
 
+import re
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -138,7 +139,7 @@ def test_validate_retry_policy_message_parity(payload: object, expected_message:
     single 422 detail byte)."""
     from modulo.api.routes.pipelines import _validate_retry_policy
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match=re.escape(expected_message)) as exc_info:
         _validate_retry_policy(payload)
     assert str(exc_info.value) == expected_message
 

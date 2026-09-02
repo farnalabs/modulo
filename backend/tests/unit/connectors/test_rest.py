@@ -390,9 +390,9 @@ def test_validate_credentials_is_authoritative_auth_contract() -> None:
         RestConnector.validate_credentials(creds)
         RestConnector._normalise_auth(creds)
     for creds in invalid:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="REST "):
             RestConnector.validate_credentials(creds)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="REST "):
             RestConnector._normalise_auth(creds)
 
 
@@ -441,7 +441,7 @@ def test_validate_credentials_rejects_whitespace_only_secret() -> None:
     blank_basic = {"auth_mode": "basic", "username": "   ", "password": "u"}
     blank_api_key = {"auth_mode": "api_key", "api_key": "\t\n"}
     for creds in (blank_bearer, blank_basic, blank_api_key):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="REST "):
             RestConnector.validate_credentials(creds)
 
 

@@ -547,11 +547,11 @@ async def test_dispatch_retain_payload_re_raises_cancelled_error_on_encrypt(noti
         patch.object(notifier, "_record_delivery", AsyncMock()),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
         patch.object(notifier, "_reset_dead_letter", AsyncMock()),
-        pytest.raises(asyncio.CancelledError),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(200))
-            await _do_dispatch(notifier, ep, retain_payload=True)
+            with pytest.raises(asyncio.CancelledError):
+                await _do_dispatch(notifier, ep, retain_payload=True)
 
 
 async def test_dispatch_retain_payload_encrypt_failure_logs_and_continues(notifier: Notifier) -> None:
@@ -897,7 +897,6 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
             return_value=mapper_instance,
         ),
         patch("modulo.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
-        pytest.raises(asyncio.CancelledError),
     ):
         session = AsyncMock()
         begin_cm = AsyncMock()
@@ -906,7 +905,8 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
         session.begin = MagicMock(return_value=begin_cm)
         factory.return_value.__aenter__.return_value = session
 
-        await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
+        with pytest.raises(asyncio.CancelledError):
+            await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
 
     mapper_instance.create_from_event.assert_not_called()
 

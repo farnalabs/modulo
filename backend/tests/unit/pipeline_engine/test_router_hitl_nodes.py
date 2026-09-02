@@ -534,7 +534,7 @@ def test_terminal_statuses_include_router_no_match():
 
 
 @pytest.fixture
-async def _sqlite_runs_engine():
+async def sqlite_runs_engine():
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__]))
@@ -542,13 +542,13 @@ async def _sqlite_runs_engine():
     await eng.dispose()
 
 
-async def test_update_run_status_persists_router_no_match_with_completed_at(_sqlite_runs_engine):
+async def test_update_run_status_persists_router_no_match_with_completed_at(sqlite_runs_engine):
     """Persistence-layer coverage: update_run_status accepts 'router_no_match'
     and stamps completed_at on the real row — the end-to-end write a no-match
     run goes through in finalize_cost. Without the whitelist + completed_at
     wiring this raises ValueError or leaves completed_at NULL (the executor-only
     test above never reaches this layer)."""
-    factory = async_sessionmaker(_sqlite_runs_engine, expire_on_commit=False)
+    factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
     async with factory() as session, session.begin():
@@ -581,12 +581,12 @@ async def test_update_run_status_persists_router_no_match_with_completed_at(_sql
     assert row.completed_at is not None
 
 
-async def test_update_run_status_router_no_match_in_transition_terminal_set(_sqlite_runs_engine):
+async def test_update_run_status_router_no_match_in_transition_terminal_set(sqlite_runs_engine):
     """Prove-the-fix (FAR-415): a router_no_match run is terminal and accepted by
     the fenced UPDATE / transition SQL terminal set, so the executor's terminal
     write is not rejected by the status guard. Exercises the real persistence
     path the executor funnels into (finalize_cost -> update_run_status)."""
-    factory = async_sessionmaker(_sqlite_runs_engine, expire_on_commit=False)
+    factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)
     run_id = uuid.uuid4()
     async with factory() as session, session.begin():
         session.add(

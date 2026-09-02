@@ -454,7 +454,8 @@ async def test_condition_syntax_error_fails_closed():
         )
 
 
-async def test_eval_condition_nonexistent_eval_name_is_graceful(_interrupt_without_graph_runtime):
+@pytest.mark.usefixtures("_interrupt_without_graph_runtime")
+async def test_eval_condition_nonexistent_eval_name_is_graceful():
     """A condition referencing a nonexistent eval_name does NOT crash.
 
     With eval definitions present but the referenced ``eval_name`` absent from

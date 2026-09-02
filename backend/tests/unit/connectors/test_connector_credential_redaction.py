@@ -15,6 +15,8 @@ is made, and asserts the credential value never appears in the surfaced error
 message (and the ``***`` mask was applied).
 """
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -146,9 +148,7 @@ def test_redacting_decorator_redacts_escaping_exception() -> None:
         async def work(self) -> str:
             raise ValueError("boom secretvalue123")
 
-    with pytest.raises(ValueError) as exinfo:
-        import asyncio
-
+    with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
         asyncio.run(Obj().work())
     assert "secretvalue123" not in str(exinfo.value)
     assert "***" in str(exinfo.value)
@@ -164,8 +164,6 @@ def test_redacting_decorator_is_noop_for_clean_errors() -> None:
             raise ValueError("ordinary error")
 
     with pytest.raises(ValueError, match="ordinary error") as exinfo:
-        import asyncio
-
         asyncio.run(Obj().work())
     assert str(exinfo.value) == "ordinary error"
 
@@ -230,7 +228,7 @@ async def test_gitlab_redacts_token_from_401_error() -> None:
         respx.get("https://gitlab.com/api/v4/projects").mock(
             return_value=httpx.Response(401, text=f"Unauthorized ({_GITLAB_TOKEN})")
         )
-        with pytest.raises(ValueError) as exinfo:
+        with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="projects"))
     assert _GITLAB_TOKEN not in str(exinfo.value)
     assert "***" in str(exinfo.value)
@@ -255,7 +253,7 @@ async def test_slack_redacts_token_from_401_error() -> None:
         respx.get("https://slack.com/api/conversations.list").mock(
             return_value=httpx.Response(401, text=f"invalid_auth ({_SLACK_TOKEN})")
         )
-        with pytest.raises(ValueError) as exinfo:
+        with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="channels"))
     assert _SLACK_TOKEN not in str(exinfo.value)
     assert "***" in str(exinfo.value)
@@ -267,7 +265,7 @@ async def test_linear_redacts_token_from_401_error() -> None:
         respx.post("https://api.linear.app/graphql").mock(
             return_value=httpx.Response(401, text=f"Unauthorized ({_LINEAR_TOKEN})")
         )
-        with pytest.raises(ValueError) as exinfo:
+        with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="issue", filters={"issue_ref": "ENG-1"}))
     assert _LINEAR_TOKEN not in str(exinfo.value)
     assert "***" in str(exinfo.value)
@@ -279,7 +277,7 @@ async def test_jira_redacts_token_from_401_error() -> None:
         respx.get("https://your-domain.atlassian.net/rest/api/3/issue/ENG-1").mock(
             return_value=httpx.Response(401, text=f"Unauthorized ({_JIRA_TOKEN})")
         )
-        with pytest.raises(ValueError) as exinfo:
+        with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "ENG-1"}))
     assert _JIRA_TOKEN not in str(exinfo.value)
     assert "***" in str(exinfo.value)
@@ -294,7 +292,7 @@ async def test_trello_ticket_tracker_redacts_credentials_from_401_error() -> Non
         respx.get("https://api.trello.com/1/boards/board123/cards").mock(
             return_value=httpx.Response(401, text=f"invalid token ({_TRELLO_TOKEN})")
         )
-        with pytest.raises(ValueError) as exinfo:
+        with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.list_tickets()
     assert _TRELLO_TOKEN not in str(exinfo.value)
     assert _TRELLO_KEY not in str(exinfo.value)

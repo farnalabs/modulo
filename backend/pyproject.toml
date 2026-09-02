@@ -392,6 +392,19 @@ select = [
     "PLC0208",  # iterate a tuple literal, not a set literal, in a for-loop
     "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
     "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
+    # Twelfth wave of defensive gate-strengthening (a real fixed backlog, then
+    # pass-to-enable): PT011/PT012/PT019 flagged 42 genuine pytest-style defects
+    # across the test tree that this PR FIXED (verified zero remaining with
+    # ruff==0.16.5: `ruff check . --select PT011,PT012,PT019 --statistics`).
+    # Mirrors the repo-root ruff.toml gate. Each backlog fix raised the bar on
+    # what the exception actually proves (narrowed `match`, single-statement
+    # `pytest.raises` bodies, or explicit `usefixtures` instead of a value-less
+    # underscore fixture parameter). PT019 is per-file-ignored for the two
+    # FastAPI route modules that use underscore-prefixed dependency-injection
+    # binding targets, which are not pytest fixtures.
+    "PT011",   # `pytest.raises(X)` too broad — set `match` or use a more specific exception
+    "PT012",   # `pytest.raises()` block should contain a single simple statement
+    "PT019",   # underscore fixture param without value — use `@pytest.mark.usefixtures`
 ]
 ignore = [
     "S101",     # assert allowed in tests
@@ -405,6 +418,12 @@ ignore = [
 
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
+
+# PT019 mis-fires on FastAPI dependency-injection parameters (require_feature /
+# require_permission / Depends) whose underscore-prefixed names are DI binding
+# targets, not pytest fixtures. These files are route handlers, not tests.
+"src/modulo/api/routes/admin_sso.py" = ["PT019"]
+"src/modulo/api/routes/observability.py" = ["PT019"]
 
 "scripts/**" = ["T20", "PERF", "ISC"]
 "scripts/gen_seed_sql.py" = ["S608"]
@@ -537,7 +556,6 @@ dev = [
     # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
     # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).
     # Replace with a >=8.1.1 PyPI pin once the fix is released.
-    #
     # Pinned by REF (refs/pull/827/head), not by commit SHA: uv fetches git deps in
     # refspec form (+<ref>:refs/...), and GitHub rejects anonymous fetch-by-SHA in
     # that form (auth prompt -> "could not read Username" under terminal prompts

@@ -304,12 +304,10 @@ async def test_reconnect_timeout_bounds_hang(monkeypatch):
     saver = _make_saver(error=OperationalError("drop"), fail_times=999)
     never = asyncio.get_running_loop().create_future()
 
-    with (
-        patch("psycopg.AsyncConnection.connect", new_callable=AsyncMock) as mock_connect,
-        pytest.raises(OperationalError),
-    ):
+    with patch("psycopg.AsyncConnection.connect", new_callable=AsyncMock) as mock_connect:
         mock_connect.return_value = never
-        await saver.aput(_config(), _checkpoint(), _metadata())
+        with pytest.raises(OperationalError):
+            await saver.aput(_config(), _checkpoint(), _metadata())
 
     mock_connect.assert_awaited_once()
 

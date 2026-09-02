@@ -351,7 +351,7 @@ def test_run_status_whitelist_includes_budget_exceeded() -> None:
 
 
 @pytest.fixture
-async def _sqlite_runs_engine():
+async def sqlite_runs_engine():
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from modulo.db.models.base import Base
@@ -364,7 +364,7 @@ async def _sqlite_runs_engine():
     await eng.dispose()
 
 
-async def test_update_run_status_persists_budget_exceeded_with_completed_at(_sqlite_runs_engine) -> None:
+async def test_update_run_status_persists_budget_exceeded_with_completed_at(sqlite_runs_engine) -> None:
     """Persistence-layer coverage: update_run_status accepts 'budget_exceeded'
     and stamps completed_at on the real row — the end-to-end write a
     budget-exceeded run goes through in finalize_cost. Without the whitelist +
@@ -375,7 +375,7 @@ async def test_update_run_status_persists_budget_exceeded_with_completed_at(_sql
     from modulo.db.crud.run import update_run_status
     from modulo.db.models.run import Run
 
-    factory = async_sessionmaker(_sqlite_runs_engine, expire_on_commit=False)
+    factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
     async with factory() as session, session.begin():

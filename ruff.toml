@@ -231,6 +231,16 @@ select = [
     "PLC0208",  # iterate a tuple literal, not a set literal, in a for-loop
     "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
     "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
+    # Twelfth wave of defensive gate-strengthening (a real fixed backlog, then
+    # pass-to-enable): PT011/PT012/PT019 flagged genuine pytest-style defects
+    # across the tree that the improving PR FIXED (verified zero remaining with
+    # ruff==0.16.5: `ruff check . --select PT011,PT012,PT019 --statistics`).
+    # Mirrors the backend/pyproject.toml gate. PT019 is per-file-ignored for the
+    # two FastAPI route modules that use underscore-prefixed dependency-injection
+    # binding targets, which are not pytest fixtures.
+    "PT011",   # `pytest.raises(X)` too broad — set `match` or use a more specific exception
+    "PT012",   # `pytest.raises()` block should contain a single simple statement
+    "PT019",   # underscore fixture param without value — use `@pytest.mark.usefixtures`
 ]
 ignore = [
     "S101",
@@ -251,6 +261,11 @@ ignore = [
 "backend/tests/unit/secrets_backend/*" = ["E402"]
 "backend/src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
 "backend/src/modulo/api/routes/scim.py" = ["N803", "N815"]
+# PT019 mis-fires on FastAPI dependency-injection parameters (require_feature /
+# require_permission / Depends) whose underscore-prefixed names are DI binding
+# targets, not pytest fixtures. These files are route handlers, not tests.
+"backend/src/modulo/api/routes/admin_sso.py" = ["PT019"]
+"backend/src/modulo/api/routes/observability.py" = ["PT019"]
 "backend/src/modulo/api/routes/triggers.py" = ["UP017"]
 "backend/src/modulo/core/cron_scheduler.py" = ["UP017"]
 "backend/src/modulo/core/reports/scheduler.py" = ["UP017"]

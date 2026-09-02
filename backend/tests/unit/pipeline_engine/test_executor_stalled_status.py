@@ -140,7 +140,7 @@ def test_terminal_statuses_include_stalled():
 
 
 @pytest.fixture
-async def _sqlite_runs_engine():
+async def sqlite_runs_engine():
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__]))
@@ -148,12 +148,12 @@ async def _sqlite_runs_engine():
     await eng.dispose()
 
 
-async def test_update_run_status_persists_stalled_with_completed_at(_sqlite_runs_engine):
+async def test_update_run_status_persists_stalled_with_completed_at(sqlite_runs_engine):
     """Persistence-layer coverage: update_run_status accepts 'stalled' and
     stamps completed_at on the real row — the end-to-end write a stalled run
     goes through in finalize_cost. Without the whitelist + completed_at
     wiring this raises ValueError or leaves completed_at NULL."""
-    factory = async_sessionmaker(_sqlite_runs_engine, expire_on_commit=False)
+    factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
     async with factory() as session, session.begin():

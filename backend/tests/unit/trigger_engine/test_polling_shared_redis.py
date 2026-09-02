@@ -491,9 +491,12 @@ async def test_connector_query_enforces_shared_budget_third_call_denied() -> Non
         timeout_seconds=0.05,
     )
 
-    with pytest.raises(RESTRateLimitTimeoutError):
+    async def _burst_until_timeout() -> None:
         for _ in range(3):
             await connector.query(ConnectorQuery(resource="default"))
+
+    with pytest.raises(RESTRateLimitTimeoutError):
+        await _burst_until_timeout()
 
     # The canonical per-tenant, per-destination key is what the connector charged.
     assert "rest_rate_limit:org-1:https://api.example.com/widgets" in store

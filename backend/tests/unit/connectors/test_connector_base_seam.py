@@ -17,6 +17,7 @@ precisely the regression these assertions catch.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -104,8 +105,6 @@ def test_connector_base_subclass_client_rejects_unpinned_host(
         transport = client._transport
         backend = transport._pool._network_backend
         with pytest.raises(ssrf.UnpinnedHostError):
-            import asyncio
-
             asyncio.run(backend.connect_tcp("rebound-internal.example", 443))
     finally:
         _aclose(client)

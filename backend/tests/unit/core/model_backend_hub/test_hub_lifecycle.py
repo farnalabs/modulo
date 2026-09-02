@@ -85,9 +85,9 @@ async def test_aexit_with_exception_logs_and_clears(
 ) -> None:
     hub = ModelBackendHub()
     bid = uuid.uuid4()
+    hub.register(bid, backend)
     with pytest.raises(RuntimeError, match="boom"):
         async with hub:
-            hub.register(bid, backend)
             raise RuntimeError("boom")
     assert not hub._backends
     assert "ModelBackendHub exiting due to error" in caplog.text

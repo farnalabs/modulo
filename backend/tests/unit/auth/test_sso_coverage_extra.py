@@ -152,12 +152,10 @@ async def test_exchange_code_json_decode_error() -> None:
     response.json.side_effect = json.JSONDecodeError("bad", "doc", 0)
     client = AsyncMock()
     client.post.return_value = response
-    with (
-        patch("modulo.auth.sso.httpx.AsyncClient") as client_type,
-        pytest.raises(ValueError, match="Invalid JSON in OIDC token response"),
-    ):
+    with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value = client
-        await _exchange_code("https://tok", "cid", "csec", "code", "http://cb")
+        with pytest.raises(ValueError, match="Invalid JSON in OIDC token response"):
+            await _exchange_code("https://tok", "cid", "csec", "code", "http://cb")
 
 
 # ---------------------------------------------------------------------------

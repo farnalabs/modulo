@@ -3941,16 +3941,16 @@ async def test_teardown_model_backend_hub_when_connector_hub_init_raises_pre_str
         patch("modulo.core.pipeline_engine.executor.set_cancellation_check", new=MagicMock()) as set_cc,
         patch("modulo.core.pipeline_engine.executor.set_audit_hook", new=MagicMock()) as set_ah,
         patch("modulo.core.pipeline_engine.executor.get_registry") as get_registry_mock,
-        pytest.raises(RuntimeError, match="connector hub init failed"),
     ):
         registry = MagicMock()
         get_registry_mock.return_value = registry
-        await executor._init_run_environment(
-            org_id=org_id,
-            run_id=run_id,
-            pipeline_id=pipeline_id,
-            graph_json={"nodes": []},
-        )
+        with pytest.raises(RuntimeError, match="connector hub init failed"):
+            await executor._init_run_environment(
+                org_id=org_id,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                graph_json={"nodes": []},
+            )
 
     assert model_hub.exited is True
     set_mb.assert_called_once_with(None)

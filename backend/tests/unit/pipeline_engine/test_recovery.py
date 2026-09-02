@@ -254,21 +254,19 @@ async def test_recover_node_refuses_guardrail_blocked_run():
     run.error_code = "eval_blocked"
     session = _mock_session()
 
-    with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        pytest.raises(GuardrailOverrideRequiredError) as exc_info,
-    ):
+    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
 
-        await recover_node(
-            session,
-            org_id=_ORG_ID,
-            run_id=_RUN_ID,
-            node_id=_NODE_ID,
-            input_data={"foo": "bar"},
-        )
+        with pytest.raises(GuardrailOverrideRequiredError) as exc_info:
+            await recover_node(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id=_NODE_ID,
+                input_data={"foo": "bar"},
+            )
 
     assert "guardrail-override" in str(exc_info.value).lower()
 
@@ -436,21 +434,19 @@ async def test_recover_node_disappears_after_lock():
     run = _make_run(status="failed")
     session = _mock_session()
 
-    with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]),
-        pytest.raises(RecoveryNotAllowedError) as exc_info,
-    ):
+    with patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
 
-        await recover_node(
-            session,
-            org_id=_ORG_ID,
-            run_id=_RUN_ID,
-            node_id=_NODE_ID,
-            input_data={"foo": "bar"},
-        )
+        with pytest.raises(RecoveryNotAllowedError) as exc_info:
+            await recover_node(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id=_NODE_ID,
+                input_data={"foo": "bar"},
+            )
 
     assert "not_found" in str(exc_info.value)
 
@@ -553,21 +549,19 @@ async def test_guardrail_override_disappears_after_lock():
     run.error_code = "eval_blocked"
     session = _mock_session()
 
-    with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]),
-        pytest.raises(GuardrailOverrideError) as exc_info,
-    ):
+    with patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
 
-        await guardrail_override(
-            session,
-            org_id=_ORG_ID,
-            run_id=_RUN_ID,
-            input_data={"foo": "bar"},
-            actor_id=_ACTOR_ID,
-        )
+        with pytest.raises(GuardrailOverrideError) as exc_info:
+            await guardrail_override(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                input_data={"foo": "bar"},
+                actor_id=_ACTOR_ID,
+            )
 
     assert "not found" in str(exc_info.value)
 

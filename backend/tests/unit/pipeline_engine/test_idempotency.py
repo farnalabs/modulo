@@ -139,11 +139,11 @@ def test_run_idempotency_key_excludes_per_replay_run_id() -> None:
     A bare run_id (a fresh UUID fork per re-run) would mint a NEW key on every
     re-run and silently defeat dedupe, so it must fail loudly here.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         run_idempotency_key("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         run_idempotency_key("pipeline:not-a-number")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         run_idempotency_key("")
 
 

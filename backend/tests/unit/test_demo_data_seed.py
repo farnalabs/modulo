@@ -292,7 +292,7 @@ async def test_seed_demo_org_email_collision_refuses_cross_tenant() -> None:
     preexisting = Account(email="admin@demo.example", display_name="real-admin")
     session.add(preexisting)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="collides with an existing account"):
         await seed_demo_org(
             session,
             slug="collide",

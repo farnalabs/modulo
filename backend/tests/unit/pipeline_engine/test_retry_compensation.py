@@ -244,7 +244,7 @@ def test_run_level_idempotency_key_reused_across_operator_rerun() -> None:
 
 def test_run_level_key_rejects_bare_run_id() -> None:
     # A naive per-replay run_id must be rejected loudly (FAR-410 contract).
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run_ref must be the stable logical run identity"):
         rc.run_idempotency_key(run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f")
 
 
