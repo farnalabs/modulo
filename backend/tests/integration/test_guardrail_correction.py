@@ -215,7 +215,7 @@ async def _create_feedback_record(
                 "oid": str(rig["org_id"]),
                 "rid": str(run_id),
                 "aid": str(account_id),
-                "nid": str(uuid.uuid4()),
+                "nid": str(rig["node_id"]),
                 "out": json.dumps({"body": "secret: hunter2"}),
             },
         )

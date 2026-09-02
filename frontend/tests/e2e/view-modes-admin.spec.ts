@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 import type { Page } from '@playwright/test'
 
 async function selectOption(page: Page, testId: string, value: string) {
@@ -34,7 +34,8 @@ const sampleViews = {
 }
 
 test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, env }) => {
+    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     // The Remy floating panel (rendered on staging where dev-mode is on) opens
     // by default and its fixed-position overlay intercepts clicks on the
     // header's Create View button, timing out locator.click() with

@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Admin Environments', { tag: "@regression" }, () => {
   test('renders the Environment Profiles page', { tag: "@regression" }, async ({ page, env }) => {
@@ -13,6 +13,7 @@ test.describe('Admin Environments', { tag: "@regression" }, () => {
 
 test.describe('Admin Node Categories', { tag: "@regression" }, () => {
   test('renders the Node Categories page', { tag: "@regression" }, async ({ page, env }) => {
+    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
     await page.goto('/admin/node-categories')
     await expect(page.locator('h1')).toContainText('Node Categories')

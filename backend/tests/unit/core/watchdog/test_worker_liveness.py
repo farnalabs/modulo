@@ -94,7 +94,7 @@ class _FakeWatchdogRedis:
 
     async def keys(self, pattern: str) -> list[str]:
         self._raise_if_failing()
-        prefix = pattern.split("*")[0]
+        prefix = pattern.split("*", maxsplit=1)[0]
         return [k for k in self._data if k.startswith(prefix)]
 
     async def get(self, key: str) -> str | None:
