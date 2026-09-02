@@ -4,21 +4,29 @@
 app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
-# Standing footprint (verified live 2026-09-02 via `fly scale show` / `fly machines
-# list`): 1 x app (2 CPU, 2gb) + 2 x worker (1 CPU, 2gb each; one is a stopped cold
-# standby of the other) = 3 machines. The [[vm]] blocks below match the live machines
-# exactly. NOTE: prod runs ONE standing app machine (agreed 2026-09-02) - the
-# August 2026 invoice (2x CPU line = 2.06 machine-months) proves it ran that way
-# all month. If app-group HA is ever wanted that is a manual `fly scale count
-# app=2 -a app-modulo` (+1 x 2-CPU machine), not a config change.
+# Standing footprint: 1 x app + 2 x worker (1 CPU, 2gb each; one is a stopped cold
+# standby of the other) = 3 machines (verified live 2026-09-02 via `fly scale show`
+# / `fly machines list`). DECLARED app VM ([[vm]] below) is 4 shared CPU / 2gb, but
+# the LIVE prod app machine is still 2 shared CPU until a post-merge ops step:
+# [[vm]] changes do NOT resize existing machines on their own - they apply to NEW
+# machines only. Post-merge ops step: `flyctl machine update <machine-id> -a
+# app-modulo --vm-size shared-cpu-4x` (brief restart; find the app-group machine id
+# via `flyctl machines list -a app-modulo`). NOTE: prod runs ONE standing app
+# machine (agreed 2026-09-02) - the August 2026 invoice (2x CPU line = 2.06
+# machine-months) proves it ran that way all month. If app-group HA is ever wanted
+# that is a manual `fly scale count app=2 -a app-modulo` (+1 app machine at the
+# [[vm]]-declared size), not a config change.
 # Whole-org standing (verified 2026-09-02): 11 machines across 7 apps in org
 # `personal`, ~8 started 24/7: app-modulo 3 + staging-modulo 2 + modulo-telemetry 2
 # (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly MPG
 # Postgres machines (modulo-app-db 2CPU/4gb, modulo-staging-db, library-modulo-db).
 # MPG machines bill as separate "MPG Cluster" lines, NOT in the "Machines" usage
-# lines (verified against the Aug 2026 invoice: the 2x CPU line fits app+staging app
-# machines exactly, with zero headroom for modulo-app-db). demo-modulo
-# (fly.demo.toml) is NOT provisioned - no app, no machines, no cost.
+# lines (verified against the Aug 2026 invoice). The invoice-line math "the 2x CPU
+# line fits app+staging app machines exactly, with zero headroom for modulo-app-db"
+# no longer holds after the live resize: the prod app machine adds ~2 shared CPU to
+# that line going forward, so treat post-resize figures on that line as APPROXIMATE
+# until verified against the next invoice. demo-modulo (fly.demo.toml) is NOT
+# provisioned - no app, no machines, no cost.
 # Org `modulo-admin` (separate org/bill) additionally holds 2 MPG clusters named
 # modulo-telemetry-db (fra, basic); one is ORPHANED (no attached apps) - cleanup
 # candidate via `fly mpg destroy`, needs-human.
@@ -45,8 +53,8 @@ primary_region = 'lhr'
   app = ""
   worker = ""
 
-# Web process group — nginx + uvicorn, handles HTTP traffic
-# Restart policy — crash-loop guard + max-restart in the entrypoint is the
+# Web process group - nginx + uvicorn, handles HTTP traffic
+# Restart policy - crash-loop guard + max-restart in the entrypoint is the
 # control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
 # container and the LB moves traffic decisively.
 # Machine-level recovery for a machine whose worker/scheduler is SILENTLY dead
@@ -90,7 +98,7 @@ primary_region = 'lhr'
     protocol = "http"
 
 # Worker process-group health check (ADR 021). Top-level [checks], not a service
-# check — it does not affect routing. The worker container exposes a liveness
+# check - it does not affect routing. The worker container exposes a liveness
 # server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
 # SAQ worker subprocesses (runs + system) are alive. The worker group has no
 # service/health check today, so a machine that is "up" but running no SAQ
@@ -106,10 +114,10 @@ primary_region = 'lhr'
     type = "http"
     processes = ['worker']
 
-# Worker process group — SAQ workers only, ALWAYS restart (ADR 021).
+# Worker process group - SAQ workers only, ALWAYS restart (ADR 021).
 # policy = "always" restarts the machine no matter the exit code. "on-failure"
 # only restarts a non-zero exit, so a worker machine that a rolling deploy leaves
-# `stopped` (clean exit / SIGTERM teardown) stays down — the 2026-08-08 outage
+# `stopped` (clean exit / SIGTERM teardown) stays down - the 2026-08-08 outage
 # where both worker machines were `stopped` for ~3h and needed a manual
 # `fly machines start`. "always" is the Fly-documented policy for long-running
 # background workers: crash, clean exit, or deploy replacement all self-heal.
@@ -125,31 +133,37 @@ primary_region = 'lhr'
   MODULO_PUBLIC_URL = "https://app.modulo.run"
   # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"
-  MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  # Caps in-process local-run concurrency on the web machine to reduce worst-case event-loop load (paired with the CPU bump).
+  MODULO_MAX_LOCAL_CONCURRENCY = "2"
   SAQ_WORKER_CONCURRENCY = "20"
   # Code-accurate invariant: the effective pool is >= SAQ_WORKER_CONCURRENCY
-  # + 5 (max() floor in saq_worker._effective_redis_pool_size — every
+  # + 5 (max() floor in saq_worker._effective_redis_pool_size - every
   # concurrent blocking dequeue holds one pool connection, plus a 5-connection
   # reserve for the upkeep ops schedule/sweep/abort/worker_info).
   SAQ_REDIS_POOL_SIZE = "50"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
-  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) — NOT pay-as-you-go
+  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) - NOT pay-as-you-go
   # (2026-08 decision, verified 2026-09-02 via `flyctl redis list`). Prod keeps
-  # SAQ_WORKER_CONCURRENCY=20 / SAQ_REDIS_POOL_SIZE=50 (ADR 017 design target —
+  # SAQ_WORKER_CONCURRENCY=20 / SAQ_REDIS_POOL_SIZE=50 (ADR 017 design target -
   # up to 5 worker machines x 20 slots) and stays cheapest on Fixed while prod
   # traffic is real. See fly.staging.toml for the CANONICAL command-volume
   # audit derivation that sized these knobs (staging runs the right-sized 2/10).
   # Enable auto-upgrade on the add-on as a safety net:
-  # `flyctl redis update <name>` → select plan, then enable auto-upgrade.
+  # `flyctl redis update <name>` -> select plan, then enable auto-upgrade.
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
 
+# 2026-09-02 wedge: the 2-shared-CPU web machine stopped answering HTTP under
+# concurrent pipeline orchestration load (service check critical for 2+ hours).
+# 4 shared CPU gives event-loop headroom; memory unchanged (no memory-pressure
+# evidence). Applies to NEW machines only - see the machine-budget block above
+# for the live-machine resize command.
 [[vm]]
   processes = ['app']
   memory = '2gb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 4
 
 [[vm]]
   processes = ['worker']
