@@ -355,7 +355,7 @@ DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
 
 ```
 curl https://modulo.run/install.sh | bash
-# or: docker compose -f docker-compose.prod.yml up
+# or: docker compose -f deploy/compose/docker-compose.prod.yml up
 ```
 
 | Component | How it runs |
@@ -373,7 +373,7 @@ If Redis is configured (`REDIS_URL` set), the app automatically upgrades schedul
 The Kubernetes/Helm example deployment configs were removed – they were never
 exercised by CI or used in production. Modulo's only managed deployment path is
 Fly.io. For self-hosting, use the Docker Compose configuration
-(`docker-compose.prod.yml`). Kubernetes/Helm support can be re-added later as a
+(`deploy/compose/docker-compose.prod.yml`). Kubernetes/Helm support can be re-added later as a
 properly maintained example config.
 
 ---

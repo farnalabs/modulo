@@ -9,10 +9,10 @@
 ## 1. Telemetry & Observability
 
 - [ ] **`MODULO_TELEMETRY_ENABLED` is not set** (defaults to `false`)
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY`
   - expected: no output or `MODULO_TELEMETRY_ENABLED=false`
 - [ ] **`OTEL_EXPORTER_OTLP_ENDPOINT` is not set**
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
   - expected: no output
 - [ ] **No OTel config saved in database** (if DB was migrated from non-VPC env)
   - verify: query `otel_config` table – `otlp_endpoint` should be empty string
@@ -51,7 +51,7 @@
 ## 6. Container image security
 
 - [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) – not Docker Hub
-  - verify: `docker compose -f docker-compose.prod.yml config | grep image`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml config | grep image`
   - expected: all images from internal registry URL
 
 ## 7. Secrets
@@ -62,13 +62,13 @@
 ## 8. Runtime verification
 
 - [ ] **Deployed container can reach database and Redis**
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo nc -zv postgres 5432`
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo nc -zv redis 6379`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo nc -zv postgres 5432`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo nc -zv redis 6379`
 - [ ] **Deployed container can NOT reach the public internet**
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo curl -s --connect-timeout 5 https://google.com`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo curl -s --connect-timeout 5 https://google.com`
   - expected: connection timeout or refused
 - [ ] **Deployed container can NOT resolve public DNS names**
-  - verify: `docker compose -f docker-compose.prod.yml exec modulo nslookup google.com`
+  - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo nslookup google.com`
   - expected: failure or NXDOMAIN (depending on DNS policy)
 
 ## 9. Documentation

@@ -25,8 +25,8 @@ app = 'app-modulo'
 # line fits app+staging app machines exactly, with zero headroom for modulo-app-db"
 # no longer holds after the live resize: the prod app machine adds ~2 shared CPU to
 # that line going forward, so treat post-resize figures on that line as APPROXIMATE
-# until verified against the next invoice. demo-modulo (fly.demo.toml) is NOT
-# provisioned - no app, no machines, no cost.
+# until verified against the next invoice. The demo Fly instance (demo-modulo) is
+# retired - not provisioned, no app, no machines, no cost.
 # Org `modulo-admin` (separate org/bill) additionally holds 2 MPG clusters named
 # modulo-telemetry-db (fra, basic); one is ORPHANED (no attached apps) - cleanup
 # candidate via `fly mpg destroy`, needs-human.
@@ -148,7 +148,7 @@ primary_region = 'lhr'
   # (2026-08 decision, verified 2026-09-02 via `flyctl redis list`). Prod keeps
   # SAQ_WORKER_CONCURRENCY=20 / SAQ_REDIS_POOL_SIZE=50 (ADR 017 design target -
   # up to 5 worker machines x 20 slots) and stays cheapest on Fixed while prod
-  # traffic is real. See fly.staging.toml for the CANONICAL command-volume
+  # traffic is real. See deploy/fly/fly.staging.toml for the CANONICAL command-volume
   # audit derivation that sized these knobs (staging runs the right-sized 2/10).
   # Enable auto-upgrade on the add-on as a safety net:
   # `flyctl redis update <name>` -> select plan, then enable auto-upgrade.

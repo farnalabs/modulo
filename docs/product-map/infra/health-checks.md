@@ -1,7 +1,7 @@
 ---
 id: feat-infra-health
 prd: N/A
-adr: [docs/adr/021-worker-resilience.md]
+adr: [Repos/devtools/adr/021-worker-resilience.md]
 delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/health.py

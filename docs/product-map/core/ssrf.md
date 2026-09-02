@@ -2,7 +2,7 @@
 id: feat-core-ssrf
 prd: N/A
 adr:
-  - docs/adr/025-generic-rest-integration-connector.md
+  - Repos/devtools/adr/025-generic-rest-integration-connector.md
 code:
   - backend/src/modulo/core/ssrf.py
 unit-tests:

@@ -510,14 +510,14 @@ Configure alerts for these events in your monitoring system:
 
 3. **Deploy the new image** (Docker Compose):
    ```bash
-   docker compose -f docker-compose.prod.yml pull modulo
-   docker compose -f docker-compose.prod.yml up -d
+   docker compose -f deploy/compose/docker-compose.prod.yml pull modulo
+   docker compose -f deploy/compose/docker-compose.prod.yml up -d
    ```
    For Fly.io deployments, `fly deploy` performs a rolling/bluegreen update.
 
 4. **Verify migration completed:**
    ```bash
-   docker compose -f docker-compose.prod.yml logs modulo | grep alembic
+   docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep alembic
    # Expected: "Migration successful"
    ```
 
@@ -525,9 +525,9 @@ Configure alerts for these events in your monitoring system:
 
 ```bash
 # Docker Compose – re-tag and restart the previous image
-docker compose -f docker-compose.prod.yml stop modulo
+docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
 docker tag modulo-backend:old modulo-backend:latest
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
 For Fly.io, roll back by re-deploying the previous image tag via `fly deploy`
@@ -538,13 +538,13 @@ previous code version expects an older schema and a downgrade migration exists:
 
 ```bash
 # Check current Alembic version
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic current
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic current
 
 # Check that the target migration has a downgrade() function
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1  # preview SQL
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1  # preview SQL
 
 # Downgrade (use with extreme caution – data loss possible)
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade -1
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic downgrade -1
 ```
 
 ⚠️ Not all migrations include a `downgrade()` function. If `alembic downgrade`

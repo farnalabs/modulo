@@ -17,7 +17,7 @@ DOCKERFILES = (
     PRODUCT / "backend" / "Dockerfile",
     PRODUCT / "backend" / "Dockerfile.fly",
     PRODUCT / "backend" / "Dockerfile.mutation",
-    PRODUCT / "Dockerfile.all-in-one",
+    PRODUCT / "deploy" / "docker" / "Dockerfile.all-in-one",
 )
 
 REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=3\.(\d+)(?:,<3\.(\d+))?"')

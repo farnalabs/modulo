@@ -329,17 +329,18 @@ Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory n
 
 ### Docker Compose
 
-Four compose files:
+Compose files (`docker-compose*.yml` at the repo root; the non-default ones live under `deploy/compose/`):
 - `docker-compose.yml` – dev mode (builds from source, Postgres 16, Redis 7)
 - `docker-compose.local.yml` – with observability profile (otel-collector, Prometheus, Grafana)
-- `docker-compose.test.yml` – CI test environment
-- `docker-compose.mariadb.yml` – MariaDB alternative (experimental multi-backend – **deprecated 2026-07-11**, not actively tested or maintained)
+- `deploy/compose/docker-compose.prod.yml` – self-hosted single-server production (prebuilt image)
+- `deploy/compose/docker-compose.test.yml` – CI test environment
+- `deploy/compose/docker-compose.mariadb.yml` – MariaDB alternative (experimental multi-backend – **deprecated 2026-07-11**, not actively tested or maintained)
 
 ### Kubernetes (Helm)
 
 The Kubernetes/Helm example deployment configs were removed – they were never
 exercised by CI or used in production. Self-hosting is via Docker Compose
-(`docker-compose.prod.yml`); the managed deployment path is Fly.io.
+(`deploy/compose/docker-compose.prod.yml`); the managed deployment path is Fly.io.
 
 ### Redis dependency
 
@@ -383,7 +384,7 @@ OpenTelemetry-native. Default exporter: stdout JSON. Configurable OTLP endpoint 
 
 ## Architecture Decision Records
 
-ADRs at `docs/adr/` document key trade-offs:
+ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (migrated out of this repo 2026-09-02, FAR-434; they were previously in-repo under `docs/adr/`). They document key trade-offs:
 
 | ADR | Title | Status |
 |-----|-------|--------|

@@ -6,7 +6,7 @@ recovering an organisation whose only admin cannot authenticate.
 
 **Prerequisite reading:**
 - `docs/prd.md` §7.19 — product requirements for break-glass admin recovery
-- `docs/adr/017-centralized-authorization.md`, `docs/adr/018-centralized-authorization.md` — the auth architecture and the ONE deliberate login-route hook deviation
+- `Repos/devtools/adr/017-centralized-authorization.md`, `Repos/devtools/adr/018-centralized-authorization.md` — the auth architecture and the ONE deliberate login-route hook deviation
 - `docs/configuration-reference.md` §Break-glass Admin Recovery — env settings
 - `docs/deployment-security.md` — deployment security baseline
 - `docs/security/secret-management.md` — secret handling / vault
@@ -389,7 +389,7 @@ the `modulo_breakglass` session (actor in `payload_json`, `account_id` NULL).
 | Topic | Document |
 |---|---|
 | Product requirements | `docs/prd.md` §7.19 |
-| Auth architecture / login hook | `docs/adr/017-centralized-authorization.md`, `docs/adr/018-centralized-authorization.md` |
+| Auth architecture / login hook | `Repos/devtools/adr/017-centralized-authorization.md`, `Repos/devtools/adr/018-centralized-authorization.md` |
 | Env settings | `docs/configuration-reference.md` §Break-glass Admin Recovery |
 | Deploy-gate precondition | `docs/deployment.md` §Break-Glass Admin Recovery Deploy Gate |
 | Deployment security baseline | `docs/deployment-security.md` |

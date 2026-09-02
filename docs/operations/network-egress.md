@@ -140,10 +140,10 @@ never initiates external connections without configuration.
 
 ```bash
 # Check if telemetry is enabled
-docker compose -f docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY
 
 # Check if OTLP endpoint is configured
-docker compose -f docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP
 
 # List all active connector instances (API)
 curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/connectors"
@@ -152,5 +152,5 @@ curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/connectors"
 curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/admin/notifications"
 
 # Verify no unexpected egress (requires host firewall / network policy monitoring)
-docker compose -f docker-compose.prod.yml exec modulo netstat -tlnp  # listening only
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo netstat -tlnp  # listening only
 ```

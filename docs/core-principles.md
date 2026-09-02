@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Date:** 11 August 2026
-**Related:** `architecture.md`, ADRs (`docs/adr/`). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
+**Related:** `architecture.md`, ADRs (`Repos/devtools/adr/` in the private `farnalabs/devtools` repo — migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
 
 ## 1. Schema seams
 Every boundary in a pipeline is a typed contract. Inputs validate against `input_schema`, outputs against `output_schema` (JSON Schema draft-07), before anything moves. Schemas are org-scoped, versioned (semver), reusable, composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
@@ -19,7 +19,7 @@ A run executes against a frozen `PipelineSnapshot`: agent versions, schema pins,
 ## 3. Audit as a first-class output
 Every state-changing action produces an immutable, org-scoped AuditEvent (actor, action, resource, timestamp). Append-only at DB level (0005 triggers), SHA-256-linked chain for verifiability. SOC 2 evidence export builds on it.
 **Why:** governance requires a record you can trust after the fact; the trail is a product output, not an afterthought.
-**Where:** `modulo/core/audit_logger/`, `docs/adr/004-user-deactivation-replaces-deletion.md`.
+**Where:** `modulo/core/audit_logger/`, `Repos/devtools/adr/004-user-deactivation-replaces-deletion.md`.
 **Benefit:** the history you inspect is exactly what happened; auditors and operators read the same truth.
 
 ## 4. Deterministic gates
@@ -49,7 +49,7 @@ Credentials decrypt once at run-start into a run-scoped context; they never ente
 ## 7. We dispatch, we don't run agents
 Modulo dispatches work to external agent runtimes; it owns dispatch, auth, audit, cost tracking, eval gates, HITL. The runtime owns the tool-using loop. Bring your own model, agent, prompt.
 **Why:** established agent runtimes do tool-use better than a platform can; competing with them is the wrong strategy.
-**Where:** `docs/adr/003-agent-dispatch-model.md`, `sandbox_agent` node type.
+**Where:** `Repos/devtools/adr/003-agent-dispatch-model.md`, `sandbox_agent` node type.
 **Benefit:** swap runtimes without changing governance; your stack stays yours.
 
 ## 8. Correction never rewrites history

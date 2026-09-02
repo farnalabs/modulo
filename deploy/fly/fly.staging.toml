@@ -9,8 +9,8 @@ app = 'staging-modulo'
 # (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly MPG
 # Postgres machines (modulo-app-db 2CPU/4gb, modulo-staging-db, library-modulo-db).
 # MPG machines bill as separate "MPG Cluster" lines, NOT in the "Machines" usage
-# lines (verified against the Aug 2026 invoice). demo-modulo (fly.demo.toml) is NOT
-# provisioned - no app, no machines, no cost.
+# lines (verified against the Aug 2026 invoice). The demo Fly instance (demo-modulo)
+# is retired - not provisioned, no app, no machines, no cost.
 # Staging-specific: every staging deploy launches a one-off pre-migrate machine
 # (shared-cpu-1x / 1gb, deploy.yml "Pre-deploy migrations"), destroyed after the
 # deploy (`if: always()`); it bills in the 1x "Machines" lines while it runs.
@@ -29,6 +29,10 @@ primary_region = 'lhr'
   command = "/release.sh"
 
 [build]
+  # Path is relative to the Docker build context = the project (repo) root,
+  # NOT to this file's directory. CI runs `fly deploy --config
+  # deploy/fly/fly.staging.toml` from the repo root, and `--config` does not
+  # move the build context (Fly docs: "will not change the Docker context path").
   dockerfile = "backend/Dockerfile.fly"
 
 [processes]

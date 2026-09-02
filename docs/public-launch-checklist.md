@@ -106,7 +106,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
 ## 6. Deployment Configuration
 
 - [ ] **Docker Compose** production config is validated:
-  - `docker-compose.prod.yml` (or equivalent) references correct images
+  - `deploy/compose/docker-compose.prod.yml` (or equivalent) references correct images
   - Port mappings are correct
   - Volume mounts are configured for Postgres data persistence
 

@@ -202,7 +202,11 @@ def test_graph_entry_feature_ids_are_unique():
 
 
 #: Behaviour-tracker frontmatter fields whose values are repo-relative file paths.
-_CITATION_FIELDS = ("code", "unit-tests", "bdd", "adr")
+#: ``adr`` is deliberately excluded: ADRs were migrated out of this repo to the
+#: private ``farnalabs/devtools`` repo (``Repos/devtools/adr/``) on 2026-09-02
+#: (FAR-434), so ``adr:`` citations are no longer repo-relative and cannot be
+#: file-resolved here.
+_CITATION_FIELDS = ("code", "unit-tests", "bdd")
 
 _BDD_ROOT = REPO_ROOT / "backend" / "tests" / "bdd"
 
@@ -277,7 +281,10 @@ def _registered_bdd_features() -> set[Path]:
 
 
 def test_entry_file_references_resolve():
-    """Every ``code:`` / ``unit-tests:`` / ``bdd:`` / ``adr:`` reference resolves.
+    """Every ``code:`` / ``unit-tests:`` / ``bdd:`` reference resolves.
+
+    (``adr:`` is not checked — ADRs live in the private ``farnalabs/devtools``
+    repo since FAR-434 and are not repo-relative paths.)
 
     The feature-graph contract (``docs/product-map/README.md``) points these
     fields at the code paths, test files and BDD feature files that implement

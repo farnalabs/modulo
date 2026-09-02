@@ -29,9 +29,9 @@ modulo/
     src/{stores,components,views,composables}
     src/manifest.yaml        # product map (ADR 008)
     tests/e2e/               # Playwright
-  docs/                      # architecture.md, core-principles.md, adr/, security/
+  docs/                      # architecture.md, core-principles.md, security/ (ADRs moved out — see below)
   scripts/                   # dev helper scripts
-  deploy/                    # Fly/Caddy/nginx/supervisor configs
+  deploy/                    # Fly/Caddy/nginx/supervisor configs; deploy/compose/ + deploy/docker/ hold non-default compose files and Dockerfiles
   configs/                   # grafana dashboards, otel-collector config
   .semgrep/                  # custom lint rules (rls, credentials, jinja2, yaml, asyncdb)
   .github/workflows/         # CI, Deploy, merge-queue (autonomous PR lifecycle)
@@ -40,7 +40,7 @@ modulo/
 ## Where to look first
 
 - **Product requirements / behaviour:** `docs/architecture.md`, `docs/core-principles.md`
-- **Architecture decisions:** `docs/adr/`
+- **Architecture decisions:** `Repos/devtools/adr/` in the private `farnalabs/devtools` repo (migrated out of this repo 2026-09-02, FAR-434; previously `docs/adr/`)
 - **Product map:** `frontend/src/manifest.yaml`
 
 ## Working-directory rules (non-negotiable)

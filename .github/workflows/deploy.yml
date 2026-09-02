@@ -471,7 +471,7 @@ jobs:
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Build attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app staging-modulo --build-only --push --image-label "$IMAGE_LABEL" --config fly.staging.toml \
+            if fly deploy --app staging-modulo --build-only --push --image-label "$IMAGE_LABEL" --config deploy/fly/fly.staging.toml \
               --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
@@ -713,7 +713,7 @@ jobs:
           RETRY_DELAY=10
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
-            if fly deploy --app staging-modulo --image "$IMAGE_REF" --config fly.staging.toml; then
+            if fly deploy --app staging-modulo --image "$IMAGE_REF" --config deploy/fly/fly.staging.toml; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
             else
@@ -920,13 +920,13 @@ jobs:
               fly machine clone "$WORKER_ID" --app staging-modulo --region lhr
             elif [ -n "$IMAGE" ]; then
               # No worker machine exists at all -- create one from the deployed
-              # image. The [processes] section of fly.staging.toml assigns the group.
+              # image. The [processes] section of deploy/fly/fly.staging.toml assigns the group.
               echo "No worker machine exists -- creating one from the deployed image: $IMAGE"
-              fly machine run "$IMAGE" --app staging-modulo --region lhr -c fly.staging.toml
+              fly machine run "$IMAGE" --app staging-modulo --region lhr -c deploy/fly/fly.staging.toml
             else
               # Last resort: fresh build, still using the config for the worker group.
               echo "No worker machine and no deployed image resolvable -- creating one from a fresh build"
-              fly machine run . --app staging-modulo --region lhr -c fly.staging.toml
+              fly machine run . --app staging-modulo --region lhr -c deploy/fly/fly.staging.toml
             fi
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"

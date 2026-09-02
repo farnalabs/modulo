@@ -2,7 +2,7 @@
 id: feat-router
 prd: N/A
 adr:
-  - docs/adr/025-execution-graph-router-hitl-nodes.md
+  - Repos/devtools/adr/025-execution-graph-router-hitl-nodes.md
 code:
   - backend/src/modulo/core/pipeline_engine/jmespath_eval.py
   - backend/src/modulo/core/pipeline_engine/node_runner.py

@@ -31,7 +31,7 @@ of these two places — otherwise it is invisible to Remy and to this graph.
 ---
 id: feat-<domain>-<feature>        # unique feature id (match the manifest registry)
 prd: N.N                           # PRD section (N/A for infra-only surfaces)
-adr: [docs/adr/...md]              # governing ADRs (optional)
+adr: [Repos/devtools/adr/...md]              # governing ADRs (optional)
 code: [backend/src/...]            # code paths implementing this feature
 bdd: [tests/.../feature]           # BDD feature files (missing = coverage gap)
 unit-tests: [tests/...]            # unit/integration test files

@@ -157,15 +157,15 @@ Medium / Low incident detected
 2. **Create** incident channel `#security-on-call-YYYYMMDD`.
 3. **Classify** severity (see §1). If unsure, classify up.
 4. **Snapshot** current state:
-   - `docker compose -f docker-compose.prod.yml ps`
-   - `docker compose -f docker-compose.prod.yml logs modulo --tail=200`
+   - `docker compose -f deploy/compose/docker-compose.prod.yml ps`
+   - `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo --tail=200`
    - `GET /api/v1/admin/audit/verify` (audit chain integrity)
    - `GET /healthz/ready` (readiness)
 5. **Preserve** evidence before any remediation:
-   - Export affected container logs: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
+   - Export affected container logs: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
    - Snapshot audit log window: `GET /api/v1/admin/audit/export?page=... > incident-YYYYMMDD-audit.jsonl` (audit viewer feature; paginate to cover the window)
    - Capture Postgres connection state: `SELECT * FROM pg_stat_activity;`
-   - If container compromise suspected: `docker compose -f docker-compose.prod.yml exec modulo cat /proc/1/cmdline`
+   - If container compromise suspected: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo cat /proc/1/cmdline`
 6. **Determine scope:**
    - What tenants/users are affected?
    - What data was accessed?
@@ -646,7 +646,7 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 
 ### 8.3 Evidence Preservation Checklist
 
-- [ ] Container logs exported: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
+- [ ] Container logs exported: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
 - [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (paginated; there is no audit CLI)
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
 - [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses image `ghcr.io/farnalabs/modulo:${TAG}`)

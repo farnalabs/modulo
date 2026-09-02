@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [docs/adr/003-agent-dispatch-model.md]
+adr: [Repos/devtools/adr/003-agent-dispatch-model.md]
 delivery-tasks: []
 code:
   - backend/src/modulo/core/runtime_provider/
@@ -70,6 +70,6 @@ its product-map entry carries the ADR 003 deprecation notice.
 - 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
   requires to carry the ShellConnector deprecation notice
-  (`docs/adr/003-agent-dispatch-model.md`). Re-verified the runtime_provider package
+  (`Repos/devtools/adr/003-agent-dispatch-model.md`). Re-verified the runtime_provider package
   layout, environment-profile CRUD routes, workspace-lease model, and ShellConnector
   deprecation notice against the current tree. Status: covered.

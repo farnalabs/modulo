@@ -74,7 +74,7 @@ fly secrets set \
 fly deploy
 ```
 
-A `fly.toml` is at the repository root (`deploy/fly/` holds bootstrap and entrypoint scripts only).
+The production `fly.toml` is at the repository root; `deploy/fly/` holds `fly.staging.toml` plus the bootstrap and entrypoint scripts.
 
 ### Option B: Railway
 

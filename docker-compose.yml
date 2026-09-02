@@ -1,4 +1,4 @@
-# MariaDB switch: run `docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d`.
+# MariaDB switch: run `docker compose -f docker-compose.yml -f deploy/compose/docker-compose.mariadb.yml up -d`.
 # When using the MariaDB override, the backend automatically gets these values:
 #   MODULO_DB=mariadb
 #   DATABASE_URL=mysql+aiomysql://modulo:modulo@db:3306/modulo

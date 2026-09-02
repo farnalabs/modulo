@@ -2,9 +2,9 @@
 id: feat-remy
 prd: 8.23
 adr:
-  - docs/adr/007-remy-ui-commands.md
-  - docs/adr/011-remy-context-sources.md
-  - docs/adr/014-remy-mcp-api-key-jwt.md
+  - Repos/devtools/adr/007-remy-ui-commands.md
+  - Repos/devtools/adr/011-remy-context-sources.md
+  - Repos/devtools/adr/014-remy-mcp-api-key-jwt.md
 code:
   - backend/src/modulo/api/routes/remy.py
   - backend/src/modulo/api/routes/admin_remy.py

@@ -26,13 +26,13 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 
 ```bash
 # 1. Pull the latest image
-docker compose -f docker-compose.prod.yml pull
+docker compose -f deploy/compose/docker-compose.prod.yml pull
 
 # 2. Restart with new image (runs migrations on startup)
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f deploy/compose/docker-compose.prod.yml up -d
 
 # 3. Verify migration completed
-docker compose -f docker-compose.prod.yml logs modulo | grep alembic
+docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep alembic
 
 # 4. Check application health
 curl http://localhost:8000/healthz
@@ -96,9 +96,9 @@ between machine groups.
 
 ```bash
 # Docker Compose – re-tag and restart
-docker compose -f docker-compose.prod.yml stop modulo
+docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
 docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f deploy/compose/docker-compose.prod.yml up -d
 
 # Self-hosted
 git checkout <previous-tag>
@@ -112,13 +112,13 @@ sudo systemctl restart modulo
 
 ```bash
 # Check current Alembic version
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic current
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic current
 
 # Preview the downgrade SQL
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1
 
 # Downgrade (use with extreme caution – data loss possible)
-docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade -1
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic downgrade -1
 ```
 
 **Prefer a forward-fix over downgrading.** Write a new migration that reverts the schema change rather than using `alembic downgrade`. Not all migrations include a `downgrade()` function.

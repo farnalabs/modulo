@@ -68,7 +68,7 @@ with the following defaults:
 To use MariaDB instead of PostgreSQL, apply the override:
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.mariadb.yml up -d
 ```
 
 The backend auto-detects MariaDB and configures the connection string
@@ -209,14 +209,20 @@ modulo/
 ├── .github/
 │   └── workflows/                # CI/CD pipeline definitions
 ├── docs/
-│   ├── adr/                      # Architecture decision records
 │   ├── product-map/              # Feature graph entries (see product-map/README.md)
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
+      (Architecture decision records moved to the private farnalabs/devtools repo,
+       Repos/devtools/adr/, 2026-09-02 — FAR-434)
       (product map: frontend/src/manifest.yaml — feature registry + per-route refs, ADR 008)
+├── deploy/
+│   ├── compose/                  # Non-default compose files: docker-compose.{prod,test,mariadb}.yml
+│   ├── docker/                   # Dockerfile.{all-in-one,backend,frontend}
+│   └── fly/                      # fly.staging.toml + Fly helper scripts
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
 ├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability
-└── docker-compose.mariadb.yml    # MariaDB override
+├── fly.toml                      # Fly config for app.modulo.run
+└── ...                           # dotfile config (.gitignore, ruff.toml, .pre-commit-config.yaml, ...)
 ```
 
 CLI tools are registered as console scripts in `pyproject.toml`:

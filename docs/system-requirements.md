@@ -45,7 +45,7 @@ Supported platforms, minimum resources, and database backends for running Modulo
 |----------|---------|--------|-----------------|-------|
 | **PostgreSQL** | 16+ | **Supported** | **Yes** | Primary production database |
 | **MySQL** | 8+ | Supported | Conformance | Via `MODULO_DB=mysql` (`aiomysql` driver) |
-| **MariaDB** | 11+ | Supported | Conformance | Via `MODULO_DB=mariadb` (`docker-compose.mariadb.yml`) |
+| **MariaDB** | 11+ | Supported | Conformance | Via `MODULO_DB=mariadb` (`deploy/compose/docker-compose.mariadb.yml`) |
 | **SQLite** | 3.x | Compatible | **No** | Dev-only: no RLS, no advisory locks |
 
 ### PostgreSQL Requirements

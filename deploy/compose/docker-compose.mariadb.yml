@@ -3,7 +3,7 @@
 # (Supabase). This file is preserved for backward compatibility but is not actively tested
 # or maintained.
 #
-# Original usage: docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
+# Original usage: docker compose -f docker-compose.yml -f deploy/compose/docker-compose.mariadb.yml up -d
 # The backend env vars below are set automatically; no .env changes needed.
 
 services:
