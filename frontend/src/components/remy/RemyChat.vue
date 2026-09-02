@@ -747,6 +747,7 @@ function renderMarkdown(text: string): string {
 </script>
 
 <style scoped>
+@reference "../../style.css";
 .remy-messages {
   scroll-behavior: smooth;
 }

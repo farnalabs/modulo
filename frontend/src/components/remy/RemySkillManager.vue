@@ -270,6 +270,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+@reference "../../style.css";
 .remy-skill-input {
   @apply w-full rounded-lg px-3 py-2 text-sm outline-none;
   background-color: hsl(var(--background));

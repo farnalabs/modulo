@@ -11,9 +11,15 @@ FUTURE_SUNSET = "2099-12-31"
 PAST_SUNSET = "2020-01-01"
 
 
-def _future_sunset() -> str:
-    """Return an ISO date comfortably in the future so deprecation headers are exercised (200 path)."""
-    return (date.today() + timedelta(days=30)).isoformat()
+def _future_sunset(days: int = 30) -> str:
+    """Return an ISO date string safely in the future relative to today.
+
+    The middleware returns 410 Gone once the sunset date has passed, so tests
+    must avoid hardcoding a fixed date that silently goes stale (e.g. a test
+    pinned to "2026-09-01" began failing on 2026-09-02). Deriving the date
+    relative to today keeps these tests date-independent.
+    """
+    return (date.today() + timedelta(days=days)).isoformat()
 
 
 def _make_app() -> FastAPI:
@@ -112,7 +118,7 @@ class TestDeprecationHeaderMiddleware:
 
     def test_clear_resets_registry(self):
         """Calling clear() should remove all registered deprecation rules."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=FUTURE_SUNSET)
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset=_future_sunset())
         DeprecationHeaderMiddleware.clear()
         app = _make_app()
         with TestClient(app) as client:

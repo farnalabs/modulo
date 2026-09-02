@@ -2,7 +2,7 @@ import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath, URL } from 'node:url'
 import { createRequire } from 'node:module'
-import tailwindcss from 'tailwindcss'
+import tailwindcss from '@tailwindcss/postcss'
 import autoprefixer from 'autoprefixer'
 
 const require = createRequire(import.meta.url)

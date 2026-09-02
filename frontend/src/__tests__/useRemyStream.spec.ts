@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useRemyStore } from '../composables/useRemyStore'
 import { useRemyStream } from '../composables/useRemyStream'
@@ -40,6 +40,10 @@ function createMockSSEStream(events: Array<{ event: string; data: unknown }>): R
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.restoreAllMocks()
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
 })
 
 describe('useRemyStream', () => {
