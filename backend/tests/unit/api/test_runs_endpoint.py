@@ -1152,6 +1152,32 @@ def test_list_runs_invalid_cursor_returns_422(client: TestClient) -> None:
     assert "Invalid cursor" in resp.json()["detail"]
 
 
+def test_list_runs_value_error_without_cursor_is_not_mapped_to_422(client: TestClient) -> None:
+    """A ValueError raised with no cursor supplied must not be mis-mapped to 422.
+
+    The 422 mapping is documented as "malformed cursor"; when the client sent
+    no cursor at all, a ValueError from deeper in the chain is a server fault
+    and must surface through the generic 500 envelope, never as the 422
+    cursor client-error.
+    """
+
+    async def _raise_unrelated_value_error(*args: Any, **kwargs: Any) -> MagicMock:
+        raise ValueError("non-cursor failure deeper in the chain")
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            side_effect=_raise_unrelated_value_error,
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 500
+    assert "Invalid cursor" not in resp.json()["detail"]
+
+
 def test_list_runs_includes_truncated_error_detail_preview(client: TestClient) -> None:
     run_id = uuid.uuid4()
     run = _make_listable_run(run_id)

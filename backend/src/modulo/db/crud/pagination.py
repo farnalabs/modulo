@@ -73,6 +73,22 @@ class CursorPaginator:
             logger.warning("Failed to parse cursor value as datetime, falling back to raw string: %s", raw)
             return raw
 
+    @staticmethod
+    def _validate_cursor_value_type(value: Any, sort_col: Any) -> None:
+        """Reject cursor values that cannot be compared against the sort column.
+
+        A well-formed cursor whose value is not of the sort column's Python
+        type (e.g. a non-date string for a ``created_at`` timestamptz cursor)
+        would fail the keyset tuple comparison at the database and surface as
+        a 503 instead of the 422 a client error deserves.
+        """
+        try:
+            expected = sort_col.type.python_type
+        except NotImplementedError:
+            return
+        if expected is datetime and not isinstance(value, datetime):
+            raise ValueError("Invalid cursor value") from None
+
     async def paginate(
         self,
         session: AsyncSession,
@@ -119,6 +135,7 @@ class CursorPaginator:
         if cursor:
             cursor_value_str, cursor_id = self.decode_cursor(cursor)
             cursor_value = self._parse_cursor_value(cursor_value_str)
+            self._validate_cursor_value_type(cursor_value, sort_col)
 
             bound_cursor = literal(cursor_value)
             bound_id = literal(cursor_id)

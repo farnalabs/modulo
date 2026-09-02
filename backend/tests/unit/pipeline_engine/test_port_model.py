@@ -385,3 +385,40 @@ def test_golden_flat_dict_pipeline_backfill_and_routing():
     # is renamed or namespaced by introducing ports. Routing on ``state.summary``
     # resolves identically before and after backfill.
     assert port_to_state_key("out") == "out"
+
+
+# ---------------------------------------------------------------------------
+# FAR-525 — the topology hash tolerates backoff_schedule; a schedule-only
+# edit alters the hash (deliberate over-invalidation, ADR 028)
+# ---------------------------------------------------------------------------
+
+
+def test_topology_hash_tolerates_backoff_schedule() -> None:
+    g = _base_graph()
+    base = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2})
+    with_schedule = compute_retry_aware_topology_hash(
+        g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}}
+    )
+    assert base != with_schedule
+
+
+def test_topology_hash_schedule_only_edit_alters_hash() -> None:
+    g = _base_graph()
+    h1 = compute_retry_aware_topology_hash(g, {"backoff_schedule": {"delay_seconds": 30}})
+    h2 = compute_retry_aware_topology_hash(g, {"backoff_schedule": {"delay_seconds": 60}})
+    assert h1 != h2
+
+
+def test_topology_hash_canonicalization_round_trip() -> None:
+    """300.0 (PATCH input, canonicalised to 300 at the write site) and 300
+    hash identically once canonicalised — type-stable storage keeps the key
+    stable across a PATCH round-trip."""
+    g = _base_graph()
+    from modulo.api.routes.pipelines import _validate_retry_policy
+
+    patched = _validate_retry_policy(
+        {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0}}
+    )
+    assert compute_retry_aware_topology_hash(g, patched) == compute_retry_aware_topology_hash(
+        g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300}}
+    )

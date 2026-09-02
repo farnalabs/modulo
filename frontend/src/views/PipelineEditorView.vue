@@ -158,6 +158,47 @@
                     data-testid="pipeline-editor-retry-policy-max"
                   />
                 </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <label for="retry-policy-delay" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.backoff_delay_seconds') }}
+                  </label>
+                  <input
+                    id="retry-policy-delay"
+                    v-model.number="retryPolicyDelaySeconds"
+                    type="number"
+                    min="1"
+                    max="300"
+                    step="1"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-delay"
+                  />
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <label for="retry-policy-multiplier" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.backoff_multiplier') }}
+                  </label>
+                  <input
+                    id="retry-policy-multiplier"
+                    v-model.number="retryPolicyMultiplier"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="0.1"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-multiplier"
+                  />
+                </div>
+                <p class="mt-1 text-[10px] leading-snug text-muted-foreground">
+                  {{ $t('views.PipelineEditorView.backoff_schedule_help') }}
+                </p>
+                <div
+                  v-if="retryPolicyScheduleWarning"
+                  class="mt-2 text-xs text-warning"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-schedule-warning"
+                >
+                  {{ retryPolicyScheduleWarning }}
+                </div>
                 <div
                   v-if="retryPolicyNoRetriesWarning"
                   class="mt-2 text-xs text-warning"
@@ -1319,6 +1360,10 @@ const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
 const retryPolicyEvents = ref<string[]>([])
 const retryPolicyMaxRetries = ref(0)
+const retryPolicyDelaySeconds = ref(45)
+const retryPolicyMultiplier = ref(2)
+const retryPolicyScheduleWarning = ref<string | null>(null)
+const retryPolicyLegacyBackoff = ref<number | undefined>(undefined)
 const retryPolicyError = ref<string | null>(null)
 const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
 const retryPolicyPanelRef = ref<HTMLElement | null>(null)
@@ -1351,6 +1396,7 @@ const retryPolicyNoRetriesWarning = computed(() => {
 
 function syncRetryPolicyFromPipeline() {
   const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
+  retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
     const events = Array.isArray(rp.on)
       ? rp.on.filter((e: string): e is string => retryPolicyEventValues.includes(e))
@@ -1358,9 +1404,53 @@ function syncRetryPolicyFromPipeline() {
     retryPolicyEvents.value = events
     const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
     retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+
+    // FAR-525: keep the legacy node-level inherited `backoff` so a save can
+    // re-send it losslessly (the editor rebuilds the policy from a whitelist).
+    const legacyBackoff = (rp as Record<string, unknown>).backoff
+    retryPolicyLegacyBackoff.value =
+      typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
+
+    // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
+    // stored values are clamped here for editing ONLY — the runtime resolver
+    // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
+    let scheduleClamped = false
+    const schedule = (rp as Record<string, unknown>).backoff_schedule
+    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
+      const s = schedule as Record<string, unknown>
+      const rawDelay = Number(s.delay_seconds)
+      if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
+        retryPolicyDelaySeconds.value = Math.round(rawDelay)
+      } else {
+        retryPolicyDelaySeconds.value = Number.isFinite(rawDelay)
+          ? Math.min(300, Math.max(1, Math.round(rawDelay)))
+          : 45
+        scheduleClamped = true
+      }
+      if (s.multiplier === undefined) {
+        retryPolicyMultiplier.value = 2
+      } else {
+        const rawMult = Number(s.multiplier)
+        if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
+          retryPolicyMultiplier.value = rawMult
+        } else {
+          retryPolicyMultiplier.value = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
+          scheduleClamped = true
+        }
+      }
+    } else {
+      retryPolicyDelaySeconds.value = 45
+      retryPolicyMultiplier.value = 2
+    }
+    if (scheduleClamped) {
+      retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
+    }
   } else {
     retryPolicyEvents.value = []
     retryPolicyMaxRetries.value = 0
+    retryPolicyLegacyBackoff.value = undefined
+    retryPolicyDelaySeconds.value = 45
+    retryPolicyMultiplier.value = 2
   }
   retryPolicyError.value = null
 }
@@ -1410,8 +1500,20 @@ async function saveRetryPolicy() {
     retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_max')
     return
   }
+  // FAR-525: rebuild the policy from a whitelist so no API-set key is silently
+  // destroyed: the legacy node-level `backoff` is preserved explicitly, and the
+  // run-level `backoff_schedule` is rebuilt from the panel inputs (never spread
+  // from the stored object, so junk inner keys are dropped). An empty `on`
+  // stays inert at runtime but must still carry the schedule through.
+  const delay = Math.min(300, Math.max(1, Math.round(Number(retryPolicyDelaySeconds.value) || 0)))
+  const multiplier = Math.min(10, Math.max(1, Number(retryPolicyMultiplier.value) || 0))
+  const policy: RetryPolicy = { on, max_retries: max }
+  if (retryPolicyLegacyBackoff.value !== undefined) {
+    policy.backoff = retryPolicyLegacyBackoff.value
+  }
+  policy.backoff_schedule = { delay_seconds: delay, multiplier }
   const body: { retry_policy: RetryPolicy } = {
-    retry_policy: on.length > 0 ? { on, max_retries: max } : {},
+    retry_policy: policy,
   }
   retryPolicySaving.value = true
   try {

@@ -25,10 +25,19 @@ async def get_membership_by_account_and_org(
     return result.scalar_one_or_none()
 
 
-async def list_memberships_for_account(session: AsyncSession, account_id: uuid.UUID) -> list[OrgMembership]:
-    result = await session.execute(
-        select(OrgMembership).where(OrgMembership.account_id == account_id).order_by(OrgMembership.joined_at)
-    )
+async def list_memberships_for_account(
+    session: AsyncSession, account_id: uuid.UUID, *, active_only: bool = False
+) -> list[OrgMembership]:
+    """List the account's org memberships ordered by join date.
+
+    With ``active_only=True`` the tombstoned memberships (``deactivated_at``
+    set — the per-org deactivation signal, gh-1794/FAR-533) are excluded, so
+    callers that resolve an org CONTEXT (login) never pick a deactivated org.
+    """
+    stmt = select(OrgMembership).where(OrgMembership.account_id == account_id)
+    if active_only:
+        stmt = stmt.where(OrgMembership.deactivated_at.is_(None))
+    result = await session.execute(stmt.order_by(OrgMembership.joined_at))
     return list(result.scalars().all())
 
 

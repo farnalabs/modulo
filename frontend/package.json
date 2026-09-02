@@ -52,7 +52,7 @@
         "vue-json-pretty": "2.6.0",
         "vue-router": "^4.3.0",
         "vuedraggable": "^4.1.0",
-        "web-vitals": "4.2.4"
+        "web-vitals": "6.2.1"
     },
     "devDependencies": {
         "@axe-core/playwright": "^4.12.1",
@@ -66,7 +66,7 @@
         "@vue/test-utils": "^2.4.6",
         "autoprefixer": "^10.5.0",
         "cross-env": "^10.1.0",
-        "eslint": "^9.39.2",
+        "eslint": "^10.0.0",
         "eslint-plugin-vue": "^10.9.2",
         "eslint-plugin-vuejs-accessibility": "^2.5.0",
         "istanbul-lib-coverage": "^3.2.2",
@@ -74,7 +74,7 @@
         "istanbul-lib-report": "^3.0.1",
         "istanbul-reports": "^3.2.0",
         "js-yaml": "^4.3.0",
-        "jsdom": "^29.1.1",
+        "jsdom": "^30.0.0",
         "magic-string": "^1.0.0",
         "openapi-fetch": "^0.17.0",
         "openapi-typescript": "^7.13.0",

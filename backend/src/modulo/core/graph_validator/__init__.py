@@ -74,6 +74,12 @@ _KNOWN_SANDBOX_TEMPLATES = frozenset({"opencode", "modulo-opencode"})
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
+# Run-level ``backoff_schedule`` bounds (FAR-525). Hosted in retry_compensation
+# (DB-free, the schedule constants' home) so the write-site validator and the
+# runtime resolver cannot drift. NOTE: retry_compensation is LAZY-imported
+# inside check_retry_policy_schedule — an eager module-level import would
+# re-enter the executor <-> graph_validator import cycle (see _check_retry).
+
 # REST connector fan-out effective defaults. The connector defaults
 # ``max_cardinality`` to ``_DEFAULT_MAX_FANOUT_CARDINALITY`` and
 # ``per_item_timeout`` to its ``_DEFAULT_TIMEOUT`` when the ``fan_out`` config
@@ -2731,6 +2737,84 @@ class GraphValidator:
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'max_retries' must be an integer between 0 and 5",
             )
+
+    @staticmethod
+    def check_retry_policy_schedule(policy: Any, result: ValidationResult) -> None:
+        """Validate the OPTIONAL run-level ``backoff_schedule`` key (FAR-525).
+
+        DISTINCT from :meth:`check_retry_policy` (which owns the core
+        ``on``/``max_retries`` shape): a malformed schedule never disables
+        retries, so it gets its own issue code (``RETRY_POLICY_SCHEDULE_MALFORMED``).
+        Severity is a caller decision: ERROR at the write sites (API + import),
+        WARNING at run start (the runtime resolver fail-opens to the hardcoded
+        default schedule, so a faulting schedule must not block the run).
+
+        Valid shape: ``{"delay_seconds": 1-300, "multiplier": 1.0-10.0}`` (multiplier
+        optional, default 2.0). ``backoff_schedule`` ``None``/``{}``/absent (or a
+        non-dict policy) is "no schedule" and passes.
+        """
+        # Lazy import (see _check_retry): retry_compensation lazy-loads to
+        # avoid the executor <-> graph_validator import cycle.
+        from modulo.core.pipeline_engine import retry_compensation as rc
+
+        if not isinstance(policy, dict):
+            return
+        schedule = policy.get("backoff_schedule")
+        if schedule is None or schedule == {}:
+            return
+        if not isinstance(schedule, dict):
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' must be an object like "
+                "{'delay_seconds': 1-300, 'multiplier': 1.0-10.0}",
+            )
+            return
+        unknown = set(schedule) - rc.RETRY_SCHEDULE_ALLOWED_KEYS
+        if unknown:
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                f"retry_policy 'backoff_schedule' contains unknown keys {sorted(str(k) for k in unknown)}; "
+                f"allowed keys are {sorted(rc.RETRY_SCHEDULE_ALLOWED_KEYS)}",
+            )
+
+        # A JSON integer literal with more digits than float can represent
+        # (e.g. 10**400) parses to an arbitrary-precision Python int whose
+        # float() conversion raises OverflowError BEFORE the range comparison
+        # — contain it so a huge int lands in the same malformed bucket as any
+        # other bound fault (never a 500 / hard abort).
+        def _as_float(value: Any) -> float | None:
+            try:
+                return float(value)
+            except OverflowError:
+                return None
+
+        delay = schedule.get("delay_seconds")
+        if delay is None:
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' must include 'delay_seconds' "
+                f"(integer seconds, {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS}-{rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS})",
+            )
+        else:
+            delay_f = None if isinstance(delay, bool) or not isinstance(delay, (int, float)) else _as_float(delay)
+            if delay_f is None or not (
+                rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS
+                and delay_f == int(delay_f)
+            ):
+                result.error(
+                    "RETRY_POLICY_SCHEDULE_MALFORMED",
+                    "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
+                    f"{rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS}",
+                )
+        if "multiplier" in schedule:
+            mult = schedule["multiplier"]
+            mult_f = None if isinstance(mult, bool) or not isinstance(mult, (int, float)) else _as_float(mult)
+            if mult_f is None or not rc.RETRY_SCHEDULE_MIN_MULTIPLIER <= mult_f <= rc.RETRY_SCHEDULE_MAX_MULTIPLIER:
+                result.error(
+                    "RETRY_POLICY_SCHEDULE_MALFORMED",
+                    "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
+                    f"{rc.RETRY_SCHEDULE_MIN_MULTIPLIER} and {rc.RETRY_SCHEDULE_MAX_MULTIPLIER}",
+                )
 
     # ------------------------------------------------------------------
     # Edge validation

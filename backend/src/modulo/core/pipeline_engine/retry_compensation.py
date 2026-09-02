@@ -26,6 +26,8 @@ Nothing here imports the executor or the ORM — it is DB-free and unit-testable
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,9 +37,17 @@ __all__ = [
     "RETRY_BACKOFF_CAP_SECONDS",
     "RETRY_EVENTS",
     "RETRY_MAX_ATTEMPTS_BOUND",
+    "RETRY_SCHEDULE_ALLOWED_KEYS",
+    "RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS",
+    "RETRY_SCHEDULE_DEFAULT_MULTIPLIER",
+    "RETRY_SCHEDULE_MAX_DELAY_SECONDS",
+    "RETRY_SCHEDULE_MAX_MULTIPLIER",
+    "RETRY_SCHEDULE_MIN_DELAY_SECONDS",
+    "RETRY_SCHEDULE_MIN_MULTIPLIER",
     "NodeRetryPolicy",
     "RetryConfigError",
     "build_run_ref",
+    "canonicalise_backoff_schedule",
     "detect_compensation_cycle",
     "edge_has_compensation",
     "edge_retry_and_compensation_conflict",
@@ -47,8 +57,10 @@ __all__ = [
     "node_retries_on",
     "parse_edge_retry",
     "parse_node_retry",
+    "resolve_backoff_schedule",
     "resolve_node_retry",
     "run_idempotency_key",
+    "sanitize_retry_policy_snippet",
     "validate_compensation_acyclic",
     "validate_compensation_target_exists",
     "validate_edge_mutual_exclusion",
@@ -71,6 +83,23 @@ RETRY_MAX_ATTEMPTS_BOUND = 5
 # Maximum sane backoff (seconds) for a node / edge retry. Kept conservative so a
 # malformed ``backoff`` (e.g. ``1e9``) cannot pin a worker in a sleep loop.
 RETRY_BACKOFF_CAP_SECONDS = 300.0
+
+# ---------------------------------------------------------------------------
+# Run-level retry_policy ``backoff_schedule`` bounds (FAR-525)
+# ---------------------------------------------------------------------------
+# ``backoff_schedule`` is a RUN-LEVEL re-dispatch pacing key ONLY — it does NOT
+# participate in the node-default inheritance path (`_policy_from_pipeline_default`
+# reads ONLY the legacy numeric ``backoff``). The bounds are hosted here because
+# this module is DB-free and already lazily imported by GraphValidator; the 300s
+# code-held CAP below is the same value as ``RETRY_BACKOFF_CAP_SECONDS`` (kept a
+# separate name so the two layers cannot silently re-couple).
+RETRY_SCHEDULE_MIN_DELAY_SECONDS = 1
+RETRY_SCHEDULE_MAX_DELAY_SECONDS = 300
+RETRY_SCHEDULE_MIN_MULTIPLIER = 1.0
+RETRY_SCHEDULE_MAX_MULTIPLIER = 10.0
+RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS = 45.0
+RETRY_SCHEDULE_DEFAULT_MULTIPLIER = 2.0
+RETRY_SCHEDULE_ALLOWED_KEYS = frozenset({"delay_seconds", "multiplier"})
 
 
 class RetryConfigError(ValueError):
@@ -153,7 +182,14 @@ def parse_node_retry(raw: Any) -> NodeRetryPolicy | None:
     # Nevers retry when the event set is empty.
     if not events:
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
-    backoff_sec = min(float(max(backoff, 0.0)), RETRY_BACKOFF_CAP_SECONDS)
+    # A huge un-representable int (e.g. 10**400, direct graph JSON) overflows
+    # float(); raise the SAME typed error as any other non-numeric backoff so
+    # validate_node_retry_config's `except RetryConfigError` handles it (typed
+    # 422, not a 500).
+    backoff_f = safe_float(max(backoff, 0.0))
+    if backoff_f is None:
+        raise RetryConfigError("retry 'backoff' must be a number of seconds", "RETRY_CONFIG_MALFORMED")
+    backoff_sec = min(backoff_f, RETRY_BACKOFF_CAP_SECONDS)
     return NodeRetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_sec, events=events)
 
 
@@ -209,8 +245,182 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     max_attempts = min(max_retries + 1, RETRY_MAX_ATTEMPTS_BOUND)
     backoff = pipeline_retry_policy.get("backoff", 0.0)
-    backoff_sec = min(float(max(backoff, 0.0)), RETRY_BACKOFF_CAP_SECONDS) if isinstance(backoff, (int, float)) else 0.0
+    # A huge un-representable int (e.g. 10**400, direct-DB-written) overflows
+    # float(); treat it like any other non-numeric backoff — the documented
+    # 0.0 default (the else branch below) — instead of bricking graph compile.
+    backoff_f = safe_float(backoff) if isinstance(backoff, (int, float)) else None
+    backoff_sec = min(max(backoff_f, 0.0), RETRY_BACKOFF_CAP_SECONDS) if backoff_f is not None else 0.0
     return NodeRetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_sec, events=frozenset(node_events))
+
+
+def safe_float(value: float) -> float | None:
+    """``float(value)`` with :class:`OverflowError` contained (None on overflow).
+
+    A JSON int literal with more digits than float can represent (e.g.
+    ``10**400``) parses to an arbitrary-precision int whose ``float()``
+    conversion raises OverflowError. Callers treat ``None`` as "unusable
+    value" and apply their own documented default (fail-open) or typed
+    error (:class:`RetryConfigError`).
+    """
+    try:
+        return float(value)
+    except OverflowError:
+        return None
+
+
+def resolve_backoff_schedule(policy: Any) -> tuple[bool, float, float, str | None]:
+    """Resolve the run-level ``backoff_schedule`` from a ``retry_policy`` (FAR-525).
+
+    Pure, DB-free, TOTAL fail-open: any structural fault (non-dict policy,
+    non-dict / empty-object schedule, unknown inner key, bool-typed or
+    out-of-bounds ``delay_seconds`` / ``multiplier``, NaN / Infinity) yields the
+    hardcoded DEFAULT schedule (``45s x 2.0`` — identical to the executor's
+    pre-FAR-525 behaviour) plus a fail-open ``reason`` the CALLER logs. The
+    fail-open is ALL-OR-NOTHING: no partial application of a partially valid
+    schedule.
+
+    Returns ``(schedule_present, delay_seconds, multiplier, fail_open_reason)``:
+      - absent (``backoff_schedule`` is ``None``/``{}``/missing, or the policy
+        is not a dict): ``(False, RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS,
+        RETRY_SCHEDULE_DEFAULT_MULTIPLIER, None)`` — the LIVE defaults are
+        THIS module's ``RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS`` /
+        ``RETRY_SCHEDULE_DEFAULT_MULTIPLIER`` (the executor's
+        ``_retry_backoff_seconds`` parameter defaults are single-sourced to
+        the same constants; the topology hash is unaffected either way — it
+        folds the STORED policy dict, never the resolver's return values).
+      - valid: ``(True, delay_seconds, multiplier, None)`` — ``delay_seconds``
+        is an integer-valued float and ``multiplier`` a float, so a re-resolve
+        of the same stored dict is deterministic.
+      - invalid: ``(True, default, default, reason)`` — present but unusable,
+        so the caller logs the structured fail-open warning and re-dispatch
+        falls back to the default schedule.
+    """
+    base = float(RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS)
+    default_multiplier = RETRY_SCHEDULE_DEFAULT_MULTIPLIER
+    if not isinstance(policy, dict):
+        return (False, base, default_multiplier, None)
+    schedule = policy.get("backoff_schedule")
+    if schedule is None or (isinstance(schedule, dict) and not schedule):
+        return (False, base, default_multiplier, None)
+
+    def _fail_open(reason: str) -> tuple[bool, float, float, str | None]:
+        return (True, base, default_multiplier, reason)
+
+    if not isinstance(schedule, dict):
+        return _fail_open("backoff_schedule must be an object")
+    unknown = set(schedule) - RETRY_SCHEDULE_ALLOWED_KEYS
+    if unknown:
+        return _fail_open(f"backoff_schedule contains unknown keys {sorted(str(k) for k in unknown)}")
+
+    delay_raw = schedule.get("delay_seconds")
+    if isinstance(delay_raw, bool) or not isinstance(delay_raw, (int, float)):
+        return _fail_open("backoff_schedule 'delay_seconds' must be a number of seconds")
+    delay_f = safe_float(delay_raw)
+    if delay_f is None:
+        return _fail_open("'delay_seconds' is out of representable range")
+    # NaN/Infinity fail the range comparison (not <= bound / not < bound), so
+    # they land in the same fail-open bucket as any other out-of-bounds value.
+    if not RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= RETRY_SCHEDULE_MAX_DELAY_SECONDS:
+        return _fail_open(
+            f"backoff_schedule 'delay_seconds' out of bounds "
+            f"[{RETRY_SCHEDULE_MIN_DELAY_SECONDS}, {RETRY_SCHEDULE_MAX_DELAY_SECONDS}]"
+        )
+    # Aligned with the write-site validator (FAR-525 qa gate): a non-integral
+    # in-range delay (e.g. 2.5) is rejected there, so the resolver must not
+    # silently truncate it — fail open to the default schedule instead.
+    if delay_f != int(delay_f):
+        return _fail_open("'delay_seconds' must be an integer")
+
+    mult_raw = schedule.get("multiplier", default_multiplier)
+    if isinstance(mult_raw, bool) or not isinstance(mult_raw, (int, float)):
+        return _fail_open("backoff_schedule 'multiplier' must be a number")
+    multiplier = safe_float(mult_raw)
+    if multiplier is None:
+        return _fail_open("'multiplier' is out of representable range")
+    if not RETRY_SCHEDULE_MIN_MULTIPLIER <= multiplier <= RETRY_SCHEDULE_MAX_MULTIPLIER:
+        return _fail_open(
+            f"backoff_schedule 'multiplier' out of bounds "
+            f"[{RETRY_SCHEDULE_MIN_MULTIPLIER}, {RETRY_SCHEDULE_MAX_MULTIPLIER}]"
+        )
+    return (True, float(int(delay_f)), multiplier, None)
+
+
+def canonicalise_backoff_schedule(schedule: Any) -> dict[str, Any] | None:
+    """Canonicalise a ``backoff_schedule`` dict for type-stable storage (FAR-525).
+
+    The SINGLE implementation of the write-site canonicalisation invariant
+    (``delay_seconds`` integral float -> ``int``, ``multiplier`` ``int`` ->
+    ``float``) — shared by the API write path and the import sanitiser so the
+    retry-aware topology hash cannot flip on a float/int spelling of the same
+    schedule.
+
+    Returns ``None`` for absent/empty/non-dict input (nothing to canonicalise)
+    and a NEW dict (the input is never mutated) otherwise. Raises
+    ``ValueError`` with the standard validator message shape when a value
+    cannot be represented as float at all (e.g. a JSON int literal with more
+    digits than float can represent, ``10**400``) — the shape/bounds faults
+    themselves stay owned by ``GraphValidator.check_retry_policy_schedule``;
+    this helper only guards its own conversion.
+    """
+    if not isinstance(schedule, dict) or not schedule:
+        return None
+    canonical = dict(schedule)
+    delay = canonical.get("delay_seconds")
+    if isinstance(delay, (int, float)) and not isinstance(delay, bool):
+        # Attempt the float conversion for ANY numeric (ints included) so a
+        # huge un-representable int (e.g. 10**400) raises the standard
+        # ValueError instead of leaking an OverflowError; only FLOAT values
+        # are rebuilt (ints pass through value-exact).
+        try:
+            delay_f = float(delay)
+        except OverflowError as exc:
+            raise ValueError(
+                "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
+                f"{RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {RETRY_SCHEDULE_MAX_DELAY_SECONDS}"
+            ) from exc
+        if not isinstance(delay, int) and delay_f.is_integer():
+            canonical["delay_seconds"] = int(delay_f)
+    mult = canonical.get("multiplier")
+    if isinstance(mult, int) and not isinstance(mult, bool):
+        try:
+            canonical["multiplier"] = float(mult)
+        except OverflowError as exc:
+            raise ValueError(
+                "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
+                f"{RETRY_SCHEDULE_MIN_MULTIPLIER} and {RETRY_SCHEDULE_MAX_MULTIPLIER}"
+            ) from exc
+    return canonical
+
+
+_TOKENISH_KEY_RE = re.compile(r"token|secret|password|credential|api[-_]?key|authorization", re.IGNORECASE)
+_SNIPPET_LIMIT = 120
+
+
+def sanitize_retry_policy_snippet(value: Any, limit: int = _SNIPPET_LIMIT) -> str:
+    """A BOUNDED, REDACTED string snippet of an offending config value (FAR-525).
+
+    Used for fail-open warning logs: the offending input is operator-supplied
+    JSON, so it must never reach a log line raw or unbounded. Only scalar
+    fields are rendered, values whose KEY looks token-like are redacted, and
+    the result is truncated to ``limit`` characters. Never raises.
+    """
+    try:
+        if isinstance(value, dict):
+            safe: dict[str, str] = {}
+            for k, v in value.items():
+                key = str(k)
+                if _TOKENISH_KEY_RE.search(key):
+                    safe[key] = "[REDACTED]"
+                elif isinstance(v, (int, float, bool)) or v is None:
+                    safe[key] = repr(v)
+                else:
+                    safe[key] = f"<{type(v).__name__}>"
+            rendered = json.dumps(safe, sort_keys=True)
+        else:
+            rendered = f"<{type(value).__name__}>"
+        return rendered[:limit]
+    except Exception:  # pragma: no cover - never raise from a log helper
+        return "<unrenderable>"
 
 
 def node_retries_on(policy: NodeRetryPolicy, event: str) -> bool:

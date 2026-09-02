@@ -232,6 +232,7 @@ class TestUserList:
 
         fake_membership = MagicMock()
         fake_membership.role = "admin"
+        fake_membership.deactivated_at = None
 
         with patch(
             "modulo.api.routes.admin._list_org_accounts",
@@ -271,6 +272,7 @@ class TestUserUpdate:
 
         fake_membership = MagicMock()
         fake_membership.role = "runner"
+        fake_membership.deactivated_at = None
 
         with (
             patch(
@@ -322,13 +324,14 @@ class TestUserDeactivate:
         fake_account.created_at = _NOW
         fake_account.last_login = None
         fake_account.is_break_glass = False
-        # The SECURITY DEFINER deactivation sets active=false globally; the route
-        # refreshes the account after the call, so reflect the post-state here.
-        fake_account.active = False
+        # Per-org deactivation (FAR-533): accounts.active stays true; the
+        # CALLER'S-ORG membership carries the deactivated_at tombstone.
+        fake_account.active = True
         target_id = str(_OTHER_USER_ID)
 
         fake_membership = MagicMock()
         fake_membership.role = "admin"
+        fake_membership.deactivated_at = _NOW
 
         with (
             patch(
@@ -393,6 +396,8 @@ class TestUserReactivate:
 
         fake_membership = MagicMock()
         fake_membership.role = "admin"
+        # FAR-533: reactivation clears the caller's-org tombstone only.
+        fake_membership.deactivated_at = None
 
         with (
             patch(

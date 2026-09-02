@@ -3877,32 +3877,39 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     never-re-claimable zombie is ultimately bounded by the B4 mid-graph-wedge
     age backstop.
 
-    Retry budgeting (FAR-509) — the budget bounds successful-claim CYCLES
-    (terminal-fail once ``claim_count`` exceeds it; it does NOT bound the
-    enqueue count):
-      * ``retry_policy`` present (non-empty) with ``"stall"`` in ``on``: honor the
+    Retry budgeting (FAR-509, re-keyed on EVENT CONTENT by the FAR-525 qa
+    gate) — the budget bounds successful-claim CYCLES (terminal-fail once
+    ``claim_count`` exceeds it; it does NOT bound the enqueue count):
+      * ``retry_policy`` with ``"stall"`` in ``on``: honor the
         ``max_retries`` budget. ``claim_count`` is 1 for the initial claim, so a
         re-dispatch is allowed while ``claim_count <= max_retries`` (initial
         attempt + up to ``max_retries`` retries).
-      * ``retry_policy`` absent/None OR an empty policy (the column defaults to
-        ``{}``): re-dispatch while ``claim_count`` is within the configurable
-        budget (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 2). Zero nodes have
+      * ``retry_policy`` absent/None, a non-dict, OR an ``on`` that is
+        empty/missing (this includes the ``{}`` column default AND the
+        FAR-525 GUI's no-op panel save
+        ``{on: [], max_retries: 0, backoff_schedule: {...}}``): re-dispatch
+        while ``claim_count`` is within the configurable budget
+        (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 2). Zero nodes have
         executed, so every re-dispatch is safe; terminal-fail applies once the
-        budget is exhausted.
-      * ``retry_policy`` present (non-empty) but WITHOUT ``"stall"`` in ``on``:
-        terminal-fail — never re-dispatch a nodeless zombie for a trigger it does
-        not cover.
+        budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
+        (what it covers), never on dict non-emptiness — a no-op panel save
+        must not silently convert budget-default repair into terminal-fail.
+      * ``retry_policy`` whose ``on`` is non-empty but does NOT contain
+        ``"stall"``: terminal-fail — never re-dispatch a nodeless zombie for a
+        trigger it does not cover.
     """
     retry_policy = getattr(row, "retry_policy", None)
-    if isinstance(retry_policy, dict) and retry_policy:
+    if isinstance(retry_policy, dict):
         on = retry_policy.get("on") or []
         if "stall" in on:
             max_retries = int(retry_policy.get("max_retries", 0) or 0)
             return bool(row.claim_count <= max_retries)
-        # A non-empty policy that does not cover "stall" must NOT re-dispatch a
-        # nodeless zombie — terminal-fail it.
-        return False
-    # No stall retry policy (or no/empty policy): re-dispatch while within the
+        if on:
+            # A policy whose `on` names events but does NOT cover "stall" must
+            # NOT re-dispatch a nodeless zombie — terminal-fail it.
+            return False
+    # No stall coverage (no/empty/None policy, an empty/missing `on`, or the
+    # GUI's no-op all-empty panel save): re-dispatch while within the
     # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2 — FAR-509;
     # claim_count is 1 for the un-re-dispatched initial claim). This bounds the
     # successful-claim cycles, NOT the enqueue rate — the rate is throttled in

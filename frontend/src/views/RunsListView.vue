@@ -37,14 +37,16 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadRuns" />
 
-    <EmptyState
-      v-else-if="runs.length === 0"
-      :title="$t('views.RunsListView.no_runs_found')"
-      :description="$t('views.RunsListView.empty_state_description')"
-    />
-
     <template v-else>
-      <div class="table-wrapper">
+      <!-- An emptied cursor page still renders the footer when the user can
+           go back, so they are never stranded without Prev. -->
+      <EmptyState
+        v-if="runs.length === 0"
+        :title="$t('views.RunsListView.no_runs_found')"
+        :description="$t('views.RunsListView.empty_state_description')"
+      />
+
+      <div v-else class="table-wrapper">
         <DataTable
           :columns="[
             { key: 'pipeline_name', label: $t('views.RunsListView.pipeline'), sortable: true },
@@ -157,7 +159,10 @@
         </DataTable>
       </div>
 
-      <div class="flex items-center justify-between">
+      <div
+        v-if="runs.length > 0 || cursorStack.length > 0"
+        class="flex items-center justify-between"
+      >
         <span class="text-sm text-muted-foreground">
           {{ $t('views.RunsListView.run_count', total) }}
         </span>
@@ -193,7 +198,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted, onMounted } from 'vue'
 import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
@@ -229,8 +234,9 @@ const cursor = ref(parseCursorParam(route.query.cursor))
 const cursorStack = ref<Array<string | null>>([])
 const pagePosition = ref(1)
 // The visited-page count is only meaningful for in-session navigation — a
-// deep link straight onto a cursor has no known position, so the label hides.
-const positionKnown = ref(false)
+// deep link straight onto a cursor has no known position, so the label hides;
+// a bare mount is page 1 by definition.
+const positionKnown = ref(!cursor.value)
 
 const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
 const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
@@ -322,6 +328,14 @@ onUnmounted(() => {
   }
 })
 
+onMounted(() => {
+  if (route.query.page !== undefined) {
+    const query: LocationQuery = { ...route.query }
+    delete query.page
+    router.replace({ query })
+  }
+})
+
 function aggregateCostValue(run: RunListItem): number | null {
   if (run.aggregate_cost_usd == null || run.aggregate_cost_usd === '') return null
   const aggregate = Number(run.aggregate_cost_usd)
@@ -378,6 +392,7 @@ function handleFilterUpdate(key: string, value: string) {
 }
 
 function nextPage() {
+  if (loading.value) return
   if (!canGoNext.value) return
   cursorStack.value = [...cursorStack.value, cursor.value]
   cursor.value = nextCursor.value
@@ -388,6 +403,7 @@ function nextPage() {
 }
 
 function prevPage() {
+  if (loading.value) return
   if (cursorStack.value.length === 0) return
   const stack = [...cursorStack.value]
   cursor.value = stack.pop() ?? null

@@ -13001,7 +13001,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing. 'backoff' is the legacy NODE-level inherited retry delay (node retries inherit this value; default 0). 'backoff_schedule' paces ONLY the run-level re-dispatch: the in-job sleep is min(delay_seconds * multiplier^(attempt-1), 300) plus up to +25% jitter (cap and jitter are code-held, not configurable); multiplier defaults to 2.0 (1.0 = fixed delay). The effective re-dispatch gap is the sleep plus settings.saq_retry_delay plus queue wait.
              */
             retry_policy?: {
                 [key: string]: unknown;
@@ -13478,7 +13478,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5}. Set to {} to clear.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. Set to {} to clear. 'backoff' = node-level inherited retry delay; 'backoff_schedule' = run-level re-dispatch pacing only (min(delay_seconds * multiplier^(attempt-1), 300) + up to 25% jitter; multiplier default 2.0). Effective gap = sleep + settings.saq_retry_delay + queue wait.
              */
             retry_policy?: {
                 [key: string]: unknown;

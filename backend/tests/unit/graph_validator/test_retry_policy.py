@@ -111,3 +111,93 @@ def test_retry_policy_default_max_retries_is_valid() -> None:
     GraphValidator.check_retry_policy({"on": ["stall"]}, result)
     assert not result.issues
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# FAR-525 — check_retry_policy_schedule (the OPTIONAL backoff_schedule key)
+# ---------------------------------------------------------------------------
+
+
+def _schedule_errors(policy: object) -> list[str]:
+    result = ValidationResult()
+    GraphValidator.check_retry_policy_schedule(policy, result)
+    return [i.message for i in result.issues if i.code == "RETRY_POLICY_SCHEDULE_MALFORMED"]
+
+
+def test_schedule_absent_or_empty_passes() -> None:
+    for policy in (
+        None,
+        {},
+        {"on": ["failure"], "max_retries": 1},
+        {"on": ["failure"], "max_retries": 1, "backoff_schedule": None},
+        {"on": ["failure"], "max_retries": 1, "backoff_schedule": {}},
+    ):
+        assert not _schedule_errors(policy)
+
+
+def test_schedule_non_dict_policy_passes() -> None:
+    # A non-dict policy is the core validator's fault, not the schedule's.
+    assert not _schedule_errors("stall")
+
+
+def test_schedule_non_dict_schedule_is_malformed() -> None:
+    assert _schedule_errors({"backoff_schedule": 45})
+
+
+def test_schedule_missing_delay_seconds_is_malformed() -> None:
+    errors = _schedule_errors({"backoff_schedule": {"multiplier": 2.0}})
+    assert len(errors) == 1
+    assert "delay_seconds" in errors[0]
+
+
+def test_schedule_bounds_edges() -> None:
+
+    # Accepted
+    for delay in (1, 300, 300.0, 1.0):
+        assert not _schedule_errors({"backoff_schedule": {"delay_seconds": delay}}), delay
+    for mult in (1, 1.0, 2, 2.0, 10, 10.0):
+        assert not _schedule_errors({"backoff_schedule": {"delay_seconds": 45, "multiplier": mult}}), mult
+    # Rejected: bools, non-integral, out of bounds, NaN/Infinity
+    for bad in (0, 301, -1, 0.9, 300.5, 1.5, True, False, float("nan"), float("inf"), "45", None):
+        assert _schedule_errors({"backoff_schedule": {"delay_seconds": bad}}), bad
+    for bad in (0.9, 10.1, -1, True, False, float("nan"), float("inf"), "2", None):
+        assert _schedule_errors({"backoff_schedule": {"delay_seconds": 45, "multiplier": bad}}), bad
+
+
+def test_schedule_huge_int_delay_is_malformed_not_a_crash() -> None:
+    """FAR-525 qa gate: a JSON int literal with >308 digits (10**309 / 10**400)
+    parses to an arbitrary-precision Python int whose float() conversion raises
+    OverflowError. The validator must contain that and emit the STANDARD
+    RETRY_POLICY_SCHEDULE_MALFORMED issue (a 422 at the write sites, a warning
+    at run start) — never raise."""
+    for huge in (10**309, 10**400, -(10**400)):
+        errors = _schedule_errors({"backoff_schedule": {"delay_seconds": huge}})
+        assert len(errors) == 1, huge
+    for huge in (10**309, 10**400):
+        errors = _schedule_errors({"backoff_schedule": {"delay_seconds": 45, "multiplier": huge}})
+        assert len(errors) == 1, huge
+
+
+def test_schedule_unknown_inner_key_rejected() -> None:
+    errors = _schedule_errors({"backoff_schedule": {"delay_seconds": 45, "backof": 2}})
+    assert len(errors) == 1
+    assert "backof" in errors[0]
+
+
+def test_schedule_valid_schedule_emits_nothing() -> None:
+    assert not _schedule_errors({"backoff_schedule": {"delay_seconds": 30, "multiplier": 1.5}})
+
+
+def test_schedule_malformed_does_not_affect_core_check() -> None:
+    """Layering: the schedule fault is a DISTINCT code — a policy with a valid
+    core shape but a malformed schedule passes the CORE check clean, and the
+    schedule check alone carries RETRY_POLICY_SCHEDULE_MALFORMED."""
+    policy = {"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 0}}
+    core_result = ValidationResult()
+    GraphValidator.check_retry_policy(policy, core_result)
+    assert "RETRY_POLICY_MALFORMED" not in _codes(core_result)
+    assert core_result.is_valid
+    schedule_result = ValidationResult()
+    GraphValidator.check_retry_policy_schedule(policy, schedule_result)
+    assert "RETRY_POLICY_SCHEDULE_MALFORMED" in _codes(schedule_result)
+    assert not schedule_result.is_valid

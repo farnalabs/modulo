@@ -44,3 +44,21 @@ Rejected — loses identity link in historical records. Effective audit requires
 ### Soft delete (deleted_at timestamp)
 
 Rejected as unnecessary complexity — the `active` boolean already separates "currently active" from "offboarded" users. A `deleted_at` field would add query complexity without meaningful benefit. The PRD user model (§9.1) already defines `active` as the canonical status field.
+
+## Update (2026-09-02, FAR-533 / gh-1794): deactivation is PER-ORG
+
+The deactivation described above was account-global: `accounts.active = false`
+locked the user out of EVERY org they belong to, while the caller was only ever
+authorised by a SINGLE shared org. Migration `0173_per_org_deactivation`
+redefined the caller-bound SECURITY DEFINER so the org-admin deactivation path
+tombstones the caller's-org membership (`org_memberships.deactivated_at`) and
+leaves `accounts.active` untouched — a user shared with orgs B/C keeps their
+access there. Reactivation (`POST /users/{user_id}/reactivate`, and
+`PUT /users/{user_id}` with `is_active`) clears the caller's-org tombstone
+only. The session-revocation guarantee of rationale 4 is preserved: token
+families and API keys scoped to the caller's org are revoked atomically, and
+the tombstone gates login org-resolution, live-role revalidation and refresh
+(ADR 017). The global `accounts.active` flip is now reserved for the operator /
+break-glass path (`modulo_breakglass`), which remains a global ban by design.
+Accounts deactivated under the old global behaviour stay globally inactive
+until an operator reactivates them.

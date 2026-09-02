@@ -129,10 +129,11 @@ async def scim_deactivate_user(
     """Tombstone a SCIM-managed user via the caller-bound deactivate_break_glass.
 
     The SECURITY DEFINER revokes families/keys scoped to the caller's shared
-    orgs, deactivates the membership(s), sets ``accounts.active = false``
-    globally, and applies the destructive tombstone for break-glass targets.
-    Atomic single statement; raises M2010/M2020/M2040 via custom ERRCODE that
-    the route maps to SCIM status codes.
+    orgs, tombstones the membership(s) (``deactivated_at`` — the per-org
+    deactivation signal, gh-1794/FAR-533; the global ``accounts.active`` flip
+    is operator/break-glass only), and applies the destructive tombstone for
+    break-glass targets. Atomic single statement; raises M2010/M2020/M2040 via
+    custom ERRCODE that the route maps to SCIM status codes.
     """
     account = await scim_get_user(session, org_id, user_id)
     if account is None:

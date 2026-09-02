@@ -846,23 +846,72 @@ def suggest_import_name(
     return f"{base} {suffix} {idx}"
 
 
-def _sanitize_retry_policy(imported: Any) -> dict[str, Any]:
-    """Validate an imported pipeline ``retry_policy``; coerce malformed to {}.
+def _sanitize_retry_policy(imported: Any) -> tuple[dict[str, Any], str | None]:
+    """Validate an imported pipeline ``retry_policy``; sanitise by fault class (FAR-525).
 
     A malformed policy is a hard pre-run failure at execute time
-    (``GraphValidator.check_retry_policy`` → ``GraphValidationError``), which
+    (``GraphValidator.check_retry_policy`` -> ``GraphValidationError``), which
     would break EVERY run of an imported pipeline. Import is best-effort copy:
     never let a malformed bundled policy permanently break the imported
-    pipeline's runs, so invalid policies are dropped to the no-policy default
-    ({}). A valid policy is returned unchanged (as a shallow copy).
+    pipeline's runs.
+
+    Returns ``(policy, fault_class)``:
+      - absent (``None``): ``({}, None)`` — "no policy" is NOT a fault (the
+        legacy warning only fired for a PRESENT malformed policy).
+      - no fault: ``(canonicalised copy, None)`` — canonicalisation-only deltas
+        (e.g. ``300.0`` -> ``300``) are NOT faults.
+      - schedule-level fault (the OPTIONAL ``backoff_schedule`` is malformed):
+        NESTED DROP — the schedule key is removed but ``on``/``max_retries``/
+        ``backoff`` are KEPT (``"schedule"``). A bad pacing schedule must not
+        cost the caller its entire retry policy.
+      - any TOP-LEVEL core fault (``on``/``max_retries``/present non-dict):
+        WHOLE DROP to ``{}`` UNCHANGED from the legacy behaviour (``"core"``).
+
+    A mixed-error payload (core AND schedule faults) whole-drops: the core
+    fault is the fatal one, and keeping ``on``/``max_retries`` beside a
+    schedule we had to drop anyway buys nothing.
     """
+    from modulo.core.pipeline_engine import retry_compensation
+
+    if imported is None:
+        return {}, None
     if not isinstance(imported, dict):
-        return {}
-    check = ValidationResult()
-    GraphValidator.check_retry_policy(imported, check)
-    if check.is_valid:
-        return dict(imported)
-    return {}
+        return {}, "core"
+    core_check = ValidationResult()
+    GraphValidator.check_retry_policy(imported, core_check)
+    if not core_check.is_valid:
+        return {}, "core"
+    schedule_check = ValidationResult()
+    canonical_schedule: dict[str, Any] | None = None
+    schedule_valid = True
+    try:
+        GraphValidator.check_retry_policy_schedule(imported, schedule_check)
+        schedule_valid = schedule_check.is_valid
+        if schedule_valid:
+            # Canonicalise type-stable storage via the SINGLE shared helper
+            # (retry_compensation.canonicalise_backoff_schedule): integral float
+            # -> int, int -> float — identical to the API write site. Inside the
+            # same containment try: a canonicalise ValueError (an
+            # un-representable value the validator let through) is a SCHEDULE
+            # fault — the schedule key drops, the core policy survives.
+            canonical_schedule = retry_compensation.canonicalise_backoff_schedule(imported.get("backoff_schedule"))
+    except Exception:
+        # Defense-in-depth (FAR-525 qa gate): neither the schedule validator nor
+        # the canonicaliser may break the import with an unexpected exception —
+        # ANY escape degrades to the schedule-fault class (nested drop +
+        # schedule warning). The warning distinguishes a genuine validator
+        # defect from malformed bundled data. The CORE check above keeps its
+        # exact semantics (a core fault whole-drops, unchanged) — only
+        # unexpected-exception containment is broadened.
+        logger.warning("workflow_import.retry_policy_schedule_check_failed", exc_info=True)
+        schedule_valid = False
+    policy = dict(imported)
+    if schedule_valid:
+        if canonical_schedule is not None:
+            policy["backoff_schedule"] = canonical_schedule
+        return policy, None
+    policy.pop("backoff_schedule", None)
+    return policy, "schedule"
 
 
 async def get_existing_pipeline_names(
@@ -1115,11 +1164,22 @@ def _normalize_graph_nodes(pipeline_info: dict[str, Any], warnings: list[str]) -
 
 
 def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, Any], warnings: list[str]) -> None:
-    """Sanitise the imported retry_policy so a malformed policy never breaks runs."""
+    """Sanitise the imported retry_policy so a malformed policy never breaks runs.
+
+    FAR-525: warnings derive from the sanitiser's fault class — a schedule-only
+    fault nested-drops (schedule removed, policy kept) with its own warning;
+    a core fault whole-drops to {} with the legacy warning. A
+    canonicalisation-only delta (no fault) emits NO warning.
+    """
     imported_retry_policy = pipeline_info.get("retry_policy")
-    sanitized_retry_policy = _sanitize_retry_policy(imported_retry_policy)
-    if imported_retry_policy is not None and sanitized_retry_policy != imported_retry_policy:
+    sanitized_retry_policy, fault_class = _sanitize_retry_policy(imported_retry_policy)
+    if fault_class == "core":
         warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
+    elif fault_class == "schedule":
+        warnings.append(
+            "Imported pipeline 'retry_policy' contained a malformed 'backoff_schedule'; "
+            "the schedule was removed but the retry policy (on/max_retries) was kept."
+        )
     pipeline.retry_policy = sanitized_retry_policy
 
 

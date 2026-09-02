@@ -525,9 +525,13 @@ class TestReconcilePredicateMatrix:
 class TestNodelessRedispatchBudget:
     """FAR-509: the policy-less nodeless re-dispatch budget is configurable via
     SAQ_NODELESS_REDISPATCH_BUDGET (default 2). Direct unit checks of
-    ``_should_redispatch_nodeless`` — the retry-policy taxonomy (stall-covered
-    → max_retries; non-empty without stall → never) is deliberate and MUST NOT
-    change."""
+    ``_should_redispatch_nodeless`` — the retry-policy taxonomy. FAR-525 qa
+    gate: the decision keys on the POLICY's EVENT CONTENT (its ``on`` list),
+    NEVER on dict non-emptiness — a policy whose ``on`` is empty/missing is
+    treated the SAME as ``{}`` (budget-default repair), so the FAR-525 GUI's
+    no-op panel save (``{on: [], max_retries: 0, backoff_schedule: {...}}``,
+    always non-empty) cannot silently convert budget-default repair into
+    terminal-fail."""
 
     @staticmethod
     def _row(claim_count: int, retry_policy: Any = None) -> SimpleNamespace:
@@ -537,7 +541,7 @@ class TestNodelessRedispatchBudget:
 
     def test_policy_less_first_claim_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """claim_count=1 (the initial claim, never re-dispatched) is within the
-        default budget → re-dispatch."""
+        default budget — re-dispatch."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(1)) is True
 
@@ -548,14 +552,14 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(2)) is True
 
     def test_policy_less_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default budget 2: claim_count=3 has exhausted the budget → the
+        """Default budget 2: claim_count=3 has exhausted the budget — the
         backstop terminal-fail applies."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(3)) is False
 
     def test_policy_less_custom_budget_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With SAQ_NODELESS_REDISPATCH_BUDGET=1, claim_count=2 is already past
-        the budget → terminal-fail (the pre-FAR-509 hardcoded behaviour)."""
+        the budget — terminal-fail (the pre-FAR-509 hardcoded behaviour)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=1))
         assert ch._should_redispatch_nodeless(self._row(2)) is False
 
@@ -567,7 +571,7 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is False
 
     def test_non_stall_policy_never_redispatches(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A non-empty policy WITHOUT 'stall' in 'on' is terminal-failed
+        """A policy whose `on` NAMES events but WITHOUT 'stall' is terminal-failed
         regardless of claim_count or the configured budget."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
         assert (
@@ -580,6 +584,24 @@ class TestNodelessRedispatchBudget:
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(2, retry_policy={})) is True
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={})) is False
+
+    def test_noop_panel_save_policy_gets_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-525 qa gate — the 4-row characterization, row 4 (THE FIX): the
+        FAR-525 GUI's no-op panel save always stores a NON-EMPTY policy
+        (``{on: [], max_retries: 0, backoff_schedule: {...}}``). Its ``on`` is
+        EMPTY, so it must be treated the SAME as ``{}`` — budget-default
+        repair, NOT the terminal-fail a non-emptiness key produced."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        noop_save = {"on": [], "max_retries": 0, "backoff_schedule": {"delay_seconds": 45, "multiplier": 2.0}}
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy=noop_save)) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy=noop_save)) is False
+
+    def test_missing_on_key_gets_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-empty policy whose `on` key is MISSING is also event-empty:
+        budget-default repair (event content, not dict shape, decides)."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"max_retries": 3})) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"max_retries": 3})) is False
 
 
 class TestNodelessRedispatchThrottle:

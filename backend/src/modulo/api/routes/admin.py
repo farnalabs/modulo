@@ -198,13 +198,22 @@ def _update_org_setting(org: Organisation, key: str, value: object) -> None:
     org.settings_json = settings
 
 
-def _to_user_list_item(account: Account, org_role: str) -> "UserListItem":
+def _to_user_list_item(account: Account, org_role: str, org_membership: OrgMembership | None = None) -> "UserListItem":
+    """Serialise an account for the caller's org view.
+
+    ``is_active`` is the caller's-ORG view (gh-1794/FAR-533): an account with
+    ``active = true`` whose membership in the CALLER'S org is tombstoned
+    (``deactivated_at`` set — the per-org deactivation signal) is INACTIVE in
+    that org. Without a membership the global ``accounts.active`` flag is the
+    only available signal (legacy call sites / system-admin bootstrapping).
+    """
+    org_active = org_membership is None or org_membership.deactivated_at is None
     return UserListItem(
         id=str(account.id),
         email=account.email,
         display_name=account.display_name,
         org_role=org_role,
-        is_active=account.active,
+        is_active=bool(account.active) and org_active,
         auth_provider=account.auth_provider,
         created_at=account.created_at.isoformat(),
         last_login=account.last_login.isoformat() if account.last_login else None,
@@ -1052,7 +1061,7 @@ async def admin_list_users(
         _raise_this_feature_not_available()
 
     return UserListResponse(
-        items=[_to_user_list_item(a, m.role) for a, m in accounts_memberships],
+        items=[_to_user_list_item(a, m.role, org_membership=m) for a, m in accounts_memberships],
         total=total,
         page=page,
         page_size=page_size,
@@ -1150,8 +1159,25 @@ async def admin_update_user(
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
                 )
 
-            if req.is_active is not None:
-                account.active = req.is_active
+            # FAR-533 (gh-1794): is_active is PER-ORG. Deactivating tombstones
+            # the CALLER'S-ORG membership (deactivated_at) and never flips the
+            # account-global accounts.active flag — a single-org admin must
+            # not be able to lock a shared user out of other orgs. Reactivating
+            # clears the caller's-org tombstone only; a globally-flipped
+            # account (operator break-glass) stays inactive until an operator
+            # restores it.
+            if req.is_active is False:
+                from sqlalchemy import update as sa_update
+
+                await session.execute(
+                    sa_update(OrgMembership)
+                    .where(
+                        OrgMembership.account_id == user_id,
+                        OrgMembership.organisation_id == current_user.organisation_id,
+                        OrgMembership.deactivated_at.is_(None),
+                    )
+                    .values(deactivated_at=func.now())
+                )
             if req.is_active is True:
                 from sqlalchemy import update as sa_update
 
@@ -1192,7 +1218,12 @@ async def admin_update_user(
         _raise_this_feature_not_available()
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
-    return _to_user_list_item(account, org_role)
+    # Refresh the membership AFTER the tombstone writes committed — the bulk
+    # UPDATE does not refresh the in-session ORM object and (expire_on_commit
+    # off) a plain re-SELECT would return the same stale identity-map instance
+    # (gh-1794/FAR-533).
+    await session.refresh(target_membership)
+    return _to_user_list_item(account, org_role, org_membership=target_membership)
 
 
 async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
@@ -1292,8 +1323,10 @@ async def admin_deactivate_user(
                 target_active_after=False,
             )
 
-            # Caller-bound SECURITY DEFINER: scoped family/key/membership
-            # revocation + account-global active=false + per-org last-admin
+            # Caller-bound SECURITY DEFINER: per-org family/key/membership
+            # revocation + per-org membership tombstone (deactivated_at — the
+            # deactivation signal, gh-1794/FAR-533; accounts.active is only
+            # flipped by the operator/break-glass branch) + per-org last-admin
             # M2020 + bg-only destructive tombstone. Atomic single statement.
             await session.execute(
                 text("SELECT public.deactivate_break_glass(:caller, :target, false)"),
@@ -1359,7 +1392,13 @@ async def admin_deactivate_user(
         )
         _raise_unexpected("An unexpected error occurred while deactivating the user.")
 
-    return _to_user_list_item(account, org_role)
+    # Refresh the membership AFTER the SECURITY DEFINER tombstoned it — the
+    # raw-SQL call does not refresh the in-session ORM object, and (with
+    # expire_on_commit off) a plain re-SELECT would return the same stale
+    # identity-map instance. is_active must reflect the caller's-org tombstone
+    # (gh-1794/FAR-533).
+    await session.refresh(membership)
+    return _to_user_list_item(account, org_role, org_membership=membership)
 
 
 @router.post("/users/{user_id}/reactivate")
@@ -1393,8 +1432,12 @@ async def admin_reactivate_user(
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
 
-            account.active = True
-
+            # FAR-533 (gh-1794): reactivation is PER-ORG — clear the
+            # deactivated_at tombstone on the CALLER'S-ORG membership only and
+            # never touch accounts.active. A globally-flipped account (operator
+            # break-glass, or legacy pre-0173 deactivation) stays inactive
+            # until an operator restores it; clearing this tombstone alone
+            # restores exactly this org.
             from sqlalchemy import update as sa_update
 
             await session.execute(
@@ -1443,7 +1486,12 @@ async def admin_reactivate_user(
         )
         _raise_unexpected("An unexpected error occurred while reactivating the user.")
 
-    return _to_user_list_item(account, org_role)
+    # Refresh the membership AFTER the tombstone clear committed — the bulk
+    # UPDATE does not refresh the in-session ORM object (same identity-map
+    # caveat as the deactivate route). is_active must reflect the caller's-org
+    # state (gh-1794/FAR-533).
+    await session.refresh(membership)
+    return _to_user_list_item(account, org_role, org_membership=membership)
 
 
 class AdminResetPasswordResponse(BaseModel):
