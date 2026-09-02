@@ -913,6 +913,13 @@ jobs:
             exit 0
           fi
 
+          # [partial] contract: a multi-PR sweep lands one slice at a time. A PR
+          # whose title carries a [partial] token (case-insensitive) is a partial
+          # slice: this step posts a Linear COMMENT on the ticket instead of
+          # closing it, so the first merged slice cannot prematurely mark the
+          # whole sweep Done. The sweep owner closes the ticket manually when the
+          # final slice merges. Titles without [partial] keep the existing
+          # close-on-merge behaviour.
           for NUM in $PR_NUMS; do
             TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
             TICKET=$(echo "$TITLE" | grep -oP 'FAR-\d+' | head -1 || true)
@@ -920,7 +927,12 @@ jobs:
               echo "PR #$NUM has no FAR-xxx ticket in title - skipping Linear close"
               continue
             fi
-            echo "Closing Linear ticket $TICKET for PR #$NUM"
+            PARTIAL=$(echo "$TITLE" | grep -qi '\[partial\]' && echo "yes" || echo "no")
+            if [ "$PARTIAL" = "yes" ]; then
+              echo "PR #$NUM title carries [partial] - will comment on $TICKET instead of closing"
+            else
+              echo "Closing Linear ticket $TICKET for PR #$NUM"
+            fi
             # Resolve the exact issue by identifier filter (Linear's documented
             # lookup) rather than scanning an arbitrary 100-issue window, which
             # silently misses any ticket outside it.
@@ -930,6 +942,27 @@ jobs:
               | jq -r '.data.team.issues.nodes[] | .id' 2>/dev/null || echo "")
             if [ -z "$ISSUE_ID" ]; then
               echo "::warning::Ticket $TICKET not found in Linear - skipping"
+              continue
+            fi
+            if [ "$PARTIAL" = "yes" ]; then
+              # Partial slice: comment on the ticket and leave it open. The
+              # query travels via --arg (a value, never string interpolation)
+              # and jq builds the payload, so title characters can't break it.
+              COMMENT_BODY=$(printf 'PR #%s merged (partial slice): "%s". Ticket left open — close it manually when the sweep completes.' "$NUM" "$TITLE")
+              COMMENT_PAYLOAD=$(jq -n \
+                --arg q 'mutation($id: String!, $body: String!) { issueComment(input: { issueId: $id, body: $body }) { success comment { id } } }' \
+                --arg id "$ISSUE_ID" --arg body "$COMMENT_BODY" \
+                '{query: $q, variables: { id: $id, body: $body } }' \
+                2>/dev/null || echo "")
+              COMMENT_OK=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+                -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                -d "$COMMENT_PAYLOAD" \
+                | jq -r '.data.issueComment.success' 2>/dev/null || echo "")
+              if [ "$COMMENT_OK" = "true" ]; then
+                echo "  $TICKET <- partial-slice comment posted (ticket left open)"
+              else
+                echo "::warning::Failed to comment on $TICKET for PR #$NUM (fail-open)"
+              fi
               continue
             fi
             RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
