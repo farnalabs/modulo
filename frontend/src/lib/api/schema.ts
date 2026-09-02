@@ -135,7 +135,17 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Admin Update User */
+        /**
+         * Admin Update User
+         * @description Update a user's active flag / org role.
+         *
+         *     Deactivating (``is_active=False``) tombstones the target's membership in
+         *     the caller's org (per-org semantics, FAR-533) and also blacklists the
+         *     target's refresh-token families and revokes the target's live org API
+         *     keys scoped to that org, mirroring the POST deactivate path's per-org
+         *     revocation (FAR-537). Reactivating cannot un-revoke what a prior
+         *     deactivation revoked — revoked families/keys are re-minted by re-login.
+         */
         put: operations["admin_update_user_api_v1_admin_users__user_id__put"];
         post?: never;
         delete?: never;
