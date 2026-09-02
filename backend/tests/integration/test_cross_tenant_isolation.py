@@ -9,15 +9,19 @@ import os
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
 from modulo.core.feature_flags import LicenseData, LicenseKeyTier
+from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.rls import set_rls_org
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -277,6 +281,58 @@ async def _seed_pipeline_with_nodes(
     return pipeline_id
 
 
+async def _seed_trigger(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> uuid.UUID:
+    trigger_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
+            ),
+            {
+                "id": str(trigger_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "config": json.dumps({"hmac_secret": uuid.uuid4().hex}),
+                "uid": str(user_id),
+            },
+        )
+    return trigger_id
+
+
+async def _seed_trigger_event(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    *,
+    received_at: datetime,
+) -> uuid.UUID:
+    event_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
+                "raw_payload_hash, validation_result, received_at) "
+                "VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted', :received_at)"
+            ),
+            {
+                "id": str(event_id),
+                "oid": str(org_id),
+                "tid": str(trigger_id),
+                # 64-char payload hash (two uuid4 hex halves).
+                "hash": uuid.uuid4().hex + uuid.uuid4().hex,
+                "received_at": received_at,
+            },
+        )
+    return event_id
+
+
 # ---------------------------------------------------------------------------
 # HTTP client fixture — FastAPI app wired to the testcontainer database
 # ---------------------------------------------------------------------------
@@ -399,6 +455,26 @@ async def pipeline_b(
     user_b: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_b, user_b, "CrossTenant-PipelineB")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def trigger_a(
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+    user_a: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_trigger(db_engine, org_a, pipeline_a, user_a)
+
+
+@pytest_asyncio.fixture(scope="module")
+async def trigger_b(
+    db_engine: AsyncEngine,
+    org_b: uuid.UUID,
+    pipeline_b: uuid.UUID,
+    user_b: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_trigger(db_engine, org_b, pipeline_b, user_b)
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -1026,3 +1102,89 @@ class TestEvalCoverageOrgFilter:
         assert node["eval_count"] == 1, (
             f"Coverage should count only OrgA's eval definition (1), got {node['eval_count']}"
         )
+
+
+# ===================================================================
+# Test 11: FAR-523 — trigger_events retention RLS context
+# ===================================================================
+
+
+class TestTriggerEventRetentionRls:
+    """FAR-523: cross-org trigger_events retention must run on the system
+    (BYPASSRLS) session factory, and an org-scoped app-role session without an
+    RLS org context must see ZERO rows — the silent no-op that both the
+    removed web-process cleanup loop and the pre-fix notifier endpoint read
+    suffered on Postgres."""
+
+    async def test_system_cleanup_purges_old_events_across_orgs(
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        trigger_a: uuid.UUID,
+        trigger_b: uuid.UUID,
+    ) -> None:
+        """The SAQ ``trigger_events_cleanup`` system cron purges BOTH orgs'
+        expired events through a BYPASSRLS-equivalent factory. The plain
+        ``modulo_app`` factory (NOBYPASSRLS, no ``app.organisation_id``) would
+        silently match zero rows and delete nothing."""
+        import modulo.core.saq_worker as sw
+
+        old_a = await _seed_trigger_event(
+            db_engine, org_a, trigger_a, received_at=datetime.now(UTC) - timedelta(days=100)
+        )
+        old_b = await _seed_trigger_event(
+            db_engine, org_b, trigger_b, received_at=datetime.now(UTC) - timedelta(days=100)
+        )
+
+        # The testcontainers superuser bypasses RLS entirely — the same
+        # effective semantics as the production modulo_system (BYPASSRLS)
+        # role the system session factory connects with. autobegin=False
+        # mirrors the real system factory (the cron opens per-batch
+        # transactions itself).
+        system_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+        with patch.object(sw, "_make_system_session_factory", return_value=system_factory):
+            result = await sw.trigger_events_cleanup({})
+
+        assert result["deleted"] >= 2, "both orgs' expired events must be purged"
+        async with db_engine.connect() as conn:
+            for event_id in (old_a, old_b):
+                row = await conn.execute(
+                    text("SELECT count(*) FROM trigger_events WHERE id = :eid"), {"eid": str(event_id)}
+                )
+                assert int(row.scalar_one()) == 0, f"expired event {event_id} must be purged cross-org"
+
+    async def test_app_role_session_without_rls_context_sees_zero_rows(
+        self,
+        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        trigger_a: uuid.UUID,
+        trigger_b: uuid.UUID,
+    ) -> None:
+        """Prove-the-fix, both directions, against the FORCE-RLS NOBYPASSRLS
+        role:
+
+        (a) a bare app-role session with NO org context — what the removed
+            web-process cleanup loop and the pre-fix notifier read ran as —
+            sees ZERO trigger_events rows (the silent no-op bug class); and
+        (b) the same session with ``set_rls_org(org_a)`` sees exactly org A's
+            event and none of org B's.
+        """
+        event_a = await _seed_trigger_event(db_engine, org_a, trigger_a, received_at=datetime.now(UTC))
+        event_b = await _seed_trigger_event(db_engine, org_b, trigger_b, received_at=datetime.now(UTC))
+
+        app_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+
+        # (a) No org context: FORCE RLS filters everything.
+        async with app_factory() as session, session.begin():
+            visible = (await session.execute(select(TriggerEvent))).scalars().all()
+            assert visible == [], "app-role session without org context must see zero trigger_events"
+
+        # (b) With set_rls_org(org_a): exactly org A's event, org B's invisible.
+        async with app_factory() as session, session.begin():
+            await set_rls_org(session, org_a)
+            visible_ids = {ep.id for ep in (await session.execute(select(TriggerEvent))).scalars()}
+            assert event_a in visible_ids, "org A session must see its own event"
+            assert event_b not in visible_ids, "org A session must not see org B's event"
