@@ -274,4 +274,11 @@ __all__ = [
     #     sampler / run-stats store is added.
     "evaluate_rest_rollback",
     "is_unknown_like",
+    # --- FAR-551: hard-delete CRUD for environment profiles. The user-facing
+    #     API only ever soft-deletes (soft_delete_environment_profile); this
+    #     hard-delete stays as the admin/housekeeping cleanup primitive and is
+    #     exercised directly by tests/integration/bdd/test_environment_profiles.py
+    #     (FK RESTRICT-on-lease behaviour). vulture scans src/ only so it cannot
+    #     see the test call sites.
+    "delete_environment_profile",
 ]

@@ -588,17 +588,6 @@ routes:
         <<: *community
         deprecated: false
 
-    /admin/environments:
-        name: admin-environments
-        breadcrumb: Run Environments
-        parent: /
-        product_map: [feat-environments, feat-runtime]
-        sidebar_group: admin
-        sidebar_order: 9
-        type: list_page
-        <<: *team
-        deprecated: false
-
     /admin/parameter-schemas:
         name: admin-parameter-schemas
         breadcrumb: Parameter Schemas
@@ -1072,40 +1061,6 @@ elements:
         dynamic_testid: false
       - testid: admin-spend-limits-org-limit
         type: input
-        dynamic_testid: false
-    /admin/environments:
-      - testid: admin-envprofiles-add
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-name-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-description-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-provider-select
-        type: select
-        dynamic_testid: false
-      - testid: admin-envprofiles-image-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-timeout-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-memory-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-cpu-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-cancel
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-delete-confirm
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-delete-cancel
-        type: button
         dynamic_testid: false
     /admin/feature-flags:
       - testid: developer-mode-toggle
@@ -1677,6 +1632,15 @@ elements:
         dynamic_testid: false
       - testid: envprofile-list-name
         type: link
+        dynamic_testid: false
+      - testid: envprofile-test
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-test-panel
+        type: element
+        dynamic_testid: false
+      - testid: envprofile-test-dismiss
+        type: button
         dynamic_testid: false
     /environment-profiles/:id/edit:
       - testid: envprofile-form-back
@@ -3177,7 +3141,7 @@ features:
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
     feat-environments:
-        description: Environment profiles and run environments
+        description: Environment profiles
     feat-evals:
         description: Evaluation editor and proposal queue
     feat-feedback:

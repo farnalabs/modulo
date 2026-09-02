@@ -8,7 +8,7 @@ Feature: Environment Profiles
 
   Scenario: Create an environment profile
     Given a valid environment profile payload with name "python-dev", image "python:3.12-slim", capabilities ["docker", "gpu"], egress "allow_all", and timeout 7200
-    When I POST /api/v1/environments with the profile payload
+    When I POST /api/v1/environment-profiles with the profile payload
     Then the response status is 201
     And the response contains a profile with name "python-dev"
     And the profile has image_ref "python:3.12-slim"
@@ -16,64 +16,64 @@ Feature: Environment Profiles
 
   Scenario: Create profile with empty name returns validation error
     Given an invalid environment profile payload with empty name
-    When I POST /api/v1/environments with the invalid payload
+    When I POST /api/v1/environment-profiles with the invalid payload
     Then the response status is 422
     And the error indicates "name" is required
 
   Scenario: Create profile with empty image_ref returns validation error
     Given an invalid environment profile payload with empty image_ref
-    When I POST /api/v1/environments with the invalid payload
+    When I POST /api/v1/environment-profiles with the invalid payload
     Then the response status is 422
     And the error indicates "image_ref" is required
 
   Scenario: Create profile with too-long name returns validation error
     Given an invalid environment profile payload with a too-long name
-    When I POST /api/v1/environments with the invalid payload
+    When I POST /api/v1/environment-profiles with the invalid payload
     Then the response status is 422
     And the error indicates "name" has an invalid value
 
   Scenario: List environment profiles
     Given org "acme" has 3 environment profiles
-    When I GET /api/v1/environments
+    When I GET /api/v1/environment-profiles
     Then the response status is 200
     And the response is a paginated list with 3 items and page_size 20
 
   Scenario: Get a specific environment profile
     Given org "acme" has an environment profile with id "11111111-1111-1111-1111-111111111111"
-    When I GET /api/v1/environments/11111111-1111-1111-1111-111111111111
+    When I GET /api/v1/environment-profiles/11111111-1111-1111-1111-111111111111
     Then the response status is 200
     And the response contains a profile with id "11111111-1111-1111-1111-111111111111"
 
   Scenario: Profile not found returns 404
     Given org "acme" has no environment profile with id "22222222-2222-2222-2222-222222222222"
-    When I GET /api/v1/environments/22222222-2222-2222-2222-222222222222
+    When I GET /api/v1/environment-profiles/22222222-2222-2222-2222-222222222222
     Then the response status is 404
     And the error message is "Environment profile not found"
 
   Scenario: Update an environment profile
     Given org "acme" has an environment profile with id "11111111-1111-1111-1111-111111111111"
-    When I PATCH /api/v1/environments/11111111-1111-1111-1111-111111111111 with name "updated-name"
+    When I PUT /api/v1/environment-profiles/11111111-1111-1111-1111-111111111111 with name "updated-name"
     Then the response status is 200
     And the response contains a profile with name "updated-name"
 
   Scenario: Update nonexistent profile returns 404
-    When I PATCH /api/v1/environments/22222222-2222-2222-2222-222222222222 with name "nope"
+    When I PUT /api/v1/environment-profiles/22222222-2222-2222-2222-222222222222 with name "nope"
     Then the response status is 404
     And the error message is "Environment profile not found"
 
   Scenario: Delete an environment profile
     Given org "acme" has an environment profile with id "11111111-1111-1111-1111-111111111111"
-    When I DELETE /api/v1/environments/11111111-1111-1111-1111-111111111111
+    When I DELETE /api/v1/environment-profiles/11111111-1111-1111-1111-111111111111
     Then the response status is 204
 
   Scenario: Delete nonexistent profile returns 404
-    When I DELETE /api/v1/environments/22222222-2222-2222-2222-222222222222
+    When I DELETE /api/v1/environment-profiles/22222222-2222-2222-2222-222222222222
     Then the response status is 404
     And the error message is "Environment profile not found"
 
   Scenario: Test an environment profile
     Given org "acme" has an environment profile with id "11111111-1111-1111-1111-111111111111"
-    When I POST /api/v1/environments/11111111-1111-1111-1111-111111111111/test
+    When I POST /api/v1/environment-profiles/11111111-1111-1111-1111-111111111111/test
     Then the response status is 200
     And the response is a Server-Sent Events stream
     And the stream contains a "provisioning" event
@@ -81,7 +81,7 @@ Feature: Environment Profiles
     And the stream contains a "destroyed" event
 
   Scenario: Test nonexistent profile returns 404
-    When I POST /api/v1/environments/22222222-2222-2222-2222-222222222222/test
+    When I POST /api/v1/environment-profiles/22222222-2222-2222-2222-222222222222/test
     Then the response status is 404
     And the error message is "Environment profile not found"
 
@@ -145,12 +145,12 @@ Feature: Environment Profiles
   Scenario: Cross-org isolation blocks access to another org's profile
     Given org "acme" has an environment profile with id "11111111-1111-1111-1111-111111111111"
     When I authenticate as a user in org "megacorp"
-    And I GET /api/v1/environments/11111111-1111-1111-1111-111111111111
+    And I GET /api/v1/environment-profiles/11111111-1111-1111-1111-111111111111
     Then the response status is 404
     And the error message is "Environment profile not found"
 
   Scenario: Cross-org isolation hides profiles from listing
     Given org "acme" has 3 environment profiles
     When I authenticate as a user in org "megacorp"
-    And I GET /api/v1/environments
+    And I GET /api/v1/environment-profiles
     Then the response contains 0 environment profiles

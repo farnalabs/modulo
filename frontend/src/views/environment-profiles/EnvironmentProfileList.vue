@@ -66,6 +66,7 @@
                 <span
                   class="h-1.5 w-1.5 rounded-full"
                   :class="profile.status === 'active' ? 'bg-success' : 'bg-muted-foreground'"
+                  aria-hidden="true"
                 />
                 <span class="capitalize">{{ profile.status === 'active' ? $t('common.active') : $t('common.deleted') }}</span>
               </span>
@@ -81,6 +82,16 @@
               <Button severity="secondary" outlined size="small" data-testid="envprofile-list-edit" @click="$router.push(`/environment-profiles/${profile.id}/edit`)">
                 Edit
               </Button>
+              <Button
+                severity="secondary"
+                outlined
+                size="small"
+                data-testid="envprofile-test"
+                :disabled="testResult.profileId === profile.id && testResult.running"
+                @click="testConnection(profile)"
+              >
+                {{ testResult.profileId === profile.id && testResult.running ? $t('views.EnvironmentProfileList.testing') : $t('views.EnvironmentProfileList.test_connection') }}
+              </Button>
               <button type="button"
                 class="ml-auto rounded p-1 text-destructive hover:bg-destructive/10 transition-colors"
                 data-testid="envprofile-list-delete"
@@ -91,6 +102,40 @@
                   <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                 </svg>
               </button>
+            </div>
+
+            <div v-if="testResult.profileId === profile.id" class="rounded-lg border border-input bg-muted/30 p-3" data-testid="envprofile-test-panel">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-xs font-semibold">{{ $t('views.EnvironmentProfileList.test_connection_for', { name: profile.name }) }}</h3>
+                <button type="button"
+                  class="text-xs text-muted-foreground hover:text-foreground"
+                  data-testid="envprofile-test-dismiss"
+                  @click="closeTestResult"
+                >
+                  {{ $t('views.EnvironmentProfileList.dismiss') }}
+                </button>
+              </div>
+              <div class="space-y-1">
+                <div
+                  v-for="(event, idx) in testResult.events"
+                  :key="idx"
+                  class="flex items-center gap-2 text-xs font-mono"
+                  :class="event.event === 'failed' ? 'text-destructive' : 'text-muted-foreground'"
+                >
+                  <span
+                    class="inline-block h-2 w-2 rounded-full shrink-0"
+                    aria-hidden="true"
+                    :class="{
+                      'bg-yellow-400': event.event === 'provisioning' || event.event === 'destroying',
+                      'bg-success': event.event === 'provisioned' || event.event === 'destroyed' || event.event === 'command_complete',
+                      'bg-destructive': event.event === 'failed',
+                      'bg-primary': event.event === 'command_start',
+                    }"
+                  />
+                  <span>{{ event.event }}</span>
+                  <span>{{ event.detail }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -121,21 +166,81 @@
 
 <script setup lang="ts">
 import PageHeader from '../../components/shared/PageHeader.vue'
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
 import type { EnvironmentProfileSummary } from '../../stores/environmentProfiles'
+import { getAuthHeaders } from '../../lib/api/client'
+import { formatApiError } from '../../lib/api/formatError'
+import { parseSSEStream } from '../../lib/sse'
 import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import FeatureGate from '../../components/FeatureGate.vue'
 import Button from 'primevue/button'
 
 const store = useEnvironmentProfilesStore()
+const { t } = useI18n()
 
 const search = ref('')
 const deleteConfirmId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
+
+interface TestEvent {
+  event: string
+  detail: string
+  timestamp: string
+}
+
+const testResult = reactive<{ profileId: string | null; running: boolean; events: TestEvent[] }>({
+  profileId: null,
+  running: false,
+  events: [],
+})
+
+async function testConnection(profile: EnvironmentProfileSummary) {
+  testResult.profileId = profile.id
+  testResult.running = true
+  testResult.events = []
+
+  try {
+    const response = await fetch(`/api/v1/environment-profiles/${profile.id}/test`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) {
+      testResult.events.push({ event: 'failed', detail: `HTTP ${response.status}`, timestamp: new Date().toISOString() })
+      return
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      testResult.events.push({ event: 'failed', detail: t('views.EnvironmentProfileList.no_response_body'), timestamp: new Date().toISOString() })
+      return
+    }
+
+    for await (const message of parseSSEStream(reader)) {
+      if (!message.data) continue
+      try {
+        const parsed = JSON.parse(message.data) as TestEvent
+        testResult.events.push(parsed)
+      } catch {
+        testResult.events.push({ event: 'info', detail: message.data, timestamp: new Date().toISOString() })
+      }
+    }
+  } catch (e: unknown) {
+    testResult.events.push({ event: 'failed', detail: formatApiError(e), timestamp: new Date().toISOString() })
+  } finally {
+    testResult.running = false
+  }
+}
+
+function closeTestResult() {
+  testResult.profileId = null
+  testResult.running = false
+  testResult.events = []
+}
 
 const filteredProfiles = computed(() => {
   if (!search.value) return store.profiles
