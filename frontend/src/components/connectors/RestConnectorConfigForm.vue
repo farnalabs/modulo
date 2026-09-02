@@ -106,6 +106,13 @@
         {{ $t('connectors.rest.section_credentials') }}
       </h3>
       <p v-if="mode === 'edit'" class="mb-3 text-xs text-muted-foreground">{{ $t('connectors.rest.credentials_write_only') }}</p>
+      <!-- Legacy rows stored before the config echo have no auth_mode in
+           config_json, so the prefill silently defaults to bearer which may not
+           match the stored credential — surface the ambiguity explicitly
+           instead (FAR-532). -->
+      <p v-if="mode === 'edit' && legacyAuthEcho" data-testid="rest-connector-legacy-auth-hint" class="mb-3 text-xs text-amber-600 dark:text-amber-400">
+        {{ $t('connectors.rest.auth_mode_legacy_echo_hint') }}
+      </p>
       <div class="space-y-4">
         <div>
           <label for="restconn-connector-auth-mode" class="mb-1 block text-sm font-medium">{{ $t('connectors.rest.auth_mode') }}</label>
@@ -264,6 +271,12 @@ export const REST_ADVANCED_FIELDS = [
   'fan_out',
   'rate_limit',
 ] as const
+
+// The select option enums for the form's dropdowns. Exported so the
+// AdminConnectorsView prefill/echo logic consumes the SAME sets instead of
+// re-declaring drift-prone REST_*-prefixed copies (FAR-532).
+export const ON_UNKNOWN_OPTIONS: string[] = ['fail_open', 'fail_closed', 'off']
+export const AUTH_MODE_OPTIONS: string[] = ['bearer', 'basic', 'api_key']
 </script>
 
 <script setup lang="ts">
@@ -302,12 +315,10 @@ const credsDirty = defineModel<boolean>('credsDirty', { default: false })
 // clobber invariant or demanding a re-entered secret (FAR-466).
 const credsIdentityDirty = defineModel<boolean>('credsIdentityDirty', { default: false })
 
-const props = defineProps<{ mode: 'add' | 'edit' | null }>()
+const props = defineProps<{ mode: 'add' | 'edit' | null; legacyAuthEcho?: boolean }>()
 const { t } = useI18n()
 
 const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
-const ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
-const AUTH_MODE_OPTIONS = ['bearer', 'basic', 'api_key']
 
 const errors = reactive<Record<string, string>>({})
 

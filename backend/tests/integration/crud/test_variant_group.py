@@ -125,13 +125,17 @@ async def _insert_test_org(db_engine: AsyncEngine, org_id: uuid.UUID) -> None:
 
 async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_user: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
+    # Unique per seed: the shared session org + uq_pipelines_org_name make a
+    # fixed name collide with every later seed in the same pytest session
+    # (the raw-SQL insert here commits; rls_session rollbacks don't cover it).
+    pipeline_name = f"variant-test-pipeline-{uuid.uuid4().hex[:10]}"
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
                 "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
             ),
-            {"id": str(pipeline_id), "org_id": str(org_id), "name": "variant-test-pipeline", "uid": str(test_user)},
+            {"id": str(pipeline_id), "org_id": str(org_id), "name": pipeline_name, "uid": str(test_user)},
         )
     return pipeline_id
 

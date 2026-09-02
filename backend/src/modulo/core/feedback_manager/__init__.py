@@ -689,10 +689,14 @@ class FeedbackManager:
         run_context_overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build the engine-only ``feedback_correction`` block for the new run."""
+        # producing_node_id rides inside input_payload (a JSON column): the ORM
+        # models it as Uuid(), so the attribute is a uuid.UUID object after any
+        # flush/refresh — embed its string form or the JSON bind fails with
+        # "Object of type UUID is not JSON serializable" at run creation.
         feedback_correction: dict[str, Any] = {
             "rejection_reason": record.rejection_reason,
             "rejected_output": record.rejected_output,
-            "producing_node_id": record.producing_node_id,
+            "producing_node_id": str(record.producing_node_id),
             "is_correction_run": True,
         }
         if run_context_overrides:
@@ -1008,7 +1012,7 @@ class FeedbackManager:
                 payload_json={
                     "correction_id": ctx.correction.id,
                     "guardrail_id": ctx.correction.guardrail_id,
-                    "node_id": record.producing_node_id,
+                    "node_id": str(record.producing_node_id),
                     "attempt": attempt,
                 },
             )

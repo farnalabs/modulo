@@ -97,6 +97,23 @@ class ShellConnector(ConnectorBase):
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHELL
 
+    def write_reported_failure(self, result: Any) -> bool:
+        """FAR-531 (AC6): shell write results carry the executed command's
+        ``exit_code`` (both the ``command`` and ``file`` resources return it). A
+        non-zero exit code is a REPORTED failure without a raise — the write did
+        not reach upstream, so the idempotency stamp must not treat the
+        non-raising return as a delivery.
+
+        QA Fix 4: an ABSENT-or-``None`` distinction matters. ``exit_code: None``
+        (E2B CAN produce it — ``CommandsExecResult.exit_code`` is Optional for
+        killed / failed-to-start commands, and the runtime provider only
+        defaults on a MISSING attribute) is treated as a reported failure: a
+        killed command is NOT a confirmed delivery, so the result must not
+        stamp ``delivery_done`` and suppress the re-run in every mode. A result
+        WITHOUT an ``exit_code`` key at all is not a REPORTED failure (nothing
+        to report) — the pre-FAR-531 delivery semantics apply."""
+        return isinstance(result, dict) and "exit_code" in result and result.get("exit_code") != 0
+
     async def health_check(self) -> HealthResult:
         if self._runtime_provider is None and self._runtime_provider_hub is None:
             return HealthResult(ok=False, detail=_ERR_RUNTIME_NOT_CONFIGURED)

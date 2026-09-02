@@ -172,10 +172,9 @@ class Settings(BaseSettings):
     # PipelineGraphNode.delivery_sentinel). Consumed at BOTH sandbox guards: guard
     # A (node_runner early skip for single sandbox node) and guard B (executor
     # retry suppression). When disabled the gate never fires and transient node
-    # failures retry exactly as before. NOTE: this flag is consumed at THREE
-    # sites total (the two sandbox guards above plus the FAR-458 connector-write
-    # gate's SHARED predecessor); the connector-write gate now uses its OWN
-    # opt-in flag below.
+    # failures retry exactly as before. The FAR-458 connector-write gate is a
+    # separate concern with its OWN opt-in kill-switch below — this flag never
+    # gates it.
     modulo_idempotency_gate_enabled: bool = Field(True, alias="MODULO_IDEMPOTENCY_GATE_ENABLED")
     # FAR-458 connector-write idempotency gate kill-switch. GENUINELY OPT-IN:
     # defaults to False so a deploy never silently suppresses byte-identical

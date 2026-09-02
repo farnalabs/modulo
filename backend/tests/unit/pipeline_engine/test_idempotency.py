@@ -311,6 +311,70 @@ def test_read_before_write_ambiguous_fails_open_on_non_dict_markers() -> None:
     assert read_before_write_ambiguous(["x"], run_ref="pipeline:42", node_ref="node-a") is False
 
 
+# ── FAR-531 intent / no-delivery marker states ───────────────────────────────
+
+
+def test_read_before_write_ambiguous_true_on_intent_marker() -> None:
+    """An IN-FLIGHT intent marker (FAR-531: persisted after the gate proceeds,
+    before the write fires; matching key, no ``delivery_done``) IS the ambiguous
+    state — a later attempt's gate must detect it so fail_closed can suppress."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    derived = node_idempotency_key(persisted, "node-a", index=0)
+    markers = {
+        "run:r:node:n:connector": {
+            "_modulo_marker": True,
+            "marker_kind": "connector_write_intent",
+            "status": "running",
+            "idempotency_key": derived,
+        }
+    }
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0) is True
+    # And it is NOT a confirmed delivery — a fail_open gate re-fires.
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_read_before_write_ambiguous_false_on_no_delivery_confirmed() -> None:
+    """A DEFINITE no-delivery marker (``no_delivery_confirmed: True`` — the
+    connector's result REPORTED failure via the ``write_reported_failure``
+    hook; a raised error is ambiguous per FAR-531 QA Fix 1) is NOT ambiguous:
+    the later attempt's gate must re-fire the write under BOTH modes (FAR-458:
+    never suppress a definite failure)."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    derived = node_idempotency_key(persisted, "node-a", index=0)
+    markers = {
+        "run:r:node:n:connector": {
+            "_modulo_marker": True,
+            "marker_kind": "connector_write_no_delivery",
+            "no_delivery_confirmed": True,
+            "idempotency_key": derived,
+        }
+    }
+    assert read_before_write_ambiguous(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+    assert read_before_write_suppression(markers, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
+def test_no_delivery_confirmed_resolves_after_in_flight_intent() -> None:
+    """The intent → no-delivery transition REPLACES the in-flight state in the
+    same slot: once resolved, the same key is no longer ambiguous (the exact
+    reported-failure sequence a re-run observes)."""
+    persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
+    derived = node_idempotency_key(persisted, "node-a", index=0)
+    slot = "run:r:node:n:connector"
+    intent_markers = {
+        slot: {"_modulo_marker": True, "marker_kind": "connector_write_intent", "idempotency_key": derived}
+    }
+    assert read_before_write_ambiguous(intent_markers, run_ref=persisted, node_ref="node-a", index=0) is True
+    resolved_markers = {
+        slot: {
+            "_modulo_marker": True,
+            "marker_kind": "connector_write_no_delivery",
+            "no_delivery_confirmed": True,
+            "idempotency_key": derived,
+        }
+    }
+    assert read_before_write_ambiguous(resolved_markers, run_ref=persisted, node_ref="node-a", index=0) is False
+
+
 def test_run_ref_shape_regex_consistent_with_db_layer() -> None:
     """The core (``_RUN_REF_RE``) and DB-layer (``_RUN_IDEMPOTENCY_REF_RE``)
     run-ref shape regexes are mirrored deliberately (import-linter forbids

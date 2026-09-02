@@ -1956,7 +1956,7 @@ async def admin_queue_metrics(
             try:
                 # LLEN via execute_command — redis stubs type llen() as a
                 # non-awaitable union, which breaks strict mypy.
-                val = await r.execute_command("LLEN", f"saq:{qname}:queued")
+                val = await r.execute_command("LLEN", f"saq:{qname}:queued")  # type: ignore[no-untyped-call]
                 queues[qname] = int(val or 0)
             except Exception:
                 logger.warning("admin.queue_metrics.llen_failed queue=%s", qname)

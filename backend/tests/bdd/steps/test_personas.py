@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import uuid
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1817,8 +1818,6 @@ def check_docker_available():
 @when("I run docker compose up")
 def start_compose_stack(ctx):
     """Start Postgres and Redis via testcontainers, configure app, start TestClient."""
-    import warnings
-
     from fastapi.testclient import TestClient
 
     with warnings.catch_warnings():

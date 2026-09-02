@@ -33,7 +33,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -934,22 +934,18 @@ async def _write_streak_notify_pending(
         return
     key = _streak_notify_pending_key(org_id)
     try:
-        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
-        # (dual sync/async); we always hold the async client, so cast.
-        await cast(
-            Awaitable[int],
-            redis_client.sadd(
-                key,
-                _streak_pending_member(
-                    data,
-                    threshold=threshold,
-                    pipeline_name=pipeline_name,
-                    retry_count=retry_count,
-                    last_retry_at=last_retry_at,
-                ),
+        # redis.asyncio 8.x async client returns awaitables directly.
+        await redis_client.sadd(
+            key,
+            _streak_pending_member(
+                data,
+                threshold=threshold,
+                pipeline_name=pipeline_name,
+                retry_count=retry_count,
+                last_retry_at=last_retry_at,
             ),
         )
-        await cast(Awaitable[int], redis_client.expire(key, _STREAK_PENDING_MARKER_TTL))
+        await redis_client.expire(key, _STREAK_PENDING_MARKER_TTL)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1168,7 +1164,7 @@ async def _trigger_active_state(org_id: uuid.UUID, trigger_id: uuid.UUID) -> boo
 
 async def _srem_streak_member(redis_client: AsyncRedis, key: str, raw: str) -> None:
     try:
-        await cast(Awaitable[int], redis_client.srem(key, raw))
+        await redis_client.srem(key, raw)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1360,9 +1356,11 @@ def _streak_member_in_cooldown(data: dict[str, Any]) -> bool:
 async def _read_streak_pending_members(redis_client: AsyncRedis, org_id: uuid.UUID) -> set[str] | None:
     """Read the per-org pending notify set; ``None`` on failure (skip the pass)."""
     try:
-        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
-        # (dual sync/async); we always hold the async client, so cast.
-        return await cast(Awaitable[set[str]], redis_client.smembers(_streak_notify_pending_key(org_id)))
+        # redis.asyncio 8.x async client returns awaitables directly; members are
+        # stored as UTF-8 strings, decoded here since the client has no
+        # decode_responses.
+        raw_members = await redis_client.smembers(_streak_notify_pending_key(org_id))
+        return {m.decode() if isinstance(m, bytes) else m for m in raw_members}
     except asyncio.CancelledError:
         raise
     except Exception:

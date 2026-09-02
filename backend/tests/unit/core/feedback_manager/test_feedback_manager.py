@@ -818,7 +818,7 @@ class TestSpawnCorrectionRun:
         injected = _call_kwargs["feedback_correction"]
         assert injected["rejection_reason"] == sample_record.rejection_reason
         assert injected["rejected_output"] == sample_record.rejected_output
-        assert injected["producing_node_id"] == sample_record.producing_node_id
+        assert injected["producing_node_id"] == str(sample_record.producing_node_id)
         assert injected["is_correction_run"] is True
         assert "_feedback_correction" not in _call_kwargs["input_payload"]
 

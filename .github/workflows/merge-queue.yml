@@ -716,16 +716,26 @@ jobs:
 
       # If CI passed -- merge source PRs
       - name: Merge source PRs via gh pr merge
+        id: ghmerge
         if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # FAR-530: the merge step's own output is the authoritative record of
+          # which PRs squash-merged into the queue branch (oldest first). It does
+          # not depend on ref ordering the way a git-log range scrape does.
+          MERGE_STEP_PRS: ${{ steps.merge.outputs.merged_prs }}
         shell: bash
         run: |
-          # Extract PR numbers from squash commits on merge-queue (oldest first)
-          PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac || true)
+          # FAR-530: primary source is the merge step's output; the git-log range
+          # stays only as a defensive fallback.
+          PR_NUMS="$MERGE_STEP_PRS"
+          [ -z "$PR_NUMS" ] && PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac || true)
           echo "Merging source PRs (in oldest-first order):"
           echo "$PR_NUMS"
 
+          # FAR-530: record which PRs ACTUALLY merge to main via gh (the close
+          # step consumes this; guard-skipped PRs must never have tickets closed).
+          GH_MERGED=""
           FAILED=""
           for NUM in $PR_NUMS; do
             echo "  Merging PR #$NUM..."
@@ -792,6 +802,7 @@ jobs:
 
             if gh pr merge --squash "$NUM" 2>&1; then
               echo "    PR #$NUM merged --"
+              GH_MERGED="$GH_MERGED $NUM"
               # Delete the PR's source branch right after a successful merge
               # (best-effort: a delete failure must never fail the queue). Use the
               # GitHub API to delete the remote ref -- gh pr merge --delete-branch
@@ -823,6 +834,10 @@ jobs:
             fi
             gh pr close "$NUM" 2>/dev/null || true
           done
+
+          GH_MERGED=$(echo "$GH_MERGED" | xargs)
+          echo "$GH_MERGED" > /tmp/gh_merged_prs.txt
+          echo "gh_merged_pr_nums=$GH_MERGED" >> "$GITHUB_OUTPUT"
 
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
 
@@ -883,10 +898,33 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          # FAR-530: PRs that ACTUALLY merged to main this run (gh pr merge
+          # succeeded), recorded by the ghmerge step - never re-derived from a
+          # git-log range whose emptiness depends on step ordering.
+          GH_MERGED_PRS: ${{ steps.ghmerge.outputs.gh_merged_pr_nums }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
-          PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
-          [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to close."; exit 0; }
+          # Build the candidate PR list from two sources (FAR-530):
+          #   1. Primary: PRs gh-merged by THIS run (ghmerge step output).
+          #   2. Fallback sweep: any PR merged after this run started, so a
+          #      merge path that produced no output is still caught. GitHub
+          #      returns both timestamps as ISO-8601 UTC, which compare
+          #      correctly lexicographically.
+          RUN_STARTED_AT=$(gh run view "${{ github.run_id }}" --repo "$REPO" --json createdAt --jq '.createdAt' 2>/dev/null || echo "")
+          gh pr list --repo "$REPO" --state merged --limit 20 --json number,title,mergedAt 2>/dev/null \
+            | jq -r --arg start "$RUN_STARTED_AT" \
+                '.[] | select(.mergedAt != null) | select($start == "" or .mergedAt >= $start) | .number' \
+            > /tmp/close_sweep_nums.txt || true
+
+          : > /tmp/close_candidates.txt
+          for NUM in $GH_MERGED_PRS; do echo "$NUM" >> /tmp/close_candidates.txt; done
+          cat /tmp/close_sweep_nums.txt >> /tmp/close_candidates.txt
+          sort -u /tmp/close_candidates.txt -o /tmp/close_candidates.txt
+          CANDIDATES=$(tr '\n' ' ' < /tmp/close_candidates.txt | xargs)
+          [ -z "$CANDIDATES" ] && { echo "No PRs merged this cycle - nothing to close."; exit 0; }
+          echo "Candidate PRs for Linear close: $CANDIDATES"
+
           if [ -z "$LINEAR_API_KEY" ]; then
             echo "::warning::LINEAR_API_KEY not configured - skipping Linear ticket close (fail-open)."
             exit 0
@@ -913,34 +951,41 @@ jobs:
             exit 0
           fi
 
-          for NUM in $PR_NUMS; do
+          for NUM in $CANDIDATES; do
             TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
-            TICKET=$(echo "$TITLE" | grep -oP 'FAR-\d+' | head -1 || true)
-            if [ -z "$TICKET" ]; then
+            # FAR-530: close ALL FAR-ids in a title (one PR can resolve several),
+            # deduplicated - the old 'head -1' structurally dropped the rest.
+            TICKETS=$(echo "$TITLE" | grep -oP 'FAR-\d+' | sort -u || true)
+            if [ -z "$TICKETS" ]; then
               echo "PR #$NUM has no FAR-xxx ticket in title - skipping Linear close"
               continue
             fi
-            echo "Closing Linear ticket $TICKET for PR #$NUM"
-            # Resolve the exact issue by identifier filter (Linear's documented
-            # lookup) rather than scanning an arbitrary 100-issue window, which
-            # silently misses any ticket outside it.
-            ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
-              -d "{\"query\":\"query(\$teamId: String!, \$identifier: String!) { team(id: \$teamId) { issues(first: 10, filter: { identifier: { eq: \$identifier } }) { nodes { id identifier state { name } } } } }\",\"variables\":{\"teamId\":\"$TEAM_ID\",\"identifier\":\"$TICKET\"}}" \
-              | jq -r '.data.team.issues.nodes[] | .id' 2>/dev/null || echo "")
-            if [ -z "$ISSUE_ID" ]; then
-              echo "::warning::Ticket $TICKET not found in Linear - skipping"
-              continue
-            fi
-            RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
-              -d "{\"query\":\"mutation(\$id: String!, \$stateId: String!) { issueUpdate(id: \$id, input: { stateId: \$stateId }) { issue { id state { name } } } }\",\"variables\":{\"id\":\"$ISSUE_ID\",\"stateId\":\"$DONE_STATE_ID\"}}" \
-              | jq -r '.data.issueUpdate.issue.state.name' 2>/dev/null || echo "")
-            if [ -n "$RESULT" ]; then
-              echo "  $TICKET -> $RESULT"
-            else
-              echo "::warning::Failed to close $TICKET (fail-open)"
-            fi
+            for TICKET in $TICKETS; do
+              echo "Closing Linear ticket $TICKET for PR #$NUM"
+              # Lookup the issue directly by identifier: Linear's documented
+              # issue(id:) query accepts identifiers like "FAR-458". The previous
+              # team.issues(filter: {identifier: ...}) query was ALWAYS a GraphQL
+              # validation error ("Field \"identifier\" is not defined by type
+              # \"IssueFilter\""), so every close attempt failed open with
+              # "Ticket not found" (FAR-530 root cause).
+              ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+                -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                -d "{\"query\":\"query(\$identifier: String!) { issue(id: \$identifier) { id identifier state { name } } }\",\"variables\":{\"identifier\":\"$TICKET\"}}" \
+                | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
+              if [ -z "$ISSUE_ID" ]; then
+                echo "::warning::Ticket $TICKET not found in Linear - skipping"
+                continue
+              fi
+              RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+                -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                -d "{\"query\":\"mutation(\$id: String!, \$stateId: String!) { issueUpdate(id: \$id, input: { stateId: \$stateId }) { issue { id state { name } } } }\",\"variables\":{\"id\":\"$ISSUE_ID\",\"stateId\":\"$DONE_STATE_ID\"}}" \
+                | jq -r '.data.issueUpdate.issue.state.name' 2>/dev/null || echo "")
+              if [ -n "$RESULT" ]; then
+                echo "  $TICKET -> $RESULT"
+              else
+                echo "::warning::Failed to close $TICKET (fail-open)"
+              fi
+            done
           done
 
       - name: Delete branches whose PRs are already merged (defense-in-depth)

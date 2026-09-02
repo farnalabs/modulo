@@ -102,7 +102,7 @@ dependencies = [
     "click>=8.1.0",
     "tqdm>=4.68.3",
     "langchain-ibm>=1.1.0",
-    "redis>=6.4.0,<7",
+    "redis>=8.1,<9",
     "saq[web]==0.26.4",
     "aiohttp>=3.14.3",
 ]
@@ -152,7 +152,7 @@ dev = [
 
 docker = ["aiodocker>=0.21.0"]
 redis = [
-    "redis>=6.4.0,<7",
+    "redis>=8.1,<9",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -354,12 +354,24 @@ select = [
     "PLW1510", # subprocess.run() needs an explicit `check=` argument
     "ARG003",  # unused class-method argument
     "ARG004",  # unused static-method argument
-    # Tenth wave of defensive gate-strengthening (verified zero current
-    # violations with ruff==0.16.5: `ruff check . --extend-select T10,TID
-    # --statistics`). Mirrors the repo-root ruff.toml gate. These families block
-    # future regressions: T10 (flake8-debugging — no `pdb`/`ipdb`/`breakpoint`
-    # left in committed code) and TID (flake8-tidy-imports — prefer absolute
-    # imports, no relative imports beyond the top-level package).
+    # Tenth wave of defensive gate-strengthening: pass-to-enable rules that
+    # tighten logging correctness (LOG007/G010/G101/G202), string-quote
+    # consistency (Q001/Q002) and stdlib modernization (UP033). Verified zero
+    # current violations under both the backend and repo-root gates with
+    # ruff==0.16.5: `ruff check . --select LOG007,G010,G101,G202,Q001,Q002,
+    # UP033 --statistics`. Mirrors the repo-root ruff.toml gate. (FLY002 was
+    # evaluated and dropped: the one join site feeds raw SQL text, so ruff's
+    # S608 security gate and FLY002 cannot both be satisfied there.)
+    "LOG007",  # logging.exception() must not set exc_info=False (defeats its capture)
+    "G010",    # logger.warn() is deprecated — use logger.warning()
+    "G101",    # logging `extra=` key must not clash with a LogRecord attribute
+    "G202",    # no redundant exc_info= on logging calls that pass an exception
+    "Q001",    # multiline string quote style must follow the configured inline-quotes
+    "Q002",    # docstring quote style must follow the configured inline-quotes
+    "UP033",   # @lru_cache(maxsize=None) → @functools.cache
+    # Tenth wave (repo-root sync): T10/TID families block future regressions
+    # (verified zero current violations with ruff==0.16.5:
+    # `ruff check . --extend-select T10,TID --statistics`).
     "T10",     # no committed debuggers (pdb/ipdb/breakpoint)
     "TID",     # tidy imports — absolute imports only, no out-of-package relatives
     # Eleventh wave of defensive gate-strengthening (a small fixed backlog, then
@@ -513,7 +525,14 @@ dev = [
     # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
     # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).
     # Replace with a >=8.1.1 PyPI pin once the fix is released.
-    "pytest-bdd @ git+https://github.com/pytest-dev/pytest-bdd@60f6625b71b5552af02a4830e3d520f5ab6838e4",
+    #
+    # Pinned by REF (refs/pull/827/head), not by commit SHA: uv fetches git deps in
+    # refspec form (+<ref>:refs/...), and GitHub rejects anonymous fetch-by-SHA in
+    # that form (auth prompt -> "could not read Username" under terminal prompts
+    # disabled), which broke `uv sync --frozen` on every PR on 2026-09-02.
+    # refs/pull/827/head resolves to the same fix commit (60f6625b) and fetches
+    # anonymously. Replace with a >=8.1.1 PyPI pin once released.
+    "pytest-bdd @ git+https://github.com/pytest-dev/pytest-bdd@refs/pull/827/head",
     "pytest-cov>=7.1.0",
     "pytest-playwright>=0.8.0",
     "pytest-timeout>=2.4.0",

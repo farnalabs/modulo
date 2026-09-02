@@ -226,22 +226,38 @@ def read_before_write_ambiguous(
 
     True ONLY when a marker carries the SAME derived ``idempotency_key`` as this
     write (computed with the SAME ``run_ref`` / ``node_ref`` / ``index`` /
-    ``payload`` as the marker write) but WITHOUT ``delivery_done is True``. That
-    is the AMBIGUOUS state: a prior attempt touched this exact write but its
-    side-effecting delivery could not be confirmed (an indeterminate upstream
-    result, or the process died after the write before confirming). The
-    connector-write idempotency gate (:func:`_connector_write_gate`) uses this to
-    apply the per-connector-per-write ``on_unknown`` policy: ``fail_closed``
-    SUPPRESSES the ambiguous write (possible silent miss; the operator
-    reconciles), ``fail_open`` lets it FIRE (possible duplicate, usually
-    recoverable).
+    ``payload`` as the marker write) but WITHOUT ``delivery_done is True`` AND
+    WITHOUT ``no_delivery_confirmed is True``. That is the AMBIGUOUS state: a
+    prior attempt touched this exact write but its side-effecting delivery could
+    not be confirmed. With the FAR-531 intent markers, the ambiguous state is
+    carried by an IN-FLIGHT ``connector_write_intent`` marker (persisted after
+    the gate proceeds and before the upstream write fires; it is resolved to
+    ``delivery_done`` on success or ``no_delivery_confirmed`` on a definite
+    failure — a crash/timeout between the two leaves it in-flight, which is
+    exactly the ambiguity fail_closed guards against).
+
+    ``no_delivery_confirmed: True`` marks a DEFINITE no-delivery (the
+    connector's result explicitly reported failure — post-FAR-531, a connector
+    that RAISED is AMBIGUOUS, not definite: the write may have landed despite
+    the error, so its intent marker stays in-flight and no-delivery is never
+    persisted for it): the write did NOT reach upstream, so the later attempt's
+    gate must treat it as NOT ambiguous and re-fire under
+    BOTH modes (FAR-458: never suppress a definite failure — suppression would
+    strand the operator's recover-by-re-run).
+
+    The connector-write idempotency gate (:func:`_connector_write_gate`) uses
+    this to apply the per-connector-per-write ``on_unknown`` policy:
+    ``fail_closed`` SUPPRESSES the ambiguous write (possible silent miss; the
+    operator reconciles), ``fail_open`` lets it FIRE (possible duplicate,
+    usually recoverable).
 
     This is DELIBERATELY distinct from :func:`read_before_write_suppression`,
     which returns True ONLY for the CONFIRMED-delivered case (``delivery_done is
     True`` + matching key). A confirmed-delivered write is mode-independent (it
     always suppresses) — ``on_unknown`` governs ONLY the couldn't-confirm case.
-    A first-time write (no marker) or a changed-payload/target re-run (derives a
-    DIFFERENT key) is never ambiguous and never suppressed on this branch.
+    A first-time write (no marker), a changed-payload/target re-run (derives a
+    DIFFERENT key), or a definite-failure re-run (``no_delivery_confirmed``) is
+    never ambiguous and never suppressed on this branch.
 
     Fail-open: a missing/None ``run_ref``, a malformed ``run_ref``, a missing
     ``node_ref``, or a non-dict ``markers`` returns ``False`` (never treated as
@@ -260,5 +276,6 @@ def read_before_write_ambiguous(
         isinstance(marker, dict)
         and marker.get("idempotency_key") == derived
         and marker.get("delivery_done") is not True
+        and marker.get("no_delivery_confirmed") is not True
         for marker in markers.values()
     )

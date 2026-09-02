@@ -16,8 +16,22 @@ Deploy-safety: every FK is added ``NOT VALID`` then ``VALIDATE``-d, mirroring
 ``0151_fix_constraints``. ``ADD CONSTRAINT ... FOREIGN KEY NOT VALID`` takes only
 a brief ``AccessExclusive`` lock and does NOT scan existing rows, so a populated
 table never aborts the upgrade on pre-existing orphans; the ``VALIDATE`` is
-online. ``pipeline_edges`` uses ``RESTRICT``, and a historical orphan there would
-otherwise hard-fail a naive ``ADD CONSTRAINT``.
+online.
+
+0164-round-2 correction (deploy-integration rot, 2026-09-02): the four
+``*_node_id`` FKs this migration originally added referenced the ``nodes``
+table — which is the DEPRECATED composite-template table (see
+``db/models/node.py``). Pipeline graph nodes live ONLY in
+``pipelines.graph_nodes_json`` / ``pipeline_snapshots.graph_nodes_json``; their
+IDs are minted client-side and never materialised into ``nodes``. The four
+constraints were therefore unsatisfiable by design: ``VALIDATE`` fails on any
+populated DB, and every first-class pipeline-edge / eval-definition /
+eval-result write violates the FK (caught by the integration suite —
+``tests/integration/crud/test_pipeline.py``,
+``tests/integration/test_guardrail_config_api.py``). They are dropped from this
+migration entirely (edit-in-place is safe: no environment applied 0164 — the
+deploy gate blocked every deploy after this merged, and CI migrates fresh
+DBs). The two FKs that reference real, populated tables remain.
 """
 
 from __future__ import annotations
@@ -33,10 +47,6 @@ depends_on: tuple[str, ...] | None = None
 # (constraint, table, columns, ref_table, ref_columns, ondelete)
 _FKS: tuple[tuple[str, str, list[str], str, list[str], str], ...] = (
     ("org_api_keys_run_id_fkey", "org_api_keys", ["run_id"], "runs", ["id"], "SET NULL"),
-    ("eval_definitions_node_id_fkey", "eval_definitions", ["node_id"], "nodes", ["id"], "SET NULL"),
-    ("eval_results_node_id_fkey", "eval_results", ["node_id"], "nodes", ["id"], "SET NULL"),
-    ("pipeline_edges_source_node_id_fkey", "pipeline_edges", ["source_node_id"], "nodes", ["id"], "RESTRICT"),
-    ("pipeline_edges_target_node_id_fkey", "pipeline_edges", ["target_node_id"], "nodes", ["id"], "RESTRICT"),
     ("runs_variant_group_id_fkey", "runs", ["variant_group_id"], "variant_groups", ["id"], "SET NULL"),
 )
 

@@ -535,6 +535,23 @@ class ConnectorBase(ABC):
         """
         return DEFAULT_ON_UNKNOWN
 
+    def write_reported_failure(self, result: Any) -> bool:
+        """Did a NON-RAISING ``write()`` result report an upstream failure?
+
+        FAR-531 (AC6): some connectors report a failed write in their RETURN
+        value instead of raising (e.g. ``ShellConnector.write`` for the
+        ``command`` resource returns ``{"exit_code": <non-zero>}``). For those,
+        a non-raising ``write()`` is NOT proof of delivery, and the
+        connector-write idempotency stamp (``_stamp_connector_write_delivered``)
+        must not treat it as one. Connectors whose results have that shape
+        override this hook; the default ``False`` means "a write that returned
+        without raising delivered" (every connector that raises on failure).
+
+        ``result`` is the raw value returned by ``write()``. Implementations
+        must be pure and never raise for any result shape.
+        """
+        return False
+
     async def compensate(
         self,
         operation: CompensationOperation,

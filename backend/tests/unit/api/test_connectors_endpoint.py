@@ -4,11 +4,13 @@ Credentials (raw credential strings) must NEVER appear in responses.
 Only `has_credentials: true/false` is exposed.
 """
 
+import ast
 import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +19,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
+import modulo.api.routes.connectors as connectors_module
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
@@ -1336,7 +1339,114 @@ def test_connector_response_surfaces_degraded_markers(client: TestClient) -> Non
     assert body["last_skip_error"] == "ValueError: Missing credential key 'token'"
 
 
-# ── FAR-504: credential auth contract centralization + overlay model ─────
+def test_create_rest_invalid_on_unknown_config_rejected(client: TestClient) -> None:
+    """FAR-532: an invalid config_json.on_unknown must be rejected at the CREATE
+    boundary (422) — pre-fix it saved fine and bricked every bound node at run
+    time (RestConnector.__init__ raises on a bad mode)."""
+    body = {
+        "name": "REST Connector",
+        "connector_type_id": "rest",
+        "credentials": json.dumps({"auth_mode": "bearer", "token": "t"}),
+        "config_json": {"base_url": "https://api.example.com", "on_unknown": "bogus"},
+    }
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance") as mock_create,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=body)
+    assert resp.status_code == 422
+    assert "on_unknown" in resp.json()["detail"]
+    mock_create.assert_not_awaited()
+
+
+def test_patch_rest_invalid_on_unknown_config_rejected(client: TestClient) -> None:
+    """FAR-532: an invalid config_json.on_unknown must be rejected at the PATCH
+    config boundary (422) and the connector must not be updated."""
+    existing = _make_rest_connector(_encrypt_creds({"auth_mode": "bearer", "token": "t"}))
+    mock_update = AsyncMock()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"config_json": {"on_unknown": "bogus"}},
+        )
+    assert resp.status_code == 422
+    assert "on_unknown" in resp.json()["detail"]
+    mock_update.assert_not_awaited()
+
+
+def test_patch_rest_on_unknown_case_insensitive_accepted(client: TestClient) -> None:
+    """The boundary check mirrors the connector's own normalisation: a
+    case-insensitive match (e.g. a legacy uppercase echo 'FAIL_CLOSED') is
+    accepted, not rejected."""
+    existing = _make_rest_connector(_encrypt_creds({"auth_mode": "bearer", "token": "t"}))
+    captured: dict[str, Any] = {}
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        return existing
+
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"config_json": {"on_unknown": "FAIL_CLOSED"}},
+        )
+    assert resp.status_code == 200
+    assert captured["updates"]["config_json"]["on_unknown"] == "FAIL_CLOSED"
+
+
+def test_patch_masked_secret_key_preserves_stored_value(client: TestClient) -> None:
+    """FAR-532: ``secret`` is secret material (the REST connector's
+    ``_secret_values`` collects it) — a masked ``secret`` echo must preserve the
+    stored value, never be overlaid as identity (which would store the literal
+    mask string where the connector expects secret material)."""
+    stored = {"auth_mode": "api_key", "api_key": "secret123", "secret": "legacy-secret-value"}
+    existing = _make_rest_connector(_encrypt_creds(stored))
+    captured: dict[str, Any] = {}
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, Any]) -> MagicMock:
+        captured["updates"] = updates
+        if "credentials_ciphertext" in updates:
+            existing.credentials_ciphertext = updates["credentials_ciphertext"]
+        return existing
+
+    incoming = {"auth_mode": "api_key", "api_key": "", "secret": SENSITIVE_VALUE_MASK}
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": json.dumps(incoming)},
+        )
+    assert resp.status_code == 200
+    decoded = json.loads(Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode())
+    assert decoded["secret"] == "legacy-secret-value", f"Masked secret must preserve the stored value, got {decoded}"
+    assert decoded["api_key"] == "secret123"
+
+
+def test_connectors_route_module_has_no_assert_statements() -> None:
+    """FAR-532: bare `assert` guards vanish under `python -O`. The update
+    endpoint's credential-flow invariant (a supplied credential payload is
+    non-None) must be an explicit defensive branch (500), never an assert —
+    pin the route module to zero Assert nodes."""
+    module_file = getattr(connectors_module, "__file__", None)
+    assert module_file is not None
+    source = Path(module_file).read_text(encoding="utf-8")
+    assert_nodes = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Assert)]
+    assert not assert_nodes, f"assert statements found at lines {[n.lineno for n in assert_nodes]}"
 
 
 def _overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:

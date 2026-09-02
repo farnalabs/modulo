@@ -3596,7 +3596,8 @@ export default {
       "advanced_json": "Advanced configuration (JSON)",
       "advanced_json_invalid": "Advanced JSON is not valid JSON",
       "advanced_json_help": "Templated / advanced fields: path, headers, params, body, operations, next_cursor_path, passthrough, max_response_size, idempotency_header, fan_out, rate_limit.",
-      "credentials_write_only": "Credentials are write-only — they can never be read back. Re-enter to change; leave untouched to keep the existing stored credential."
+      "credentials_write_only": "Credentials are write-only — they can never be read back. Re-enter to change; leave untouched to keep the existing stored credential.",
+      "auth_mode_legacy_echo_hint": "No auth settings were echoed back for this connector (a row stored before that echo existed), so the auth mode shown may not match the stored credential. Verify the auth mode and re-enter the credential if it does not match."
     }
   }
 }

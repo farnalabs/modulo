@@ -7,6 +7,8 @@ import { ref } from 'vue'
 import RestConnectorConfigForm, {
   REST_FLAT_FIELDS,
   REST_ADVANCED_FIELDS,
+  ON_UNKNOWN_OPTIONS,
+  AUTH_MODE_OPTIONS,
   type RestConfigState,
   type RestCredsState,
 } from '../components/connectors/RestConnectorConfigForm.vue'
@@ -328,5 +330,31 @@ describe('RestConnectorConfigForm', () => {
     const { fields, advanced } = readRestConfigSchemaFields()
     expect(new Set(REST_FLAT_FIELDS)).toEqual(new Set(fields))
     expect(new Set(REST_ADVANCED_FIELDS)).toEqual(new Set(advanced))
+  })
+
+  it('exports the shared option enums the view consumes (single source of truth)', () => {
+    // The AdminConnectorsView prefill/echo logic imports these instead of
+    // re-declaring REST_*-prefixed copies that can drift (FAR-532).
+    expect(ON_UNKNOWN_OPTIONS).toEqual(['fail_open', 'fail_closed', 'off'])
+    expect(AUTH_MODE_OPTIONS).toEqual(['bearer', 'basic', 'api_key'])
+  })
+
+  it('shows the legacy auth-echo hint in edit mode only when legacyAuthEcho is set', async () => {
+    const { wrapper } = mountForm('edit')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]').exists()).toBe(false)
+    await wrapper.setProps({ legacyAuthEcho: true })
+    await wrapper.vm.$nextTick()
+    const hint = wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('may not match the stored credential')
+  })
+
+  it('does not show the legacy auth-echo hint in add mode', async () => {
+    const { wrapper } = mountForm('add')
+    await wrapper.vm.$nextTick()
+    await wrapper.setProps({ legacyAuthEcho: true })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]').exists()).toBe(false)
   })
 })

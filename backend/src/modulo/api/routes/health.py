@@ -32,7 +32,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import asyncpg  # type: ignore[import-untyped]
 import redis.asyncio as aioredis
@@ -338,7 +338,7 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
         member_keys = await r.zrangebyscore(stats_key, now_ms, "+inf")
         if not member_keys:
             return set()
-        raw = await r.mget(member_keys)
+        raw = await r.mget(cast("list[bytes | str]", member_keys))
         hostnames: set[str] = set()
         for blob in raw:
             if not blob:
