@@ -6,6 +6,7 @@ import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -19,10 +20,38 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/trigger_event_log.feature")
 
-from tests.bdd.conftest import make_mock_pipeline, make_mock_run, make_mock_snapshot
+from collections.abc import AsyncGenerator
+
+from modulo.api.dependencies import get_system_db_session
+from modulo.api.main import app
+from tests.bdd.conftest import (
+    make_mock_pipeline,
+    make_mock_run,
+    make_mock_snapshot,
+    make_system_session_mock,
+)
 
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+
+class _ProvisionedSystemSettings:
+    """Settings stub presenting a provisioned system database URL.
+
+    These BDD scenarios mock the system SESSION but run without
+    ``MODULO_SYSTEM_DATABASE_URL``; the (robust) fallback predicate would
+    otherwise 503 every delivery. The created engine is lazy and never
+    connects.
+    """
+
+    modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-bdd-test"
+
+
+@pytest.fixture(autouse=True)
+def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modulo.api import dependencies as _deps
+
+    monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
 
 def _patch_trigger_run(client, request, *, pipeline=None, run=None, payload=None, pipeline_not_found=False):
@@ -150,30 +179,37 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         patch("modulo.api.routes.webhooks.verify_timestamp", return_value=1700000000),
         patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
     ):
+        headers = {
+            "X-Modulo-Timestamp": "1700000000",
+            "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
+        }
         if trigger_missing:
-            missing_row = MagicMock()
-            missing_row.scalar_one_or_none.return_value = None
+            # The bootstrap trigger read runs on the SYSTEM session (FAR-523):
+            # a missing trigger must be absent from the instance-global read.
+            missing_system = make_system_session_mock(trigger_found=False)
 
-            async def _execute(stmt, *a, **kw):
-                return missing_row
+            async def _missing_system_override() -> AsyncGenerator[AsyncMock, None]:
+                yield missing_system
 
-            with patch.object(request.node._mock_session, "execute", side_effect=_execute):
+            previous = app.dependency_overrides.get(get_system_db_session)
+            app.dependency_overrides[get_system_db_session] = _missing_system_override
+            try:
                 resp = client.post(
                     f"/api/v1/triggers/{request.node._trigger_name}/webhook",
                     json=payload,
-                    headers={
-                        "X-Modulo-Timestamp": "1700000000",
-                        "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
-                    },
+                    headers=headers,
                 )
+            finally:
+                # pop-or-restore: put back whatever the client fixture installed.
+                if previous is None:
+                    app.dependency_overrides.pop(get_system_db_session, None)
+                else:
+                    app.dependency_overrides[get_system_db_session] = previous
         else:
             resp = client.post(
                 f"/api/v1/triggers/{request.node._trigger_name}/webhook",
                 json=payload,
-                headers={
-                    "X-Modulo-Timestamp": "1700000000",
-                    "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
-                },
+                headers=headers,
             )
     request.node._resp = resp
 

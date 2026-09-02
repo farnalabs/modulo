@@ -95,6 +95,19 @@ class TriggerInactiveError(RuntimeError):
         self.trigger_id = trigger_id
 
 
+class TriggerConfigInvalidError(RuntimeError):
+    """The trigger's ``config_json`` is not a JSON object (schema drift / manual edit).
+
+    Raised by the shared bootstrap helper so EVERY delivery path (webhook
+    receive, unauthenticated AND authenticated replay, Slack) 400s uniformly
+    instead of ``AttributeError``-ing on the ``.get`` reads downstream.
+    """
+
+    def __init__(self, trigger_id: uuid.UUID) -> None:
+        super().__init__(f"Trigger {trigger_id} has an invalid config_json (expected a JSON object)")
+        self.trigger_id = trigger_id
+
+
 class HmacValidationError(PermissionError):
     def __init__(self) -> None:
         super().__init__("HMAC-SHA256 signature is missing or invalid")
@@ -528,7 +541,12 @@ class TriggerEngine:
                 TriggerEvent.id == event_id,
                 TriggerEvent.organisation_id == org_id,
                 TriggerEvent.trigger_type == "webhook",
-                TriggerEvent.validation_result.in_(["accepted"]),
+                # Replayable outcomes: the original accepted delivery, plus a
+                # delivery that was refused as BUSY (recorded post-unwind by
+                # the route with its raw payload — replay is the recovery
+                # path for those). Genuine validation failures stay
+                # non-replayable.
+                TriggerEvent.validation_result.in_(["accepted", "concurrency_limit_reached"]),
             )
         )
         event = result.scalar_one_or_none()
@@ -548,6 +566,7 @@ class TriggerEngine:
                 select(Trigger).where(
                     Trigger.id == event.trigger_id,
                     Trigger.organisation_id == org_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = trigger_result.scalar_one_or_none()
@@ -872,11 +891,18 @@ class TriggerEngine:
         trigger_id: uuid.UUID,
         org_id: uuid.UUID,
     ) -> Trigger:
-        """Load trigger row (no FOR UPDATE - caller holds advisory lock if needed)."""
+        """Load trigger row (no FOR UPDATE - caller holds advisory lock if needed).
+
+        Soft-deleted triggers are excluded: every caller of this helper is a
+        delivery path (webhook receive / Slack app_mention), and a deleted
+        trigger must not accept new deliveries — a missing row raises
+        TriggerNotFoundError exactly like the shared bootstrap helper does.
+        """
         result = await session.execute(
             select(Trigger).where(
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
             )
         )
         trigger = result.scalar_one_or_none()

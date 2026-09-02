@@ -17,11 +17,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -119,12 +120,17 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
+    mock_system_session = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET})
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_system_session
+
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
@@ -286,14 +292,16 @@ def test_replay_webhook_unauthenticated_hmacless_trigger_denied(client: TestClie
     """An unauthenticated replay against an HMAC-less trigger is denied (401).
 
     Replay is NOT public run-creation like receive_webhook — a trigger with no
-    shared secret cannot authenticate an unauthenticated replay.
+    shared secret cannot authenticate an unauthenticated replay. The trigger
+    (and its secret) is resolved on the SYSTEM session bootstrap, so the
+    override targets ``get_system_db_session``.
     """
-    mock_session = _make_mock_session(trigger_config=None)
+    mock_system_session = make_system_session_mock(trigger_config=None)
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield mock_session
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_system_session
 
-    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     try:
         event_id = uuid.uuid4()
         resp = client.post(
@@ -303,4 +311,238 @@ def test_replay_webhook_unauthenticated_hmacless_trigger_denied(client: TestClie
         assert resp.status_code == 401
         assert "HMAC" in resp.json()["detail"]
     finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+
+def test_replay_webhook_bootstrap_reads_trigger_via_system_session(client: TestClient) -> None:
+    """Regression (FAR-523): the replay bootstrap read must go through the
+    system session BEFORE any app-session RLS org context exists — a
+    pre-context read of the org-scoped ``triggers`` table on the app session
+    matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET})
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run"),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        ):
+            m.return_value = (run_mock, None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 202
+    tables = [c.args[0].get_final_froms()[0].name for c in system_mock.execute.await_args_list if c.args]
+    assert "triggers" in tables
+
+
+def test_replay_webhook_missing_trigger_returns_404(client: TestClient) -> None:
+    """A trigger absent from the SYSTEM (instance-global) read is a real 404."""
+    system_mock = make_system_session_mock(trigger_found=False)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        resp = client.post(
+            f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+            headers=_auth_headers("admin"),
+        )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+
+
+def _make_org_aware_app_session(*, payload_org_id: uuid.UUID) -> AsyncMock:
+    """App-session mock whose stored-payload lookup is org-faithful.
+
+    The payload row "lives" in ``payload_org_id``. The lookup finds it only
+    when the route's query does NOT constrain ``organisation_id`` (the
+    regression condition this guards) or pins the payload's own org; pinning
+    any OTHER org (what the route does for another org's trigger) misses
+    exactly like the real RLS-scoped lookup.
+    """
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    payload_mock = MagicMock()
+    payload_mock.raw_body = _STORED_BODY
+    payload_row = MagicMock()
+    payload_row.scalar_one_or_none = MagicMock(return_value=payload_mock)
+    empty_row = MagicMock()
+    empty_row.scalar_one_or_none = MagicMock(return_value=None)
+
+    async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        if isinstance(stmt, Select):
+            froms = stmt.get_final_froms()
+            table = getattr(froms[0], "name", "") if froms else ""
+            if table == "webhook_payloads":
+                params = stmt.compile().params
+                org_param = next((v for k, v in params.items() if k.startswith("organisation_id")), None)
+                if org_param is None or org_param == payload_org_id:
+                    return payload_row
+                return empty_row
+        return empty_row
+
+    session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()
+    return session
+
+
+def test_replay_other_org_event_unauthenticated_returns_404_no_disclosure(client: TestClient) -> None:
+    """Cross-tenant isolation (FAR-523): an unauthenticated replay referencing
+    ANOTHER org's event_id gets a bare 404 — the org-scoped stored-payload
+    lookup misses (the session is pinned to the trigger's org), so the other
+    org's raw payload is never disclosed and no run is created. If the org
+    predicate were dropped from the lookup, this test FAILS (the payload would
+    be "found" and the replay would proceed to 202)."""
+    other_org = uuid.uuid4()
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET}, trigger_org_id=other_org)
+    # The stored payload belongs to org-A; the route pins the session to
+    # org-B (derived from the trigger), so the lookup must miss.
+    app_session = _make_org_aware_app_session(payload_org_id=_ORG_ID)
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    async def override_app() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    app.dependency_overrides[get_db_session] = override_app
+    event_id = uuid.uuid4()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{event_id}",
+                headers=_hmac_headers(),
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
         app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger event not found"
+    assert _STORED_BODY.decode() not in resp.text
+    m.assert_not_called()
+
+
+def test_replay_webhook_degraded_system_engine_returns_503(client: TestClient) -> None:
+    """Replay shares receive_webhook's degraded-system-engine contract: 503
+    with the distinct bootstrap-degraded failure, never a silent 404."""
+    with patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True):
+        resp = client.post(
+            f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
+
+
+def test_replay_webhook_trigger_busy_records_delivery_then_acks(client: TestClient) -> None:
+    """Replay serializes on the same engine advisory lock: the loser is NOT
+    executed and NOT auto-queued (the engine raises before any TriggerEvent
+    and the main transaction rolls back) — the route must RECORD the busy
+    replay (a ``concurrency_limit_reached`` event carrying the original
+    event's payload hash) and only then ack 202, never a false ack or 500."""
+    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["detail"] == BUSY_ACK_DETAIL
+    assert body.get("run_id") is None
+    dispatch.assert_not_called()
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "webhook"
+    assert kwargs["source_event_id"] == event_id
+    # A busy replay stores no NEW payload row — the original event's payload
+    # already exists and remains the replayable artefact.
+    assert kwargs.get("raw_body") is None
+
+
+def test_replay_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
+    """Unauthenticated replay reads the trigger's config_json for the HMAC
+    secret — a non-dict value must 400, not AttributeError -> 500."""
+    system_mock = make_system_session_mock(trigger_config="bogus")
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_replay_webhook_authenticated_invalid_config_json_returns_400(client: TestClient) -> None:
+    """Authenticated replay hits the SAME config-shape hole: before the
+    validation moved into the shared bootstrap helper, the isinstance guard
+    only ran inside ``if principal is None:`` — a runner replaying a trigger
+    with corrupt config_json got AttributeError -> 500. The helper now raises
+    TriggerConfigInvalidError for every path → 400."""
+    system_mock = make_system_session_mock(trigger_config="bogus")
+
+    async def override_system() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system
+    try:
+        with patch("modulo.api.routes.webhooks.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"

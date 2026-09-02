@@ -7734,7 +7734,10 @@ export interface paths {
          *     * Rate-limited to 1 request per 60 seconds per IP.
          *     * Daily cap of 100 events per IP.
          *     * Max request body size 10,000 bytes.
-         *     * Events are stored as orphaned records (no organisation scoping).
+         *     * Events are stored in a dedicated orphan-org partition: the ingest
+         *       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
+         *       migration 0171) that tenant sessions can never see (org-only RLS
+         *       policies), so unattributed frontend errors never leak across tenancy.
          *     * A future cleanup job will prune events older than 48 hours (TTL).
          */
         post: operations["ingest_errors_public_api_v1_errors_ingest_public_post"];

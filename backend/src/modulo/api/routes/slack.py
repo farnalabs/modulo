@@ -33,7 +33,10 @@ from modulo.api.dependencies import (
     get_current_tenant_user_optional,
     get_db_session,
     get_or_create_engine,
+    get_system_db_session,
+    system_engine_is_fallback,
 )
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
@@ -41,6 +44,8 @@ from modulo.core.exceptions import TriggersPausedError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
+    TriggerBusyError,
+    TriggerConfigInvalidError,
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
@@ -57,9 +62,8 @@ from modulo.core.trigger_engine.slack_app_mention import (
     verify_slack_signature,
     verify_slack_timestamp,
 )
+from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
@@ -125,28 +129,6 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
         await _ingest_slack_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
-async def _load_trigger_and_org(
-    session: AsyncSession,
-    trigger_id: uuid.UUID,
-    principal: TenantPrincipal | None,
-) -> tuple[Trigger, uuid.UUID]:
-    """Load the trigger row and resolve its org_id (principal or pipeline)."""
-    trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
-    trigger = trigger_row.scalar_one_or_none()
-    if trigger is None:
-        raise TriggerNotFoundError(trigger_id=trigger_id)
-
-    org_id = principal.organisation_id if principal else None
-    if org_id is None:
-        pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-        pipeline = pipe.scalar_one_or_none()
-        if pipeline:
-            org_id = pipeline.organisation_id
-    if org_id is None:
-        raise HTTPException(status_code=401, detail="Could not resolve organization")
-    return trigger, org_id
-
-
 @router.post(
     "/{trigger_id}/slack",
     status_code=status.HTTP_202_ACCEPTED,
@@ -167,6 +149,7 @@ async def receive_slack_event(
     response: Response,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     _engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
@@ -197,12 +180,32 @@ async def receive_slack_event(
             detail="Request body must be a JSON object",
         ) from exc
 
+    if system_engine_is_fallback():
+        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
+        # would silently match zero rows and every delivery would 404. Refuse
+        # loudly (same contract as admin_rotation's system-role check) — 503
+        # is distinguishable from a genuine 404.
+        _log.error("slack.system_bootstrap_degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System database not provisioned; trigger delivery unavailable",
+        )
+
+    org_id: uuid.UUID | None = None
     try:
         async with session.begin():
-            trigger, org_id = await _load_trigger_and_org(session, trigger_id, principal)
+            # Bootstrap via the shared system-session helper (FAR-523): the
+            # trigger read must precede any RLS org context on Postgres; the
+            # helper 404s a principal referencing another org's trigger.
+            trigger, org_id = await load_trigger_and_org_global(
+                system_session, trigger_id, principal.organisation_id if principal else None
+            )
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
+            # config_json shape was validated by the shared bootstrap helper
+            # (TriggerConfigInvalidError → 400 below), so ``.get`` here cannot
+            # AttributeError on external ingress.
             cfg = trigger.config_json or {}
             signing_secret: str | None = cfg.get("signing_secret")
 
@@ -276,6 +279,15 @@ async def receive_slack_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "slack.receive_event.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
     except SlackTimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -306,6 +318,32 @@ async def receive_slack_event(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except TriggerBusyError:
+        # Concurrent same-trigger deliveries serialize on the engine's
+        # advisory lock. The loser is NOT executed and NOT auto-queued: the
+        # engine raises BEFORE any TriggerEvent is written and the main
+        # transaction rolls back, so the busy delivery is recorded here —
+        # AFTER the unwind — in a fresh transaction (a
+        # ``concurrency_limit_reached`` event). Slack suppresses retries on
+        # 2xx BY DESIGN, so the recording is what makes the 202 ack honest —
+        # the delivery is visible in the event log, never silently lost.
+        _log.info("slack.receive_event.trigger_busy trigger=%s", trigger_id)
+        if org_id is not None:
+            await record_busy_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="slack_app_mention",
+                payload_hash=sha256_hex(raw_body),
+            )
+            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        # Defensive: TriggerBusyError can only fire after the bootstrap
+        # helper resolved the org — refuse loudly rather than false-ack.
+        _log.error("slack.receive_event.trigger_busy_unresolvable trigger=%s", trigger_id)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Pipeline busy — delivery not accepted; retry",
+            headers={"Retry-After": "5"},
+        ) from None
     except ProgrammingError:
         _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(

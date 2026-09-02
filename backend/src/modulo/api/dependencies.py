@@ -14,6 +14,7 @@ divergent second pool.
 """
 
 import logging
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from contextvars import Token
@@ -579,46 +580,95 @@ def get_or_create_session_factory(
 
 _SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
 _SYSTEM_SESSION_FACTORY: async_sessionmaker[AsyncSession] | None = None
+# True when the system engine fell back to the NOBYPASSRLS app engine (see
+# get_or_create_system_engine): in that state bootstrap reads that MUST be
+# instance-global (pre-auth trigger/org resolution, cross-org admin ops)
+# silently match zero rows, so hot-path callers must refuse loudly (503)
+# instead of 404ing every delivery.
+_SYSTEM_ENGINE_IS_FALLBACK = False
+# Guards the lazy engine singleton below: without it, two concurrent
+# first-requests could each run the check-then-set and leak the loser's
+# connection pool. The critical section contains no awaits, and the function
+# is sync — an asyncio.Lock cannot be used from sync code, so a
+# threading.Lock is the correct primitive here.
+_SYSTEM_ENGINE_LOCK = threading.Lock()
+
+# Statement (command) timeout for the system engine's asyncpg connections. The
+# app engine sets none (its connect_args carry only the connect timeout and
+# the Fly/HAProxy knobs), but the system session now sits on the pre-auth
+# trigger-delivery hot path — a hung statement there stalls external webhook
+# deliveries. 10s mirrors the connect timeout above.
+_SYSTEM_DB_COMMAND_TIMEOUT_SECONDS = 10
+
+
+def system_engine_is_fallback() -> bool:
+    """Whether the system engine is the NOBYPASSRLS app-engine fallback.
+
+    True when ``MODULO_SYSTEM_DATABASE_URL`` is unset. In that state the
+    system session cannot actually bypass RLS, so bootstrap reads that must
+    be instance-global (pre-auth trigger/org resolution, cross-org admin ops)
+    match zero rows and fail closed. Callers on external ingress paths must
+    refuse loudly (503) instead of silently 404ing every delivery.
+
+    Ensures the engine singleton is initialised before reading the flag: the
+    flag is only set as a side effect of :func:`get_or_create_system_engine`,
+    so a caller that reaches this predicate before any system-session user
+    would otherwise read a stale False purely due to call ordering. The
+    factory is idempotent and lock-guarded, so this is a no-op after the
+    first request.
+    """
+    get_or_create_system_engine()
+    return _SYSTEM_ENGINE_IS_FALLBACK
 
 
 def get_or_create_system_engine() -> AsyncEngine:
     """Return the process-global system engine (``modulo_system`` role, BYPASSRLS).
 
     Used for cross-org reads that must bypass per-org RLS — e.g. pre-auth SSO
-    provider resolution (provider config is instance-global, not tenant data).
-    Mirrors ``saq_worker._get_system_async_engine``: when
-    ``MODULO_SYSTEM_DATABASE_URL`` is set, builds a dedicated engine connected
-    as the ``modulo_system`` role (LOGIN, BYPASSRLS); otherwise falls back to
-    the regular engine with a warning. The fallback runs as ``modulo_app``
-    (NOBYPASSRLS), so an RLS-scoped read returns zero rows — callers must treat
-    an empty result as a signal to fall back to a scoped app read.
+    provider resolution (provider config is instance-global, not tenant data)
+    and the FAR-523 trigger-delivery bootstrap. Mirrors
+    ``saq_worker._get_system_async_engine``: when ``MODULO_SYSTEM_DATABASE_URL``
+    is set, builds a dedicated engine connected as the ``modulo_system`` role
+    (LOGIN, BYPASSRLS); otherwise falls back to the regular engine with a
+    warning AND records the fallback via :func:`system_engine_is_fallback` —
+    the fallback runs as ``modulo_app`` (NOBYPASSRLS), so an RLS-scoped read
+    returns zero rows and callers must fail loud rather than treat the empty
+    result as "not found".
     """
-    global _SYSTEM_ASYNC_ENGINE
+    global _SYSTEM_ASYNC_ENGINE, _SYSTEM_ENGINE_IS_FALLBACK
     if _SYSTEM_ASYNC_ENGINE is None:
-        settings = get_settings()
-        if settings.modulo_system_database_url:
-            from sqlalchemy.ext.asyncio import create_async_engine
+        with _SYSTEM_ENGINE_LOCK:
+            if _SYSTEM_ASYNC_ENGINE is None:
+                settings = get_settings()
+                if settings.modulo_system_database_url:
+                    from sqlalchemy.ext.asyncio import create_async_engine
 
-            _SYSTEM_ASYNC_ENGINE = create_async_engine(
-                settings.modulo_system_database_url,
-                pool_pre_ping=True,
-                pool_size=20,
-                max_overflow=10,
-                pool_recycle=3600,
-                pool_timeout=30,
-                connect_args={"ssl": False, "statement_cache_size": 0, "timeout": 10},
-            )
-        else:
-            logger.warning(
-                "api.system_engine_fallback",
-                extra={
-                    "reason": (
-                        "MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider "
-                        "resolution falls back to a scoped app read (single-org)"
+                    _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                        settings.modulo_system_database_url,
+                        pool_pre_ping=True,
+                        pool_size=20,
+                        max_overflow=10,
+                        pool_recycle=3600,
+                        pool_timeout=30,
+                        connect_args={
+                            "ssl": False,
+                            "statement_cache_size": 0,
+                            "timeout": 10,
+                            "command_timeout": _SYSTEM_DB_COMMAND_TIMEOUT_SECONDS,
+                        },
                     )
-                },
-            )
-            _SYSTEM_ASYNC_ENGINE = get_or_create_engine(settings)
+                else:
+                    _SYSTEM_ENGINE_IS_FALLBACK = True
+                    logger.warning(
+                        "api.system_engine_fallback",
+                        extra={
+                            "reason": (
+                                "MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider "
+                                "resolution falls back to a scoped app read (single-org)"
+                            )
+                        },
+                    )
+                    _SYSTEM_ASYNC_ENGINE = get_or_create_engine(settings)
     return _SYSTEM_ASYNC_ENGINE
 
 

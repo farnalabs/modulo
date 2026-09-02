@@ -39,6 +39,7 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
+from modulo.db.models.organisation import ORPHAN_ORG_ID as _ORPHAN_ORG_ID
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -63,8 +64,11 @@ _key_store: SessionKeyStore | None = None
 _public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
 _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
 
-# Orphan org ID for unauthenticated public ingest events
-ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# Orphan org ID for unauthenticated public ingest events — the shared
+# sentinel constant lives on the Organisation model so the ingest path, the
+# admin listing filter and migration tooling cannot drift apart. Re-exported
+# here under the same name for backward compatibility.
+ORPHAN_ORG_ID = _ORPHAN_ORG_ID
 
 # Breadcrumbs are persisted inside ``context_json`` under this key (PRD §8.25
 # lists breadcrumbs as part of the event context payload).
@@ -234,7 +238,10 @@ async def ingest_errors_public(
     * Rate-limited to 1 request per 60 seconds per IP.
     * Daily cap of 100 events per IP.
     * Max request body size 10,000 bytes.
-    * Events are stored as orphaned records (no organisation scoping).
+    * Events are stored in a dedicated orphan-org partition: the ingest
+      transaction is RLS-pinned to a nil-UUID organisation row (seeded by
+      migration 0171) that tenant sessions can never see (org-only RLS
+      policies), so unattributed frontend errors never leak across tenancy.
     * A future cleanup job will prune events older than 48 hours (TTL).
     """
     client_ip = request.client.host if request.client else "unknown"
@@ -297,6 +304,17 @@ async def ingest_errors_public(
     events_data = [_prepare_event_data(e) for e in valid_events]
     try:
         async with session.begin():
+            # Pre-auth route (FAR-457 pattern): error_events/error_groups are
+            # OrgScoped (org-only RLS), so the INSERTs below would fail the
+            # policy's WITH CHECK when ``app.organisation_id`` is unset — and
+            # ``ingest_batch`` swallows per-event errors (logged server-side),
+            # which previously yielded a false-success 201 with an empty
+            # results list and nothing persisted. Pin the transaction to the
+            # orphan org (a real organisations row seeded by migration 0171,
+            # satisfying the error_events FK) so the writes pass WITH CHECK
+            # and the dedup/group lookups partition to the orphan rows
+            # exactly as their explicit ``organisation_id`` predicates intend.
+            await set_rls_org(session, ORPHAN_ORG_ID)
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
     except ProgrammingError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
@@ -317,6 +335,19 @@ async def ingest_errors_public(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
+
+    if not results:
+        # ingest_batch swallows per-event failures (FK/RLS regressions,
+        # malformed rows): a 201 with zero results would be a false success —
+        # the client must learn persistence failed.
+        _log.error(
+            "error_tracking.public_ingest_not_persisted",
+            extra={"ip": client_ip, "submitted": len(valid_events)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error ingestion failed; no events could be persisted",
+        )
 
     # Update daily cap count after successful ingest
     ip_counts[today] = today_count + len(valid_events)
