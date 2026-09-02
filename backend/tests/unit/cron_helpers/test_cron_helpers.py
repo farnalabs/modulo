@@ -2771,6 +2771,40 @@ class TestDispatcherReconcileSharedStats:
         assert ch.DISPATCHER_RECONCILE_STATS_TTL_SECONDS > 5 * ch.DISPATCHER_RECONCILE_TICK_SECONDS
 
 
+class TestCronLivenessHeartbeat:
+    """_write_cron_liveness — the per-machine ``saq:cron:heartbeat:*`` stamp
+    read by /healthz/ready and the worker-liveness watchdog (FAR-538)."""
+
+    @pytest.mark.asyncio
+    async def test_write_sets_self_expiring_ttl(self) -> None:
+        """2026-09 Redis audit (FAR-538): the per-machine cron heartbeat key
+        carries a TTL so a dead worker machine's key self-expires instead of
+        persisting a dead timestamp forever. Both consumers degrade, not
+        break, on a missing key: /healthz/ready reports a missing key past
+        boot grace as the SAME "unavailable" tier a stale key gets ("never
+        fired"), and worker_liveness._cron_heartbeat_fresh skips missing keys
+        -> the SAME "stale fleet-wide" advisory an all-stale scan yields."""
+        r = AsyncMock()
+        await ch._write_cron_liveness(r)
+        assert r.set.await_args.args[0] == ch._cron_liveness_key("fire_due_triggers")
+        assert r.set.await_args.kwargs["ex"] == ch.CRON_LIVENESS_STATS_TTL_SECONDS
+        # Derived, not magic: the TTL must exceed BOTH consumers' shared
+        # 2x-cadence stale window (health._CRON_STALE_SECONDS and
+        # worker_liveness._CRON_STALE_SECONDS = 120s) so a key only ever
+        # expires after staleness is already signal-equivalent, plus one
+        # tick of margin for the 60s write cadence. The consumer window is
+        # cross-pinned to the real module constant (core -> core import)
+        # so a widening stale window fails here loudly instead of silently
+        # breaking the signal-equivalence invariant.
+        assert ch.CRON_LIVENESS_TICK_SECONDS == 60
+        assert ch.CRON_LIVENESS_STALE_SECONDS == 2 * ch.CRON_LIVENESS_TICK_SECONDS
+        assert ch.CRON_LIVENESS_STATS_TTL_SECONDS > ch.CRON_LIVENESS_STALE_SECONDS
+        from modulo.core.watchdog import worker_liveness as wl
+
+        assert wl._CRON_STALE_SECONDS == ch.CRON_LIVENESS_STALE_SECONDS
+        assert ch.CRON_LIVENESS_STATS_TTL_SECONDS > wl._CRON_STALE_SECONDS
+
+
 # ---------------------------------------------------------------------------
 # Review PR #982 findings 1-3: catch-up marker dedup, skip-attempt recording,
 # atomic claim, TTL coverage.

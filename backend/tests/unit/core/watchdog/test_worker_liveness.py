@@ -157,6 +157,25 @@ class TestWorkerLivenessWatchdog:
         post.assert_not_awaited()
         assert wl._WATCHDOG_HEARTBEAT_KEY in fake._data
         assert float(fake._data[wl._WATCHDOG_HEARTBEAT_KEY]) <= time.time()
+        assert fake._set_opts[wl._WATCHDOG_HEARTBEAT_KEY]["ex"] == wl.WATCHDOG_HEARTBEAT_TTL_SECONDS
+
+    async def test_watchdog_heartbeat_sets_self_expiring_ttl(self) -> None:
+        """2026-09 Redis audit (FAR-538): the watchdog's own liveness stamp
+        carries a TTL so a dead watchdog's key self-expires instead of
+        persisting a dead timestamp forever. No code reads this key — it is
+        an operator diagnostic — so a missing key gives the same verdict a
+        stale timestamp already gives (the watchdog is not ticking)."""
+        fake = _FakeWatchdogRedis()
+        await wl._write_watchdog_heartbeat(fake)
+        assert wl._WATCHDOG_HEARTBEAT_KEY in fake._data
+        assert fake._set_opts[wl._WATCHDOG_HEARTBEAT_KEY]["ex"] == wl.WATCHDOG_HEARTBEAT_TTL_SECONDS
+        # Derived, not magic: the TTL must outlive several ticks (a live
+        # watchdog restamps every watchdog_tick_seconds, default 30s, and
+        # never lets it lapse) and cover the watchdog's own default
+        # stale-detection window (watchdog_worker_stale_seconds, 180s).
+        assert _make_settings().watchdog_tick_seconds == wl._WATCHDOG_TICK_SECONDS
+        assert wl.WATCHDOG_HEARTBEAT_TTL_SECONDS > 2 * wl._WATCHDOG_TICK_SECONDS
+        assert _make_settings().watchdog_worker_stale_seconds <= wl.WATCHDOG_HEARTBEAT_TTL_SECONDS
 
     async def test_all_workers_dead_alerts_once_then_silent_while_active(self) -> None:
         fake = _FakeWatchdogRedis()

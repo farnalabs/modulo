@@ -65,6 +65,24 @@ _log = logging.getLogger("modulo.watchdog")
 _ALERT_STATE_KEY = "watchdog:alert:state:worker_liveness"
 _WATCHDOG_HEARTBEAT_KEY = "watchdog:heartbeat:worker_liveness"
 
+# Self-expiring TTL for the watchdog's own liveness stamp (2026-09 Redis audit,
+# FAR-538). The watchdog loop restamps every tick (settings.watchdog_tick_seconds,
+# default 30s — settings.py). Unlike the cron heartbeat above, NO code reads
+# this key: it is an operator diagnostic ("compare the stored timestamp to
+# now"), so a MISSING key yields exactly the conclusion a stale timestamp
+# already gives — the watchdog is not ticking — and nothing gates on it.
+# TTL = 6 ticks (180s): far beyond one missed tick (a live watchdog's 30s
+# refresh never lets it lapse) and equal to the watchdog's own default
+# stale-detection window (settings.watchdog_worker_stale_seconds, 180s), so a
+# dead watchdog's stamp self-expires in about the horizon in which watchdog
+# death would be noticed, instead of persisting a dead timestamp forever.
+# The derivation assumes the DEFAULT tick; the test suite pins
+# _WATCHDOG_TICK_SECONDS to the settings default so drift fails loudly (and
+# even if an operator raises the tick, this key is diagnostic-only — nothing
+# gates on it).
+_WATCHDOG_TICK_SECONDS = 30  # settings.watchdog_tick_seconds default
+WATCHDOG_HEARTBEAT_TTL_SECONDS = _WATCHDOG_TICK_SECONDS * 6
+
 # SAQ worker_info heartbeat TTL is 90s (saq_worker._TIMERS["worker_info"]=89
 # +1); the watchdog stale threshold defaults to 2x this. fire_due_triggers
 # (system cron) runs every 60s and writes a per-machine cron heartbeat; stale
@@ -132,8 +150,12 @@ async def _cron_heartbeat_fresh(redis: aioredis.Redis) -> bool:
 
 
 async def _write_watchdog_heartbeat(redis: aioredis.Redis) -> None:
-    """Stamp this watchdog's own liveness key so a dead watchdog is detectable."""
-    await redis.set(_WATCHDOG_HEARTBEAT_KEY, str(int(time.time())))
+    """Stamp this watchdog's own liveness key so a dead watchdog is detectable.
+
+    Self-expiring (FAR-538): see WATCHDOG_HEARTBEAT_TTL_SECONDS — a dead
+    watchdog's stamp must not persist a dead timestamp forever.
+    """
+    await redis.set(_WATCHDOG_HEARTBEAT_KEY, str(int(time.time())), ex=WATCHDOG_HEARTBEAT_TTL_SECONDS)
 
 
 async def _claim_alert(redis: aioredis.Redis, settings: Settings, conditions: list[str]) -> bool:

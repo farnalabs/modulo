@@ -359,6 +359,32 @@ def _machine_hostname() -> str:
     return os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
 
 
+# Per-machine cron liveness heartbeat TTL (2026-09 Redis audit, FAR-538). The
+# fire_due_triggers scheduler refreshes its key on every 60s system-cron tick,
+# and BOTH consumers treat a stale key with a 2x-cadence stale window and a
+# MISSING key as the same degraded verdict, so a TTL past that window is
+# signal-equivalent — expiry never flips a tier earlier than staleness would:
+# - /healthz/ready (health._check_system_crons machine-scoped, and
+#   health._check_fleet_system_crons fleet-wide): stale past
+#   health._CRON_STALE_SECONDS (120s = 2x cadence) -> readiness-gating
+#   "unavailable" (hard gate); a MISSING key past boot grace gets the SAME
+#   "unavailable" verdict ("never fired"), so a lapsed key reads identically
+#   in steady state. One bounded nuance: a machine RESTARTED after its old
+#   key expired now gets the normal 120s boot grace instead of instantly
+#   inheriting the dead timestamp as "unavailable" — strictly more accurate,
+#   never a tier flipped earlier.
+# - worker_liveness._cron_heartbeat_fresh: SCANs these keys with its own
+#   worker_liveness._CRON_STALE_SECONDS (120s) window; a MISSING key is
+#   skipped, so no fresh key remains -> the SAME "stale fleet-wide" advisory
+#   condition an all-stale scan yields (alert, never fatal).
+# TTL = 3 ticks (180s) = the shared 120s stale window + one tick of margin: a
+# live worker's 60s refresh never lets it lapse, while a dead worker's key
+# self-expires instead of accumulating a dead timestamp forever.
+CRON_LIVENESS_TICK_SECONDS = 60
+CRON_LIVENESS_STALE_SECONDS = 2 * CRON_LIVENESS_TICK_SECONDS
+CRON_LIVENESS_STATS_TTL_SECONDS = CRON_LIVENESS_STALE_SECONDS + CRON_LIVENESS_TICK_SECONDS
+
+
 def _cron_liveness_key(function: str) -> str:
     """Per-machine system-cron liveness key watched by /healthz/ready (plan F8).
 
@@ -3034,7 +3060,13 @@ async def _read_pause_by_org(
 
 async def _write_cron_liveness(redis_client: AsyncRedis) -> None:
     try:
-        await redis_client.set(_cron_liveness_key("fire_due_triggers"), int(time.time()))
+        # Self-expiring (FAR-538): see CRON_LIVENESS_STATS_TTL_SECONDS above —
+        # a dead worker's heartbeat must not persist a dead timestamp forever.
+        await redis_client.set(
+            _cron_liveness_key("fire_due_triggers"),
+            int(time.time()),
+            ex=CRON_LIVENESS_STATS_TTL_SECONDS,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:
