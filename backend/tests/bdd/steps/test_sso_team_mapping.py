@@ -218,7 +218,7 @@ def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[
 @given(parsers.parse('a first-time OIDC user with email "{email}"'))
 def first_time_oidc_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = True
     ctx["auth_type"] = "oidc"
 
@@ -226,7 +226,7 @@ def first_time_oidc_user(email: str, ctx: dict[str, Any]) -> None:
 @given(parsers.parse('a first-time SAML user with email "{email}"'))
 def first_time_saml_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = True
     ctx["auth_type"] = "saml"
 
