@@ -705,9 +705,12 @@ def test_single_migration_head() -> None:
     # 0170_add_residual_foreign_keys (DB-improvement residual FK sweep) chains off 0169.
     chaining_off_0169 = [p for p in revisions if parents[p] == "0169_connector_instance_degraded"]
     assert [_basename(p) for p in chaining_off_0169] == ["0170_add_residual_foreign_keys.py"]
-    # Nothing chains off 0170 -> it is the single head.
+    # 0171_runs_list_performance_indexes (Runs-page timeout fix) chains off 0170.
     chaining_off_0170 = [p for p in revisions if parents[p] == "0170_add_residual_foreign_keys"]
-    assert chaining_off_0170 == []
+    assert [_basename(p) for p in chaining_off_0170] == ["0171_runs_list_performance_indexes.py"]
+    # Nothing chains off 0171 -> it is the single head.
+    chaining_off_0171 = [p for p in revisions if parents[p] == "0171_runs_list_performance_indexes"]
+    assert chaining_off_0171 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
