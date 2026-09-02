@@ -501,7 +501,11 @@ async def list_runs_endpoint(
         )
         return await _run_with_retry(lambda: _do_list_runs(factory, user, query))
     except ValueError:
-        # Malformed cursor (CursorPaginator.decode_cursor raises ValueError).
+        # Malformed cursor (CursorPaginator.decode_cursor raises ValueError) —
+        # only mappable to 422 when a cursor was actually supplied; a
+        # non-cursor ValueError must not be mis-mapped to a client error.
+        if cursor is None:
+            raise
         _log.warning("runs.list_runs_endpoint: invalid cursor")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

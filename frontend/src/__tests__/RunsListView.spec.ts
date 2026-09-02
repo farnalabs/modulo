@@ -498,7 +498,31 @@ describe('RunsListView', () => {
     const firstCall = (api.GET as any).mock.calls[0]
     expect(firstCall[1].params.query.cursor).toBeUndefined()
     expect(firstCall[1].params.query.page_size).toBe(20)
+    // The retired offset param must never reappear on the wire.
+    expect(firstCall[1].params.query.page).toBeUndefined()
     expect(routerMocks.replace).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows the page-position label on a bare mount (page 1 is known)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Page 1')
+    wrapper.unmount()
+  })
+
+  it('scrubs a stale legacy ?page= param from the URL on mount', async () => {
+    routeMocks.query = { page: '5', status: 'running' }
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { status: 'running' } })
+    const firstCall = (api.GET as any).mock.calls[0]
+    expect(firstCall[1].params.query.page).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -517,7 +541,64 @@ describe('RunsListView', () => {
     expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
       params: { query: expect.objectContaining({ cursor: 'cursor-1' }) },
     }))
+    const lastCall = (api.GET as any).mock.calls.at(-1)
+    expect(lastCall[1].params.query.page).toBeUndefined()
     expect(routerMocks.replace).toHaveBeenLastCalledWith({ query: { cursor: 'cursor-1' } })
+    wrapper.unmount()
+  })
+
+  it('ignores a second Next click while a page fetch is in flight', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    let release: (value: unknown) => void = () => {}
+    ;(api.GET as any).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve }),
+    )
+    const nextBtn = wrapper.find('[data-testid="runs-list-next-page"]')
+    await nextBtn.trigger('click')
+    await flushPromises()
+
+    await nextBtn.trigger('click')
+    await flushPromises()
+    const cursor1Calls = (api.GET as any).mock.calls.filter(
+      (call: any[]) => call[1]?.params?.query?.cursor === 'cursor-1',
+    )
+    expect(cursor1Calls).toHaveLength(1)
+
+    release({ data: listWith(manyRuns.slice(5, 25), { next_cursor: null, has_more: false, total: 25 }), error: undefined })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Page 2')
+    wrapper.unmount()
+  })
+
+  it('keeps the pagination footer with a working Prev on an emptied cursor page', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    // The page behind the cursor was emptied between fetches: no rows, no more pages.
+    mockResponses['/api/v1/runs'] = listWith([], { next_cursor: null, has_more: false, total: 0 })
+    await wrapper.find('[data-testid="runs-list-next-page"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No runs found')
+    const prevBtn = wrapper.find('[data-testid="runs-list-prev-page"]')
+    expect(prevBtn.exists()).toBe(true)
+    expect((prevBtn.element as HTMLButtonElement).disabled).toBe(false)
+    expect((wrapper.find('[data-testid="runs-list-next-page"]').element as HTMLButtonElement).disabled).toBe(true)
+
+    // Prev recovers the user back to the last non-empty page.
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    await prevBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Test Pipeline')
     wrapper.unmount()
   })
 
