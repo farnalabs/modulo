@@ -109,6 +109,14 @@ def db_url(
     # auth.dependencies._verify_identity hits tables that don't exist there and
     # every API-backed integration test fails with a 503.
     session_monkeypatch.setenv("DATABASE_URL", url)
+    # Also point the system (BYPASSRLS) engine at the same migrated testcontainer.
+    # Without MODULO_SYSTEM_DATABASE_URL set, the process-global system engine
+    # falls back to the scoped app role and system_engine_is_fallback() becomes
+    # True, so pre-auth paths (webhook trigger delivery, cross-org reads) refuse
+    # with 503 (system_bootstrap_degraded) and every integration test that
+    # exercises them fails. The testcontainer superuser has BYPASSRLS, so the
+    # system engine works correctly here.
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", url)
     return url
 
 
