@@ -208,13 +208,14 @@ async def _create_feedback_record(
                 "rejection_reason, rejected_output, producing_node_id, feedback_status, "
                 "feedback_handler_type) "
                 "VALUES (:id, :oid, :rid, 'gate-1', :aid, 'secret detected', (:out)::json, "
-                "'node_a', 'correcting', 'ai_correction')"
+                "(:nid)::uuid, 'correcting', 'ai_correction')"
             ),
             {
                 "id": str(record_id),
                 "oid": str(rig["org_id"]),
                 "rid": str(run_id),
                 "aid": str(account_id),
+                "nid": str(rig["node_id"]),
                 "out": json.dumps({"body": "secret: hunter2"}),
             },
         )
