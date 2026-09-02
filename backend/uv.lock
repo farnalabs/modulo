@@ -1227,7 +1227,7 @@ dev = [
     { name = "ruff" },
     { name = "schemathesis" },
     { name = "semgrep" },
-    { name = "testcontainers" },
+    { name = "testcontainers", extra = ["redis"] },
     { name = "types-passlib" },
     { name = "types-pyyaml" },
     { name = "vulture" },
@@ -1268,7 +1268,7 @@ dev = [
     { name = "ruff" },
     { name = "schemathesis" },
     { name = "semgrep" },
-    { name = "testcontainers" },
+    { name = "testcontainers", extra = ["redis"] },
     { name = "types-jmespath" },
     { name = "types-jsonschema" },
     { name = "types-passlib" },
@@ -1329,7 +1329,7 @@ requires-dist = [
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-bdd", marker = "extra == 'dev'", specifier = ">=7.2.0" },
+    { name = "pytest-bdd", marker = "extra == 'dev'", path = "vendor/pytest_bdd-8.1.0-py3-none-any.whl" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "pytest-playwright", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "pytest-recording", marker = "extra == 'dev'", specifier = ">=0.13.0" },
@@ -1349,7 +1349,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "starlette", specifier = ">=0.48.0" },
     { name = "tenacity", specifier = ">=9.0.0" },
-    { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.14.2" },
+    { name = "testcontainers", extras = ["postgres", "redis"], marker = "extra == 'dev'", specifier = ">=4.14.2" },
     { name = "tqdm", specifier = ">=4.68.3" },
     { name = "types-passlib", marker = "extra == 'dev'", specifier = ">=1.7.7" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260518" },
@@ -1377,7 +1377,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
-    { name = "pytest-bdd", git = "https://github.com/pytest-dev/pytest-bdd?rev=refs%2Fpull%2F827%2Fhead" },
+    { name = "pytest-bdd", path = "vendor/pytest_bdd-8.1.0-py3-none-any.whl" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-playwright", specifier = ">=0.8.0" },
     { name = "pytest-recording", specifier = ">=0.13.0" },
@@ -1388,7 +1388,7 @@ dev = [
     { name = "ruff", specifier = ">=0.16.5,<0.17" },
     { name = "schemathesis", specifier = ">=3.30.0" },
     { name = "semgrep", specifier = ">=1.70.0" },
-    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.14.2" },
+    { name = "testcontainers", extras = ["postgres", "redis"], specifier = ">=4.14.2" },
     { name = "types-jmespath", specifier = ">=1.1.0.20260508" },
     { name = "types-jsonschema", specifier = ">=4.26.0" },
     { name = "types-passlib", specifier = ">=1.7.7" },
@@ -2208,8 +2208,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.14' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -3909,10 +3909,10 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.14'" },
-    { name = "python-dateutil", marker = "python_full_version < '3.14'" },
-    { name = "pytz", marker = "python_full_version < '3.14'" },
-    { name = "tzdata", marker = "python_full_version < '3.14'" },
+    { name = "numpy" },
+    { name = "python-dateutil" },
+    { name = "pytz" },
+    { name = "tzdata" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/01/d40b85317f86cf08d853a4f495195c73815fdf205eef3993821720274518/pandas-2.3.3.tar.gz", hash = "sha256:e05e1af93b977f7eafa636d043f9f94c7ee3ac81af99c13508215942e64c993b", size = 4495223, upload-time = "2025-09-29T23:34:51.853Z" }
 wheels = [
@@ -3961,9 +3961,9 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version >= '3.14'" },
-    { name = "python-dateutil", marker = "python_full_version >= '3.14'" },
-    { name = "tzdata", marker = "(python_full_version >= '3.14' and sys_platform == 'emscripten') or (python_full_version >= '3.14' and sys_platform == 'win32')" },
+    { name = "numpy" },
+    { name = "python-dateutil" },
+    { name = "tzdata", marker = "sys_platform == 'emscripten' or sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz", hash = "sha256:dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712", size = 4658219, upload-time = "2026-07-22T22:19:28.819Z" }
 wheels = [
@@ -4673,7 +4673,7 @@ wheels = [
 [[package]]
 name = "pytest-bdd"
 version = "8.1.0"
-source = { git = "https://github.com/pytest-dev/pytest-bdd?rev=refs%2Fpull%2F827%2Fhead#60f6625b71b5552af02a4830e3d520f5ab6838e4" }
+source = { path = "vendor/pytest_bdd-8.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "gherkin-official" },
     { name = "mako" },
@@ -4681,6 +4681,20 @@ dependencies = [
     { name = "parse" },
     { name = "parse-type" },
     { name = "pytest" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { filename = "pytest_bdd-8.1.0-py3-none-any.whl", hash = "sha256:78b8671edf8cfa97175b1c46bf4c376ae3506a5b15a910ad2154be24e7b72ad9" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gherkin-official", specifier = ">=29.0.0,!=31.0.0,!=32.0.0" },
+    { name = "mako" },
+    { name = "packaging" },
+    { name = "parse" },
+    { name = "parse-type" },
+    { name = "pytest", specifier = ">=7.0.0" },
     { name = "typing-extensions" },
 ]
 
@@ -5582,6 +5596,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4b/13/2cc466bddf26d0085f30a2b2bd56b7f8708b54a54db833eec97c5c69129b/testcontainers-4.15.0.tar.gz", hash = "sha256:085cde086337632e19002719460b7b80bbab2bdd51bb3ea04f77d0de96504706", size = 95340, upload-time = "2026-07-24T23:08:01.731Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/00/7e/424aac8b355597835deb333e757a0e94b5ccf38ad00f07fe6ed1f4e17c88/testcontainers-4.15.0-py3-none-any.whl", hash = "sha256:8796c14e76604031ad39cf0ed3b8e9806283a1fbf5270965c2b1c594caa31b74", size = 160771, upload-time = "2026-07-24T23:08:00.13Z" },
+]
+
+[package.optional-dependencies]
+redis = [
+    { name = "redis" },
 ]
 
 [[package]]
