@@ -143,6 +143,7 @@ function formatTime(iso: string): string {
 </script>
 
 <style scoped>
+@reference "../../style.css";
 .remy-sessions {
   @apply flex flex-col h-full;
 }

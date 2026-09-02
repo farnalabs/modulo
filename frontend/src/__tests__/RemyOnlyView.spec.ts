@@ -72,7 +72,7 @@ beforeEach(() => {
 
 describe('RemyOnlyView', () => {
   it('shows the unavailable state when dev mode is off', async () => {
-    ;(usePlanStore as any).mockReturnValue({
+    ;(usePlanStore as any).mockReturnValueOnce({
       devMode: false,
       loaded: true,
       features: {},
@@ -97,7 +97,11 @@ describe('RemyOnlyView', () => {
 
     expect(createSpy).not.toHaveBeenCalled()
     expect(loadSpy).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="remy-only-empty"]').exists()).toBe(true)
+    // vitest v4 no longer flushes Vue's nextTick DOM patch via flushPromises()
+    // alone; wait for the post-mount reactive render to settle.
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="remy-only-empty"]').exists()).toBe(true)
+    })
   })
 
   it('restored activeSessionId present in sessions → loadSession called on mount', async () => {
@@ -110,9 +114,11 @@ describe('RemyOnlyView', () => {
     const wrapper = mount(RemyOnlyView)
     await flushPromises()
 
-    expect(loadSpy).toHaveBeenCalledWith('session-1')
-    expect(wrapper.find('[data-testid="remy-only-tab-bar"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="remy-only-chat"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(loadSpy).toHaveBeenCalledWith('session-1')
+      expect(wrapper.find('[data-testid="remy-only-tab-bar"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="remy-only-chat"]').exists()).toBe(true)
+    })
   })
 
   it('renders resolved i18n keys for the remy-only chrome (banner is not a raw key)', async () => {

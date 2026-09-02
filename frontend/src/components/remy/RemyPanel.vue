@@ -573,6 +573,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+@reference "../../style.css";
 .remy-panel {
   @apply fixed z-40 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
   background-color: hsl(var(--background));

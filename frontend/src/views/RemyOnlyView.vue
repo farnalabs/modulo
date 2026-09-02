@@ -385,6 +385,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+@reference "../style.css";
 .remy-only-tab {
   @apply flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors border-b-2 border-transparent;
   color: hsl(var(--muted-foreground));

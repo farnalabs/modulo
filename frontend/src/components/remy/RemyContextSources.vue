@@ -175,6 +175,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+@reference "../../style.css";
 .remy-cs-select {
   @apply rounded-lg px-2 py-1.5 text-xs outline-none;
   background-color: hsl(var(--background));
