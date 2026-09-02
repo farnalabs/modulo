@@ -137,7 +137,26 @@ single ``api_key`` fallback. Read ``auth_mode`` + named fields from that dict:
     #            in: "header" (default) | "query" + query_param_name (default "api_key")
     # basic   -> username + password
 
-Templating uses the existing ``node_runner`` ``jinja2.sandbox.SandboxedEnvironment``;
+WRITE-ONLY / PARTIAL-OVERLAY CREDENTIAL MODEL (FAR-466 / FAR-504)
+-------------------------------------------------------------------
+Credentials are WRITE-ONLY at the API surface: the ciphertext is never exposed
+in a response (only a ``has_credentials`` boolean). A PATCH overlays the
+supplied credential dict onto the decrypted stored one (see
+``modulo.api.routes.connectors._credential_overlay``):
+
+* **Secret fields** (``token``, ``api_key``, ``username``, ``password``) are
+  replaced only when the request supplies a real, non-empty, non-masked value;
+  an empty/masked value leaves the stored secret intact.
+* **Non-secret identity fields** (``auth_mode``, ``in``, ``header_name``,
+  ``query_param_name``) are always overlaid, so an identity-only edit applies
+  while the stored secret survives.
+* **Unknown / legacy keys** are overlaid as-is; an overlay never drops a stored
+  secret.
+
+The connector reads auth identity from this DECRYPTED dict at run time via
+``_normalise_auth`` (validated by ``validate_credentials`` — the single source
+of truth for the required-secret contract). Templating uses the existing
+``node_runner`` ``jinja2.sandbox.SandboxedEnvironment``;
 the only runtime dependencies added here are ``httpx``, ``jinja2`` and
 ``jmespath``.
 
@@ -215,6 +234,15 @@ _AUTH_PROTECTED_HEADERS = frozenset({"authorization", "proxy-authorization", "ho
 
 # C0 control chars (minus tab, which is legal in header values) + DEL.
 _CONTROL_CHARS = frozenset({chr(c) for c in range(0x20) if c != 0x09} | {"\x7f"})
+
+# FAR-504: the sensitive-mask sentinel a redacted secret value is masked to.
+# Defined LOCALLY rather than imported because the ``Connectors don't reach into
+# core`` import-linter contract forbids ``modulo.connectors`` depending on
+# ``modulo.core``; the value mirrors ``modulo.core.secret_patterns
+# .SENSITIVE_VALUE_MASK`` (re-exported by ``modulo.api.middleware.sensitive_mask``
+# and compared verbatim by the PATCH credential overlay). A masked placeholder is
+# NOT a real secret and must be rejected on create — see ``validate_credentials``.
+_SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MiB
@@ -311,6 +339,41 @@ def _reject_control_chars(value: str, *, what: str) -> None:
     if bad:
         offending = " ".join(repr(c) for c in sorted(bad))
         raise ValueError(f"REST {what} contains control characters (header injection): {offending}")
+
+
+def _is_secret_effectively_missing(value: Any) -> bool:
+    """True when *value* is absent, whitespace-only, or the sensitive-mask sentinel.
+
+    FAR-504: a MASKED placeholder (``SENSITIVE_VALUE_MASK``) or a whitespace-only
+    string is NOT a real secret. Accepting one on CREATE would persist the literal
+    placeholder as the stored secret — a guaranteed runtime auth failure at
+    ``_normalise_auth``/request time. The PATCH overlay substitutes the real secret
+    before ``validate_credentials`` runs on the overlay path, so a masked/blank
+    value can never reach this check there; CREATE is the asymmetry this closes.
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return not value
+    return not value.strip() or value == _SENSITIVE_VALUE_MASK
+
+
+def _required_secret_error(message: str, fields: tuple[str, ...], creds: dict[str, Any]) -> ValueError:
+    """Build the required-secret rejection, with a dedicated masked-placeholder variant.
+
+    FAR-504 review minor: "REST bearer auth requires creds['token']" is misleading
+    when a token WAS supplied and it is the redaction mask
+    (``SENSITIVE_VALUE_MASK``) — the key was not absent, the VALUE is not a real
+    secret. When any checked field holds the mask sentinel, return a message that
+    says exactly that; otherwise return the historical "requires ..." message.
+    """
+    masked = [f for f in fields if creds.get(f) == _SENSITIVE_VALUE_MASK]
+    if masked:
+        names = " and ".join(f"creds['{f}']" for f in masked)
+        return ValueError(
+            f"{message} — {names} holds the redaction-mask placeholder, not a real secret; supply the actual secret"
+        )
+    return ValueError(message)
 
 
 class RESTError(ValueError):
@@ -1020,31 +1083,69 @@ class RestConnector(ConnectorBase):
 
     # ── Auth ───────────────────────────────────────────────────────────────
 
+    # FAR-504: the single source of truth for the REST credential auth contract.
+    # Every consumer that validates a REST credential dict — the connector's own
+    # ``_normalise_auth`` at run time AND the API boundary (create + PATCH
+    # overlay) — funnels through ``validate_credentials`` so the required-secret
+    # invariant never drifts between the two. The write-only/partial-overlay
+    # model is documented at the module and route level; this validator is the
+    # one place that defines "what makes a credential valid for a declared
+    # auth_mode".
     @staticmethod
-    def _normalise_auth(creds: dict[str, Any]) -> dict[str, Any]:
+    def validate_credentials(creds: dict[str, Any]) -> None:
+        """Validate a REST credential dict against the connector's auth contract.
+
+        Single source of truth for the required-secret invariant (FAR-504):
+        ``bearer`` requires ``token``; ``basic`` requires ``username`` +
+        ``password``; ``api_key`` requires ``api_key`` (with ``in`` limited to
+        ``header`` / ``query``). A required secret that is absent,
+        whitespace-only, or the sensitive-mask sentinel (``SENSITIVE_VALUE_MASK``)
+        is treated as MISSING — accepting a masked/blank placeholder on create
+        would persist it as the real secret. Raises ``ValueError`` with a clear
+        message when the declared ``auth_mode`` is missing a required secret or an
+        invalid ``auth_mode`` is supplied. Called by ``_normalise_auth``
+        (run-time) and by the API boundary (create + PATCH overlay) so a broken
+        credential is rejected at the boundary (422) instead of saved and
+        exploding on the first run.
+        """
         mode = str(creds.get("auth_mode", "")).strip().lower()
         if mode not in {"bearer", "api_key", "basic"}:
             raise ValueError(
                 f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
             )
+        if mode == "bearer":
+            if _is_secret_effectively_missing(creds.get("token")):
+                raise _required_secret_error("REST bearer auth requires creds['token']", ("token",), creds)
+        elif mode == "basic":
+            if _is_secret_effectively_missing(creds.get("username")) or _is_secret_effectively_missing(
+                creds.get("password")
+            ):
+                raise _required_secret_error(
+                    "REST basic auth requires creds['username'] and creds['password']",
+                    ("username", "password"),
+                    creds,
+                )
+        else:  # api_key
+            if _is_secret_effectively_missing(creds.get("api_key")):
+                raise _required_secret_error("REST api_key auth requires creds['api_key']", ("api_key",), creds)
+            auth_in = creds.get("in")
+            if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
+                raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth_in!r}")
+
+    @staticmethod
+    def _normalise_auth(creds: dict[str, Any]) -> dict[str, Any]:
+        RestConnector.validate_credentials(creds)
+        mode = str(creds.get("auth_mode", "")).strip().lower()
         auth: dict[str, Any] = {"mode": mode}
         if mode == "bearer":
-            if not creds.get("token"):
-                raise ValueError("REST bearer auth requires creds['token']")
             auth["token"] = str(creds["token"])
         elif mode == "basic":
-            if not creds.get("username") or not creds.get("password"):
-                raise ValueError("REST basic auth requires creds['username'] and creds['password']")
             auth["username"] = str(creds["username"])
             auth["password"] = str(creds["password"])
-        else:  # api_key
-            if not creds.get("api_key"):
-                raise ValueError("REST api_key auth requires creds['api_key']")
+        else:  # api_key — auth identity pre-validated by validate_credentials
             auth["api_key"] = str(creds["api_key"])
             auth_in = creds.get("in")
             auth["in"] = str(auth_in if auth_in is not None else "header").lower()
-            if auth["in"] not in {"header", "query"}:
-                raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth['in']!r}")
             if auth["in"] == "header":
                 header_name = creds.get("header_name")
                 # An empty/whitespace-only name is UNSET, not a name: an empty

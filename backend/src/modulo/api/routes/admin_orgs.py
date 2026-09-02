@@ -39,7 +39,7 @@ from modulo.db.crud.organisation import (
     list_organisations,
     update_organisation,
 )
-from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
 
 _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
@@ -259,7 +259,9 @@ async def admin_list_orgs(
         raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_list_orgs", exc)
-    return [_list_org_item(o) for o in orgs]
+    # The nil-UUID orphan org (public-error-ingest sentinel, migration 0171)
+    # is infrastructure, never a customer org — hide it from the admin listing.
+    return [_list_org_item(o) for o in orgs if o.id != ORPHAN_ORG_ID]
 
 
 # --- Create User in Org ---

@@ -20,10 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.conftest import make_system_session_mock
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -73,9 +74,13 @@ def _make_trigger_session() -> AsyncMock:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_trigger_session()
+    mock_system_session = make_system_session_mock(trigger_config={"signing_secret": _SECRET}, trigger_org_id=_ORG_ID)
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_system_session
 
     async def override_optional_principal() -> AuthenticatedPrincipal | None:
         return AuthenticatedPrincipal(
@@ -84,6 +89,7 @@ def client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
     from modulo.api.dependencies import get_current_tenant_user_optional
@@ -266,17 +272,16 @@ def test_paused_org_returns_202_paused(client: TestClient) -> None:
 
 
 def test_trigger_not_found_returns_404(client: TestClient) -> None:
+    """A trigger absent from the SYSTEM (instance-global) bootstrap read is a
+    real 404 (FAR-523: the bootstrap runs on the system session)."""
     body = _event_body()
     ts = str(int(time.time()))
-    session = _make_trigger_session()
-    trigger_result = MagicMock()
-    trigger_result.scalar_one_or_none.return_value = None
-    session.execute = AsyncMock(return_value=trigger_result)
+    system_session = make_system_session_mock(trigger_found=False)
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield session
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
 
-    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
     try:
         with patch("modulo.api.routes.slack.set_rls_org"):
             resp = client.post(
@@ -285,7 +290,7 @@ def test_trigger_not_found_returns_404(client: TestClient) -> None:
                 headers={**_headers(ts, body), "Content-Type": "application/json"},
             )
     finally:
-        app.dependency_overrides.pop(get_db_session, None)
+        app.dependency_overrides.pop(get_system_db_session, None)
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Trigger not found"
@@ -313,3 +318,119 @@ def test_app_mention_duplicate_event_returns_400(client: TestClient) -> None:
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Duplicate Slack event"
+
+
+def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) -> None:
+    """Cross-tenant isolation (FAR-523): an org-A principal referencing an
+    org-B trigger gets the same 404 as a missing trigger — fail closed, no
+    cross-org enumeration, and no run is created."""
+    other_org = uuid.uuid4()
+    system_session = make_system_session_mock(trigger_config={"signing_secret": _SECRET}, trigger_org_id=other_org)
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    from modulo.api.dependencies import get_current_tenant_user_optional
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
+        username="attacker", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    body = _event_body()
+    ts = str(int(time.time()))
+    try:
+        with (
+            patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.slack.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/slack",
+                content=body,
+                headers={**_headers(ts, body), "Content-Type": "application/json"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_current_tenant_user_optional, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger not found"
+    m.assert_not_called()
+
+
+def test_receive_slack_event_degraded_system_engine_returns_503(client: TestClient) -> None:
+    """When the modulo_system role is not provisioned the bootstrap would
+    silently 404 every delivery. The route must refuse loudly with a 503
+    (log code slack.system_bootstrap_degraded) — distinguishable from a 404."""
+    with patch("modulo.api.routes.slack.system_engine_is_fallback", return_value=True):
+        body = _event_body()
+        ts = str(int(time.time()))
+        resp = client.post(
+            f"/api/v1/triggers/{uuid.uuid4()}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "System database not provisioned; trigger delivery unavailable"
+
+
+def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient) -> None:
+    """Concurrent same-trigger slack deliveries serialize on the engine's
+    advisory lock. The loser is NOT executed and NOT auto-queued (the engine
+    raises before any TriggerEvent and the main transaction rolls back) — the
+    route must RECORD the busy delivery and only then ack 202. Slack
+    suppresses retries on 2xx BY DESIGN, so without the recording the
+    delivery would be silently lost."""
+    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
+        patch("modulo.api.routes.slack.set_rls_org"),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 202
+    body_json = resp.json()
+    assert body_json["status"] == "queued"
+    assert body_json["detail"] == BUSY_ACK_DETAIL
+    assert body_json.get("run_id") is None
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "slack_app_mention"
+    assert len(kwargs["payload_hash"]) == 64
+
+
+def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:
+    """A non-dict config_json on the trigger must 400 at the route, not
+    AttributeError -> 500 on external ingress."""
+    system_session = make_system_session_mock(trigger_config="bogus")
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    body = _event_body()
+    ts = str(int(time.time()))
+    try:
+        with patch("modulo.api.routes.slack.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/triggers/{uuid.uuid4()}/slack",
+                content=body,
+                headers={**_headers(ts, body), "Content-Type": "application/json"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Trigger configuration is invalid"

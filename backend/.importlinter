@@ -79,6 +79,11 @@ forbidden_modules =
     modulo.core
     modulo.api
 ignore_imports =
+    # FAR-523 trigger-delivery bootstrap: the shared trigger/org resolver in
+    # db.crud.trigger raises the engine's TriggerNotFoundError (same
+    # exception-mapping category as the pipeline_snapshot -> core.exceptions
+    # seam below — db exposes the read, core owns the exception type).
+    modulo.db.crud.trigger -> modulo.core.trigger_engine
     modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
     modulo.db.crud.run -> modulo.core.exceptions
     modulo.db.settings_resolver -> modulo.core.exceptions

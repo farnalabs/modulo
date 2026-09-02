@@ -859,19 +859,23 @@ REST_INTEGRATION: dict[str, Any] = {
                 "enum": ["fail_open", "fail_closed", "off"],
                 "default": "fail_open",
                 "description": (
-                    "Connector-write idempotency mode for the FAR-458 read-before-write "
-                    "dedup gate. Controls what happens to a write whose prior delivery "
-                    "could not be confirmed (ambiguous). Inert unless the opt-in "
+                    "Connector-write idempotency gate mode for the FAR-458 "
+                    "read-before-write dedup: what happens when a re-run of the "
+                    "SAME unchanged write finds a prior attempt whose delivery "
+                    "could not be confirmed (ambiguous). This does NOT govern "
+                    "response-shape or records extraction. Inert unless the opt-in "
                     "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled."
                 ),
                 "help": (
-                    "fail_open (default): re-fire the write on ambiguous delivery — "
-                    "possible duplicate, usually recoverable. fail_closed: suppress the "
-                    "write on ambiguous delivery — possible silent miss the operator must "
-                    "reconcile. off: bypass the gate entirely, the write always fires "
-                    "(never deduped). Only takes effect when the "
-                    "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled; otherwise "
-                    "all connector writes fire normally."
+                    "fail_open (default): re-fire the unconfirmed write on ambiguous "
+                    "delivery — possible duplicate, usually recoverable; a "
+                    "confirmed-delivered write is still suppressed. fail_closed: "
+                    "suppress the unconfirmed write on ambiguous delivery — possible "
+                    "silent miss the operator must reconcile; a confirmed-delivered "
+                    "write is still suppressed. off: bypass the gate entirely — "
+                    "writes always fire, never deduped. Only takes effect when the "
+                    "MODULO_CONNECTOR_WRITE_GATE_ENABLED killswitch is enabled; "
+                    "otherwise all connector writes fire normally."
                 ),
             },
             "records_path": {

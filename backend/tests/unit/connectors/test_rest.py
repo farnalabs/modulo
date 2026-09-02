@@ -15,6 +15,7 @@ import pytest
 from modulo.connectors._rate_bucket import TokenBucket
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 from modulo.connectors.rest import (
+    _SENSITIVE_VALUE_MASK,
     RESTCardinalityExceededError,
     RESTConnectError,
     RestConnector,
@@ -25,6 +26,7 @@ from modulo.connectors.rest import (
     RESTStatusError,
     SecurityGuard,
 )
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.connectors._conformance import assert_result_shape, assert_write_result_shape
 from tests.connectors._noop_guard import make_noop_security_guard as _noop_guard
 
@@ -358,6 +360,112 @@ def test_auth_basic() -> None:
     c._transport = httpx.MockTransport(handler)
     asyncio_run(c.query(ConnectorQuery(resource="default")))
     assert captured["authorization"].startswith("Basic ")
+
+
+# ── Credential auth contract (FAR-504) ────────────────────────────────
+
+
+def test_validate_credentials_is_authoritative_auth_contract() -> None:
+    """``validate_credentials`` is the single source of truth for the REST
+    required-secret contract (FAR-504): rejected dicts must also be rejected by
+    ``_normalise_auth`` (and vice versa), so the API boundary and the run-time
+    connector never drift. bearer->token; basic->username+password;
+    api_key->api_key + in header/query."""
+    valid = [
+        {"auth_mode": "bearer", "token": "t"},
+        {"auth_mode": "api_key", "api_key": "k"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "header", "header_name": "X-Key"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "query", "query_param_name": "token"},
+        {"auth_mode": "basic", "username": "u", "password": "p"},
+    ]
+    invalid = [
+        {"auth_mode": "bearer"},  # missing token
+        {"auth_mode": "api_key"},  # missing api_key
+        {"auth_mode": "basic", "username": "u"},  # missing password
+        {"auth_mode": "basic", "password": "p"},  # missing username
+        {"auth_mode": "opaque"},  # unsupported mode
+        {"auth_mode": "api_key", "api_key": "k", "in": "cookie"},  # in must be header/query
+    ]
+    for creds in valid:
+        RestConnector.validate_credentials(creds)
+        RestConnector._normalise_auth(creds)
+    for creds in invalid:
+        with pytest.raises(ValueError):
+            RestConnector.validate_credentials(creds)
+        with pytest.raises(ValueError):
+            RestConnector._normalise_auth(creds)
+
+
+def test_validate_credentials_raises_on_missing_required_secret() -> None:
+    """Each auth_mode raises a specific ValueError naming the missing secret."""
+    with pytest.raises(ValueError, match="requires creds\\['token'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "bearer"})
+    with pytest.raises(ValueError, match="requires creds\\['username'\\] and creds\\['password'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "basic", "username": "u"})
+    with pytest.raises(ValueError, match="requires creds\\['api_key'\\]"):
+        RestConnector.validate_credentials({"auth_mode": "api_key"})
+    with pytest.raises(ValueError, match=r"auth_mode.*one of 'bearer', 'api_key', 'basic'"):
+        RestConnector.validate_credentials({"auth_mode": "opaque"})
+
+
+def test_validate_credentials_rejects_masked_secret() -> None:
+    """A masked placeholder (SENSITIVE_VALUE_MASK) is NOT a real secret: CREATE
+    must reject it rather than persist the literal mask as the stored credential
+    (guaranteed runtime auth failure). All three secret-bearing auth_modes are
+    covered (FAR-504)."""
+    # The connector's local mirror of the mask sentinel must stay in sync with the
+    # canonical value (the connector cannot import ``modulo.core`` per the
+    # import-linter contract, so it mirrors the string — a drift here silently
+    # defeats the masked-rejection guard).
+    assert _SENSITIVE_VALUE_MASK == SENSITIVE_VALUE_MASK
+    masked_bearer = {"auth_mode": "bearer", "token": SENSITIVE_VALUE_MASK}
+    masked_basic = {"auth_mode": "basic", "username": "u", "password": SENSITIVE_VALUE_MASK}
+    masked_api_key = {"auth_mode": "api_key", "api_key": SENSITIVE_VALUE_MASK}
+    # A masked value gets the DEDICATED message (FAR-504 review minor): the plain
+    # "requires creds['token']" wording would wrongly imply the key was absent,
+    # when in fact a (placeholder) value WAS supplied.
+    with pytest.raises(ValueError, match=r"requires creds\['token'\].*redaction-mask placeholder"):
+        RestConnector.validate_credentials(masked_bearer)
+    with pytest.raises(
+        ValueError, match=r"requires creds\['username'\] and creds\['password'\].*redaction-mask placeholder"
+    ):
+        RestConnector.validate_credentials(masked_basic)
+    with pytest.raises(ValueError, match=r"requires creds\['api_key'\].*redaction-mask placeholder"):
+        RestConnector.validate_credentials(masked_api_key)
+
+
+def test_validate_credentials_rejects_whitespace_only_secret() -> None:
+    """A whitespace-only secret is MISSING — a blank credential string should be
+    rejected rather than persisted as a real (broken) secret (FAR-504)."""
+    blank_bearer = {"auth_mode": "bearer", "token": "   "}
+    blank_basic = {"auth_mode": "basic", "username": "   ", "password": "u"}
+    blank_api_key = {"auth_mode": "api_key", "api_key": "\t\n"}
+    for creds in (blank_bearer, blank_basic, blank_api_key):
+        with pytest.raises(ValueError):
+            RestConnector.validate_credentials(creds)
+
+
+def test_validate_credentials_accepts_real_nonempty_secret() -> None:
+    """A legitimate non-empty secret still passes validation for every mode
+    (the masked/whitespace rejection must never reject a real secret)."""
+    valid = [
+        {"auth_mode": "bearer", "token": "sk-live-real-token-12345"},
+        {"auth_mode": "api_key", "api_key": "a-real-api-key"},
+        {"auth_mode": "api_key", "api_key": "a-real-api-key", "in": "header"},
+        {"auth_mode": "basic", "username": "user@example.com", "password": "hunter2!"},
+    ]
+    for creds in valid:
+        RestConnector.validate_credentials(creds)  # must not raise for a real secret
+        auth = RestConnector._normalise_auth(creds)
+        assert auth["mode"] == str(creds["auth_mode"]).lower()
+        if creds["auth_mode"] == "bearer":
+            assert auth["token"] == creds["token"]
+        elif creds["auth_mode"] == "basic":
+            assert auth["username"] == creds["username"]
+            assert auth["password"] == creds["password"]
+        else:  # api_key
+            assert auth["api_key"] == creds["api_key"]
+            assert auth["in"] == str(creds.get("in", "header")).lower()
 
 
 # ── Injection guard ────────────────────────────────
