@@ -1,6 +1,13 @@
 app = 'demo-modulo'
 primary_region = 'lhr'
 
+# STATUS (verified 2026-09-02): this app is NOT provisioned - `fly apps list` in org
+# `personal` has no demo-modulo and `fly machines list -a demo-modulo` returns
+# "app not found". This file bills NOTHING today and must not be counted in the org
+# machine budget. Provisioning it (2 machines per min_machines_running below) is a
+# deliberate scale-up decision: +2 x 1-CPU machines on top of the org footprint
+# documented in fly.toml / fly.staging.toml.
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 

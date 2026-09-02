@@ -4,12 +4,30 @@
 app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
-# Standing footprint: 2 x app + 1 x worker = 3 machines for this app.
-# Whole-org standing: app-modulo 3 + staging-modulo 2 + DBs 2 = 7.
-# Rolling deploys peak at N+1 per process group; keep the org total
-# (incl. staging + DBs) under the Fly machine limit (~10 on the
-# personal plan). There is no automated budget guard in CI: deploy.yml only
-# prunes group-less strays ("Clean up stray machines"), so the limit is
+# Standing footprint (verified live 2026-09-02 via `fly scale show` / `fly machines
+# list`): 1 x app (2 CPU, 2gb) + 2 x worker (1 CPU, 2gb each; one is a stopped cold
+# standby of the other) = 3 machines. The [[vm]] blocks below match the live machines
+# exactly. NOTE: min_machines_running=2 does NOT create or keep a second app machine -
+# the August 2026 invoice (2x CPU line = 2.06 machine-months) proves prod ran ONE app
+# machine all month. If app-group HA is wanted that is a manual `fly scale count
+# app=2 -a app-modulo` (+1 x 2-CPU machine), not a config change.
+# Whole-org standing (verified 2026-09-02): 11 machines across 7 apps in org
+# `personal`, ~8 started 24/7: app-modulo 3 + staging-modulo 2 + modulo-telemetry 2
+# (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly MPG
+# Postgres machines (modulo-app-db 2CPU/4gb, modulo-staging-db, library-modulo-db).
+# MPG machines bill as separate "MPG Cluster" lines, NOT in the "Machines" usage
+# lines (verified against the Aug 2026 invoice: the 2x CPU line fits app+staging app
+# machines exactly, with zero headroom for modulo-app-db). demo-modulo
+# (fly.demo.toml) is NOT provisioned - no app, no machines, no cost.
+# Org `modulo-admin` (separate org/bill) additionally holds 2 MPG clusters named
+# modulo-telemetry-db (fra, basic); one is ORPHANED (no attached apps) - cleanup
+# candidate via `fly mpg destroy`, needs-human.
+# Rolling deploys peak at N+1 per process group; each deploy also launches one-off
+# pre-migrate machines (shared-cpu-1x / 1gb, deploy.yml) on staging AND prod,
+# destroyed after the deploy - they bill only while running. There is no automated
+# budget guard in CI: deploy.yml only prunes group-less strays ("Clean up stray
+# machines") - a GROUPED stray (cloned worker, failed-rolling-deploy leftover) is
+# never auto-cleaned; run `fly machines list -a <app>` after incidents. The limit is
 # enforced by this standing footprint + manual review before scaling up.
 # Do NOT add process groups or machines without updating this block.
 primary_region = 'lhr'
