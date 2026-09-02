@@ -109,6 +109,24 @@ def db_url(
     # auth.dependencies._verify_identity hits tables that don't exist there and
     # every API-backed integration test fails with a 503.
     session_monkeypatch.setenv("DATABASE_URL", url)
+    # Point the system (BYPASSRLS) engine at the same migrated testcontainer.
+    # Without MODULO_SYSTEM_DATABASE_URL set, the process-global system engine
+    # falls back to the scoped app role and system_engine_is_fallback() becomes
+    # True, so pre-auth paths (webhook trigger delivery, cross-org reads) refuse
+    # with 503 (system_bootstrap_degraded) and every integration test that
+    # exercises them fails.
+    #
+    # It MUST carry the dedicated ``modulo_system`` role's credentials, not the
+    # container superuser's: ``bootstrap_role._bootstrap`` derives the system
+    # role NAME from this URL's username (``sys_user = _parse_role(sys_url) or
+    # _SYSTEM_ROLE``). Pointing it at the superuser URL makes bootstrap
+    # provision the superuser instead, ``modulo_system`` is never created, and
+    # the fatal role-posture assertion fails the boot for every integration
+    # test ("modulo_system does not have BYPASSRLS"). ``bootstrap_roles``
+    # creates the role LOGIN BYPASSRLS with exactly this password, which
+    # mirrors production: deploy/fly/bootstrap_db.derive_system_database_url
+    # swaps the runtime URL's username to ``modulo_system``.
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "modulo_system", "syspass"))
     return url
 
 
