@@ -8,7 +8,7 @@
 
 services:
   db:
-    image: mariadb:11.8
+    image: mariadb:12.3
     environment:
       MARIADB_USER: modulo
       MARIADB_PASSWORD: modulo
