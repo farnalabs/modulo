@@ -82,15 +82,15 @@ Every registered manifest feature, its description, and the routes that referenc
 Fresh entries for these features are added to the graph below as behaviour trackers.
 
 ### Build
-- **feat-dashboard** - Home dashboard, metrics overview, and saved views - routes: `/`, `/admin/views`
-- **feat-pipelines** - Visual pipeline editor, composite editor, and node categories - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`, `/admin/node-categories`
+- **feat-dashboard** - Home dashboard and metrics overview (Saved Views deferred from the MVP nav — hidden via private_preview; see FAR-546) - routes: `/`
+- **feat-pipelines** - Visual pipeline editor and composite editor (Node Categories deferred from the MVP nav — hidden via private_preview; see FAR-545) - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`
 - **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
 - **feat-library** - Reusable pipeline templates and the template library - routes: `/library/:id/create-pipeline`, `/library`
-- **feat-runs** - Run execution, history, detail, and output diffs - routes: `/runs`, `/runs/diff`, `/runs/:id`
+- **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav — hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
 
 ### Monitor
-- **feat-observability** - Error dashboard, monitoring, and observability exports - routes: `/settings/observability`, `/settings/error-forwarders`, `/settings/monitoring`, `/admin/errors`, `/admin/errors/:id`
+- **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav — hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
 - **feat-notifications** - Notifications, email delivery, and notification logs - routes: `/notifications`, `/settings/email`, `/admin/notification-delivery`
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
@@ -112,15 +112,15 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ### Admin
 - **feat-teams** - Users, teams, and role-based access - routes: `/settings/teams`, `/admin/users`
-- **feat-org** - Organization settings and feature flags - routes: `/admin/org`, `/admin/feature-flags`
+- **feat-org** - Organization settings (Feature Flags deferred from the MVP nav — hidden via private_preview; see FAR-548) - routes: `/admin/org`
 - **feat-sso** - Single sign-on (SSO) - routes: `/settings/sso`
-- **feat-plugins** - Plugin registry - routes: `/admin/plugins`
+- **feat-plugins** - Plugin registry (deferred from the MVP nav — hidden via private_preview; see FAR-544) - routes: `/admin/plugins`
 - **feat-audit** - Audit trail and audit log - routes: `/admin/audit`
 - **feat-feedback** - Feedback inbox - routes: `/feedback/inbox`
 
 ### System
 - **feat-license** - Feature licensing and plan tiers - routes: `/settings/license`
-- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency - routes: `/settings/runtime-config`, `/settings/rate-limits`, `/admin/housekeeping`, `/admin/environments`, `/admin/run-retention`, `/admin/sandbox-concurrency`
+- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency (Runtime Config and Rate Limits deferred from the MVP nav — hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/environments`, `/admin/run-retention`, `/admin/sandbox-concurrency`
 - **feat-system-config** - System-level configuration administration - routes: `/admin/system/config`
 - **feat-system-orgs** - System-level organization administration - routes: `/admin/system/orgs`
 - **feat-product-analytics** - Product usage and adoption analytics for system administrators - routes: `/admin/product-analytics`
@@ -139,7 +139,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > [Known graph gaps](#known-graph-gaps). Keeping a single list stops the two copies
 > drifting apart (they did: the older inline copy still named features whose trackers
 > had already landed in the index below).
-> 
+>
 > **Closed this walk:** `feat-environments` gained its behaviour-tracker entry
 > (`environments/environments.md`) — see the graph index above.
 

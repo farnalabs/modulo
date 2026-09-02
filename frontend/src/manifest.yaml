@@ -139,6 +139,7 @@ routes:
         sidebar_order: 2
         type: page
         <<: *community
+        visibility: private_preview
         deprecated: false
 
     /pipelines/:id/editor:
@@ -376,6 +377,7 @@ routes:
         sidebar_group: system
         sidebar_order: 7
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -387,6 +389,7 @@ routes:
         sidebar_group: system
         sidebar_order: 8
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -422,6 +425,7 @@ routes:
         sidebar_group: system
         sidebar_order: 2
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -445,6 +449,7 @@ routes:
         sidebar_order: 4
         type: form_page
         <<: *community
+        visibility: private_preview
         deprecated: false
 
     /admin/users:
@@ -557,6 +562,7 @@ routes:
         sidebar_order: 7
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /admin/feature-flags:
@@ -567,6 +573,7 @@ routes:
         sidebar_group: system
         sidebar_order: 4
         type: list_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -579,17 +586,6 @@ routes:
         sidebar_order: 6
         type: page
         <<: *community
-        deprecated: false
-
-    /admin/environments:
-        name: admin-environments
-        breadcrumb: Run Environments
-        parent: /
-        product_map: [feat-environments, feat-runtime]
-        sidebar_group: admin
-        sidebar_order: 9
-        type: list_page
-        <<: *team
         deprecated: false
 
     /admin/parameter-schemas:
@@ -634,6 +630,7 @@ routes:
         sidebar_order: 8
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /admin/errors:
@@ -714,6 +711,7 @@ routes:
         sidebar_order: 4
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /lifecycle-maps:
@@ -1063,40 +1061,6 @@ elements:
         dynamic_testid: false
       - testid: admin-spend-limits-org-limit
         type: input
-        dynamic_testid: false
-    /admin/environments:
-      - testid: admin-envprofiles-add
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-name-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-description-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-provider-select
-        type: select
-        dynamic_testid: false
-      - testid: admin-envprofiles-image-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-timeout-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-memory-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-cpu-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-envprofiles-cancel
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-delete-confirm
-        type: button
-        dynamic_testid: false
-      - testid: admin-envprofiles-delete-cancel
-        type: button
         dynamic_testid: false
     /admin/feature-flags:
       - testid: developer-mode-toggle
@@ -1668,6 +1632,15 @@ elements:
         dynamic_testid: false
       - testid: envprofile-list-name
         type: link
+        dynamic_testid: false
+      - testid: envprofile-test
+        type: button
+        dynamic_testid: false
+      - testid: envprofile-test-panel
+        type: element
+        dynamic_testid: false
+      - testid: envprofile-test-dismiss
+        type: button
         dynamic_testid: false
     /environment-profiles/:id/edit:
       - testid: envprofile-form-back
@@ -3168,7 +3141,7 @@ features:
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
     feat-environments:
-        description: Environment profiles and run environments
+        description: Environment profiles
     feat-evals:
         description: Evaluation editor and proposal queue
     feat-feedback:

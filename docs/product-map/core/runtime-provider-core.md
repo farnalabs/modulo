@@ -9,11 +9,10 @@ code:
   - backend/src/modulo/db/models/workspace_lease.py
   - backend/src/modulo/db/crud/environment_profile.py
   - backend/src/modulo/api/routes/environment_profiles.py
-  - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/connectors/shell/__init__.py
   - frontend/src/views/environment-profiles/
-  - frontend/src/views/AdminEnvironmentProfilesView.vue
+  - frontend/src/stores/environmentProfiles.ts
 unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py
   - backend/tests/unit/core/runtime_provider/test_hub.py
@@ -21,7 +20,7 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_local.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
-  - backend/tests/unit/api/test_environments.py
+  - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/workflows/binding.feature
@@ -44,8 +43,8 @@ its product-map entry carries the ADR 003 deprecation notice.
 - [x] Provider registry/hub resolves the configured provider by profile
 - [x] Built-in providers: `local`, `local_docker`, `docker`, `e2b`
 - [x] Environment profiles CRUD (`/api/v1/environment-profiles`): list, create, get,
-      update, delete, restore — input-validated, org-scoped
-- [x] Run environments surface (`/api/v1/environments`) with workspace leases
+      update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) —
+      input-validated, org-scoped, gated on the `environment_profiles` feature
 - [x] Graph validator rejects pipelines whose nodes need a capability the profile lacks
       (`test_environment_capabilities`)
 - [x] Workspace leases are released/expired and reaped (`workspace_lease`)
@@ -65,6 +64,9 @@ its product-map entry carries the ADR 003 deprecation notice.
 
 ## QA History
 
+- 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
+  `environments.py` router into `/environment-profiles`; ported the `/test`
+  connectivity check; added the missing API feature-gate.
 - 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
   requires to carry the ShellConnector deprecation notice

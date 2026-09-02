@@ -135,7 +135,17 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Admin Update User */
+        /**
+         * Admin Update User
+         * @description Update a user's active flag / org role.
+         *
+         *     Deactivating (``is_active=False``) tombstones the target's membership in
+         *     the caller's org (per-org semantics, FAR-533) and also blacklists the
+         *     target's refresh-token families and revokes the target's live org API
+         *     keys scoped to that org, mirroring the POST deactivate path's per-org
+         *     revocation (FAR-537). Reactivating cannot un-revoke what a prior
+         *     deactivation revoked — revoked families/keys are re-minted by re-login.
+         */
         put: operations["admin_update_user_api_v1_admin_users__user_id__put"];
         post?: never;
         delete?: never;
@@ -7455,63 +7465,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/environments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Profiles */
-        get: operations["list_profiles_api_v1_environments_get"];
-        put?: never;
-        /** Create Profile */
-        post: operations["create_profile_api_v1_environments_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/environments/{profile_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Profile */
-        get: operations["get_profile_api_v1_environments__profile_id__get"];
-        put?: never;
-        post?: never;
-        /** Delete Profile */
-        delete: operations["delete_profile_api_v1_environments__profile_id__delete"];
-        options?: never;
-        head?: never;
-        /** Update Profile */
-        patch: operations["update_profile_api_v1_environments__profile_id__patch"];
-        trace?: never;
-    };
-    "/api/v1/environments/{profile_id}/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Test Profile
-         * @description Provision a sandbox from the profile, run echo, destroy it — stream events.
-         */
-        post: operations["test_profile_api_v1_environments__profile_id__test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/environment-profiles": {
         parameters: {
             query?: never;
@@ -7560,6 +7513,26 @@ export interface paths {
         put?: never;
         /** Restore Profile */
         post: operations["restore_profile_api_v1_environment_profiles__profile_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/environment-profiles/{profile_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Profile
+         * @description Provision a sandbox from the profile, run echo, destroy it — stream events.
+         */
+        post: operations["test_profile_api_v1_environment_profiles__profile_id__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13612,6 +13585,97 @@ export interface components {
              */
             visibility: string;
         };
+        /** ProfileListResponse */
+        ProfileListResponse: {
+            /** Items */
+            items: components["schemas"]["ProfileResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ProfileResponse */
+        ProfileResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Provider Type */
+            provider_type: string;
+            /** Image Ref */
+            image_ref?: string | null;
+            /** Capabilities */
+            capabilities: string[];
+            /** Config Json */
+            config_json: {
+                [key: string]: unknown;
+            };
+            /** Network Policy */
+            network_policy: string;
+            /** Initialisation Strategy */
+            initialisation_strategy: string;
+            /** Secret Refs */
+            secret_refs: string[];
+            /** Persistence Policy */
+            persistence_policy: string;
+            /** Status */
+            status: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Visibility */
+            visibility: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ProfileUpdate */
+        ProfileUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Provider Type */
+            provider_type?: string | null;
+            /** Image Ref */
+            image_ref?: string | null;
+            /** Capabilities */
+            capabilities?: string[] | null;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Network Policy */
+            network_policy?: string | null;
+            /** Initialisation Strategy */
+            initialisation_strategy?: string | null;
+            /** Secret Refs */
+            secret_refs?: string[] | null;
+            /** Persistence Policy */
+            persistence_policy?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Visibility */
+            visibility?: string | null;
+        };
         /** PromptDiffEntry */
         PromptDiffEntry: {
             /** Base Variant */
@@ -16618,178 +16682,6 @@ export interface components {
              * @description Override version string, defaults to '1.0.0'
              */
             version?: string | null;
-        };
-        /** ProfileListResponse */
-        modulo__api__routes__environment_profiles__ProfileListResponse: {
-            /** Items */
-            items: components["schemas"]["modulo__api__routes__environment_profiles__ProfileResponse"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-        };
-        /** ProfileResponse */
-        modulo__api__routes__environment_profiles__ProfileResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Organisation Id
-             * Format: uuid
-             */
-            organisation_id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** Provider Type */
-            provider_type: string;
-            /** Image Ref */
-            image_ref?: string | null;
-            /** Capabilities */
-            capabilities: string[];
-            /** Config Json */
-            config_json: {
-                [key: string]: unknown;
-            };
-            /** Network Policy */
-            network_policy: string;
-            /** Initialisation Strategy */
-            initialisation_strategy: string;
-            /** Secret Refs */
-            secret_refs: string[];
-            /** Persistence Policy */
-            persistence_policy: string;
-            /** Status */
-            status: string;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** ProfileUpdate */
-        modulo__api__routes__environment_profiles__ProfileUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Provider Type */
-            provider_type?: string | null;
-            /** Image Ref */
-            image_ref?: string | null;
-            /** Capabilities */
-            capabilities?: string[] | null;
-            /** Config Json */
-            config_json?: {
-                [key: string]: unknown;
-            } | null;
-            /** Network Policy */
-            network_policy?: string | null;
-            /** Initialisation Strategy */
-            initialisation_strategy?: string | null;
-            /** Secret Refs */
-            secret_refs?: string[] | null;
-            /** Persistence Policy */
-            persistence_policy?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility?: string | null;
-        };
-        /** ProfileListResponse */
-        modulo__api__routes__environments__ProfileListResponse: {
-            /** Items */
-            items: components["schemas"]["modulo__api__routes__environments__ProfileResponse"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-        };
-        /** ProfileResponse */
-        modulo__api__routes__environments__ProfileResponse: {
-            /** Id */
-            id: string;
-            /** Organisation Id */
-            organisation_id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description: string | null;
-            /** Provider Type */
-            provider_type: string;
-            /** Image Ref */
-            image_ref: string | null;
-            /** Capabilities */
-            capabilities: string[];
-            /** Config Json */
-            config_json: {
-                [key: string]: unknown;
-            };
-            /** Network Policy */
-            network_policy: string;
-            /** Initialisation Strategy */
-            initialisation_strategy: string;
-            /** Secret Refs */
-            secret_refs: string[];
-            /** Persistence Policy */
-            persistence_policy: string;
-            /** Status */
-            status: string;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility: string;
-            /** Created At */
-            created_at: string | null;
-            /** Updated At */
-            updated_at: string | null;
-        };
-        /** ProfileUpdate */
-        modulo__api__routes__environments__ProfileUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Image Ref */
-            image_ref?: string | null;
-            /** Provider Type */
-            provider_type?: string | null;
-            /** Capabilities */
-            capabilities?: string[] | null;
-            /** Config Json */
-            config_json?: {
-                [key: string]: unknown;
-            } | null;
-            /** Network Policy */
-            network_policy?: string | null;
-            /** Initialisation Strategy */
-            initialisation_strategy?: string | null;
-            /** Secret Refs */
-            secret_refs?: string[] | null;
-            /** Persistence Policy */
-            persistence_policy?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility?: string | null;
-            /** Status */
-            status?: string | null;
         };
         /** SchemaCreate */
         modulo__api__routes__parameter_schemas__SchemaCreate: {
@@ -34981,208 +34873,6 @@ export interface operations {
             };
         };
     };
-    list_profiles_api_v1_environments_get: {
-        parameters: {
-            query?: {
-                page?: number;
-                page_size?: number;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environments__ProfileListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_profile_api_v1_environments_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProfileCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environments__ProfileResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_profile_api_v1_environments__profile_id__get: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environments__ProfileResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_profile_api_v1_environments__profile_id__delete: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_profile_api_v1_environments__profile_id__patch: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["modulo__api__routes__environments__ProfileUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environments__ProfileResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_profile_api_v1_environments__profile_id__test_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                profile_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_profiles_api_v1_environment_profiles_get: {
         parameters: {
             query?: {
@@ -35202,7 +34892,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileListResponse"];
+                    "application/json": components["schemas"]["ProfileListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35237,7 +34927,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileResponse"];
+                    "application/json": components["schemas"]["ProfileResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35270,7 +34960,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileResponse"];
+                    "application/json": components["schemas"]["ProfileResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35297,7 +34987,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileUpdate"];
+                "application/json": components["schemas"]["ProfileUpdate"];
             };
         };
         responses: {
@@ -35307,7 +34997,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileResponse"];
+                    "application/json": components["schemas"]["ProfileResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35371,7 +35061,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__environment_profiles__ProfileResponse"];
+                    "application/json": components["schemas"]["ProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_profile_api_v1_environment_profiles__profile_id__test_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

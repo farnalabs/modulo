@@ -78,6 +78,7 @@ from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.account import Account
+from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -90,6 +91,7 @@ from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
+from modulo.db.models.token_family import TokenFamily
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -1116,6 +1118,15 @@ async def admin_update_user(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
+    """Update a user's active flag / org role.
+
+    Deactivating (``is_active=False``) tombstones the target's membership in
+    the caller's org (per-org semantics, FAR-533) and also blacklists the
+    target's refresh-token families and revokes the target's live org API
+    keys scoped to that org, mirroring the POST deactivate path's per-org
+    revocation (FAR-537). Reactivating cannot un-revoke what a prior
+    deactivation revoked — revoked families/keys are re-minted by re-login.
+    """
     _require_admin(current_user, "update users")
 
     if req.is_active is False and user_id == current_user.account_id:
@@ -1177,6 +1188,33 @@ async def admin_update_user(
                         OrgMembership.deactivated_at.is_(None),
                     )
                     .values(deactivated_at=func.now())
+                )
+                # FAR-537: mirror the POST deactivate path's per-org revocation
+                # (the caller-bound deactivate_break_glass SECURITY DEFINER):
+                # blacklist the target's refresh-token families minted under the
+                # caller's org and revoke the target's live org API keys in that
+                # org, so live access tokens cannot outlive a PUT deactivation
+                # until TTL. The IS false / IS NULL guards keep a re-deactivation
+                # a clean no-op; running inside this transaction means a
+                # revocation failure rolls the deactivation back with it.
+                revoked_at = datetime.now(UTC)
+                await session.execute(
+                    sa_update(TokenFamily)
+                    .where(
+                        TokenFamily.account_id == user_id,
+                        TokenFamily.organisation_id == current_user.organisation_id,
+                        TokenFamily.is_blacklisted.is_(False),
+                    )
+                    .values(is_blacklisted=True, blacklisted_at=revoked_at)
+                )
+                await session.execute(
+                    sa_update(OrgApiKey)
+                    .where(
+                        OrgApiKey.account_id == user_id,
+                        OrgApiKey.organisation_id == current_user.organisation_id,
+                        OrgApiKey.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=revoked_at)
                 )
             if req.is_active is True:
                 from sqlalchemy import update as sa_update

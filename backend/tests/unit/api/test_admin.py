@@ -2,7 +2,9 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import ExitStack
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -164,6 +166,60 @@ def operator_rls_client() -> Generator[TestClient, None, None]:
     yield from _make_role_client("operator", _USER_ID)
 
 
+@pytest.fixture
+def admin_rls_with_session() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    """``admin_rls_client`` paired with its mock session, for statement assertions."""
+    mock_session = _make_rls_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app), mock_session
+    app.dependency_overrides.clear()
+
+
+def _update_statements(mock_session: AsyncMock, table: str, marker: str) -> list[tuple[str, dict[str, Any]]]:
+    """Compiled (sql, params) of every ``UPDATE <table> ... <marker>`` statement
+    executed against the mock session (mirrors test_refresh_endpoint.py's
+    blacklist-SQL capture pattern)."""
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    for call in mock_session.execute.call_args_list:
+        stmt = call.args[0] if call.args else None
+        if stmt is None:
+            continue
+        try:
+            compiled_obj = stmt.compile()
+        except Exception:  # pragma: no cover - non-compilable debug object
+            continue
+        compiled = str(compiled_obj).lower()
+        if f"update {table}" in compiled and marker in compiled:
+            pairs.append((compiled, dict(compiled_obj.params)))
+    return pairs
+
+
+def _fake_membership(deactivated: bool = False) -> MagicMock:
+    membership = MagicMock()
+    membership.role = "runner"
+    # FAR-533 per-org semantics: deactivation tombstones the caller's-org
+    # membership (deactivated_at) and leaves accounts.active true; the route
+    # refreshes the membership before serialising, so the fake mirrors the
+    # post-refresh state the response is built from.
+    membership.deactivated_at = _NOW if deactivated else None
+    return membership
+
+
 def _fake_offboarding_account(active: bool = False) -> MagicMock:
     account = MagicMock()
     account.id = _OTHER_USER_ID
@@ -296,6 +352,112 @@ class TestUserDeactivateAuthorization:
         assert resp.status_code == 200
         body = resp.json()
         assert body["is_active"] is True
+
+
+class TestUpdateUserDeactivationRevocation:
+    """PUT is_active=False revokes token families + org API keys (FAR-537).
+
+    The POST deactivate path revokes via the caller-bound
+    ``deactivate_break_glass`` SECURITY DEFINER; the PUT path must perform the
+    equivalent org-scoped revocations at the route layer so live access tokens
+    cannot outlive a PUT deactivation until TTL. Assertions inspect the
+    executed UPDATE statements (compiled SQL + bound params) because the unit
+    harness mocks the session.
+    """
+
+    URL = "/api/v1/admin/users"
+
+    def _resolved_user_patches(self, deactivated: bool = False) -> ExitStack:
+        """Patch the PUT route's user/membership resolution.
+
+        ``active=True`` always: FAR-533 per-org semantics â€” the PUT path never
+        flips the account-global flag; the caller's-org membership tombstone
+        (mirrored by *deactivated* on the fake) carries the deactivation.
+        """
+        stack = ExitStack()
+        for ctx in (
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=_fake_membership(deactivated=deactivated)),
+            ),
+            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=_fake_offboarding_account(active=True)),
+            ),
+        ):
+            stack.enter_context(ctx)
+        return stack
+
+    def test_put_deactivate_blacklists_token_families_scoped_to_caller_org(
+        self, admin_rls_with_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, mock_session = admin_rls_with_session
+        with self._resolved_user_patches(deactivated=True):
+            resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
+
+        assert resp.status_code == 200
+        family_updates = _update_statements(mock_session, "token_families", "is_blacklisted")
+        assert len(family_updates) == 1
+        compiled, params = family_updates[0]
+        assert "is_blacklisted" in compiled
+        # Idempotency guard: already-blacklisted families are never re-stamped.
+        assert "is false" in compiled
+        # Org-scoped to the caller's org, targeting only the deactivated account.
+        assert str(_ORG_ID) in {str(v) for v in params.values()}
+        assert str(_OTHER_USER_ID) in {str(v) for v in params.values()}
+
+    def test_put_deactivate_revokes_live_org_api_keys_scoped_to_caller_org(
+        self, admin_rls_with_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, mock_session = admin_rls_with_session
+        with self._resolved_user_patches(deactivated=True):
+            resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
+
+        assert resp.status_code == 200
+        key_updates = _update_statements(mock_session, "org_api_keys", "revoked_at")
+        assert len(key_updates) == 1
+        compiled, params = key_updates[0]
+        assert "revoked_at" in compiled
+        # Idempotency guard: only live (non-revoked) keys are revoked.
+        assert "is null" in compiled
+        assert str(_ORG_ID) in {str(v) for v in params.values()}
+        assert str(_OTHER_USER_ID) in {str(v) for v in params.values()}
+
+    def test_double_deactivate_is_idempotent(self, admin_rls_with_session: tuple[TestClient, AsyncMock]) -> None:
+        client, mock_session = admin_rls_with_session
+        with self._resolved_user_patches(deactivated=True):
+            first = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
+            second = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        # Both attempts carry the guards, so a re-deactivation matches zero
+        # already-revoked rows instead of duplicating the revocation.
+        for compiled, _ in _update_statements(mock_session, "token_families", "is_blacklisted"):
+            assert "is false" in compiled
+        for compiled, _ in _update_statements(mock_session, "org_api_keys", "revoked_at"):
+            assert "is null" in compiled
+
+    def test_put_reactivate_does_not_revoke(self, admin_rls_with_session: tuple[TestClient, AsyncMock]) -> None:
+        client, mock_session = admin_rls_with_session
+        with self._resolved_user_patches():
+            resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": True})
+
+        assert resp.status_code == 200
+        # Revoked families/keys cannot be un-revoked; reactivation must not
+        # emit any revocation-shaped statements (re-login re-mints).
+        assert not _update_statements(mock_session, "token_families", "is_blacklisted")
+        assert not _update_statements(mock_session, "org_api_keys", "revoked_at")
+
+    def test_put_role_change_only_does_not_revoke(self, admin_rls_with_session: tuple[TestClient, AsyncMock]) -> None:
+        client, mock_session = admin_rls_with_session
+        with self._resolved_user_patches():
+            resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"org_role": "runner"})
+
+        assert resp.status_code == 200
+        assert not _update_statements(mock_session, "token_families", "is_blacklisted")
+        assert not _update_statements(mock_session, "org_api_keys", "revoked_at")
 
 
 class TestDeletionRequest:
@@ -524,7 +686,7 @@ class TestDeleteOrgImmediate:
 
 
 class TestAdminListTeamsOwnedResourceCount:
-    """GET /api/v1/admin/teams includes owned_resource_count (PRD §9.3)."""
+    """GET /api/v1/admin/teams includes owned_resource_count (PRD Â§9.3)."""
 
     URL = "/api/v1/admin/teams"
 
@@ -590,7 +752,7 @@ class TestAdminListTeamsOwnedResourceCount:
 
 
 class TestAdminUpdateTeamOptimisticLock:
-    """PUT /api/v1/admin/teams/{id} with expected_updated_at — optimistic concurrency."""
+    """PUT /api/v1/admin/teams/{id} with expected_updated_at â€” optimistic concurrency."""
 
     URL = "/api/v1/admin/teams"
 
@@ -989,7 +1151,7 @@ class TestBillingOverviewAggregation:
 
 
 class TestOrgSlugImmutability:
-    """The org slug is immutable once set — the profile update endpoint
+    """The org slug is immutable once set â€” the profile update endpoint
     (PUT /api/v1/admin/org) must never change it."""
 
     URL = "/api/v1/admin/org"
@@ -1027,7 +1189,7 @@ class TestOrgSlugImmutability:
             assert updates.get("name") == "Renamed"
 
     def test_update_org_model_has_no_slug_field(self) -> None:
-        """The request model exposes no slug field — a client cannot even
+        """The request model exposes no slug field â€” a client cannot even
         express a slug change."""
         from modulo.api.routes.admin import UpdateOrgRequest
 
@@ -1094,7 +1256,7 @@ class TestAdminCreateUserAudit:
         assert kwargs["payload_json"]["target_user_id"] == str(account.id)
         assert kwargs["payload_json"]["org_role"] == "runner"
         # FAR-460: an admin-minted credential must be replaced by its owner on
-        # first sign-in. Mirror the reset path — the create path must set the flag.
+        # first sign-in. Mirror the reset path â€” the create path must set the flag.
         assert account.must_change_password is True
 
     def test_create_user_audit_write_is_fail_open(self, client: TestClient) -> None:

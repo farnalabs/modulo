@@ -18,6 +18,14 @@ on:
 permissions:
   contents: read
 
+# Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
+# dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
+# fetch-by-SHA, which GitHub rejects from CI runners.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+
 jobs:
   dast-auth:
     name: Authenticated OWASP ZAP API scan

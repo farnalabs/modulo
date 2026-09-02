@@ -197,12 +197,7 @@ PERMISSIONS: dict[str, str] = {
     "environment_profile.update": "operator",
     "environment_profile.delete": "operator",
     "environment_profile.list": "viewer",
-    # environments
-    "environment.create": "operator",
-    "environment.update": "operator",
-    "environment.delete": "operator",
-    "environment.list": "viewer",
-    "environment.test": "operator",
+    "environment_profile.test": "operator",
     # pipeline folders
     "pipeline_folder.create": "operator",
     "pipeline_folder.update": "operator",

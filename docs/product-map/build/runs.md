@@ -19,14 +19,14 @@ depends-on:
 status: covered
 ---
 
-# Run Execution, History, Detail & Output Diffs
+# Run Execution, History & Detail
 
 The `/runs` surface: triggering runs (with thread/runner identity), org-scoped run
 listing, stats and heatmaps, run detail with terminal status and guardrail/gate
 summaries, cancellation, node-level output and IO inspection, workspace events and
 leases, live event polling, node recovery / observation / guardrail-override /
-prompt-reveal actions, error-state recovery BDD (`failed_state` / `retry` /
-`recovery`), and cross-run node-output line diffs (`/runs/diff`).
+prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
+`recovery`).
 
 ## Behaviours
 
@@ -56,8 +56,9 @@ prompt-reveal actions, error-state recovery BDD (`failed_state` / `retry` /
       principals are scoped per key policy (`test_run_api_key_auth.py`)
 - [x] Error-state handling: failed states, retries and recovery flows are covered by
       `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
-- [x] `POST /runs/diff` produces a line-level diff between two runs' node outputs
-      (`core/line_diff.py::iter_line_diffs`)
+- _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
+  MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
+  MVP cut — restore from git history when re-enabling. See FAR-542._
 
 ## Known Gaps
 

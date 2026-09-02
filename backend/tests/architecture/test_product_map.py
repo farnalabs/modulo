@@ -139,4 +139,4 @@ def test_documentation_indexer_surfaces_product_map_features():
     matches = index.search("feat-costs")
     assert any(entry.heading_path == "/admin/costs" for entry in matches)
     matches = index.search("feat-runtime")
-    assert any(entry.heading_path == "/admin/environments" for entry in matches)
+    assert any(entry.heading_path == "/admin/run-retention" for entry in matches)

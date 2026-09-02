@@ -4,13 +4,14 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/environment_profiles.py
-  - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/db/crud/environment_profile.py
   - backend/src/modulo/core/runtime_provider
   - backend/src/modulo/api/routes/admin.py
+  - frontend/src/views/environment-profiles
+  - frontend/src/stores/environmentProfiles.ts
 unit-tests:
   - backend/tests/integration/crud/test_environment_profiles.py
-  - backend/tests/unit/api/test_environments.py
+  - backend/tests/unit/api/test_environment_profiles_routes.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
@@ -23,10 +24,12 @@ status: covered
 # Environment Profiles
 
 Reusable, org-scoped run-environment definitions (image, provider, capabilities,
-network policy, persistence) served on the `/environments` **and**
-`/environment-profiles` API surfaces, with per-run sandbox test (SSE), graph-validator
-capability resolution, and org sandbox-concurrency control on `/admin/environments`
-and `/admin/sandbox-concurrency`.
+network policy, persistence) served on the `/api/v1/environment-profiles` API
+surface, with per-profile sandbox test (SSE), graph-validator capability
+resolution, and org sandbox-concurrency control on `/admin/sandbox-concurrency`.
+(FAR-551 collapsed the duplicate `/api/v1/environments` router + `/admin/environments`
+table view into this one surface; `/admin/environments` now redirects to
+`/environment-profiles`.)
 
 ## Behaviours
 
@@ -38,9 +41,9 @@ and `/admin/sandbox-concurrency`.
 - [x] Profiles are listed paginated (page / page_size capped 1..100) and fetchable by
       id; a missing profile resolves 404 with message "Environment profile not found"
       (`list_profiles` / `get_profile`)
-- [x] Update is a partial merge (PATCH semantics): omitted fields are left untouched,
-      `capabilities` / `secret_refs` are re-serialised into their JSON columns, and a
-      name collision resolves 409
+- [x] Update (`PUT /api/v1/environment-profiles/{id}`) is a partial merge: omitted
+      fields are left untouched, `capabilities` / `secret_refs` are re-serialised into
+      their JSON columns, and a name collision resolves 409
 - [x] Delete is a soft delete returning 204 (hard delete only via the immutable
       admin surface's reusable CRUD); restore is exposed on
       `/api/v1/environment-profiles/{id}/restore`
@@ -57,10 +60,11 @@ and `/admin/sandbox-concurrency`.
       authoritative when no provider hint is set), and `e2b` resolves when the profile
       declares a `provider_hint` — see the hub-resolution scenarios in
       `backend/tests/bdd/features/environments/environment_profiles.feature`
-- [x] `POST /api/v1/environments/{id}/test` provisions a sandbox from the profile,
-      runs a hello command and destroys it, streaming a Server-Sent Events lifecycle
-      (provisioning / provisioned / command_start / command_complete / destroying /
-      destroyed, and a terminal `failed` event with cleanup on error)
+- [x] `POST /api/v1/environment-profiles/{id}/test` provisions a sandbox from the
+      profile, runs a hello command and destroys it, streaming a Server-Sent Events
+      lifecycle (provisioning / provisioned / command_start / command_complete /
+      destroying / destroyed, and a terminal `failed` event with cleanup on error);
+      gated on `environment_profile.test` (operator)
 - [x] WorkspaceLease lifecycle follows pending → provisioning → active → completed as
       the run progresses, and Provider create/destroy transitions workspace status
       running ↔ terminated (BDD scenarios in `environment_profiles.feature`)
@@ -68,11 +72,11 @@ and `/admin/sandbox-concurrency`.
       `GET/PUT /api/v1/admin/org/sandbox-concurrency` (value clamped 1..100), writing
       an `org.sandbox_concurrency_updated` audit event on success
       (`backend/src/modulo/api/routes/admin.py`)
-- [x] The frontend surfaces the whole lifecycle: list + search + new/edit form
-      (`/environment-profiles`, `/environment-profiles/new`,
-      `/environment-profiles/:id/edit`), the admin environments page
-      (`/admin/environments`) and admin sandbox-concurrency control
-      (`/admin/sandbox-concurrency`) — testids enumerated in the product map
+- [x] The frontend surfaces the whole lifecycle: list + search + per-card
+      "Test connection" (SSE) + new/edit form (`/environment-profiles`,
+      `/environment-profiles/new`, `/environment-profiles/:id/edit`) and admin
+      sandbox-concurrency control (`/admin/sandbox-concurrency`) — testids enumerated
+      in the product map
 
 ## Known Gaps
 
@@ -83,6 +87,11 @@ and `/admin/sandbox-concurrency`.
 
 ## QA History
 
+- 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
+  `environments.py` router (`/api/v1/environments`) into `/environment-profiles`;
+  ported the `POST /{id}/test` connectivity check onto the survivor with a dedicated
+  `environment_profile.test` permission; added the API-layer `require_feature`
+  gate the new router was missing; `/admin/environments` now redirects.
 - 2026-09-01: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-environments`, which previously had no
   `docs/product-map/` entry. Behaviours verified against

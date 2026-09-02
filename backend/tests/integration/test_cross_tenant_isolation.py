@@ -334,6 +334,111 @@ async def _seed_trigger_event(
 
 
 # ---------------------------------------------------------------------------
+# FAR-537 seed/read helpers — token families + org API keys for PUT-deactivation
+# revocation scoping
+# ---------------------------------------------------------------------------
+
+
+async def _seed_runner_in_orgs(db_engine: AsyncEngine, org_ids: list[uuid.UUID], email: str) -> uuid.UUID:
+    """Create an active account with a runner membership in each given org."""
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, "
+                "auth_provider, active, password_hash) "
+                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+            ),
+            {"id": str(account_id), "email": email, "name": "FAR-537 target"},
+        )
+        for oid in org_ids:
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                    "VALUES (:mid, :aid, :oid, 'runner')",
+                ),
+                {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(oid)},
+            )
+    return account_id
+
+
+async def _seed_token_family(db_engine: AsyncEngine, account_id: uuid.UUID, org_id: uuid.UUID) -> uuid.UUID:
+    family_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) "
+                "VALUES (:fid, :aid, :oid, 0, false)",
+            ),
+            {"fid": str(family_id), "aid": str(account_id), "oid": str(org_id)},
+        )
+    return family_id
+
+
+async def _seed_org_api_key(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
+    key_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, "
+                "hashed_secret, role, account_id, expires_at) "
+                "VALUES (:id, :oid, :name, :prefix, 'x', 'runner', :acc, now() + interval '1 day')",
+            ),
+            {
+                "id": str(key_id),
+                "oid": str(org_id),
+                "name": f"far537-{key_id.hex[:6]}",
+                "prefix": f"p{key_id.hex[:7]}",
+                "acc": str(account_id),
+            },
+        )
+    return key_id
+
+
+async def _scalar(db_engine: AsyncEngine, sql: str, params: dict[str, str]) -> object:
+    async with db_engine.connect() as conn:
+        return (await conn.execute(text(sql), params)).scalar_one_or_none()
+
+
+async def _account_active(db_engine: AsyncEngine, account_id: uuid.UUID) -> bool:
+    row = await _scalar(db_engine, "SELECT active FROM accounts WHERE id = :id", {"id": str(account_id)})
+    return bool(row)
+
+
+async def _membership_tombstoned(db_engine: AsyncEngine, account_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+    row = await _scalar(
+        db_engine,
+        "SELECT deactivated_at FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid",
+        {"aid": str(account_id), "oid": str(org_id)},
+    )
+    return row is not None
+
+
+async def _family_blacklisted(db_engine: AsyncEngine, family_id: uuid.UUID) -> bool:
+    row = await _scalar(
+        db_engine, "SELECT is_blacklisted FROM token_families WHERE family_id = :fid", {"fid": str(family_id)}
+    )
+    return bool(row)
+
+
+async def _family_blacklisted_at(db_engine: AsyncEngine, family_id: uuid.UUID) -> datetime | None:
+    row = await _scalar(
+        db_engine, "SELECT blacklisted_at FROM token_families WHERE family_id = :fid", {"fid": str(family_id)}
+    )
+    return row if isinstance(row, datetime) else None
+
+
+async def _key_revoked(db_engine: AsyncEngine, key_id: uuid.UUID) -> bool:
+    row = await _scalar(db_engine, "SELECT revoked_at FROM org_api_keys WHERE id = :kid", {"kid": str(key_id)})
+    return row is not None
+
+
+async def _key_revoked_at(db_engine: AsyncEngine, key_id: uuid.UUID) -> datetime | None:
+    row = await _scalar(db_engine, "SELECT revoked_at FROM org_api_keys WHERE id = :kid", {"kid": str(key_id)})
+    return row if isinstance(row, datetime) else None
+
+
+# ---------------------------------------------------------------------------
 # HTTP client fixture — FastAPI app wired to the testcontainer database
 # ---------------------------------------------------------------------------
 
@@ -820,6 +925,130 @@ class TestCrossTenantMembershipGuards:
             json={"org_role": "admin"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+
+# ===================================================================
+# Test 5d: FAR-537 — PUT is_active=False revokes org-scoped token
+#          families + org API keys (parity with the POST deactivate path)
+# ===================================================================
+
+
+class TestUpdateUserDeactivationRevocationScope:
+    """PUT is_active=False must revoke like the POST deactivate path.
+
+    The POST /users/{id}/deactivate route revokes via the caller-bound
+    ``deactivate_break_glass`` SECURITY DEFINER (per-org semantics): token
+    families minted under the caller's org are blacklisted and the target's
+    live org API keys in that org are revoked. The PUT is_active=False path
+    must do the same at the route layer, so a live access token cannot
+    outlive the deactivation until TTL. Reactivating must NOT un-revoke —
+    revoked families/keys are re-minted by re-login.
+
+    Per FAR-533 the PUT deactivation is per-org: it tombstones the caller's
+    org membership and never flips the account-global ``accounts.active``.
+    """
+
+    async def _seed_revocation_state(
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+    ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+        email = f"far537-target-{uuid.uuid4().hex[:8]}@test.local"
+        target = await _seed_runner_in_orgs(db_engine, [org_a, org_b], email)
+        family_a = await _seed_token_family(db_engine, target, org_a)
+        family_b = await _seed_token_family(db_engine, target, org_b)
+        key_a = await _seed_org_api_key(db_engine, org_a, target)
+        key_b = await _seed_org_api_key(db_engine, org_b, target)
+        return target, family_a, family_b, key_a, key_b
+
+    async def test_put_deactivate_revokes_caller_org_families_and_keys_only(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        target, family_a, family_b, key_a, key_b = await self._seed_revocation_state(db_engine, org_a, org_b)
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/users/{target}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": False},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["is_active"] is False
+
+        # FAR-533 per-org semantics: the caller's-org membership is tombstoned
+        # and the account-global flag is untouched.
+        assert await _membership_tombstoned(db_engine, target, org_a) is True
+        assert await _account_active(db_engine, target) is True
+        # Caller's org (A): families blacklisted + keys revoked.
+        assert await _family_blacklisted(db_engine, family_a) is True
+        assert await _key_revoked(db_engine, key_a) is True
+        # Other org (B): families/keys/membership untouched (per-org scoping).
+        assert await _family_blacklisted(db_engine, family_b) is False
+        assert await _key_revoked(db_engine, key_b) is False
+        assert await _membership_tombstoned(db_engine, target, org_b) is False
+
+    async def test_double_deactivate_is_idempotent_no_duplicate_revocation(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        target, family_a, _family_b, key_a, _key_b = await self._seed_revocation_state(db_engine, org_a, org_b)
+
+        token = _token(org_a, user_a, "admin")
+        headers = {"Authorization": f"Bearer {token}"}
+        first = await integration_client.put(
+            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
+        )
+        assert first.status_code == 200, first.text
+        blacklisted_at = await _family_blacklisted_at(db_engine, family_a)
+        revoked_at = await _key_revoked_at(db_engine, key_a)
+        assert blacklisted_at is not None
+        assert revoked_at is not None
+
+        second = await integration_client.put(
+            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
+        )
+        assert second.status_code == 200, second.text
+        # No duplicate revocation: the original revocation timestamps survive.
+        assert await _family_blacklisted_at(db_engine, family_a) == blacklisted_at
+        assert await _key_revoked_at(db_engine, key_a) == revoked_at
+
+    async def test_put_reactivate_works_but_does_not_unrevoke(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        target, family_a, _family_b, key_a, _key_b = await self._seed_revocation_state(db_engine, org_a, org_b)
+
+        token = _token(org_a, user_a, "admin")
+        headers = {"Authorization": f"Bearer {token}"}
+        deactivate = await integration_client.put(
+            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
+        )
+        assert deactivate.status_code == 200, deactivate.text
+
+        reactivate = await integration_client.put(
+            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": True}
+        )
+        assert reactivate.status_code == 200, reactivate.text
+        assert reactivate.json()["is_active"] is True
+        # FAR-533: reactivation clears the caller's-org tombstone only.
+        assert await _membership_tombstoned(db_engine, target, org_a) is False
+        # Asymmetry: reactivation cannot un-revoke; re-login re-mints.
+        assert await _family_blacklisted(db_engine, family_a) is True
+        assert await _key_revoked(db_engine, key_a) is True
 
 
 # ===================================================================

@@ -96,7 +96,6 @@ const SettingsGuardrailsView = () => import('../views/SettingsGuardrailsView.vue
 const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
 const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
 const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
-const AdminEnvironmentProfilesView = () => import('../views/AdminEnvironmentProfilesView.vue')
 const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
 const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
 const AdminProductAnalyticsView = () => import('../views/AdminProductAnalyticsView.vue')
@@ -420,8 +419,7 @@ const router = createRouter({
     },
     {
       path: '/admin/environments',
-      name: 'admin-environments',
-      component: AdminEnvironmentProfilesView,
+      redirect: '/environment-profiles',
     },
     {
       path: '/admin/system/orgs',

@@ -1,19 +1,26 @@
-"""EnvironmentProfile CRUD REST API (v1)."""
+"""EnvironmentProfile CRUD + sandbox test REST API (v1)."""
 
+import asyncio
+import json
 import logging
 import uuid
-from datetime import datetime
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
+from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
     get_environment_profile,
@@ -29,11 +36,32 @@ _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again
 _CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile"
 _MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 _CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE = "environment_profiles.update_profile"
+_CODE_ENVIRONMENT_PROFILES_TEST_PROFILE = "environment_profiles.test_profile"
 
 
 _log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/environment-profiles", tags=["environment-profiles"])
+router = APIRouter(
+    prefix="/api/v1/environment-profiles",
+    tags=["environment-profiles"],
+    dependencies=[require_feature("environment_profiles")],
+)
+
+
+@lru_cache
+def _get_hub() -> RuntimeProviderHub:
+    """Process-global RuntimeProviderHub singleton.
+
+    ``lru_cache`` ensures the hub is created once and reused across all
+    requests.  The E2B provider is auto-registered when
+    ``MODULO_E2B_API_KEY`` is set — adding the key post-deployment and
+    restarting the process is enough to switch from local to sandboxed
+    execution.
+    """
+    from modulo.settings import get_settings
+
+    settings = get_settings()
+    return create_default_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
 
 class ProfileCreate(BaseModel):
@@ -368,3 +396,122 @@ async def restore_profile(
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox test endpoint
+# ---------------------------------------------------------------------------
+
+
+async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile:
+    profile = await get_environment_profile(session, profile_id)
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND,
+        )
+    return profile
+
+
+def _sse_event(event: str, detail: str) -> str:
+    data = json.dumps(
+        {
+            "event": event,
+            "detail": detail,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
+    return f"data: {data}\n\n"
+
+
+def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
+    from modulo.core.runtime_provider import WorkspaceSpec
+
+    cfg = profile.config_json or {}
+    return WorkspaceSpec(
+        environment_profile_id=profile.id,
+        organisation_id=profile.organisation_id,
+        run_id=None,
+        image_ref=profile.image_ref or "",
+        capabilities=profile.capabilities_json or [],
+        timeout_seconds=cfg.get("timeout_seconds", 3600),
+        resource_limits=cfg,
+        egress_policy=profile.network_policy or "deny_all",
+        persistence_policy={"strategy": profile.persistence_policy},
+        labels={"profile_name": profile.name},
+    )
+
+
+async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str]:
+    """Stream sandbox lifecycle events as SSE."""
+    provider_ref: str | None = None
+    provider: RuntimeProvider | None = None
+
+    try:
+        yield _sse_event("provisioning", "Creating sandbox...")
+        await asyncio.sleep(0.5)
+
+        hub = _get_hub()
+        provider = hub.resolve(profile) or hub.get("local")
+        if provider is None:
+            yield _sse_event("failed", "No RuntimeProvider available — check server configuration")
+            return
+
+        spec = _build_workspace_spec(profile)
+        provider_ref = await provider.create_workspace(spec)
+        yield _sse_event("provisioned", f"Workspace created via {type(provider).__name__}: {provider_ref}")
+        await asyncio.sleep(0.3)
+
+        yield _sse_event("command_start", 'Executing: echo "Hello from Modulo sandbox"')
+        result = await provider.exec_command(provider_ref, ["echo", "Hello from Modulo sandbox"], cmd_timeout=30)
+        yield _sse_event(
+            "command_complete",
+            json.dumps(
+                {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "exit_code": result.exit_code,
+                    "duration_ms": result.duration_ms,
+                }
+            ),
+        )
+        await asyncio.sleep(0.3)
+
+        yield _sse_event("destroying", "Destroying sandbox...")
+        await provider.destroy_workspace(provider_ref)
+        yield _sse_event("destroyed", "Sandbox destroyed successfully")
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Sandbox test failed for profile %s", profile.id)
+        yield _sse_event("failed", "Test failed — check server logs for details")
+        if provider_ref and provider is not None:
+            try:
+                await provider.destroy_workspace(provider_ref)
+            except HTTPException:
+                raise
+            except Exception:
+                _log.warning("Failed to clean up sandbox %s after error", provider_ref)
+
+
+@router.post("/{profile_id}/test")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_TEST_PROFILE)
+async def test_profile(
+    profile_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("environment_profile.test"),
+) -> StreamingResponse:
+    """Provision a sandbox from the profile, run echo, destroy it — stream events."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        profile = await _get_profile_or_404(session, profile_id)
+    return StreamingResponse(
+        _sandbox_test_stream(profile),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

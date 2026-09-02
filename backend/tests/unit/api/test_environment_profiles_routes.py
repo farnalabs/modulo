@@ -1,7 +1,13 @@
-"""Unit tests for /api/v1/environments endpoints (environment profile CRUD)."""
+"""Router-level unit tests for /api/v1/environment-profiles (CRUD + sandbox test).
+
+The `/environment-profiles` router is the single surviving Environment Profiles
+surface (FAR-551 collapsed the duplicate `/api/v1/environments` router into it).
+These tests exercise the router in isolation with a mocked session + CRUD layer.
+"""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +27,8 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
+
+_ROUTES = "modulo.api.routes.environment_profiles"
 
 
 def _make_settings() -> Settings:
@@ -50,14 +58,14 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.organisation_id = overrides.get("organisation_id", _ORG_ID)
     p.name = overrides.get("name", "test-profile")
     p.description = overrides.get("description", "A test profile")
-    p.provider_type = overrides.get("provider_type", "docker")
+    p.provider_type = overrides.get("provider_type", "local_docker")
     p.image_ref = overrides.get("image_ref", "python:3.12-slim")
     p.capabilities = overrides.get("capabilities", ["docker"])
     p.capabilities_json = overrides.get("capabilities", ["docker"])
     p.config_json = overrides.get("config_json", {})
     p.egress_policy = overrides.get("egress_policy", "allow_all")
-    p.network_policy = overrides.get("network_policy", "allow_all")
-    p.initialisation_strategy = overrides.get("initialisation_strategy", "none")
+    p.network_policy = overrides.get("network_policy", "outbound")
+    p.initialisation_strategy = overrides.get("initialisation_strategy", "git_clone")
     p.secret_refs_json = overrides.get("secret_refs", [])
     p.timeout_seconds = overrides.get("timeout_seconds", 3600)
     p.resource_limits_json = overrides.get("resource_limits", {})
@@ -67,8 +75,8 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.owner_team_id = overrides.get("owner_team_id")
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
-    p.created_at = None
-    p.updated_at = None
+    p.created_at = overrides.get("created_at", datetime(2026, 1, 1, tzinfo=UTC))
+    p.updated_at = overrides.get("updated_at", datetime(2026, 1, 1, tzinfo=UTC))
     return p
 
 
@@ -109,12 +117,12 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 _ENV_AUTH_CASES = [
-    ("GET", "/api/v1/environments"),
-    ("POST", "/api/v1/environments"),
-    ("GET", f"/api/v1/environments/{_PROFILE_ID}"),
-    ("PATCH", f"/api/v1/environments/{_PROFILE_ID}"),
-    ("DELETE", f"/api/v1/environments/{_PROFILE_ID}"),
-    ("POST", f"/api/v1/environments/{_PROFILE_ID}/test"),
+    ("GET", "/api/v1/environment-profiles"),
+    ("POST", "/api/v1/environment-profiles"),
+    ("GET", f"/api/v1/environment-profiles/{_PROFILE_ID}"),
+    ("PUT", f"/api/v1/environment-profiles/{_PROFILE_ID}"),
+    ("DELETE", f"/api/v1/environment-profiles/{_PROFILE_ID}"),
+    ("POST", f"/api/v1/environment-profiles/{_PROFILE_ID}/test"),
 ]
 
 
@@ -125,13 +133,13 @@ def test_endpoints_unauthenticated(unauth_client: TestClient, method: str, url: 
 
 
 class TestListProfiles:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     def test_list_profiles_returns_paginated(self, client: TestClient) -> None:
         fake = _fake_profile()
         with (
-            patch("modulo.api.routes.environments.list_environment_profiles") as mock_list,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.list_environment_profiles") as mock_list,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_list.return_value = PageResult(items=[fake], total=1, page=1, page_size=20)
             resp = client.get(self.URL)
@@ -146,8 +154,8 @@ class TestListProfiles:
 
     def test_list_profiles_empty(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.list_environment_profiles") as mock_list,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.list_environment_profiles") as mock_list,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_list.return_value = PageResult(items=[], total=0, page=1, page_size=20)
             resp = client.get(self.URL)
@@ -158,21 +166,19 @@ class TestListProfiles:
 
 
 class TestCreateProfile:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     PAYLOAD: ClassVar[dict[str, Any]] = {
         "name": "new-env",
         "image_ref": "ubuntu:22.04",
         "capabilities": ["docker", "gpu"],
-        "egress_policy": "allow_all",
-        "timeout_seconds": 7200,
     }
 
     def test_create_profile_returns_201(self, client: TestClient) -> None:
         fake = _fake_profile(name="new-env", image_ref="ubuntu:22.04", capabilities=["docker", "gpu"])
         with (
-            patch("modulo.api.routes.environments.create_environment_profile") as mock_create,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_create.return_value = fake
             resp = client.post(self.URL, json=self.PAYLOAD)
@@ -183,21 +189,37 @@ class TestCreateProfile:
         assert data["capabilities"] == ["docker", "gpu"]
 
     def test_create_profile_with_defaults(self, client: TestClient) -> None:
-        resp = client.post(self.URL, json={"name": "incomplete"})
+        fake = _fake_profile(name="incomplete")
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.return_value = fake
+            resp = client.post(self.URL, json={"name": "incomplete"})
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "incomplete"
         assert data["status"] == "active"
 
+    def test_create_profile_conflict(self, client: TestClient) -> None:
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.side_effect = IntegrityError("mock", "mock", "mock")
+            resp = client.post(self.URL, json={"name": "dup"})
+        assert resp.status_code == 409
+        assert "already exists" in resp.json()["detail"]
+
 
 class TestGetProfile:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     def test_get_profile_returns_200(self, client: TestClient) -> None:
         fake = _fake_profile()
         with (
-            patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_get.return_value = fake
             resp = client.get(f"{self.URL}/{_PROFILE_ID}")
@@ -208,8 +230,8 @@ class TestGetProfile:
 
     def test_get_profile_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_get.return_value = None
             resp = client.get(f"{self.URL}/{_PROFILE_ID}")
@@ -218,74 +240,110 @@ class TestGetProfile:
 
 
 class TestUpdateProfile:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     def test_update_profile_returns_200(self, client: TestClient) -> None:
         fake = _fake_profile(name="updated-name")
         with (
-            patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.update_environment_profile") as mock_update,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_update.return_value = fake
-            resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "updated-name"})
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"name": "updated-name"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "updated-name"
 
     def test_update_profile_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.update_environment_profile") as mock_update,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_update.return_value = None
-            resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "nope"})
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"name": "nope"})
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_update_profile_invalid_network_policy(self, client: TestClient) -> None:
+    def test_update_profile_conflict(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.get_environment_profile"),
-            patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.get_environment_profile"),
+            patch(f"{_ROUTES}.update_environment_profile") as mock_update,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_update.side_effect = IntegrityError("mock", "mock", "mock")
-            resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"network_policy": "bogus"})
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"name": "dup"})
         assert resp.status_code == 409
-        assert resp.json()["detail"] == "An environment profile with this name already exists in your organisation."
+        assert "already exists" in resp.json()["detail"]
 
 
 class TestDeleteProfile:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     def test_delete_profile_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.delete_environment_profile") as mock_delete,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.soft_delete_environment_profile") as mock_delete,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
-            mock_delete.return_value = True
+            mock_delete.return_value = _fake_profile()
             resp = client.delete(f"{self.URL}/{_PROFILE_ID}")
         assert resp.status_code == 204
 
     def test_delete_profile_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.delete_environment_profile") as mock_delete,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.soft_delete_environment_profile") as mock_delete,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
-            mock_delete.return_value = False
+            mock_delete.return_value = None
             resp = client.delete(f"{self.URL}/{_PROFILE_ID}")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
 
+class TestRestoreProfile:
+    URL = "/api/v1/environment-profiles"
+
+    def test_restore_profile_returns_200(self, client: TestClient) -> None:
+        fake = _fake_profile()
+        with (
+            patch(f"{_ROUTES}.restore_environment_profile") as mock_restore,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_restore.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/restore")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "test-profile"
+
+    def test_restore_profile_not_found(self, client: TestClient) -> None:
+        with (
+            patch(f"{_ROUTES}.restore_environment_profile") as mock_restore,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_restore.return_value = None
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/restore")
+        assert resp.status_code == 404
+
+
 class TestProfileTestEndpoint:
-    URL = "/api/v1/environments"
+    URL = "/api/v1/environment-profiles"
 
     def test_profile_test_profile_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
-            patch("modulo.api.routes.environments.set_rls_org"),
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_get.return_value = None
             resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
+
+    def test_profile_test_streams_sse(self, client: TestClient) -> None:
+        fake = _fake_profile()
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        assert "provisioning" in resp.text

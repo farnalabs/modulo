@@ -64,7 +64,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-model-backends': { icon: 'Cpu', labelKey: 'components.SidebarNav.item_model_backends' },
   'admin-node-categories': { icon: 'Tag', labelKey: 'components.SidebarNav.item_node_categories' },
   'admin-feature-flags': { icon: 'Flag', labelKey: 'components.SidebarNav.item_feature_flags' },
-  'admin-environments': { icon: 'Container', labelKey: 'components.SidebarNav.item_environments' },
   'admin-run-retention': { icon: 'Clock', labelKey: 'components.SidebarNav.item_run_retention' },
   'admin-sandbox-concurrency': { icon: 'Gauge', labelKey: 'components.SidebarNav.item_sandbox_concurrency' },
   'admin-views': { icon: 'Eye', labelKey: 'components.SidebarNav.item_saved_views' },

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -62,8 +63,8 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.owner_team_id = overrides.get("owner_team_id")
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
-    p.created_at = None
-    p.updated_at = None
+    p.created_at = overrides.get("created_at", datetime(2026, 1, 1, tzinfo=UTC))
+    p.updated_at = overrides.get("updated_at", datetime(2026, 1, 1, tzinfo=UTC))
     return p
 
 
@@ -287,8 +288,8 @@ def snapshot_subset(ctx):
 def post_create_profile(url: str, ctx, client):
     payload = ctx.get("payload", {})
     with (
-        patch("modulo.api.routes.environments.create_environment_profile") as mock_create,
-        patch("modulo.api.routes.environments.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles.create_environment_profile") as mock_create,
+        patch("modulo.api.routes.environment_profiles.set_rls_org"),
     ):
         mock_create.return_value = _fake_profile(
             name=payload.get("name", "test"),
@@ -309,9 +310,9 @@ def post_create_invalid(url: str, ctx, client):
 @when(parsers.parse("I GET {url}"))
 def get_url(url: str, ctx, client):
     with (
-        patch("modulo.api.routes.environments.list_environment_profiles") as mock_list,
-        patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
-        patch("modulo.api.routes.environments.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles.list_environment_profiles") as mock_list,
+        patch("modulo.api.routes.environment_profiles.get_environment_profile") as mock_get,
+        patch("modulo.api.routes.environment_profiles.set_rls_org"),
     ):
         is_alt_org = ctx.get("alt_org", False)
         profile_count = 0 if is_alt_org else ctx.get("profile_count", 0)
@@ -328,21 +329,21 @@ def get_url(url: str, ctx, client):
         ctx["response"] = client.get(url)
 
 
-@when(parsers.parse('I PATCH {url} with name "{name}"'))
-def patch_profile(url: str, name: str, ctx, client):
+@when(parsers.parse('I PUT {url} with name "{name}"'))
+def put_profile(url: str, name: str, ctx, client):
     profile = ctx.get("profile")
     profile_should_be_none = ctx.get("profile_should_be_none", False)
     is_alt_org = ctx.get("alt_org", False)
     with (
-        patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
-        patch("modulo.api.routes.environments.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles.update_environment_profile") as mock_update,
+        patch("modulo.api.routes.environment_profiles.set_rls_org"),
     ):
         if profile and not profile_should_be_none and not is_alt_org:
             updated = _fake_profile(id=profile.id, name=name)
             mock_update.return_value = updated
         else:
             mock_update.return_value = None
-        ctx["response"] = client.patch(url, json={"name": name})
+        ctx["response"] = client.put(url, json={"name": name})
 
 
 @when(parsers.parse("I DELETE {url}"))
@@ -351,8 +352,8 @@ def delete_url(url: str, ctx, client):
     profile_should_be_none = ctx.get("profile_should_be_none", False)
     is_alt_org = ctx.get("alt_org", False)
     with (
-        patch("modulo.api.routes.environments.delete_environment_profile") as mock_delete,
-        patch("modulo.api.routes.environments.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles.soft_delete_environment_profile") as mock_delete,
+        patch("modulo.api.routes.environment_profiles.set_rls_org"),
     ):
         if profile and not profile_should_be_none and not is_alt_org:
             mock_delete.return_value = True
@@ -364,8 +365,8 @@ def delete_url(url: str, ctx, client):
 @when(parsers.parse("I POST {url}"))
 def post_url(url: str, ctx, client):
     with (
-        patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
-        patch("modulo.api.routes.environments.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles.get_environment_profile") as mock_get,
+        patch("modulo.api.routes.environment_profiles.set_rls_org"),
     ):
         profile = ctx.get("profile")
         profile_should_be_none = ctx.get("profile_should_be_none", False)
