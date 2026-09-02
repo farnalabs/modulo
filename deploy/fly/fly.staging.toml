@@ -29,11 +29,13 @@ primary_region = 'lhr'
   command = "/release.sh"
 
 [build]
-  # Path is relative to the Docker build context = the project (repo) root,
-  # NOT to this file's directory. CI runs `fly deploy --config
-  # deploy/fly/fly.staging.toml` from the repo root, and `--config` does not
-  # move the build context (Fly docs: "will not change the Docker context path").
-  dockerfile = "backend/Dockerfile.fly"
+  # Flyctl v0.4.87 resolves `dockerfile` relative to THIS file's directory
+  # (deploy/fly/), NOT the Docker build context. The build context stays the
+  # repo root (CI runs `fly deploy --config deploy/fly/fly.staging.toml` from
+  # the repo root), so the Dockerfile's `COPY backend/`, `COPY frontend/` etc.
+  # still work. This file lives in deploy/fly/, so to reach the repo-root
+  # backend/Dockerfile.fly we go up TWO levels (../../).
+  dockerfile = "../../backend/Dockerfile.fly"
 
 [processes]
   app = ""
