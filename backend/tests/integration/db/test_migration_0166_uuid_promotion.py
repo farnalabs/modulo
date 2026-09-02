@@ -66,6 +66,19 @@ def fresh_migration_db(monkeypatch):
     provisions the migration roles, runs ``alembic upgrade`` to ``_HEAD``, and
     tears the container down afterwards. This lets the test prove the 0155-0157
     chain applies cleanly without disturbing other integration tests.
+
+    ``DATABASE_URL`` is redirected to this ephemeral container for the duration
+    of the test via ``monkeypatch.context()``, which restores it when the fixture
+    tears down (before ``pg.stop()``). Consuming tests MUST NOT re-set
+    ``DATABASE_URL`` themselves: a ``monkeypatch.setenv`` in the test body records
+    the *then-current* (ephemeral) URL as the value to restore, and because the
+    function-scoped ``monkeypatch`` fixture is torn down AFTER this fixture, its
+    undo re-points ``DATABASE_URL`` at the container that has just been stopped.
+    Every later test in the same xdist worker that reads
+    ``get_settings().database_url`` then dies with "connection refused" (this
+    broke the deploy pre-deploy integration tests on main: the HITL checkpointer
+    dialled the dead port). The tests below therefore read the URL from this
+    fixture's return value only.
     """
     pg = PostgresContainer("postgres:16-alpine")
     pg.start()
@@ -107,9 +120,8 @@ def asyncio_run(coro):
     return asyncio.run(coro)
 
 
-async def test_0155_0156_0157_upgrade_on_fresh_schema(fresh_migration_db, monkeypatch) -> None:
+async def test_0155_0156_0157_upgrade_on_fresh_schema(fresh_migration_db) -> None:
     db_url = fresh_migration_db
-    monkeypatch.setenv("DATABASE_URL", db_url)
     engine = create_async_engine(db_url, poolclass=NullPool)
 
     try:
@@ -161,9 +173,8 @@ async def test_0155_0156_0157_upgrade_on_fresh_schema(fresh_migration_db, monkey
         await engine.dispose()
 
 
-async def test_0157_uuid_promotion_round_trips(fresh_migration_db, monkeypatch) -> None:
+async def test_0157_uuid_promotion_round_trips(fresh_migration_db) -> None:
     db_url = fresh_migration_db
-    monkeypatch.setenv("DATABASE_URL", db_url)
     engine = create_async_engine(db_url, poolclass=NullPool)
 
     well_formed = uuid.uuid4()

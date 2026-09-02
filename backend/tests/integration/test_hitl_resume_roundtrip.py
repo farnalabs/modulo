@@ -255,13 +255,15 @@ async def _interrupt_run(
 ) -> None:
     """Claim + execute until the gate interrupts; run must reach awaiting_human."""
     from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.settings import get_settings
 
     claim_token = await pe.claim_run_async(db_engine, str(run_id), str(org_id))
     assert claim_token is not None
 
-    settings = get_settings()
-    conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
+    # Build the checkpointer DSN from the migrated-testcontainer fixture rather
+    # than get_settings().database_url: the fixture is the DB this test actually
+    # seeded, so the checkpointer cannot be sent to a different (or dead) server
+    # if some earlier test leaves DATABASE_URL pointing elsewhere.
+    conn_string = migrated_db_url.replace("+asyncpg", "").replace("+psycopg", "")
     executor = PipelineExecutor(db_engine, checkpointer_conn_string=conn_string)
     setup_hub = _run_executor_hub(backend_id, fixtures)
     hub = await setup_hub()
