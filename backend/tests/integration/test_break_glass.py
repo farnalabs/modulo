@@ -1,18 +1,21 @@
 """Integration tests for break-glass deliverable (A) — last-admin prevention.
 
 Exercises the caller-bound ``deactivate_break_glass`` SECURITY DEFINER
-(reconciliation chain 0108_schema_org_identity, redefined per-org by 0173)
-against a real Postgres: M2010/M2020/M2040 pgcodes, force gating on the
-operator role (real login vs SET ROLE), scoped-vs-global deactivation (the
-non-operator branch is per-org since FAR-533/gh-1794 — the membership
-tombstone is the signal and accounts.active stays true; the operator branch
-keeps the global accounts.active flip), the active IS TRUE membership JOIN
-fix, SCIM DELETE parity + re-create reversibility, the accounts UPDATE
-allow-list boundary, the break-glass surface posture, and the
+(reconciliation chain 0108_schema_org_identity, redefined per-org by
+0173_per_org_deactivation and again by 0174_per_org_last_admin_guard with a
+per-org M2020 last-admin guard — FAR-533/FAR-539) against a real Postgres:
+M2010/M2020/M2040 pgcodes, force gating on the operator role (real login vs
+SET ROLE), scoped-vs-global deactivation (the non-operator branch is per-org
+— the membership tombstone is the signal, accounts.active stays true, and the
+M2020 guard covers only the orgs the call tombstones; the operator branch
+keeps the global accounts.active flip and the all-orgs guard), the active IS
+TRUE membership JOIN fix, SCIM DELETE parity + re-create reversibility, the
+accounts UPDATE allow-list boundary, the break-glass surface posture, and the
 lookup_api_key_org regression.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -44,7 +47,7 @@ async def _create_account(
     email: str | None = None,
     active: bool = True,
     is_break_glass: bool = False,
-    expires_at: str | None = None,
+    expires_at: str | datetime | None = None,
 ) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
@@ -189,19 +192,105 @@ async def test_caller_with_no_shared_org_is_rejected_m2010(
     assert _pgcode_of(exc_info.value) == "M2010"
 
 
-async def test_last_admin_m2020(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
+async def test_last_admin_of_other_org_no_longer_blocks(
+    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
+) -> None:
+    """FAR-539: the M2020 guard is PER-ORG — it covers only the orgs the call tombstones.
+
+    The target shares bg_org with the caller (authorizing the call) AND is the
+    ONLY admin in other_org (caller has no membership there). The non-operator
+    branch tombstones ONLY the caller's active-admin orgs, so other_org is
+    untouched and cannot be orphaned: the old all-orgs refusal (M2020) was
+    over-conservative and the deactivation now succeeds.
+    """
     other_org = await _create_org(db_engine)
     caller = await _create_account(db_engine)
     target = await _create_account(db_engine)
     await _create_membership(db_engine, org_id=bg_org, account_id=caller, role="admin")
-    # Target shares bg_org with the caller (authorizes the caller) AND is the
-    # ONLY admin in other_org (caller has no membership there).
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
     await _create_membership(db_engine, org_id=other_org, account_id=target, role="admin")
 
-    # Deactivating the target would orphan other_org (its last admin) -> M2020.
+    # Deactivating the target from bg_org leaves other_org untouched -> succeeds.
+    await _call_deactivate(modulo_app_engine, caller, target)
+
+    async with db_engine.connect() as conn:
+        shared_membership = (
+            await conn.execute(
+                text(
+                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
+                    "WHERE account_id = :id AND organisation_id = :oid"
+                ),
+                {"id": str(target), "oid": str(bg_org)},
+            )
+        ).scalar_one()
+        assert shared_membership is True
+
+        # The other org's membership (and its admin capability) is untouched.
+        other_membership = (
+            await conn.execute(
+                text(
+                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
+                    "WHERE account_id = :id AND organisation_id = :oid"
+                ),
+                {"id": str(target), "oid": str(other_org)},
+            )
+        ).scalar_one()
+        assert other_membership is False
+
+        # Per-org deactivation (FAR-533): the account stays active.
+        account_active = (
+            await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})
+        ).scalar_one()
+        assert account_active is True
+
+
+async def test_last_admin_of_callers_org_still_refused(
+    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
+) -> None:
+    """The M2020 guard still protects the org being tombstoned.
+
+    Self-deactivation: the caller IS the target and the last non-break-glass
+    admin of their org — tombstoning it would orphan the org (the guard's
+    count excludes the target itself), so M2020 still fires.
+    """
+    last_admin = await _create_account(db_engine)
+    member = await _create_account(db_engine)
+    await _create_membership(db_engine, org_id=bg_org, account_id=last_admin, role="admin")
+    await _create_membership(db_engine, org_id=bg_org, account_id=member, role="runner")
+
     with pytest.raises(DBAPIError) as exc_info:
-        await _call_deactivate(modulo_app_engine, caller, target)
+        await _call_deactivate(modulo_app_engine, last_admin, last_admin)
+    assert _pgcode_of(exc_info.value) == "M2020"
+
+    # Nothing was tombstoned.
+    async with db_engine.connect() as conn:
+        membership_deactivated = (
+            await conn.execute(
+                text(
+                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
+                    "WHERE account_id = :id AND organisation_id = :oid"
+                ),
+                {"id": str(last_admin), "oid": str(bg_org)},
+            )
+        ).scalar_one()
+        assert membership_deactivated is False
+
+
+async def test_bg_account_caller_last_admin_of_tombstoned_org_still_refused(
+    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
+) -> None:
+    """A break-glass ACCOUNT caller (non-operator session) is excluded from the
+    guard's admin count (``a.is_break_glass IS FALSE``), so removing the last
+    non-break-glass admin of the org being tombstoned is still refused."""
+    bg_caller = await _create_account(db_engine, is_break_glass=True, expires_at=datetime.now(UTC) + timedelta(hours=1))
+    target = await _create_account(db_engine)
+    member = await _create_account(db_engine)
+    await _create_membership(db_engine, org_id=bg_org, account_id=bg_caller, role="admin")
+    await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
+    await _create_membership(db_engine, org_id=bg_org, account_id=member, role="runner")
+
+    with pytest.raises(DBAPIError) as exc_info:
+        await _call_deactivate(modulo_app_engine, bg_caller, target)
     assert _pgcode_of(exc_info.value) == "M2020"
 
 
