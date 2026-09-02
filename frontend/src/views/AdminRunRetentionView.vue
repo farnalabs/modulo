@@ -113,7 +113,7 @@
             </Button>
             <button
               type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
               data-testid="admin-run-retention-reset"
               @click="resetFilters"
             >
@@ -164,8 +164,11 @@
           <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ error }}
           </div>
-            <div v-else-if="candidates.length === 0" class="py-6 text-center text-sm text-muted-foreground" data-testid="admin-run-retention-empty">
-              {{ $t('views.AdminRunRetentionView.no_runs_match') }}
+            <div v-else-if="candidates.length === 0" data-testid="admin-run-retention-empty">
+              <EmptyState
+                :title="$t('views.AdminRunRetentionView.no_runs_match')"
+                :description="$t('views.AdminRunRetentionView.no_runs_match_change_filters')"
+              />
             </div>
           <div v-else class="max-h-96 overflow-auto rounded-lg border" data-testid="admin-run-retention-candidates-table">
             <table class="w-full">
@@ -235,6 +238,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import Card from 'primevue/card'
 import Select from 'primevue/select'
@@ -255,6 +259,23 @@ type PurgeResponse = components['schemas']['PurgeResponse']
 type PipelineResponse = components['schemas']['PipelineResponse']
 
 const AVAILABLE_STATUSES = Object.values(RUN_STATUS)
+
+const STATUS_LABEL_KEY: Record<string, string> = {
+  [RUN_STATUS.PENDING]: 'views.RunsListView.status_pending',
+  [RUN_STATUS.RUNNING]: 'views.RunsListView.status_running',
+  [RUN_STATUS.AWAITING_HUMAN]: 'views.RunsListView.status_awaiting_human',
+  [RUN_STATUS.COMPLETE]: 'views.RunsListView.status_complete',
+  [RUN_STATUS.FAILED]: 'views.RunsListView.status_failed',
+  [RUN_STATUS.CANCELLED]: 'views.RunsListView.status_cancelled',
+  [RUN_STATUS.EVAL_FAILED]: 'views.RunsListView.status_eval_failed',
+  [RUN_STATUS.STALLED]: 'views.RunsListView.status_stalled',
+  [RUN_STATUS.CLAIMED]: 'views.RunsListView.status_claimed',
+  [RUN_STATUS.UNKNOWN]: 'views.RunsListView.status_unknown',
+  [RUN_STATUS.BUDGET_EXCEEDED]: 'views.RunsListView.status_budget_exceeded',
+  [RUN_STATUS.COST_CEILING_EXCEEDED]: 'views.RunsListView.status_cost_ceiling_exceeded',
+  [RUN_STATUS.ROUTER_NO_MATCH]: 'views.RunsListView.status_router_no_match',
+  [RUN_STATUS.COMPENSATION_FAILED]: 'views.RunsListView.status_compensation_failed',
+}
 
 const dateFrom = ref('')
 const dateTo = ref('')
@@ -288,7 +309,13 @@ const purgeResult = ref<PurgeResponse | null>(null)
 const showPurgeConfirm = ref(false)
 
 const pipelineOptions = computed(() => pipelines.value.map(p => ({ value: p.id, label: p.name })))
-const statusOptions = computed(() => AVAILABLE_STATUSES.map(s => ({ value: s, label: s.replace(/_/g, ' ') })))
+// Statuses added to RUN_STATUS without a STATUS_LABEL_KEY entry fall back to a
+// humanised form of the raw value ("router_no_match" -> "router no match") so a
+// new status can never render a raw i18n key in the dropdown.
+const statusOptions = computed(() => AVAILABLE_STATUSES.map(s => ({
+  value: s,
+  label: STATUS_LABEL_KEY[s] ? t(STATUS_LABEL_KEY[s]) : s.replace(/_/g, ' '),
+})))
 
 const terminalCandidates = computed(() => candidates.value.filter(c => isTerminalStatus(c.status.toLowerCase())))
 
@@ -422,7 +449,7 @@ async function exportFile() {
     })
     if (!res.ok) {
       const detail = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(formatApiError(detail) || `Export failed: ${res.status}`)
+      throw new Error(formatApiError(detail) || t('views.AdminRunRetentionView.export_failed_status', { status: res.status }))
     }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
@@ -440,7 +467,7 @@ async function exportFile() {
 }
 
 function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 B'
+  if (!bytes || bytes <= 0) return t('views.AdminRunRetentionView.bytes_zero')
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
   const val = bytes / Math.pow(1024, i)
