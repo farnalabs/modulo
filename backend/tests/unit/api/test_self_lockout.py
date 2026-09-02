@@ -236,13 +236,14 @@ class TestSelfLockoutEndpoint:
 
         mock_membership = MagicMock()
         mock_membership.role = "operator"
+        mock_membership.deactivated_at = None
 
         with (
             _patch_guard(),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -271,13 +272,14 @@ class TestSelfLockoutEndpoint:
 
         mock_membership = MagicMock()
         mock_membership.role = "operator"
+        mock_membership.deactivated_at = None
 
         with (
             _patch_guard(),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -293,13 +295,14 @@ class TestSelfLockoutEndpoint:
 
         mock_membership = MagicMock()
         mock_membership.role = "admin"
+        mock_membership.deactivated_at = None
 
         with (
             _patch_guard(),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -368,13 +371,16 @@ class TestSelfLockoutEndpoint:
 
         A user deactivated via the SECURITY DEFINER path is tombstoned on the
         membership (deactivated_at set). Reactivating via the admin update route
-        must clear that tombstone so the user regains their org role.
+        must clear that tombstone so the user regains their org role. Per-org
+        semantics (FAR-533): accounts.active is NOT touched — the account is
+        not globally banned, so the mock reflects active=True.
         """
         mock_session = _make_mock_session()
         mock_account = self._make_mock_account(_USER_ID)
-        mock_account.active = False
+        mock_account.active = True
         mock_membership = MagicMock()
         mock_membership.role = "admin"
+        mock_membership.deactivated_at = None
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session

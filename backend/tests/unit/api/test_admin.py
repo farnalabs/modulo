@@ -249,11 +249,14 @@ class TestUserDeactivateAuthorization:
     def test_deactivate_success_returns_inactive_user(self, admin_rls_client: TestClient) -> None:
         fake_membership = MagicMock()
         fake_membership.role = "admin"
+        # Per-org deactivation (FAR-533): accounts.active stays true and the
+        # CALLER'S-ORG membership carries the deactivated_at tombstone.
+        fake_membership.deactivated_at = _NOW
 
         with (
             patch(
                 "modulo.api.routes.admin.get_account_by_id",
-                AsyncMock(return_value=_fake_offboarding_account(active=False)),
+                AsyncMock(return_value=_fake_offboarding_account(active=True)),
             ),
             patch(
                 "modulo.api.routes.admin.get_membership_by_account_and_org",
@@ -274,6 +277,8 @@ class TestUserDeactivateAuthorization:
     def test_reactivate_success_returns_active_user(self, admin_rls_client: TestClient) -> None:
         fake_membership = MagicMock()
         fake_membership.role = "admin"
+        # FAR-533: reactivation clears the caller's-org tombstone only.
+        fake_membership.deactivated_at = None
 
         with (
             patch(

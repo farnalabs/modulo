@@ -252,7 +252,12 @@ async def _authenticate_credentials(
 def _resolve_login_org_context(
     memberships: list[OrgMembership], account: Account
 ) -> tuple[uuid.UUID | None, str | None]:
-    """Pick the primary org + role for a login, denying accounts with none."""
+    """Pick the primary org + role for a login, denying accounts with none.
+
+    ``memberships`` is the ACTIVE-membership list (``deactivated_at IS NULL``
+    — the login transaction filters tombstoned memberships, FAR-533), so the
+    first entry is always a live membership.
+    """
     if not memberships and not account.is_system_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -287,7 +292,14 @@ async def _run_login_transaction(
             await limiter.record_success(ip)
         await update_last_login(session, account.id)
 
-        memberships = await list_memberships_for_account(session, account.id)
+        # FAR-533 (gh-1794): per-org deactivation tombstones the membership
+        # (deactivated_at) instead of flipping accounts.active. Login must
+        # resolve its org context from ACTIVE memberships only — a user
+        # per-org-deactivated in their first-joined org must not mint a token
+        # scoped to that org (live-role revalidation would then 401 on every
+        # API call, so the tombstone has to gate here at the org-scoping
+        # point). Other orgs' active memberships still resolve a login org.
+        memberships = await list_memberships_for_account(session, account.id, active_only=True)
         org_id, org_role = _resolve_login_org_context(memberships, account)
 
         family = await create_family(session, account.id, org_id)

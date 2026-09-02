@@ -1,9 +1,12 @@
 """Integration tests for break-glass deliverable (A) — last-admin prevention.
 
 Exercises the caller-bound ``deactivate_break_glass`` SECURITY DEFINER
-(reconciliation chain 0108_schema_org_identity) against a real Postgres:
-M2010/M2020/M2040 pgcodes, force gating on the operator role (real login vs
-SET ROLE), scoped-vs-global deactivation, the active IS TRUE membership JOIN
+(reconciliation chain 0108_schema_org_identity, redefined per-org by 0173)
+against a real Postgres: M2010/M2020/M2040 pgcodes, force gating on the
+operator role (real login vs SET ROLE), scoped-vs-global deactivation (the
+non-operator branch is per-org since FAR-533/gh-1794 — the membership
+tombstone is the signal and accounts.active stays true; the operator branch
+keeps the global accounts.active flip), the active IS TRUE membership JOIN
 fix, SCIM DELETE parity + re-create reversibility, the accounts UPDATE
 allow-list boundary, the break-glass surface posture, and the
 lookup_api_key_org regression.
@@ -225,7 +228,9 @@ async def test_deactivation_succeeds_scoped_to_shared_org(
         account_active = (
             await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})
         ).scalar_one()
-        assert account_active is False  # active=false is GLOBAL
+        # FAR-533 (gh-1794): deactivation is PER-ORG — the membership
+        # tombstone below is the signal, accounts.active stays true.
+        assert account_active is True
 
         shared_membership = (
             await conn.execute(
@@ -388,7 +393,8 @@ async def test_scim_deactivate_and_recreate_reversible(db_engine: AsyncEngine, b
     async with factory() as session, session.begin():
         deactivated = await scim_deactivate_user(session, bg_org, scim_id, caller_account_id=caller)
         assert deactivated is not None
-        assert deactivated.active is False
+        # FAR-533 (gh-1794): per-org deactivation leaves accounts.active true.
+        assert deactivated.active is True
         await session.commit()
 
     async with db_engine.connect() as conn:
