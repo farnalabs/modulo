@@ -31,6 +31,7 @@ from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
+from modulo.connectors.rest import RestConnector
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import (
@@ -164,37 +165,15 @@ def _credential_overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> d
     return merged
 
 
-def _validate_rest_auth(creds: dict[str, Any]) -> None:
-    """Validate a REST credential dict against the connector's auth contract.
-
-    Mirrors ``RestConnector._normalise_auth`` so the API enforces the same
-    invariant the connector enforces at run time: ``bearer`` requires
-    ``token``, ``basic`` requires ``username``+``password``, and ``api_key``
-    requires ``api_key`` (with ``in`` limited to ``header``/``query``). Raises
-    ``ValueError`` with a clear message when the declared ``auth_mode`` is
-    missing a required secret — so a broken credential is rejected at the API
-    boundary (422) instead of being saved and blowing up on the first run.
-    The JSON credential path is validated. Non-REST connectors retain the raw
-    token path; a REST connector with a non-JSON credential payload is rejected
-    (422) instead of being encrypted verbatim.
-    """
-    mode = str(creds.get("auth_mode", "")).strip().lower()
-    if mode not in {"bearer", "api_key", "basic"}:
-        raise ValueError(
-            f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
-        )
-    if mode == "bearer":
-        if not creds.get("token"):
-            raise ValueError("REST bearer auth requires creds['token']")
-    elif mode == "basic":
-        if not creds.get("username") or not creds.get("password"):
-            raise ValueError("REST basic auth requires creds['username'] and creds['password']")
-    else:  # api_key
-        if not creds.get("api_key"):
-            raise ValueError("REST api_key auth requires creds['api_key']")
-        auth_in = creds.get("in")
-        if auth_in is not None and str(auth_in).lower() not in {"header", "query"}:
-            raise ValueError(f"REST api_key auth 'in' must be 'header' or 'query' — got {auth_in!r}")
+# Credential validation is CENTRALIZED on the connector (FAR-504): the REST
+# required-secret auth contract lives in ``RestConnector.validate_credentials``
+# (the single source of truth), and both the create and PATCH overlay boundaries
+# call it so the API never hand-mirrors the connector's run-time invariant.
+#
+# Known gap: only the REST connector validates credential SHAPE at the API
+# boundary today. Other connectors (github, filesystem, ...) accept a raw token /
+# opaque payload verbatim and rely on their own run-time behaviour; no generic
+# credential-shape hook exists yet.
 
 
 def _rest_credential_complete(parsed: dict[str, Any]) -> bool:
@@ -202,14 +181,15 @@ def _rest_credential_complete(parsed: dict[str, Any]) -> bool:
 
     Complete means: every secret field the payload carries holds a real,
     non-empty, non-masked value AND the payload satisfies the connector's auth
-    contract (``_validate_rest_auth`` — the target ``auth_mode``'s required
-    secrets are present). A complete payload can be encrypted verbatim WITHOUT
-    decrypting/overlaying the stored credential, which restores the recovery
-    path for legacy rows whose stored ciphertext is undecryptable (a full
-    replacement never needs the stored value). Whenever any incoming secret is
-    empty or masked — i.e. the payload means "keep the stored secret" — this
-    returns False and the caller must fall back to the decrypt+overlay path so
-    the anti-wipe guarantee for partial updates is preserved.
+    contract (``RestConnector.validate_credentials`` — the target
+    ``auth_mode``'s required secrets are present). A complete payload can be
+    encrypted verbatim WITHOUT decrypting/overlaying the stored credential,
+    which restores the recovery path for legacy rows whose stored ciphertext
+    is undecryptable (a full replacement never needs the stored value).
+    Whenever any incoming secret is empty or masked — i.e. the payload means
+    "keep the stored secret" — this returns False and the caller must fall
+    back to the decrypt+overlay path so the anti-wipe guarantee for partial
+    updates is preserved.
     """
     for key in _CRED_SECRET_FIELDS:
         if key in parsed:
@@ -217,7 +197,7 @@ def _rest_credential_complete(parsed: dict[str, Any]) -> bool:
             if not (isinstance(value, str) and value and value != SENSITIVE_VALUE_MASK):
                 return False
     try:
-        _validate_rest_auth(parsed)
+        RestConnector.validate_credentials(parsed)
     except ValueError:
         return False
     return True
@@ -410,7 +390,7 @@ async def create_connector_endpoint(
                 detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
             )
         try:
-            _validate_rest_auth(rest_creds)
+            RestConnector.validate_credentials(rest_creds)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -611,7 +591,8 @@ async def update_connector_endpoint(
                         # rows whose stored ciphertext is undecryptable
                         # (previously a permanent 500 even for full replacement).
                         # The completeness check has already validated the
-                        # connector's auth contract.
+                        # connector's auth contract — centralized on the
+                        # connector (RestConnector.validate_credentials, FAR-504).
                         updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
                             json.dumps(parsed), settings.fernet_key
                         )
@@ -639,15 +620,17 @@ async def update_connector_endpoint(
                             ) from None
                         if isinstance(parsed, dict):
                             incoming = _credential_overlay(stored, parsed)
-                            # FAR-466: enforce the connector's auth contract at the API
-                            # boundary so a direct PATCH cannot save a credential the
-                            # connector will reject at run time (e.g. overlaying
-                            # auth_mode=bearer onto an api_key connector, preserving the
-                            # key but supplying no token — the UI blocks this, the API
-                            # must not silently save a broken credential). The raw
-                            # non-JSON token path below keeps its historical semantics.
+                            # FAR-466 / FAR-504: enforce the connector's auth
+                            # contract at the API boundary so a direct PATCH
+                            # cannot save a credential the connector will reject
+                            # at run time (e.g. overlaying auth_mode=bearer onto
+                            # an api_key connector, preserving the key but
+                            # supplying no token — the UI blocks this, the API
+                            # must not silently save a broken credential). The
+                            # contract lives on the connector as the single
+                            # source of truth (RestConnector.validate_credentials).
                             try:
-                                _validate_rest_auth(incoming)
+                                RestConnector.validate_credentials(incoming)
                             except ValueError as exc:
                                 raise HTTPException(
                                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
