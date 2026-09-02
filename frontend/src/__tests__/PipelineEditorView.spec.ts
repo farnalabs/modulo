@@ -61,6 +61,8 @@ vi.mock('../lib/api/client', () => {
   }
 })
 
+import { api } from '../lib/api/client'
+
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
   return {
@@ -198,5 +200,339 @@ describe('PipelineEditorView', () => {
     expect((wrapper.vm as any).retryPolicyEvents).toEqual(['eval_failed', 'stall'])
     const stallCheckbox = wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]')
     expect((stallCheckbox.element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('shows the sandbox commands editor for a node with a pre-existing command list', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        template_id: 'opencode',
+        agent_prompt: 'do the thing',
+        agent_command: null,
+        agent_commands: ['opencode run', '--model oxf'],
+        commands_concatenation_string: ' ; ',
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // pre-existing rows are legible in the editor (one input per command)
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-editor"]').exists()).toBe(true)
+    const row0 = wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]')
+    expect((row0.element as HTMLInputElement).value).toBe('opencode run')
+    const row1 = wrapper.find('[data-testid="pipeline-editor-node-command-row-1"]')
+    expect((row1.element as HTMLInputElement).value).toBe('--model oxf')
+  })
+
+  it('saves the authored command list + join operator on the node config', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    const rawNode = {
+      id: 'node-1',
+      node_type: 'sandbox_agent',
+      template_id: 'opencode',
+      agent_prompt: 'do the thing',
+      agent_command: 'legacy-scalar',
+      agent_commands: ['opencode run', '--model oxf'],
+      commands_concatenation_string: ' ; ',
+      label: 'Sandbox',
+      description: '',
+      position: { x: 0, y: 0 },
+    }
+    vm.rawNodes = [rawNode]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+
+    const patchMock = vi.mocked(api.PATCH)
+    expect(patchMock).toHaveBeenCalled()
+    const savedNode = (patchMock.mock.calls[0][1] as any).body.nodes[0]
+    // list + custom joiner survive the save payload (round-trip)
+    expect(savedNode.agent_commands).toEqual(['opencode run', '--model oxf'])
+    expect(savedNode.commands_concatenation_string).toBe(' ; ')
+    // mutual exclusion: the scalar is cleared when a non-empty list is authored
+    expect(savedNode.agent_command).toBeNull()
+  })
+
+  it('saves a scalar-only sandbox command without inventing a list', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        template_id: 'opencode',
+        agent_prompt: 'do the thing',
+        agent_command: 'opencode run --auto',
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    expect(savedNode.agent_command).toBe('opencode run --auto')
+    expect(savedNode.agent_commands).toBeNull()
+    expect(savedNode.commands_concatenation_string).toBeNull()
+  })
+
+  it('falls back the join operator to the default when a list is saved without one', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        template_id: 'opencode',
+        agent_prompt: 'do the thing',
+        agent_command: 'legacy-scalar',
+        agent_commands: ['opencode run', '--model oxf'],
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    // unset joiner saves as the runtime default; the scalar is cleared by the
+    // list's presence (mutual exclusion at the payload boundary too)
+    expect(savedNode.commands_concatenation_string).toBe(' && ')
+    expect(savedNode.agent_commands).toEqual(['opencode run', '--model oxf'])
+    expect(savedNode.agent_command).toBeNull()
+  })
+
+  it('filters empty command rows and keeps a scalar-only node intact on save', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        template_id: 'opencode',
+        agent_prompt: 'do the thing',
+        agent_command: 'opencode run --auto',
+        agent_commands: ['cmd-a', '   ', ''],
+        commands_concatenation_string: ' ; ',
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    // empty/whitespace rows are dropped; the remaining list wins over the scalar
+    expect(savedNode.agent_commands).toEqual(['cmd-a'])
+    expect(savedNode.agent_command).toBeNull()
+    expect(savedNode.commands_concatenation_string).toBe(' ; ')
+  })
+
+  it('spread-preserves the sandbox node model fields in the save payload (template_id + sandbox config)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        template_id: 'opencode',
+        mode: 'llm',
+        agent_command: 'opencode run --auto',
+        agent_commands: null,
+        commands_concatenation_string: ' && ',
+        agent_prompt: 'do the thing',
+        egress_policy: 'selected',
+        egress_allowlist: [{ host: 'github.com', port: 443 }],
+        resource_limits: { cpu: 2 },
+        wallclock_budget_seconds: 600,
+        delivery_sentinel: 'DELIVERY_DONE',
+        env_vars: { FOO: 'bar' },
+        context_files: { '/home/user/notes.txt': 'notes' },
+        output_schema_json: { type: 'object' },
+        autonomy_recommendation: 'autonomy_low',
+        input_schema_pin: { schema_id: 'schema-1', schema_version: 'v1' },
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    // the critical regression: _validate_sandbox_agent_node 422s without a
+    // template_id, so a save that drops it bricks every sandbox pipeline edit
+    expect(savedNode.template_id).toBe('opencode')
+    // the hand-maintained payload map silently dropped the sandbox config
+    // surface — every one of these fields must survive the round-trip
+    expect(savedNode.egress_policy).toBe('selected')
+    expect(savedNode.egress_allowlist).toEqual([{ host: 'github.com', port: 443 }])
+    expect(savedNode.resource_limits).toEqual({ cpu: 2 })
+    expect(savedNode.wallclock_budget_seconds).toBe(600)
+    expect(savedNode.delivery_sentinel).toBe('DELIVERY_DONE')
+    expect(savedNode.env_vars).toEqual({ FOO: 'bar' })
+    expect(savedNode.context_files).toEqual({ '/home/user/notes.txt': 'notes' })
+    expect(savedNode.output_schema_json).toEqual({ type: 'object' })
+    expect(savedNode.autonomy_recommendation).toBe('autonomy_low')
+    expect(savedNode.input_schema_pin).toEqual({ schema_id: 'schema-1', schema_version: 'v1' })
+    // command normalisation still layers on top of the spread
+    expect(savedNode.agent_command).toBe('opencode run --auto')
+    expect(savedNode.agent_commands).toBeNull()
+  })
+
+  it('keeps composite node identity + schema pins in the save payload and omits UI-only keys', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'composite',
+        composite_ref: 'composite-1',
+        composite_parameter_values: { region: 'eu' },
+        composite_input_mapping: { in: 'a' },
+        composite_output_mapping: { out: 'b' },
+        input_schema_pin: { schema_id: 'schema-1', schema_version: 'v2' },
+        label: 'Composite',
+        description: '',
+        position: { x: 0, y: 0 },
+        // UI-state markers that must never leak into the payload
+        type: 'agent',
+        data: { label: 'Composite' },
+        selected: true,
+        model_backend_id: 'mb-1',
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Composite', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    await vm.saveGraph()
+
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    // "Composite nodes require a composite_ref" — dropping it hard-422s the save
+    expect(savedNode.composite_ref).toBe('composite-1')
+    expect(savedNode.composite_parameter_values).toEqual({ region: 'eu' })
+    expect(savedNode.composite_input_mapping).toEqual({ in: 'a' })
+    expect(savedNode.composite_output_mapping).toEqual({ out: 'b' })
+    expect(savedNode.input_schema_pin).toEqual({ schema_id: 'schema-1', schema_version: 'v2' })
+    // view-only keys are stripped, not persisted
+    expect(savedNode).not.toHaveProperty('type')
+    expect(savedNode).not.toHaveProperty('data')
+    expect(savedNode).not.toHaveProperty('selected')
+    expect(savedNode).not.toHaveProperty('model_backend_id')
+  })
+
+  it('shows commands read-only for an agent node and round-trips its payload without command mutations', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'agent',
+        agent_id: 'agent-1',
+        agent_command: 'node-level-legacy-command',
+        agent_commands: null,
+        commands_concatenation_string: ' && ',
+        label: 'Agent Node',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent Node', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', connector_type_refs: [{ connector_type: 'slack' }] }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // the authoring editor is sandbox-only; the read-only display renders instead
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-editor"]').exists()).toBe(false)
+    const readonly = wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]')
+    expect(readonly.exists()).toBe(true)
+    expect(readonly.text()).toContain('node-level-legacy-command')
+
+    await vm.saveGraph()
+
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    // the save payload round-trips the stored command verbatim — the editor
+    // never fabricates or rewrites commands on a non-sandbox node (FAR-488a
+    // syncs a node-level agent_command into the bound Agent's row)
+    expect(savedNode.agent_command).toBe('node-level-legacy-command')
+    expect(savedNode.agent_commands).toBeNull()
+    expect(savedNode.commands_concatenation_string).toBe(' && ')
+  })
+
+  it('renders no commands editor for a manual node', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'manual',
+        output_schema_id: 'schema-1',
+        agent_command: null,
+        agent_commands: null,
+        label: 'Manual Step',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'manual', data: { label: 'Manual Step', description: '' } }]
+    vm.schemas = [{ id: 'schema-1', name: 'Output Schema' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-editor"]').exists()).toBe(false)
+    // no command data on the node → no read-only block either
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]').exists()).toBe(false)
   })
 })

@@ -1334,3 +1334,117 @@ def test_connector_response_surfaces_degraded_markers(client: TestClient) -> Non
     assert body["degraded_at"] is not None
     assert body["degraded_at"].startswith("2025-01-01T00:00:00")
     assert body["last_skip_error"] == "ValueError: Missing credential key 'token'"
+
+
+# ── FAR-504: credential auth contract centralization + overlay model ─────
+
+
+def _overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Local import shim for the route's ``_credential_overlay``."""
+    from modulo.api.routes.connectors import _credential_overlay
+
+    return _credential_overlay(previous, incoming)
+
+
+def test_overlay_masked_or_empty_secret_preserved() -> None:
+    """FAR-504 (a): an empty OR masked secret value is preserved (not overwritten)."""
+    from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+    previous = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
+    for blank in ("", SENSITIVE_VALUE_MASK):
+        merged = _overlay(previous, {"auth_mode": "api_key", "api_key": blank, "in": "header"})
+        assert merged["api_key"] == "secret123", f"Secret must be preserved on {blank!r}, got {merged}"
+
+
+def test_overlay_real_new_secret_replaces() -> None:
+    """FAR-504 (b): a real (non-empty, non-masked) secret value replaces the stored one."""
+    previous = {"auth_mode": "api_key", "api_key": "old-secret", "in": "header", "header_name": "X-Key"}
+    merged = _overlay(
+        previous, {"auth_mode": "api_key", "api_key": "new-secret", "in": "query", "query_param_name": "token"}
+    )
+    assert merged["api_key"] == "new-secret"
+    assert merged["in"] == "query"
+    assert merged["query_param_name"] == "token"
+
+
+def test_overlay_identity_only_edit_applies_secret_survives() -> None:
+    """FAR-504 (c): an identity-only edit (auth_mode/in/header_name/query_param_name)
+    applies while the stored secret survives — the connector reads identity from
+    the overlaid credential."""
+    previous = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
+    merged = _overlay(previous, {"auth_mode": "api_key", "in": "query", "query_param_name": "auth-token"})
+    assert merged["auth_mode"] == "api_key"
+    assert merged["in"] == "query"
+    assert merged["query_param_name"] == "auth-token"
+    assert merged["api_key"] == "secret123"
+
+
+def test_overlay_never_drops_a_stored_secret_or_unknown_key() -> None:
+    """FAR-504 (d): the overlay never drops a stored secret or an unknown/legacy
+    key that the incoming payload omits — it only adds/updates."""
+    previous = {
+        "auth_mode": "api_key",
+        "api_key": "secret123",
+        "in": "header",
+        "header_name": "X-Key",
+        "legacy_field": "keep-me",
+    }
+    merged = _overlay(previous, {"auth_mode": "api_key", "in": "header", "header_name": "X-Key-V2"})
+    assert merged["api_key"] == "secret123", "stored secret must survive"
+    assert merged["legacy_field"] == "keep-me", "unknown/legacy key must survive"
+    assert merged["header_name"] == "X-Key-V2", "identity update must apply"
+
+
+def test_rest_validate_credentials_parity_with_connector() -> None:
+    """FAR-504 (1): the connector's authoritative ``validate_credentials`` enforces
+    exactly the required-secret contract the API boundary relies on, and it agrees
+    with ``_normalise_auth`` (both accept or both reject a given credential dict).
+    bearer->token; basic->username+password; api_key->api_key + in header/query."""
+    from modulo.connectors.rest import RestConnector
+
+    valid = [
+        {"auth_mode": "bearer", "token": "t"},
+        {"auth_mode": "api_key", "api_key": "k"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "header"},
+        {"auth_mode": "api_key", "api_key": "k", "in": "query", "query_param_name": "token"},
+        {"auth_mode": "basic", "username": "u", "password": "p"},
+    ]
+    invalid = [
+        {"auth_mode": "bearer"},  # no token
+        {"auth_mode": "api_key"},  # no api_key
+        {"auth_mode": "basic", "username": "u"},  # no password
+        {"auth_mode": "basic", "password": "p"},  # no username
+        {"auth_mode": "opaque"},  # unsupported mode
+        {"auth_mode": "api_key", "api_key": "k", "in": "cookie"},  # api_key in must be header/query
+    ]
+
+    for creds in valid:
+        RestConnector.validate_credentials(creds)  # must not raise
+        RestConnector._normalise_auth(creds)  # must not raise (parity)
+    for creds in invalid:
+        with pytest.raises(ValueError):
+            RestConnector.validate_credentials(creds)
+        with pytest.raises(ValueError):
+            RestConnector._normalise_auth(creds)
+
+
+def test_patch_rest_overlay_rejects_missing_basic_secret(client: TestClient) -> None:
+    """FAR-504 parity at the API boundary: a PATCH overlaying auth_mode=basic with
+    a username but NO password is rejected (422) and not persisted — the connector's
+    contract is enforced before the write."""
+    stored = {"auth_mode": "bearer", "token": "secret123"}
+    existing = _make_rest_connector(_encrypt_creds(stored))
+    mock_update = AsyncMock()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": json.dumps({"auth_mode": "basic", "username": "u"})},
+        )
+    assert resp.status_code == 422
+    assert "REST basic auth requires creds['username'] and creds['password']" in resp.json()["detail"]
+    mock_update.assert_not_awaited()

@@ -30,12 +30,26 @@ _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
 
 
-def _configure_rls_session(session: AsyncMock) -> None:
+def _configure_rls_session(session: AsyncMock) -> MagicMock:
+    """Configure a mock async session for ``set_rls_org`` + an explicit transaction.
+
+    ``set_rls_org`` requires an active transaction (RuntimeError otherwise);
+    the sqlite-dialect bind makes it store the org id in ``session.info``
+    instead of calling Postgres ``set_config``. ``session.begin()`` is wired to
+    a synchronous-callable returning the context manager (mirroring
+    ``AsyncSession.begin()``). Returns the ``session.begin()`` context manager
+    so tests can assert the caller opened an explicit transaction.
+    """
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind)
     session.info = {}
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return begin_cm
 
 
 def _make_db_session(
@@ -171,6 +185,54 @@ async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None
     assert len(found) == 1
     assert executed, "expected an executed query"
     assert "auto_disabled" in str(executed[0])
+
+
+async def test_get_subscribed_endpoints_sets_rls_org_context() -> None:
+    """FAR-523 regression: the endpoint read must activate the org's RLS
+    context. ``notification_endpoints`` carries the ``rls_org_isolation``
+    policy and ``modulo_app`` is NOBYPASSRLS, so a query without
+    ``app.organisation_id`` set silently matches ZERO rows — dispatch would
+    deliver to nobody."""
+    ep = _fake_endpoint()
+
+    with patch("modulo.core.notifier.set_rls_org", AsyncMock()) as mock_set_rls:
+        found = await _get_endpoints_for_event([ep])
+
+    assert len(found) == 1
+    mock_set_rls.assert_awaited_once()
+    # First arg is the session; the org id is the RLS context passed second.
+    assert mock_set_rls.await_args.args[1] == _ORG
+
+
+async def test_get_subscribed_endpoints_runs_in_explicit_transaction() -> None:
+    """FAR-523: the read must open an explicit transaction AND pin the org
+    context inside it — ``set_rls_org`` is transaction-scoped (SET LOCAL
+    semantics), so the execute must happen inside the same BEGIN block. Uses
+    the real ``set_rls_org`` (sqlite dialect stores the org in
+    ``session.info``) so the full call chain is exercised."""
+    ep = _fake_endpoint()
+    result = MagicMock()
+    result.scalars.return_value.__iter__ = lambda self: iter([ep])
+
+    session = AsyncMock()
+    begin_cm = _configure_rls_session(session)
+    session.execute = AsyncMock(return_value=result)
+
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    n = Notifier(MagicMock(), _KEY)
+    with patch.object(n, "_session_factory", factory):
+        found = await n._get_subscribed_endpoints(_ORG, "hitl_awaiting")
+
+    assert len(found) == 1
+    session.begin.assert_called_once()
+    begin_cm.__aenter__.assert_awaited_once()
+    assert session.info["org_id"] == _ORG
 
 
 # ---------------------------------------------------------------------------

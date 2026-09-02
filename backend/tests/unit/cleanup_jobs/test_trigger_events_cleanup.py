@@ -1,12 +1,10 @@
 """Unit tests for the trigger_events age-based retention cleanup (FAR-167).
 
-Covers ``cleanup_old_trigger_events`` (the core batch function), the
-in-process scheduler loop, and the SAQ cron wrapper in
-``modulo.core.saq_worker`` — including the autobegin=False transaction
-convention that the system session factory requires.
+Covers ``cleanup_old_trigger_events`` (the core batch function) and the SAQ
+cron wrapper in ``modulo.core.saq_worker`` — including the autobegin=False
+transaction convention that the system session factory requires.
 """
 
-import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -18,11 +16,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import modulo.core.saq_worker as sw
 from modulo.core.cleanup_jobs.trigger_events_cleanup import (
-    _CLEANUP_INTERVAL_SECONDS,
     BATCH_SIZE,
     DEFAULT_RETENTION_DAYS,
     cleanup_old_trigger_events,
-    cleanup_scheduler_loop,
 )
 from modulo.db.models.base import Base
 from modulo.db.models.trigger_event import TriggerEvent
@@ -41,15 +37,6 @@ def _make_session(ids: list[uuid.UUID] | None = None) -> AsyncMock:
         session.execute = AsyncMock(return_value=select_result)
     session.commit = AsyncMock()
     return session
-
-
-def _make_factory(session: AsyncMock) -> MagicMock:
-    """Return a mock ``async_sessionmaker`` yielding *session* via ``async with``."""
-    factory = MagicMock()
-    context = MagicMock()
-    context.__aenter__ = AsyncMock(return_value=session)
-    factory.return_value = context
-    return factory
 
 
 class TestCleanupOldTriggerEvents:
@@ -140,92 +127,18 @@ class TestCleanupOldTriggerEvents:
             await cleanup_old_trigger_events(session)
 
 
-class TestCleanupSchedulerLoop:
-    async def test_drains_batches_then_resets_backoff(self) -> None:
-        factory = _make_factory(AsyncMock())
-
-        with (
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
-                side_effect=[BATCH_SIZE, 3, asyncio.CancelledError()],
-            ) as mock_cleanup,
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
-                new_callable=AsyncMock,
-            ) as mock_sleep,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await cleanup_scheduler_loop(factory)
-
-        assert mock_cleanup.await_count == 3
-        mock_sleep.assert_awaited_once_with(_CLEANUP_INTERVAL_SECONDS)
-
-    async def test_breaks_on_cancellation(self) -> None:
-        factory = _make_factory(AsyncMock())
-
-        with (
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
-                side_effect=asyncio.CancelledError(),
-            ) as mock_cleanup,
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
-                new_callable=AsyncMock,
-            ) as mock_sleep,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await cleanup_scheduler_loop(factory)
-
-        mock_cleanup.assert_awaited_once()
-        mock_sleep.assert_not_awaited()
-
-    async def test_backs_off_exponentially_after_errors(self) -> None:
-        factory = _make_factory(AsyncMock())
-
-        with (
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
-                side_effect=[OSError("boom"), OSError("boom"), asyncio.CancelledError()],
-            ) as mock_cleanup,
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
-                new_callable=AsyncMock,
-            ) as mock_sleep,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await cleanup_scheduler_loop(factory)
-
-        assert mock_cleanup.await_count == 3
-        assert mock_sleep.await_count == 2
-        assert mock_sleep.await_args_list[0].args == (1,)
-        assert mock_sleep.await_args_list[1].args == (2,)
-
-    async def test_backoff_caps_at_cleanup_interval(self) -> None:
-        factory = _make_factory(AsyncMock())
-
-        errors = [OSError("boom")] * 13 + [asyncio.CancelledError()]
-        with (
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
-                side_effect=errors,
-            ) as mock_cleanup,
-            patch(
-                "modulo.core.cleanup_jobs.trigger_events_cleanup.asyncio.sleep",
-                new_callable=AsyncMock,
-            ) as mock_sleep,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await cleanup_scheduler_loop(factory)
-
-        assert mock_cleanup.await_count == len(errors)
-        assert mock_sleep.await_count == 13
-        assert mock_sleep.await_args_list[-1].args == (_CLEANUP_INTERVAL_SECONDS,)
-
-
 class TestSaqTriggerEventsCleanup:
     """The ``trigger_events_cleanup`` job in ``modulo.core.saq_worker`` wraps
     ``cleanup_old_trigger_events`` in a drain loop and reports the total
-    deleted count."""
+    deleted count.
+
+    Every test pins the session factory: on PostgreSQL the job must drain on
+    the SYSTEM session factory (via ``_cleanup_session_factory`` →
+    ``_make_system_session_factory``, FAR-523) because the purge is cross-org
+    by design and the plain ``modulo_app`` factory is NOBYPASSRLS — under it
+    the retention silently matched zero rows. On non-PostgreSQL backends (no
+    RLS) the plain factory is correct and the job must select it.
+    """
 
     def _make_factory_with_session(self) -> tuple[MagicMock, MagicMock]:
         """Return a mock sessionmaker (via ``async with``) plus its session.
@@ -249,7 +162,8 @@ class TestSaqTriggerEventsCleanup:
         factory, _ = self._make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
                 new_callable=AsyncMock,
@@ -258,6 +172,7 @@ class TestSaqTriggerEventsCleanup:
         ):
             result = await sw.trigger_events_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": BATCH_SIZE * 2 + 3}
         assert mock_cleanup.await_count == 3
 
@@ -265,7 +180,8 @@ class TestSaqTriggerEventsCleanup:
         factory, _ = self._make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
                 new_callable=AsyncMock,
@@ -274,6 +190,7 @@ class TestSaqTriggerEventsCleanup:
         ):
             result = await sw.trigger_events_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 0}
         mock_cleanup.assert_awaited_once()
 
@@ -281,7 +198,8 @@ class TestSaqTriggerEventsCleanup:
         factory, _ = self._make_factory_with_session()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_factory,
             patch(
                 "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
                 new_callable=AsyncMock,
@@ -290,6 +208,30 @@ class TestSaqTriggerEventsCleanup:
             pytest.raises(RuntimeError, match="db down"),
         ):
             await sw.trigger_events_cleanup({})
+
+        mock_factory.assert_called()
+
+    @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql"])
+    async def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
+        """On non-PostgreSQL backends (no RLS, no modulo_system role) the job
+        must drain on the PLAIN factory and never touch the system engine."""
+        factory, _ = self._make_factory_with_session()
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db=non_pg_db)),
+            patch.object(sw, "_make_session_factory", return_value=factory) as mock_plain,
+            patch.object(sw, "_make_system_session_factory") as mock_system,
+            patch(
+                "modulo.core.cleanup_jobs.trigger_events_cleanup.cleanup_old_trigger_events",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+        ):
+            result = await sw.trigger_events_cleanup({})
+
+        mock_plain.assert_called()
+        mock_system.assert_not_called()
+        assert result == {"deleted": 0}
 
 
 class TestSaqTriggerEventsCleanupAutobeginTransaction:
@@ -329,9 +271,13 @@ class TestSaqTriggerEventsCleanupAutobeginTransaction:
         async with autobegin_false_factory() as session, session.begin():
             session.add(old_event)
 
-        with patch.object(sw, "_make_session_factory", return_value=autobegin_false_factory):
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory) as mock_factory,
+        ):
             result = await sw.trigger_events_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 1}
         async with autobegin_false_factory() as session, session.begin():
             remaining = list((await session.execute(select(TriggerEvent))).scalars().all())
@@ -350,9 +296,13 @@ class TestSaqTriggerEventsCleanupAutobeginTransaction:
         async with autobegin_false_factory() as session, session.begin():
             session.add(recent_event)
 
-        with patch.object(sw, "_make_session_factory", return_value=autobegin_false_factory):
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory) as mock_factory,
+        ):
             result = await sw.trigger_events_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 0}
         async with autobegin_false_factory() as session, session.begin():
             remaining = list((await session.execute(select(TriggerEvent))).scalars().all())
@@ -361,7 +311,65 @@ class TestSaqTriggerEventsCleanupAutobeginTransaction:
     async def test_cron_zero_batch_against_autobegin_false_session(self, autobegin_false_factory) -> None:
         """Even an empty table must not raise: the SELECT needs an active
         transaction on an autobegin=False session."""
-        with patch.object(sw, "_make_session_factory", return_value=autobegin_false_factory):
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory) as mock_factory,
+        ):
             result = await sw.trigger_events_cleanup({})
 
+        mock_factory.assert_called()
         assert result == {"deleted": 0}
+
+
+class TestCleanupSessionFactory:
+    """``_cleanup_session_factory`` picks the session factory by dialect.
+
+    PostgreSQL (RLS, modulo_app NOBYPASSRLS) → the system session factory,
+    still failing LOUD when ``MODULO_SYSTEM_DATABASE_URL`` is unset.
+    Non-PostgreSQL (SQLite/MariaDB/MySQL — no RLS, no system role) → the
+    plain factory; the system engine is never touched.
+    """
+
+    def test_postgres_uses_system_factory(self) -> None:
+        sentinel = MagicMock(name="system_factory")
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
+            patch.object(sw, "_make_system_session_factory", return_value=sentinel) as mock_system,
+        ):
+            factory = sw._cleanup_session_factory()
+
+        mock_system.assert_called_once()
+        assert factory is sentinel
+
+    @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql", "SQLite", "MariaDB"])
+    def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
+        sentinel = MagicMock(name="plain_factory")
+
+        with (
+            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db=non_pg_db)),
+            patch.object(sw, "_make_session_factory", return_value=sentinel) as mock_plain,
+            patch.object(sw, "_make_system_session_factory") as mock_system,
+        ):
+            factory = sw._cleanup_session_factory()
+
+        mock_plain.assert_called_once()
+        mock_system.assert_not_called()
+        assert factory is sentinel
+
+    def test_postgres_with_unset_system_url_fails_loud(self) -> None:
+        """The PG fail-closed path is preserved: an unset
+        ``MODULO_SYSTEM_DATABASE_URL`` raises RuntimeError instead of silently
+        running the cross-org purge as modulo_app."""
+        settings = MagicMock(modulo_db="postgres")
+        settings.modulo_system_database_url = ""
+
+        with (
+            patch.object(sw, "get_settings", return_value=settings),
+            patch.object(sw, "_SYSTEM_ASYNC_ENGINE", None),
+            patch.object(sw, "_make_session_factory") as mock_plain,
+            pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+        ):
+            sw._cleanup_session_factory()
+
+        mock_plain.assert_not_called()

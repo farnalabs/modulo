@@ -940,6 +940,23 @@ export default {
       "template": "Template",
       "command": "Command",
       "commands": "Commands",
+      "commands_single": "Single command",
+      "commands_single_placeholder": "e.g. opencode run --auto",
+      "commands_single_hint": "Used when no command list is set below",
+      "commands_single_disabled_hint": "Add the list below, or remove all its rows, to edit the single command",
+      "commands_list_hint": "One command per row — rows are joined into a single command when the pipeline runs",
+      "commands_list_disabled_hint": "Disabled while a single command is set — clear it above to edit the list",
+      "commands_list_empty": "No commands yet — add one row per command",
+      "commands_add": "Add command",
+      "commands_row_label": "Command {n}",
+      "commands_row_remove": "Remove command {n}",
+      "commands_row_move_up": "Move command {n} up",
+      "commands_row_move_down": "Move command {n} down",
+      "commands_join_operator": "Join operator",
+      "commands_join_operator_hint": "Inserted between commands when the pipeline runs",
+      "commands_join_operator_placeholder": " && ",
+      "commands_effective_preview": "Effective command",
+      "commands_concatenated_with": "Concatenated with:",
       "timeout": "Timeout",
       "stall_timeout": "Stall Timeout",
       "heartbeat": "Heartbeat",
@@ -3529,9 +3546,11 @@ export default {
   }
 }
 
-// NOTE (FAR-412): the `connectors.rest.*` keys above are the structured-config
-// schema for a Generic REST connector. No view wires a label lookup to them yet —
-// the connector's config_json is authored as a bare JSON map. Kept as the i18n
-// surface for the upcoming structured-config form; remove only if the product
-// drops that plan. (Trailing comment — the manifest parser reads the object
-// literal and tolerates nothing inside it.)
+// NOTE (FAR-412 / FAR-504): the `connectors.rest.*` keys above are the
+// structured-config schema for a Generic REST connector. AdminConnectorsView now
+// wires the structured-config form (RestConnectorConfigForm) and the
+// `credentials_write_only` label to them — these keys are the live label surface
+// for the REST connector config + credential form, not a dead schema. Kept here
+// as the single i18n surface the form reads from; remove only if the product
+// drops the structured-config form. (Trailing comment — the manifest parser
+// reads the object literal and tolerates nothing inside it.)

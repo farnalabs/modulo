@@ -129,6 +129,14 @@ def test_parse_build_zero_duration(jenkins):
     assert run.duration_seconds is None
 
 
+def test_parse_build_null_id_and_timestamp_map_to_empty_strings(jenkins):
+    run = jenkins._parse_build({"id": None, "timestamp": None})
+    assert not run.id
+    assert not run.created_at
+    assert "None" not in run.id
+    assert "None" not in run.created_at
+
+
 @respx.mock
 async def test_get_run_status_running(jenkins):
     respx.get(f"{_JENKINS_BASE}/job/my-job/42/api/json").mock(
