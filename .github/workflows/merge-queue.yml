@@ -37,6 +37,12 @@ concurrency:
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
+  # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
+  # fetch-by-SHA, which GitHub rejects from CI runners.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
 
 jobs:
   freeze-gate:
