@@ -119,7 +119,7 @@
                 open
                 :id="retryPolicyPanelId"
                 ref="retryPolicyPanelRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
+                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.retry_policy')"
                 data-testid="pipeline-editor-retry-policy-panel"
@@ -203,7 +203,7 @@
               :options="nodeTypeOptions"
               option-label="label"
               option-value="value"
-              class="w-32 text-xs"
+              class="toolbar-select w-32 text-xs"
               append-to="self"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
               :title="$t('views.PipelineEditorView.new_node_type_hint')"
@@ -235,9 +235,9 @@
         <!-- Empty-state overlay on top of the canvas -->
         <div v-if="flowNodes.length === 0" class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none">
           <div class="text-center">
-            <h2 class="text-xl font-semibold">{{ pipeline?.name || 'Pipeline' }}</h2>
+            <h2 class="text-xl font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_fallback_title') }}</h2>
             <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
-            <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
+            <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
@@ -249,7 +249,7 @@
               :options="nodeTypeOptions"
               option-label="label"
               option-value="value"
-              class="w-36 text-xs"
+              class="toolbar-select w-36 text-xs"
               append-to="self"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
             />
@@ -276,13 +276,13 @@
                 type="button"
                 class="text-muted-foreground hover:text-foreground transition-colors"
                 @click="closeRunDialog"
-                aria-label="Close"
+                :aria-label="$t('views.PipelineEditorView.close')"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
             <p class="text-sm text-muted-foreground">
-              Run <span class="font-medium text-foreground">{{ pipeline?.name }}</span>
+              {{ $t('views.PipelineEditorView.run_label') }} <span class="font-medium text-foreground">{{ pipeline?.name }}</span>
             </p>
             <div v-if="isWebhookTriggered" class="rounded-lg bg-muted border p-3 text-sm text-muted-foreground">
               {{ $t('views.PipelineEditorView.webhook_triggered_info') }}
@@ -343,11 +343,11 @@
           <Background :gap="20" :size="1" />
           <Controls :showInteractive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-warning">MANUAL</div>
+                    <div class="text-xs font-medium text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-primary">AGENT</div>
+                    <div class="text-xs font-medium text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
@@ -361,16 +361,16 @@
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">HITL</span>
+              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
             </div>
             <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
               <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                Loop{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
+                {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
               </span>
             </div>
             <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
               <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
-                LLM{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
+                {{ $t('views.PipelineEditorView.llm_badge') }}{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
               </span>
             </div>
           </template>
@@ -382,7 +382,7 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
         <dl class="space-y-4 text-sm">
           <div>
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">ID</dt>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.id_label') }}</dt>
             <dd class="font-mono text-[10px] text-muted-foreground break-all select-all" :title="selectedNodeData.id">{{ shortId(selectedNodeData.id) }}</dd>
           </div>
           <div>
@@ -406,7 +406,7 @@
             <input id="pipeline-editor-node-label"
               v-model="selectedNodeData.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium mt-1"
-              placeholder="Enter node label"
+              :placeholder="$t('views.PipelineEditorView.enter_node_label')"
               @input="syncNodeToFlow"
               data-testid="pipeline-editor-node-label"
             />
@@ -416,7 +416,7 @@
             <textarea id="pipeline-editor-node-desc"
               v-model="selectedNodeData.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm mt-1"
-              placeholder="Optional description"
+              :placeholder="$t('views.PipelineEditorView.optional_description')"
               rows="2"
               @input="syncNodeToFlow"
               data-testid="pipeline-editor-node-description"
@@ -757,7 +757,7 @@
         </dl>
         <div class="mt-6 space-y-2">
           <Button v-if="selectedNodeData.node_type === 'manual'" type="button" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
-            Convert to Agent
+            {{ $t('views.PipelineEditorView.convert_to_agent') }}
           </Button>
           <button
             v-if="selectedNodeData.node_type === 'agent'"
@@ -786,10 +786,10 @@
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
               <Select
-  aria-label="Edge type"
+  :aria-label="$t('views.PipelineEditorView.edge_type')"
   v-model="edgeForm.edge_type"
   append-to="self"
-  placeholder="Normal"
+  :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
   :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
   option-label="label"
@@ -808,7 +808,7 @@
                 id="pipelineeditorview-field-16"
                 v-model="edgeForm.condition_expression"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="JMESPath expression (e.g. score > `0.5`)"
+                :placeholder="$t('views.PipelineEditorView.jmespath_expression_placeholder')"
                 :disabled="edgeForm.edge_type !== 'conditional' && edgeForm.edge_type !== 'loop'"
               />
             </dd>
@@ -822,9 +822,9 @@
                 min="0"
                 :aria-label="$t('views.PipelineEditorView.max_iterations')"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="0 = unlimited (RunawayGuard applies)"
+                :placeholder="$t('views.PipelineEditorView.max_iterations_placeholder')"
               />
-              <p class="mt-1 text-xs text-muted-foreground">Maximum number of times this loop can repeat before exiting. 0 means no limit.</p>
+              <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.max_iterations_hint') }}</p>
             </dd>
           </div>
           <div v-if="edgeForm.edge_type === 'llm'">
@@ -834,7 +834,7 @@
                 id="pipelineeditorview-field-17"
                 v-model="edgeForm.routing_label"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="e.g. retry, escalate, complete"
+                :placeholder="$t('views.PipelineEditorView.routing_label_placeholder')"
               />
               <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.the_llm_uses_this_label_to_select_this_path_must_be_unique_among_outgoing_edges') }}</p>
             </dd>
@@ -842,7 +842,7 @@
         </dl>
         <hr class="my-4 border-t" />
         <div class="flex items-center justify-between">
-          <h3 class="text-sm font-semibold">HITL Gate</h3>
+          <h3 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.hitl_gate') }}</h3>
           <label for="pipelineeditorview-field-15" class="inline-flex cursor-pointer items-center">
             <input id="pipelineeditorview-field-15"
               v-model="edgeForm.hitl_enabled"
@@ -858,7 +858,7 @@
             <input id="pipelineeditorview-field-14"
               v-model="edgeForm.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="e.g. Review before deploy"
+              :placeholder="$t('views.PipelineEditorView.hitl_label_placeholder')"
             />
           </div>
           <div>
@@ -866,7 +866,7 @@
             <textarea id="pipelineeditorview-field-13"
               v-model="edgeForm.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="Describe what the reviewer should check"
+              :placeholder="$t('views.PipelineEditorView.hitl_description_placeholder')"
               rows="2"
             />
           </div>
@@ -881,7 +881,7 @@
             />
           </div>
           <div class="flex items-center gap-2">
-            <input aria-label="checkbox"
+            <input :aria-label="$t('views.PipelineEditorView.aria_checkbox')"
               v-model="edgeForm.human_only"
               type="checkbox"
               class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
@@ -892,10 +892,10 @@
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
             <Select
-  aria-label="Condition type"
+  :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   append-to="self"
-  placeholder="None (always gate)"
+  :placeholder="$t('views.PipelineEditorView.none_always_gate')"
   class="w-full"
   :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
   option-label="label"
@@ -907,14 +907,14 @@
 </Select>
           </div>
           <div v-if="edgeForm.condition_type === 'jmespath'">
-            <label for="pipelineeditorview-field-10" class="mb-1 block text-xs font-medium text-muted-foreground">JMESPath Condition</label>
+            <label for="pipelineeditorview-field-10" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.jmespath_condition') }}</label>
             <input id="pipelineeditorview-field-10"
               v-model="edgeForm.condition"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-              placeholder="e.g. score > `0.5`"
+              :placeholder="$t('views.PipelineEditorView.jmespath_condition_placeholder')"
             />
             <p class="mt-1 text-[10px] text-muted-foreground">
-              Evaluated against pipeline state. If truthy, gate activates.
+              {{ $t('views.PipelineEditorView.jmespath_condition_hint') }}
             </p>
           </div>
           <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
@@ -923,7 +923,7 @@
               <input id="pipelineeditorview-field-9"
                 v-model="edgeForm.eval_name"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="e.g. quality-check"
+                :placeholder="$t('views.PipelineEditorView.eval_name_placeholder')"
               />
             </div>
             <div class="flex gap-2">
@@ -941,12 +941,12 @@
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
                 <Select
-  aria-label="Operator"
+  :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   append-to="self"
-  placeholder="lt (score &lt; threshold)"
+  :placeholder="$t('views.PipelineEditorView.eval_operator_placeholder')"
   class="w-full"
-  :options="[{ value: 'lt', label: 'lt (score < threshold)' }, { value: 'gt', label: 'gt (score > threshold)' }, { value: 'lte', label: 'lte (score ≤ threshold)' }, { value: 'gte', label: 'gte (score ≥ threshold)' }, { value: 'eq', label: 'eq (score == threshold)' }, { value: 'neq', label: 'neq (score != threshold)' }]"
+  :options="[{ value: 'lt', label: $t('views.PipelineEditorView.eval_operator_lt') }, { value: 'gt', label: $t('views.PipelineEditorView.eval_operator_gt') }, { value: 'lte', label: $t('views.PipelineEditorView.eval_operator_lte') }, { value: 'gte', label: $t('views.PipelineEditorView.eval_operator_gte') }, { value: 'eq', label: $t('views.PipelineEditorView.eval_operator_eq') }, { value: 'neq', label: $t('views.PipelineEditorView.eval_operator_neq') }]"
   option-label="label"
   option-value="value"
 >
@@ -957,19 +957,19 @@
               </div>
             </div>
             <p class="mt-1 text-[10px] text-muted-foreground">
-              If condition is true, gate fires. If false, gate is skipped.
+              {{ $t('views.PipelineEditorView.eval_condition_hint') }}
             </p>
           </div>
           <div class="flex gap-2 pt-2">
             <Button type="button" data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
-              {{ savingEdge ? 'Saving...' : 'Save Edge' }}
+              {{ savingEdge ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save_edge') }}
             </Button>
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="selectedEdgeData = null"
             >
-              Close
+              {{ $t('views.PipelineEditorView.close') }}
             </button>
           </div>
           <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
@@ -982,7 +982,7 @@
       :open="showAgentPicker"
       @update:open="showAgentPicker = false"
       :title="$t('views.PipelineEditorView.convert_to_agent')"
-      confirmText="Convert"
+      :confirmText="$t('views.PipelineEditorView.convert')"
       :confirmDisabled="!canConvert"
       @confirm="convertToAgent"
     >
@@ -1010,7 +1010,7 @@
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
             <Select
-  aria-label="Connector"
+  :aria-label="$t('views.PipelineEditorView.connector')"
   v-model="pickerConnectorId"
   append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
@@ -1033,8 +1033,8 @@
           </div>
           <div v-if="selectedAgent" class="rounded-lg border bg-muted p-3 text-sm">
             <p class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.schema') }}</p>
-            <p class="mt-0.5 font-medium">Input: {{ agentSchemaName(selectedAgent, 'input') }}</p>
-            <p class="font-medium">Output: {{ agentSchemaName(selectedAgent, 'output') }}</p>
+            <p class="mt-0.5 font-medium">{{ $t('views.PipelineEditorView.input_label') }} {{ agentSchemaName(selectedAgent, 'input') }}</p>
+            <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
           <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ convertError }}
@@ -1045,7 +1045,7 @@
       :open="showRevertDialog"
       @update:open="showRevertDialog = false"
       :title="$t('views.PipelineEditorView.revert_dialog_title')"
-      confirmText="Revert"
+      :confirmText="$t('views.PipelineEditorView.revert')"
       :confirmDisabled="!revertSnapshotId"
       @confirm="revertToManual"
     >
@@ -1059,7 +1059,7 @@
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
           <Select
-  aria-label="Snapshot"
+  :aria-label="$t('views.PipelineEditorView.snapshot_label')"
   v-model="revertSnapshotId"
   append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
@@ -1082,23 +1082,22 @@
     <FormDialog
       :open="showSaveAsComposite"
       @update:open="showSaveAsComposite = false"
-      title="Save as Composite"
-      confirmText="Save"
+      :title="$t('views.PipelineEditorView.save_as_composite')"
+      :confirmText="$t('views.PipelineEditorView.save')"
       :confirmDisabled="!saveAsName || saveAsSelectedNodeIds.length === 0 || saving"
       :loading="saving"
       @confirm="handleSaveAsComposite"
     >
       <p class="mb-4 text-sm text-muted-foreground">
-        Extracts selected nodes from this pipeline into a reusable composite template.
-        Parameter placeholders (&#123;&#123;parameter.*&#125;&#125;) in agent prompts are auto-detected.
+        {{ $t('views.PipelineEditorView.save_as_composite_description') }}
       </p>
       <div class="space-y-4">
         <div>
-          <label for="pipelineeditorview-field-3" class="mb-1 block text-sm font-medium">Name *</label>
+          <label for="pipelineeditorview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.name_required') }}</label>
           <input id="pipelineeditorview-field-3"
             v-model="saveAsName"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="My Composite"
+            :placeholder="$t('views.PipelineEditorView.composite_name_placeholder')"
           />
         </div>
         <div>
@@ -1107,7 +1106,7 @@
             v-model="saveAsDescription"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="3"
-            placeholder="Optional description"
+            :placeholder="$t('views.PipelineEditorView.optional_description')"
           />
         </div>
         <div>
@@ -1124,7 +1123,7 @@
                 :value="node.id"
                 class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
               />
-              <span>{{ node.label || 'Node ' + shortId(node.id) }}</span>
+              <span>{{ node.label || $t('views.PipelineEditorView.node_fallback_label', { id: shortId(node.id) }) }}</span>
             </label>
           </div>
         </div>
@@ -1137,7 +1136,7 @@
       :open="showRenameDialog"
       @update:open="showRenameDialog = false"
       :title="$t('views.PipelineEditorView.rename_pipeline')"
-      confirmText="Save"
+      :confirmText="$t('views.PipelineEditorView.save')"
       :confirmDisabled="!renameName.trim() || renaming"
       :loading="renaming"
       @confirm="handleRename"
@@ -1148,7 +1147,7 @@
           <input id="pipelineeditorview-field-1"
             v-model="renameName"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="Pipeline name"
+            :placeholder="$t('views.PipelineEditorView.pipeline_name_placeholder')"
             @keyup.enter="handleRename"
           />
         </div>
@@ -1160,12 +1159,12 @@
     <FormDialog
       :open="showDeleteConfirm"
       @update:open="showDeleteConfirm = false"
-      title="Delete Pipeline"
-      confirmText="Delete"
+      :title="$t('views.PipelineEditorView.delete_pipeline_title')"
+      :confirmText="$t('common.delete')"
       @confirm="handleDelete"
     >
       <p class="mb-4 text-sm text-muted-foreground">
-        Are you sure? This permanently deletes the pipeline and all its runs.
+        {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
       </p>
       <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
         {{ deleteError }}
@@ -1756,7 +1755,7 @@ async function loadGraph() {
       signal,
     }))
     if (graphError) {
-      pageError.value = `Failed to load graph: ${formatApiError(graphError)}`
+      pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(graphError) })
       return
     }
     const result = data as any
@@ -1772,7 +1771,7 @@ async function loadGraph() {
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
   } catch (e: unknown) {
-    pageError.value = `Failed to load graph: ${formatApiError(e)}`
+    pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(e) })
   }
 }
 
@@ -1873,7 +1872,7 @@ function populateEdgeForm(edge: any) {
 function buildHitlGateConfig(): any {
   if (!edgeForm.hitl_enabled) return null
   const config: any = {
-    label: edgeForm.label || 'Review Gate',
+    label: edgeForm.label || t('views.PipelineEditorView.review_gate'),
     description: edgeForm.description || '',
     reject_target: selectedEdgeData.value?.hitl_gate_config?.reject_target || null,
     claim_expiry_minutes: edgeForm.claim_expiry_minutes || 15,
@@ -1975,13 +1974,13 @@ function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
     id,
     type: nodeType,
     position: { x: 250, y: 100 },
-    data: { label: 'New Node', description: '', node_type: nodeType },
+    data: { label: t('views.PipelineEditorView.new_node_label'), description: '', node_type: nodeType },
   }
   flowNodes.value = [...flowNodes.value, newNode]
   rawNodes.value = [...rawNodes.value, {
     id,
     node_type: nodeType,
-    label: 'New Node',
+    label: t('views.PipelineEditorView.new_node_label'),
     description: '',
     position: { x: 250, y: 100 },
   }]
@@ -2095,7 +2094,7 @@ async function loadPipeline() {
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
     syncRetryPolicyFromPipeline()
   } catch (e) {
-    pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
+    pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
   }
 }
 
@@ -2128,7 +2127,7 @@ async function handleArchive() {
   try {
     pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/archive`)
   } catch (e: unknown) {
-    pageError.value = `Failed to archive pipeline: ${formatApiError(e)}`
+    pageError.value = t('views.PipelineEditorView.failed_to_archive_pipeline', { error: formatApiError(e) })
   }
 }
 
@@ -2136,7 +2135,7 @@ async function handleUnarchive() {
   try {
     pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/unarchive`)
   } catch (e: unknown) {
-    pageError.value = `Failed to unarchive pipeline: ${formatApiError(e)}`
+    pageError.value = t('views.PipelineEditorView.failed_to_unarchive_pipeline', { error: formatApiError(e) })
   }
 }
 
@@ -2164,7 +2163,7 @@ async function updateMaxDuration() {
     if (pipeline.value) pipeline.value.max_duration_seconds = val
     saveGraphError.value = null
   } catch (e) {
-    saveGraphError.value = `Failed to update max duration: ${formatApiError(e)}`
+    saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_duration', { error: formatApiError(e) })
   }
 }
 
@@ -2317,7 +2316,7 @@ async function triggerRun() {
   if (!trimmedPrompt) {
     if (!confirmEmptyRun.value) {
       confirmEmptyRun.value = true
-      emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+      emptyRunWarning.value = t('views.PipelineEditorView.empty_run_warning')
       return
     }
     emptyRunWarning.value = null
@@ -2327,7 +2326,7 @@ async function triggerRun() {
   try {
     await saveGraph()
     if (saveGraphError.value) {
-      runError.value = `Failed to save graph: ${saveGraphError.value}`
+      runError.value = t('views.PipelineEditorView.failed_to_save_graph', { error: saveGraphError.value })
       return
     }
     const { data } = await withTimeout((signal) => api.POST('/api/v1/runs', {
@@ -2383,3 +2382,21 @@ const { loading, error: pageErrorRef } = useDataFetch<void>(
 
 const pageError = pageErrorRef as any as ReturnType<typeof ref<string | null>>
 </script>
+
+<style scoped>
+/* The docked toolbar row is h-7 (1.75rem); PrimeVue's Select keeps its default
+   ~2.5rem height inside it, breaking the row's uniform look. Size the toolbar
+   Selects (node-type picker in the canvas-tools group + the empty-state
+   picker, which share the visual row) to h-7 to match. The scoped attribute
+   selector outranks PrimeVue styled-mode's single-class rules; dialog/aside
+   Selects are intentionally NOT sized by this class. */
+.toolbar-select {
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+.toolbar-select :deep(.p-select-label) {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+</style>

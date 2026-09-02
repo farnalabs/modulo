@@ -455,6 +455,9 @@ async function loadLastRunDates() {
   try {
     // The backend caps page_size at 100 (le=100); requesting more fails with
     // 422 — clamp to the cap instead of widening the backend limit.
+    // Coverage window: only the newest 100 runs are inspected, so the Last-Run
+    // column resolves for pipelines with a run inside that window; older
+    // pipelines honestly show "—" (absence of data, not absence of runs).
     const response = await api.GET('/api/v1/runs', { params: { query: { page_size: 100, sort_by: 'created_at', sort_order: 'desc' } } })
     if (response.data) {
       const items = (response.data as any).items as any[]
@@ -480,6 +483,9 @@ function getLastRun(pipelineId: string): string | undefined {
 async function loadTriggers() {
   try {
     // page_size is clamped to the backend maximum (le=100) — larger values 422.
+    // Coverage window: only the newest 100 triggers are inspected, so the
+    // Trigger column resolves for pipelines with a trigger inside that window;
+    // older pipelines honestly show "—" (absence of data, not absence of triggers).
     const response = await api.GET('/api/v1/triggers', { params: { query: { page_size: 100 } } })
     if (response.data) {
       const items = (response.data as any).items as TriggerItem[]
