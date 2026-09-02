@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import Any, cast, overload
 
 import redis.asyncio as aioredis
 
@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 JsonObject = dict[str, Any]
 
 
+@overload
+async def _redis_result[T](result: Awaitable[T]) -> T: ...
+@overload
+async def _redis_result[T](result: T) -> T: ...
 async def _redis_result[T](result: Awaitable[T] | T) -> T:
     """Resolve redis-py's sync-or-async stub union for the async client."""
     if isinstance(result, Awaitable):
