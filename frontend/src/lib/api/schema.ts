@@ -1163,7 +1163,9 @@ export interface paths {
          *     auth error. Plan/feature resolution is anonymous (via
          *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
          *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-         *     (no 401/402) so the login page simply renders no SSO options.
+         *     (no 401/402) so the login page simply renders no SSO options. The
+         *     anonymous path resolves system-level licenses only — org-level licenses
+         *     are unreachable pre-auth.
          *
          *     OIDC providers are merged from the sso_providers DB table (preferred) and
          *     the env-var fallback, deduplicated by provider_id. The DB read goes through

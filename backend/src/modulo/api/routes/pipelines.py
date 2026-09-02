@@ -507,10 +507,10 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     snapshot_count: int = 0
-    # Additive, backward-compatible: the pipelines list surfaces the stored
-    # graph's node count as a table column. Populated by the list endpoint's
-    # response builder (which already holds the full rows); other endpoints
-    # that reuse this model leave the additive default.
+    # Additive, backward-compatible: every response builder derives node_count
+    # from the row's stored graph via _pipeline_response, so detail/create/
+    # patch/clone responses report the real node count (not just the list).
+    # The default stays 0 for stand-ins that lack graph_nodes_json.
     node_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
@@ -1348,17 +1348,27 @@ async def _resolve_graph_references(
     return schema_pins, model_backend_pins
 
 
-def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
-    """Build a list-item response, deriving node_count from the stored graph.
+def _pipeline_response(pipeline: Pipeline) -> PipelineResponse:
+    """Build a PipelineResponse, deriving node_count from the stored graph.
 
-    The CRUD list already loads the full rows, so ``len(graph_nodes_json)``
-    is cheap (no extra query). Defensive against partial ORM stand-ins that
-    lack the attribute (tests, internal callers).
+    Shared by every endpoint that returns a single PipelineResponse (detail,
+    create, patch, archive/restore/unarchive, clone, folder move) so the
+    serialized node_count always matches the real graph, not the additive
+    default. ``graph_nodes_json`` is a plain JSON column loaded with the row
+    (``expire_on_commit=False`` keeps it readable after the endpoint's
+    transaction closes), so ``len(...)`` is cheap — no extra query, no lazy
+    load in async context. Defensive against partial ORM stand-ins that lack
+    the attribute (tests, internal callers).
     """
     response = PipelineResponse.model_validate(pipeline)
     nodes = getattr(pipeline, "graph_nodes_json", None)
     response.node_count = len(nodes) if isinstance(nodes, list) else 0
     return response
+
+
+def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
+    """Build a list-item response (derives node_count via _pipeline_response)."""
+    return _pipeline_response(pipeline)
 
 
 @router.get("", responses={401: {"description": "Unauthorized"}})
@@ -1430,7 +1440,7 @@ async def create_pipeline_endpoint(
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.get("/{pipeline_id}")
@@ -1450,7 +1460,7 @@ async def get_pipeline_endpoint(
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.get("/{pipeline_id}/graph")
@@ -1904,7 +1914,7 @@ async def update_pipeline_endpoint(
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    response = PipelineResponse.model_validate(pipeline)
+    response = _pipeline_response(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
 
@@ -1948,7 +1958,7 @@ async def restore_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.post("/{pipeline_id}/archive")
@@ -1969,7 +1979,7 @@ async def archive_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 @router.post("/{pipeline_id}/unarchive")
@@ -1990,7 +2000,7 @@ async def unarchive_pipeline_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 # ---------------------------------------------------------------------------
@@ -2112,7 +2122,7 @@ async def clone_pipeline_endpoint(
         _raise_db_migration_error(exc)
 
     logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
-    return PipelineResponse.model_validate(cloned)
+    return _pipeline_response(cloned)
 
 
 # ---------------------------------------------------------------------------
@@ -2704,7 +2714,7 @@ async def move_pipeline_to_folder_endpoint(
         _raise_db_migration_error(exc)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
-    return PipelineResponse.model_validate(pipeline)
+    return _pipeline_response(pipeline)
 
 
 # ---------------------------------------------------------------------------

@@ -355,6 +355,25 @@ def test_get_pipeline_returns_200(client: TestClient) -> None:
     assert resp.json()["id"] == str(_PIPELINE_ID)
 
 
+def test_get_pipeline_detail_returns_node_count_from_graph(client: TestClient) -> None:
+    """Prove-the-fix: the detail response derives node_count from the row's
+    stored graph_nodes_json, matching the list endpoint's contract. Without
+    the shared response-builder change, GET /pipelines/{id} serializes the
+    additive default (0) for a 3-node pipeline and this test fails."""
+    pipeline = _make_pipeline()
+    pipeline.graph_nodes_json = [{"id": "n1"}, {"id": "n2"}, {"id": "n3"}]
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["node_count"] == 3
+
+
 def test_get_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
