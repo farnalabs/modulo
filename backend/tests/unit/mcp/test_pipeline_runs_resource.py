@@ -2,6 +2,7 @@
 
 import uuid
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.api.mcp_server import resource_pipeline_runs
@@ -35,6 +36,42 @@ def _make_mock_run(
     r.total_tokens = total_tokens
     r.total_cost_usd = total_cost_usd
     return r
+
+
+class _DeferredColumnRun:
+    """Run stand-in that mimics a deferred-column ORM instance under asyncio.
+
+    The runs-list query defers ``cost_breakdown`` (crud/run.py
+    ``_RUNS_LIST_DEFERRED_COLUMNS``). Under SQLAlchemy 2.x asyncio, reading a
+    deferred column attribute triggers an implicit lazy load that attempts IO
+    outside a greenlet, so it raises ``MissingGreenlet`` while the session is
+    open and ``DetachedInstanceError`` once it has closed — i.e. the attribute is
+    NEVER safe to read on the list path, regardless of session state.
+
+    This stand-in encodes that contract by raising on EVERY read: the resource
+    must obtain the value from the awaited ``get_run_cost_breakdowns`` loader and
+    never touch the attribute. (MagicMock rows cannot catch this — attribute
+    access on a mock silently succeeds, which is why this explicit stand-in
+    exists.)
+    """
+
+    def __init__(self) -> None:
+        self.id = uuid.uuid4()
+        self.status = "complete"
+        self.trigger_type = "manual"
+        self.created_at = MagicMock()
+        self.created_at.isoformat.return_value = "2026-06-20T14:30:00+00:00"
+        self.total_tokens = 1500
+        self.total_cost_usd = 0.075
+
+    @property
+    def cost_breakdown(self) -> list[dict[str, Any]]:
+        raise AssertionError(
+            "cost_breakdown was read off the ORM instance — it is a deferred "
+            "column, so under asyncio this raises MissingGreenlet (session open) "
+            "or DetachedInstanceError (session closed). The MCP pipeline-runs "
+            "resource must load it via the awaited get_run_cost_breakdowns query."
+        )
 
 
 def _make_mock_session() -> AsyncMock:
@@ -109,15 +146,18 @@ class TestResourcePipelineRunsSuccess:
     @patch("modulo.api.mcp_server.get_pipeline")
     @patch("modulo.db.crud.run.list_runs")
     @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
     @patch("modulo.api.mcp_server._session")
     async def test_returns_runs_for_pipeline(
         self,
         mock_session: AsyncMock,
+        mock_get_run_cost_breakdowns: AsyncMock,
         mock_get_child_run_rollup: AsyncMock,
         mock_list_runs: AsyncMock,
         mock_get_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        mock_get_run_cost_breakdowns.return_value = {}
         session = _make_mock_session()
         mock_session.return_value.__aenter__.return_value = session
 
@@ -167,20 +207,28 @@ class TestResourcePipelineRunsSuccess:
         # ONE GROUP BY query for the whole page — never a per-run aggregate.
         mock_get_child_run_rollup.assert_awaited_once()
         assert set(mock_get_child_run_rollup.await_args.args[1]) == {run1.id, run2.id}
+        # Deferred cost_breakdown is loaded by ONE awaited batch query for the
+        # whole page — never a per-row attribute read (which would raise) and
+        # never an N+1 refresh.
+        mock_get_run_cost_breakdowns.assert_awaited_once()
+        assert set(mock_get_run_cost_breakdowns.await_args.args[1]) == {run1.id, run2.id}
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_pipeline")
     @patch("modulo.db.crud.run.list_runs")
     @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
     @patch("modulo.api.mcp_server._session")
     async def test_run_without_children_shows_zero_rollup(
         self,
         mock_session: AsyncMock,
+        mock_get_run_cost_breakdowns: AsyncMock,
         mock_get_child_run_rollup: AsyncMock,
         mock_list_runs: AsyncMock,
         mock_get_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        mock_get_run_cost_breakdowns.return_value = {}
         session = _make_mock_session()
         mock_session.return_value.__aenter__.return_value = session
 
@@ -196,6 +244,78 @@ class TestResourcePipelineRunsSuccess:
         assert "child_cost=$0.000000" in result
         assert "aggregate_cost=$0.075000" in result
         mock_get_child_run_rollup.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_pipeline")
+    @patch("modulo.db.crud.run.list_runs")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
+    @patch("modulo.api.mcp_server._session")
+    async def test_run_with_cost_breakdown_renders_breakdown(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run_cost_breakdowns: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
+        mock_list_runs: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        session = _make_mock_session()
+        mock_session.return_value.__aenter__.return_value = session
+
+        mock_get_pipeline.return_value = _make_mock_pipeline()
+
+        breakdown = [{"component": "llm", "display_name": "LLM tokens", "amount_usd": 0.075, "source": "ledger"}]
+        run1 = _make_mock_run(run_id=uuid.uuid4(), total_cost_usd=0.075)
+        mock_list_runs.return_value = _make_page_result(items=[run1], total=1)
+        mock_get_child_run_rollup.return_value = {}
+        # The deferred value reaches the renderer via the awaited loader.
+        mock_get_run_cost_breakdowns.return_value = {run1.id: breakdown}
+
+        result = await resource_pipeline_runs(pipeline_id=str(_PIPELINE_ID))
+
+        # The resource output still carries per-component cost data.
+        assert "breakdown={" in result
+        assert "- LLM tokens (llm): $0.075 ledger" in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_pipeline")
+    @patch("modulo.db.crud.run.list_runs")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
+    @patch("modulo.api.mcp_server._session")
+    async def test_deferred_cost_breakdown_attribute_is_never_read(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run_cost_breakdowns: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
+        mock_list_runs: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The resource must never touch ``run.cost_breakdown`` on the ORM row.
+
+        ``_DeferredColumnRun`` raises on every read of the deferred attribute,
+        mirroring the real asyncio behaviour (``MissingGreenlet`` in-session,
+        ``DetachedInstanceError`` detached). The breakdown must therefore be
+        rendered purely from the awaited loader's result.
+        """
+        session = _make_mock_session()
+        mock_session.return_value.__aenter__.return_value = session
+
+        mock_get_pipeline.return_value = _make_mock_pipeline()
+
+        run1 = _DeferredColumnRun()
+        breakdown = [{"component": "llm", "display_name": "LLM tokens", "amount_usd": 0.075, "source": "ledger"}]
+        mock_list_runs.return_value = _make_page_result(items=[run1], total=1)
+        mock_get_child_run_rollup.return_value = {}
+        mock_get_run_cost_breakdowns.return_value = {run1.id: breakdown}
+
+        result = await resource_pipeline_runs(pipeline_id=str(_PIPELINE_ID))
+
+        # Renders from the loader result; any attribute read would have raised.
+        assert "breakdown={" in result
+        assert "- LLM tokens (llm): $0.075 ledger" in result
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_pipeline")

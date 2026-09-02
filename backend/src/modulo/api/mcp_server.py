@@ -5934,8 +5934,16 @@ async def resource_pipelines() -> str:
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
 
-def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]]) -> str:
-    """Render a single run row as a text line for MCP resources."""
+def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]], cost_breakdown: Any) -> str:
+    """Render a single run row as a text line for MCP resources.
+
+    ``cost_breakdown`` is passed in pre-loaded by the caller because it is a
+    deferred column on the runs-list query (crud/run.py
+    ``_RUNS_LIST_DEFERRED_COLUMNS``). Reading ``r.cost_breakdown`` here is never
+    valid: the implicit lazy load attempts IO outside a greenlet and so raises
+    ``MissingGreenlet`` while the session is open, and ``DetachedInstanceError``
+    once it has closed. The caller loads it via an awaited query instead.
+    """
     child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
     aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
@@ -5945,8 +5953,8 @@ def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]]) -> str:
         f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
         f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
     )
-    if r.cost_breakdown is not None:
-        breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
+    if cost_breakdown is not None:
+        breakdown = _sanitize_cost_breakdown(cost_breakdown)
         if breakdown:
             line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
     return line
@@ -5973,14 +5981,19 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
         # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
         # joined in Python — never a per-row aggregate (avoids N+1).
         run_ids = [r.id for r in result.items]
-        from modulo.db.crud.run import get_child_run_rollup
+        from modulo.db.crud.run import get_child_run_rollup, get_run_cost_breakdowns
 
         child_rollups = await get_child_run_rollup(s, run_ids) if run_ids else {}
+        # ``cost_breakdown`` is deferred by the list query. It MUST be loaded by
+        # an awaited query — a plain ``r.cost_breakdown`` read would raise
+        # ``MissingGreenlet`` under asyncio even here with the session open.
+        # ONE query for the whole page (no N+1).
+        cost_breakdowns = await get_run_cost_breakdowns(s, run_ids) if run_ids else {}
 
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
-    lines = [_format_run_line(r, child_rollups) for r in result.items]
+    lines = [_format_run_line(r, child_rollups, cost_breakdowns.get(r.id)) for r in result.items]
     return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
 
 

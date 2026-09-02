@@ -10,10 +10,13 @@ Pinned here:
 
 * every deferred column is absent from the compiled list SELECT (and from the
   count SELECT — which selects no run columns at all);
-* the contract columns the responses DO read stay selected: ``input_payload``
-  (masked into every REST list item) and ``cost_breakdown`` (read by the MCP
-  pipeline-runs resource on DETACHED instances outside the session — a deferred
-  access there would raise, not lazy-load);
+* the contract column the responses DO read stays selected: ``input_payload``
+  (masked into every REST list item);
+* ``cost_breakdown`` IS deferred: its only list-path reader is the MCP
+  pipeline-runs resource, which now loads it through an awaited query
+  (``crud.run.get_run_cost_breakdowns``) rather than reading the attribute off
+  the ORM instance — under asyncio a deferred attribute read raises
+  ``MissingGreenlet`` even while the session is open;
 * the deferral tuple contains only heavy JSON/Text payload columns, so a future
   edit cannot quietly defer a light column a consumer needs.
 
@@ -33,7 +36,7 @@ from modulo.db.crud.run import _RUNS_LIST_DEFERRED_COLUMNS
 from modulo.db.crud.run import list_runs as db_list_runs
 from modulo.db.models.run import Run
 
-_MUST_STAY_LOADED = ("input_payload", "cost_breakdown")
+_MUST_STAY_LOADED = ("input_payload",)
 
 # Both pagination modes must defer: the offset/limit page path and the keyset
 # cursor path (the cursor branch rebuilds the statement through
@@ -117,5 +120,16 @@ def test_deferred_columns_are_heavy_payload_columns_only() -> None:
 
 
 def test_deferral_excludes_consumer_read_columns() -> None:
-    """input_payload and cost_breakdown must never land in the deferral tuple."""
+    """input_payload must never land in the deferral tuple."""
     assert not set(_MUST_STAY_LOADED) & set(_RUNS_LIST_DEFERRED_COLUMNS)
+
+
+def test_cost_breakdown_is_deferred() -> None:
+    """cost_breakdown is deferred — its list-path reader loads it via an awaited query.
+
+    Prove-the-fix anchor: the parametrised SQL-omission test above only covers
+    whatever columns the tuple currently names, so this pins the membership
+    explicitly — a revert of the crud change (dropping cost_breakdown from the
+    tuple) must fail here.
+    """
+    assert "cost_breakdown" in _RUNS_LIST_DEFERRED_COLUMNS
