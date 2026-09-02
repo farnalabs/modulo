@@ -208,7 +208,7 @@ async def _create_feedback_record(
                 "rejection_reason, rejected_output, producing_node_id, feedback_status, "
                 "feedback_handler_type) "
                 "VALUES (:id, :oid, :rid, 'gate-1', :aid, 'secret detected', (:out)::json, "
-                ":nid, 'correcting', 'ai_correction')"
+                "(:nid)::uuid, 'correcting', 'ai_correction')"
             ),
             {
                 "id": str(record_id),

@@ -517,7 +517,16 @@ async def test_apply_preserves_node_bound_guardrails(
 ):
     # A guardrail authored via the graph-save flow is bound to a node — it is
     # NOT config-as-code's row, and apply must not delete it.
+    node_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
+                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
+                "ON CONFLICT (id) DO NOTHING",
+            ),
+            {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
+        )
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
@@ -528,7 +537,7 @@ async def test_apply_preserves_node_bound_guardrails(
                 "id": str(uuid.uuid4()),
                 "oid": str(org_a),
                 "pid": str(pipeline_a),
-                "nid": str(uuid.uuid4()),
+                "nid": str(node_id),
                 "cfg": json.dumps(
                     {
                         "interception_point": "input",
@@ -592,7 +601,16 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     # config-as-code id cannot be materialized as an org-level row. Apply must
     # fail closed with a 409 (in-band remediation: rename the config id) — it
     # must NOT report clean and then drift on the very next poll.
+    node_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
+                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
+                "ON CONFLICT (id) DO NOTHING",
+            ),
+            {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
+        )
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
@@ -603,7 +621,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
                 "id": str(uuid.uuid4()),
                 "oid": str(org_a),
                 "pid": str(pipeline_a),
-                "nid": str(uuid.uuid4()),
+                "nid": str(node_id),
                 "cfg": json.dumps(
                     {
                         "interception_point": "input",

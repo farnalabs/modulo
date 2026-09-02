@@ -40,9 +40,10 @@ from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
-# ``run_evidence.node_id`` is a native ``Uuid`` (FK to ``nodes.id``), promoted by
-# migration 0160, so every node id written through ``write_evidence_row`` must be
-# a well-formed UUID — not an arbitrary langgraph-style string like "node-a".
+# ``run_evidence.node_id`` is a native ``Uuid`` column, promoted by migration 0166
+# (which deliberately deferred the FK to ``nodes.id``), so every node id written
+# through ``write_evidence_row`` must be a well-formed UUID — not an arbitrary
+# langgraph-style string like "node-a".
 _NODE_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
 
@@ -92,6 +93,24 @@ async def evidence_tenant(db_engine: AsyncEngine, test_user: uuid.UUID) -> _Evid
                 "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
             ),
             {"id": str(tenant.snapshot_id), "pid": str(tenant.pipeline_id), "oid": str(tenant.org_id)},
+        )
+        # Seed the referenced node defensively. 0166 promoted
+        # run_evidence.node_id to a native Uuid but deliberately deferred the FK
+        # to nodes.id, so nothing rejects an unmaterialised node id today. Since
+        # write_evidence_row swallows IntegrityError, a silently-dropped evidence
+        # row would make this test vacuously pass if that FK is ever re-added.
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
+                "VALUES (:nid, :oid, :pid, 'evidence-node', :uid, 300) "
+                "ON CONFLICT (id) DO NOTHING"
+            ),
+            {
+                "nid": str(_NODE_A),
+                "oid": str(tenant.org_id),
+                "pid": str(tenant.pipeline_id),
+                "uid": str(test_user),
+            },
         )
     return tenant
 
