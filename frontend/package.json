@@ -50,7 +50,7 @@
         "vue-echarts": "^8.0.1",
         "vue-i18n": "^11.4.6",
         "vue-json-pretty": "2.6.0",
-        "vue-router": "^4.3.0",
+        "vue-router": "^5.0.0",
         "vuedraggable": "^4.1.0",
         "web-vitals": "6.2.1"
     },
