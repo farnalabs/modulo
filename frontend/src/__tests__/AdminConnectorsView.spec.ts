@@ -312,6 +312,40 @@ describe('AdminConnectorsView', () => {
     expect(wrapper.text()).not.toContain('Please fix')
   })
 
+
+  it('preserves a stored non-lowercase on_unknown value on edit-save (no silent downgrade)', async () => {
+    // A stored 'FAIL_CLOSED' must match case-insensitively and be normalised on
+    // prefill: pre-fix it fell through to the fail_open default and the next
+    // save silently downgraded the stored policy (FAR-532).
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          restConnectorItem('rest-1', 'REST Connector', {
+            base_url: 'https://api.example.com',
+            method: 'GET',
+            timeout_seconds: 30,
+            verify_tls: true,
+            on_unknown: 'FAIL_CLOSED',
+            auth_mode: 'bearer',
+          }),
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-1')
+    const select = wrapper.find('[data-testid="rest-connector-on-unknown"]')
+    expect((select.element as HTMLSelectElement).value).toBe('fail_closed')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    expect(patchBody()?.config_json.on_unknown).toBe('fail_closed')
+  })
+
   it('preserves unknown config_json keys on a REST config-only edit round-trip (FAR-466 / FAR-504)', async () => {
     // A REST connector whose stored config carries GENUINELY UNKNOWN keys (not
     // surfaced as first-class form controls). The edit form must snapshot them
@@ -357,5 +391,90 @@ describe('AdminConnectorsView', () => {
     // First-class control keys also survive.
     expect(body?.config_json.base_url).toBe('https://api.example.com')
     expect(body?.config_json.method).toBe('GET')
+  })
+
+  it('preserves a stored non-number timeout_seconds instead of silently resetting it to 30', async () => {
+    // A stored string "45" must pass through prefill verbatim (the backend
+    // coerces numerics); pre-fix the typeof check reset it to 30 on edit-save
+    // (FAR-532).
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          restConnectorItem('rest-1', 'REST Connector', {
+            base_url: 'https://api.example.com',
+            method: 'GET',
+            timeout_seconds: '45',
+            verify_tls: true,
+            on_unknown: 'fail_open',
+            auth_mode: 'bearer',
+          }),
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-1')
+    const timeoutField = wrapper.find('[data-testid="rest-connector-timeout"]')
+    expect((timeoutField.element as HTMLInputElement).value).toBe('45')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    expect(patchBody()?.config_json.timeout_seconds).toBe(45)
+  })
+
+  it('shows the legacy auth-echo hint when the stored config has no auth_mode echo', async () => {
+    // Rows stored before the config echo carry no auth_mode in config_json; the
+    // bearer default may not match the stored credential, so the form must
+    // surface an explicit hint instead of silently defaulting (FAR-532).
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          restConnectorItem('rest-legacy', 'Legacy Connector', {
+            base_url: 'https://api.example.com',
+            method: 'GET',
+            timeout_seconds: 30,
+            verify_tls: true,
+            on_unknown: 'fail_open',
+          }),
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-legacy')
+    const hint = wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('may not match the stored credential')
+  })
+
+  it('hides the legacy auth-echo hint when the auth_mode echo is present', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          restConnectorItem('rest-1', 'REST Connector', {
+            base_url: 'https://api.example.com',
+            method: 'GET',
+            timeout_seconds: 30,
+            verify_tls: true,
+            on_unknown: 'fail_open',
+            auth_mode: 'bearer',
+          }),
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-1')
+    expect(wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]').exists()).toBe(false)
   })
 })

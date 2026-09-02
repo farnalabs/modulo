@@ -63,6 +63,7 @@
                 v-model:credsDirty="credsDirty"
                 v-model:credsIdentityDirty="credsIdentityDirty"
                 :mode="formMode"
+                :legacy-auth-echo="restLegacyAuthEcho"
               />
             </div>
             <div v-else>
@@ -219,6 +220,7 @@
                 v-model:credsDirty="credsDirty"
                 v-model:credsIdentityDirty="credsIdentityDirty"
                 :mode="formMode"
+                :legacy-auth-echo="restLegacyAuthEcho"
               />
             </div>
             <div v-else>
@@ -285,8 +287,13 @@ import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
-import RestConnectorConfigForm from '../components/connectors/RestConnectorConfigForm.vue'
-import { REST_FLAT_FIELDS, type RestConfigState, type RestCredsState } from '../components/connectors/RestConnectorConfigForm.vue'
+import RestConnectorConfigForm, {
+  AUTH_MODE_OPTIONS,
+  ON_UNKNOWN_OPTIONS,
+  REST_FLAT_FIELDS,
+  type RestConfigState,
+  type RestCredsState,
+} from '../components/connectors/RestConnectorConfigForm.vue'
 
 const { t } = useI18n()
 const planStore = usePlanStore()
@@ -328,9 +335,6 @@ const AUTH_IDENTITY_FIELDS = ['auth_mode', 'in', 'header_name', 'query_param_nam
 // (FAR-466 QA fix 2).
 const NON_ADVANCED_FIELDS = new Set<string>([...REST_FLAT_FIELDS, ...AUTH_IDENTITY_FIELDS, 'description'])
 
-const REST_ON_UNKNOWN_OPTIONS = ['fail_open', 'fail_closed', 'off']
-const REST_AUTH_MODE_OPTIONS = ['bearer', 'api_key', 'basic']
-
 function defaultRestConfig(): RestConfigState {
   return {
     base_url: '',
@@ -364,6 +368,10 @@ const credsDirty = ref(false)
 // query_param_name) so an identity-only change re-sends the credentials payload
 // (the backend overlays it while preserving the stored secret, FAR-466).
 const credsIdentityDirty = ref(false)
+// True when the edit target's stored config_json has NO auth_mode echo (a row
+// stored before the config echo existed): the form's bearer default may not
+// match the stored credential, so the form surfaces an explicit hint (FAR-532).
+const restLegacyAuthEcho = ref(false)
 const restFormRef = ref<InstanceType<typeof RestConnectorConfigForm> | null>(null)
 const isRestConnector = computed(() => formData.connector_type === 'rest')
 
@@ -372,15 +380,25 @@ function resetRestForm() {
   Object.assign(restCreds.value, defaultRestCreds())
   credsDirty.value = false
   credsIdentityDirty.value = false
+  restLegacyAuthEcho.value = false
 }
 
 function prefillRestConfig(connector: ConnectorItem) {
   const cfg = connector.config_json ?? {}
   restConfig.value.base_url = typeof cfg.base_url === 'string' ? cfg.base_url : ''
   restConfig.value.method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET'
-  restConfig.value.timeout_seconds = typeof cfg.timeout_seconds === 'number' ? cfg.timeout_seconds : 30
+  // Preserve a stored non-number timeout verbatim (e.g. a legacy string "45"):
+  // silently resetting it to 30 on edit-save would downgrade the operator's
+  // stored config (FAR-532). The backend coerces numerics; a non-numeric value
+  // is caught loudly by the form's timeout validation instead.
+  const storedTimeout = cfg.timeout_seconds
+  restConfig.value.timeout_seconds = typeof storedTimeout === 'number' || typeof storedTimeout === 'string' ? storedTimeout : 30
   restConfig.value.verify_tls = typeof cfg.verify_tls === 'boolean' ? cfg.verify_tls : true
-  restConfig.value.on_unknown = REST_ON_UNKNOWN_OPTIONS.includes(String(cfg.on_unknown)) ? String(cfg.on_unknown) : 'fail_open'
+  // Match case-insensitively and normalise on prefill: a stored 'FAIL_CLOSED'
+  // must display as fail_closed and re-save unchanged, never silently
+  // downgrade to fail_open (FAR-532). Mirrors the backend's normalisation.
+  const storedOnUnknown = String(cfg.on_unknown ?? '').trim().toLowerCase()
+  restConfig.value.on_unknown = ON_UNKNOWN_OPTIONS.includes(storedOnUnknown) ? storedOnUnknown : 'fail_open'
   restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
   restConfig.value.allowed_hosts = Array.isArray(cfg.allowed_hosts)
     ? (cfg.allowed_hosts as unknown[]).join(', ')
@@ -404,13 +422,17 @@ function prefillRestConfig(connector: ConnectorItem) {
   // silently resetting to defaults. Only the secret values stay write-only.
   const creds = defaultRestCreds()
   const storedMode = String(cfg.auth_mode || '').toLowerCase()
-  if (REST_AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
+  if (AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
   if (String(cfg.in) === 'query') creds.apiKeyIn = 'query'
   if (typeof cfg.header_name === 'string') creds.header_name = cfg.header_name
   if (typeof cfg.query_param_name === 'string') creds.query_param_name = cfg.query_param_name
   Object.assign(restCreds.value, creds)
   credsDirty.value = false
   credsIdentityDirty.value = false
+  // Legacy-echo hint: rows stored before the config echo carry no auth_mode in
+  // config_json, so the form's bearer default may not match the stored
+  // credential — surface the ambiguity instead of silently defaulting (FAR-532).
+  restLegacyAuthEcho.value = storedMode === ''
 }
 
 function buildRestConfig(): Record<string, unknown> {
