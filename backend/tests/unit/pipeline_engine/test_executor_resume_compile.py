@@ -291,7 +291,8 @@ async def test_resume_compile_wiring_matches_execute_path():
     # execute path and the resume path derive the SAME node idempotency key.
     execute_key = execute_build["node_idempotency_key"]("node-a", {})
     resume_key = resume_build["node_idempotency_key"]("node-a", {})
-    assert isinstance(execute_key, str) and execute_key
+    assert isinstance(execute_key, str)
+    assert execute_key
     assert execute_key == resume_key
 
 

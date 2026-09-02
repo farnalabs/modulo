@@ -201,6 +201,12 @@ select = [
     # absolute imports, no relative imports beyond the top-level package).
     "T10",     # no committed debuggers (pdb/ipdb/breakpoint)
     "TID",     # tidy imports — absolute imports only, no out-of-package relatives
+    # Eleventh wave of defensive gate-strengthening (a small fixed backlog, then
+    # pass-to-enable): PT006/PT013 had a handful of violations that this PR
+    # FIXED (verified zero remaining with ruff==0.16.5: `ruff check .
+    # --select PT006,PT013 --statistics`). Mirrors the backend/pyproject.toml gate.
+    "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
+    "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
 ]
 ignore = [
     "S101",

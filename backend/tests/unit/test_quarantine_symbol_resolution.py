@@ -255,7 +255,7 @@ def test_lens_flags_bdd_missing_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "test_id,valid",
+    ("test_id", "valid"),
     [
         ("test_thing.py::test_current", True),
         ("test_thing.py::test_renamed", False),

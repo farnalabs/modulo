@@ -241,9 +241,7 @@ def test_decode_saml_response_valid():
 
 
 def test_decode_saml_response_invalid():
-    import pytest as _pytest
-
-    with _pytest.raises(ValueError, match="Invalid base64 SAML response"):
+    with pytest.raises(ValueError, match="Invalid base64 SAML response"):
         sso_mod._decode_saml_response("!!! not base64 !!!")
 
 
@@ -276,13 +274,11 @@ def test_validate_saml_destination_missing_attr():
 
 
 def test_validate_saml_destination_mismatch():
-    import pytest as _pytest
-
     root = MagicMock()
     root.get.return_value = "https://evil"
     with (
         patch("modulo.auth.sso._decode_saml_response", return_value=b"<xml/>"),
         patch("modulo.auth.sso.ElementTree.fromstring", return_value=root),
-        _pytest.raises(ValueError, match="Destination does not match"),
+        pytest.raises(ValueError, match="Destination does not match"),
     ):
         sso_mod._validate_saml_response_destination("abc", "https://acs")
