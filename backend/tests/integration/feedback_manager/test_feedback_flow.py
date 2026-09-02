@@ -253,6 +253,50 @@ class TestFeedbackFlowUnit:
         resolved_result = await mgr.get_feedback_records(status="resolved")
         assert resolved_result["total"] == 1
 
+    async def test_spawn_correction_run_serializes_producing_node_id(
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+    ) -> None:
+        """Prove-the-fix: spawn a correction run from a real DB-backed record.
+
+        ``spawn_correction_run`` builds the engine-only ``feedback_correction``
+        block (carrying ``producing_node_id``) and persists it via the real
+        ``create_run`` into the run's ``input_payload`` JSON column. The ORM
+        models ``producing_node_id`` as ``Uuid()``, so without ``str()`` the
+        flush raised ``TypeError: Object of type UUID is not JSON serializable``
+        (the sibling of the bug fixed for the audit payload at line 1015). Here
+        ``create_run`` is deliberately NOT mocked: the assertion only passes if
+        the value is a JSON string by the time it hits the wire.
+        """
+        run_id = await _create_seed_run(rls_session, test_org, test_user)
+        mgr = FeedbackManager(rls_session, test_org)
+        record = await mgr.create_feedback_record(
+            run_id=run_id,
+            gate_id="gate-corr-node",
+            account_id=test_user,
+            rejection_reason="Output quality insufficient",
+            rejected_output={"result": "poor quality text"},
+            producing_node_id=str(_NODE_B),
+        )
+
+        new_run_id = await mgr.spawn_correction_run(record.id)
+
+        assert new_run_id is not None
+        # Read back the persisted run and assert the engine-only
+        # ``_feedback_correction`` block stored ``producing_node_id`` as a JSON
+        # string (not a raw uuid.UUID, which would have failed the flush).
+        result = await rls_session.execute(
+            text(
+                "SELECT input_payload->'_feedback_correction'->>'producing_node_id' FROM runs WHERE id = :id",
+            ),
+            {"id": str(new_run_id)},
+        )
+        stored = result.scalar_one()
+        assert stored == str(_NODE_B)
+        assert isinstance(stored, str)
+
 
 async def _create_seed_run(
     session: AsyncSession,
@@ -264,6 +308,9 @@ async def _create_seed_run(
     thread_id = str(uuid.uuid4())
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
+    # Unique per seed: uq_pipelines_org_name — test_link_correction_run seeds
+    # TWICE in the same org/session, so a fixed name collides on the second.
+    pipeline_name = f"feedback-test-pipeline-{uuid.uuid4().hex[:10]}"
     await session.execute(
         text(
             "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
@@ -272,7 +319,7 @@ async def _create_seed_run(
         {
             "id": str(pipeline_id),
             "org_id": str(org_id),
-            "name": "Feedback Test Pipeline",
+            "name": pipeline_name,
             "uid": str(user_id),
         },
     )

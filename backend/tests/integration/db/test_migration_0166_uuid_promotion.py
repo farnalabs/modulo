@@ -69,7 +69,7 @@ def fresh_migration_db(monkeypatch):
     """
     pg = PostgresContainer("postgres:16-alpine")
     pg.start()
-    raw = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
+    raw = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
 
     async def _provision():
         eng = create_async_engine(raw)

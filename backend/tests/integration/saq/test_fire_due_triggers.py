@@ -36,14 +36,17 @@ async def _seed_due_cron_trigger(
     try:
         pipeline_id = uuid.uuid4()
         trigger_id = uuid.uuid4()
+        # Unique per seed: the shared session org + uq_pipelines_org_name make a
+        # fixed name collide with every later seed in the same pytest session.
+        pipeline_name = f"saq-test-{uuid.uuid4().hex[:10]}"
         async with eng.connect() as conn, conn.begin():
             await conn.execute(
                 text(
                     "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
                     "run_context_defaults, visibility, max_concurrent_runs) "
-                    "VALUES (:id, :oid, :uid, 'saq-test', '[]'::json, '{}'::json, 'org', 5)"
+                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"
                 ),
-                {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id)},
+                {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
             )
             await conn.execute(
                 text(

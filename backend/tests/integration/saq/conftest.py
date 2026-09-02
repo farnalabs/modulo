@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Generator
 from typing import Any
 
 import pytest
-
-# testcontainers.redis emits a DeprecationWarning at import (decorator deprecation)
-# which pytest-as-error filterwarnings would otherwise turn into an ImportError.
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="testcontainers")
-
-from testcontainers.redis import RedisContainer  # noqa: E402
+from testcontainers.community.redis import RedisContainer
 
 
 @pytest.fixture(scope="session")

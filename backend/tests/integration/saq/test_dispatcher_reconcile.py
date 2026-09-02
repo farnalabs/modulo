@@ -41,6 +41,9 @@ async def _seed_saq_run(
     snapshot_id = uuid.uuid4()
     run_id = uuid.uuid4()
     run_number = int(run_id.int % 10**9) + 1
+    # Unique per seed: the shared session org + uq_pipelines_org_name make a
+    # fixed name collide with every later seed in the same pytest session.
+    pipeline_name = f"saq-reconcile-test-{uuid.uuid4().hex[:10]}"
     from sqlalchemy import NullPool
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -57,9 +60,9 @@ async def _seed_saq_run(
                 text(
                     "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
                     "run_context_defaults, visibility, max_concurrent_runs) "
-                    "VALUES (:id, :oid, :uid, 'saq-reconcile-test', '[]'::json, '{}'::json, 'org', 5)"
+                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"
                 ),
-                {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id)},
+                {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
             )
             await conn.execute(
                 text(
