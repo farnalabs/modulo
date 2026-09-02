@@ -49,12 +49,12 @@ class TestDeprecationHeaderMiddleware:
 
     def test_deprecated_route_gets_sunset_header_when_set(self):
         """Sunset header should be added when sunset date is provided."""
-        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2026-09-01")
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2099-09-01")
         app = _make_app()
         with TestClient(app) as client:
             resp = client.get("/api/v1/old-endpoint")
         assert resp.status_code == 200
-        assert resp.headers.get("Sunset") == "2026-09-01"
+        assert resp.headers.get("Sunset") == "2099-09-01"
 
     def test_deprecated_route_gets_link_header_when_migration_url_set(self):
         """Link header should be added when migration_url is provided."""
