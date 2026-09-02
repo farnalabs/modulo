@@ -78,7 +78,7 @@ def _validate_union_keyword(
     if not isinstance(variants, list):
         result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must be a non-empty array"))
         return True
-    if len(variants) == 0:
+    if not variants:
         result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must not be empty"))
         return True
 
