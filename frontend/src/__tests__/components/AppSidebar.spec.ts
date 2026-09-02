@@ -173,9 +173,9 @@ describe('AppSidebar', () => {
     it('renders the profile link as a router-link to /admin/my-profile in the drawer', async () => {
       const wrapper = mountSidebar()
       await flushPromises()
-      const link = wrapper.find('#mobile-sidebar a')
+      const link = wrapper.find('#mobile-sidebar').find('a')
       expect(link.attributes('href')).toBe('/admin/my-profile')
-      const avatar = wrapper.find('#mobile-sidebar .avatar-ring')
+      const avatar = wrapper.find('#mobile-sidebar').find('.avatar-ring')
       expect(avatar.exists()).toBe(true)
     })
 
