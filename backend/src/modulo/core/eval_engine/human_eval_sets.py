@@ -293,7 +293,7 @@ def run_human_eval_set(
             failures.append(f"{assertion.name}: raised {type(exc).__name__}: {exc}")
             continue
         if not isinstance(raw, dict) or not bool(raw.get("passed", False)):
-            detail = "" if not isinstance(raw, dict) else str(raw.get("detail", ""))
+            detail = "" if not isinstance(raw, dict) else str(raw.get("detail") or "")
             failures.append(f"{assertion.name}: {detail}".rstrip(": "))
 
     if failures:

@@ -4692,6 +4692,22 @@ def _script_enforcement_requires_remote(
     )
 
 
+def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
+    """Derive the run/pipeline/org identity strings from internal state keys.
+
+    An explicit ``None`` state value renders as ``""`` — the same result a
+    missing key produces — never the literal string ``"None"`` (gh-1802).
+    """
+    _run_id = state.get("_run_id")
+    _pipeline_id = state.get("_pipeline_id")
+    _org_id = state.get("_org_id")
+    return (
+        str(_run_id) if _run_id is not None else "",
+        str(_pipeline_id) if _pipeline_id is not None else "",
+        str(_org_id) if _org_id is not None else "",
+    )
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
@@ -4760,12 +4776,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     scoped_state = dict(state)
     scoped_state["run_context"] = scoped_run_context
 
-    _run_id = state.get("_run_id")
-    _pipeline_id = state.get("_pipeline_id")
-    _org_id = state.get("_org_id")
-    run_id: str = str(_run_id) if _run_id is not None else ""
-    pipeline_id: str = str(_pipeline_id) if _pipeline_id is not None else ""
-    org_id: str = str(_org_id) if _org_id is not None else ""
+    run_id, pipeline_id, org_id = _run_identity_strs(state)
 
     # FAR-296 mode split: llm mode renders the prompt + agent_command through
     # the SandboxedEnvironment; script mode runs script_command VERBATIM —

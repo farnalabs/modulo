@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails import GuardrailAction, GuardrailConfigError
@@ -435,6 +436,25 @@ def _envelope_definition(name: str, config: dict[str, Any]) -> EvalDefinition:
         config=config,
         failure_behaviour="warn",
     )
+
+
+def test_config_item_null_redaction_path_behaves_like_missing_key():
+    """gh-1802: an explicit ``None`` redaction path must rebuild exactly like a
+    missing key — empty string, which fails ``RedactionRule`` ``min_length=1``
+    validation — never the literal string "None"."""
+    common = {
+        "interception_point": "input",
+        "action": "block",
+        "detection": {"type": "regex", "pattern": "AKIA[0-9A-Z]{16}", "field": "body"},
+    }
+    with pytest.raises(ValidationError):
+        config_item_from_engine_definition(
+            _envelope_definition("no-aws-keys", {**common, "redaction": [{"path": None, "mode": "transform"}]})
+        )
+    with pytest.raises(ValidationError):
+        config_item_from_engine_definition(
+            _envelope_definition("no-aws-keys", {**common, "redaction": [{"mode": "transform"}]})
+        )
 
 
 def test_config_item_rebuilt_from_envelope_regex_is_complete():

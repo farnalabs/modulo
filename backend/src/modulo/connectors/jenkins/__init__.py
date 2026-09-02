@@ -86,18 +86,20 @@ class JenkinsConnector(ConnectorBase):
         return {}
 
     def _parse_build(self, raw: dict[str, Any]) -> CIRun:
+        raw_id = raw.get("id")
+        timestamp = raw.get("timestamp")
         raw_result = raw.get("result") or "BUILDING"
         status = _STATUS_MAP.get(raw_result, CIRunStatus.UNKNOWN)
         full_url = raw.get("url", "")
         duration_ms = _safe_int(raw.get("duration")) if raw.get("duration") else None
         return CIRun(
-            id=str(raw.get("id", "")),
+            id=str(raw_id) if raw_id is not None else "",
             pipeline_id=raw.get("fullDisplayName", raw.get("jobName", "")),
             status=status,
             url=full_url,
             branch="",
             commit_sha="",
-            created_at=str(raw.get("timestamp", "")),
+            created_at=str(timestamp) if timestamp is not None else "",
             updated_at="",
             duration_seconds=duration_ms // 1000 if duration_ms else None,
             triggered_by="",

@@ -503,7 +503,7 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
             field=effective_config.get("field"),
         )
     redaction = [
-        RedactionRule(path=str(raw.get("path", "")), mode=raw.get("mode", "transform"))
+        RedactionRule(path=str(raw.get("path") or ""), mode=raw.get("mode", "transform"))
         for raw in config.get("redaction") or []
         if isinstance(raw, dict)
     ]
