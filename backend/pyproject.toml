@@ -374,10 +374,22 @@ select = [
     # `ruff check . --extend-select T10,TID --statistics`).
     "T10",     # no committed debuggers (pdb/ipdb/breakpoint)
     "TID",     # tidy imports — absolute imports only, no out-of-package relatives
-    # Eleventh wave of defensive gate-strengthening (a small fixed backlog, then
-    # pass-to-enable): PT006/PT013 had a handful of violations that this PR
-    # FIXED (verified zero remaining with ruff==0.16.5: `ruff check .
-    # --select PT006,PT013 --statistics`). Mirrors the repo-root ruff.toml gate.
+    # Eleventh wave of defensive gate-strengthening — merged from both sides of
+    # the main/branch merge. The branch side (verified zero current violations
+    # with ruff==0.16.5 under both this gate and the repo-root ruff.toml:
+    # `ruff check . --select TRY002,PLE0101,PLE2502,PLW0711,PLW0128,PLC0207,
+    # PLC0208 --statistics`) locks in TRY002/PLE0101/PLE2502/PLW0711/PLW0128/
+    # PLC0207/PLC0208. PLC0207/PLC0208 had a tiny test-only backlog (9 autofix
+    # sites) that wave FIXED. The main side fixed a small PT006/PT013 backlog
+    # (verified zero remaining with ruff==0.16.5: `ruff check . --select
+    # PT006,PT013 --statistics`).
+    "TRY002",   # raise bare Exception/BaseException — prefer the concrete class
+    "PLE0101",  # `__init__` must not return a value
+    "PLE2502",  # no bidirectional-formatting Unicode control characters
+    "PLW0711",  # except clause must guard a generator, not binary-op exceptions
+    "PLW0128",  # redeclared-assigned-name — redundant double assignment
+    "PLC0207",  # str.split('sep')[0] → split('sep', maxsplit=1)[0]
+    "PLC0208",  # iterate a tuple literal, not a set literal, in a for-loop
     "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
     "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
 ]

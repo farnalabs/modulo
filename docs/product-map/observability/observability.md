@@ -48,10 +48,14 @@ status: covered
 # Observability
 
 Error tracking (ingestion, grouping, dashboard, alerting) plus infrastructure
-observability exports (OTLP metrics/traces, error forwarders, and frontend
-browser-monitoring config). Surfaces: `/admin/errors`, `/admin/errors/:id`,
-`/settings/observability`, `/settings/error-forwarders`, `/settings/monitoring`
-(`feat-observability`).
+observability exports (OTLP metrics/traces). Surfaces: `/admin/errors`,
+`/admin/errors/:id`, `/settings/observability` (`feat-observability`).
+
+_Error Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
+(`/settings/monitoring`) are deferred from the MVP nav (hidden via
+`visibility: private_preview`). Behaviour detail removed for the MVP cut — restore
+from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
+(browser monitoring)._
 
 ## Behaviours
 
@@ -68,27 +72,16 @@ browser-monitoring config). Surfaces: `/admin/errors`, `/admin/errors/:id`,
       lifetime-count fallback at window 0), and notification rules are
       configurable up to 10 per org (`error_notifications.feature`,
       `core/error_tracking/alerting.py`)
-- [x] Error forwarders: `GET /api/v1/errors/forwarders` lists all known types
-      (sentry / datadog / loki / opsgenie / pagerduty / rollbar) with configured
-      status; config validation rejects an unknown type and enforces per-type
-      required/optional credential keys; forwarders dispatch on ingest
-      (`error_forwarders.feature`, `unit/api/test_error_forwarder_config.py`,
-      `core/error_tracking/forwarders/`)
+- _Error forwarders behaviour detail removed for the MVP cut (see the pointer above)._
 - [x] OTLP observability export: `GET/PUT /api/v1/settings/observability`
       reads/updates the OTel endpoint + export interval (and the LangSmith key),
       serves stale cache on DB outage (degraded response, never hangs), masks
       sensitive headers, and a test endpoint validates an OTLP endpoint reachability
       (`metrics.feature`, `unit/api/test_observability_routes.py`)
-- [x] Browser monitoring config: `GET/PUT /api/v1/admin/monitor-config` manages
-      backend selection (builtin default / Sentry / DataDog RUM / Grafana Faro)
-      with per-backend credential validation (422 when an enabled backend's
-      required key is missing), admin-gated (403 otherwise)
-      (`monitor_config.feature`, `unit/api/test_admin_monitor_config.py`)
-- [x] Frontend views behind the routes render the settings, forwarder
-      configuration, and the admin error dashboard/detail surfaces
-      (`SettingsObservabilityView.vue`, `SettingsErrorForwardersView.vue`,
-      `SettingsMonitorConfigView.vue`, `AdminErrorsView.vue`,
-      `AdminErrorDetailView.vue`)
+- _Browser monitoring config behaviour detail removed for the MVP cut (see the pointer above)._
+- [x] Frontend views behind the shipped routes render the settings and the admin
+      error dashboard/detail surfaces (`SettingsObservabilityView.vue`,
+      `AdminErrorsView.vue`, `AdminErrorDetailView.vue`)
 
 ## Known Gaps
 

@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Settings Email', { tag: "@regression" }, () => {
   test('renders the Email Settings page', { tag: "@regression" }, async ({ page, env }) => {
@@ -15,6 +15,7 @@ test.describe('Settings Email', { tag: "@regression" }, () => {
 
 test.describe('Settings Error Forwarders', { tag: "@regression" }, () => {
   test('renders the Error Forwarders page', { tag: "@regression" }, async ({ page, env }) => {
+    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
     await page.goto('/settings/error-forwarders')
     await expect(page.locator('h1')).toContainText('Error Forwarders')

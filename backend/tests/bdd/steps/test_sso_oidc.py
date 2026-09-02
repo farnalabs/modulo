@@ -223,14 +223,14 @@ def callback_missing_params(request: Any, ctx: dict[str, Any], client: Any) -> N
 @given(parsers.parse('a first-time OIDC user with email "{email}"'))
 def first_time_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = True
 
 
 @given(parsers.parse('an existing OIDC user with email "{email}"'))
 def existing_oidc_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = False
 
 

@@ -3675,7 +3675,8 @@ def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
             (
                 node.lineno,
                 (
-                    f"{ast.unparse(node)} — unbounded asyncio {'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
+                    f"{ast.unparse(node)} — unbounded asyncio "
+                    f"{'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
                     "with no timeout; pass timeout=<secs> so a hung coroutine fails loudly "
                     "instead of stalling the whole test run"
                 ),
@@ -6740,7 +6741,8 @@ def _nested_test_functions(tree: ast.AST) -> list[tuple[int, str]]:
             inside_fn = any(kind == "fn" for kind, _ in stack)
             is_here_a_test = node.name.startswith("test_") or any(_is_mark_decorator(d) for d in node.decorator_list)
             if inside_fn and is_here_a_test and not _is_fixture(node.decorator_list):
-                found.append((node.lineno, f"{node.name}() defined inside another function — pytest never collects it"))
+                detail = f"{node.name}() defined inside another function — pytest never collects it"
+                found.append((node.lineno, detail))
             stack.append(("fn", node))
             for child in node.body:
                 _visit(child)
@@ -8393,7 +8395,8 @@ def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if ast.dump(test) not in called:
             continue
         name = test.attr
-        violations.append((node.lineno, f"assert {name} — bare bound-method reference is always truthy; call {name}()"))
+        detail = f"assert {name} — bare bound-method reference is always truthy; call {name}()"
+        violations.append((node.lineno, detail))
     return violations
 
 

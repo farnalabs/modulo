@@ -18,6 +18,11 @@ test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
     await setupLocalMockApi(page)
+    // dev_mode:true (set by the local mock API) renders the Remy floating
+    // panel on every route; it overlaps the /runs filter bar and intercepts
+    // pointer events, blocking the Select trigger. Close it (mirrors the
+    // staging e2e global-setup) so the overlay can be opened.
+    await page.addInitScript(() => { try { localStorage.setItem('remy-panel-state', 'closed') } catch (err) { console.warn(err) } })
     await loginAsAdmin(page, env)
 
     await page.goto('/runs')
@@ -46,6 +51,11 @@ test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
     await setupLocalMockApi(page)
+    // dev_mode:true (set by the local mock API) renders the Remy floating
+    // panel on every route; it overlaps the /runs filter bar and intercepts
+    // pointer events, blocking the Select trigger. Close it (mirrors the
+    // staging e2e global-setup) so the overlay can be opened.
+    await page.addInitScript(() => { try { localStorage.setItem('remy-panel-state', 'closed') } catch (err) { console.warn(err) } })
     await loginAsAdmin(page, env)
 
     await page.goto('/runs')

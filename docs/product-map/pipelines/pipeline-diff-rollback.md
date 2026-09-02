@@ -25,8 +25,7 @@ status: covered
 # Pipeline Snapshot Diff & Rollback
 
 Automatic pipeline snapshotting plus structured diff and rollback, exposed through the
-`snapshots` endpoints under `/api/v1/pipelines` (plus the `/runs` surface via
-`runs-diff`, `/runs/diff`). A snapshot is captured automatically when a run is triggered,
+`snapshots` endpoints under `/api/v1/pipelines`. A snapshot is captured automatically when a run is triggered,
 so any pipeline version can be recovered or compared. Referenced by ADR 017/018 as a
 product-map entry touched during centralized authorization cleanup.
 

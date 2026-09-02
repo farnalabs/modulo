@@ -137,14 +137,14 @@ def no_team_license(ctx: dict[str, Any]) -> None:
 @given(parsers.parse('a first-time SAML user with email "{email}"'))
 def first_time_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = True
 
 
 @given(parsers.parse('an existing SAML user with email "{email}"'))
 def existing_saml_user(email: str, ctx: dict[str, Any]) -> None:
     ctx["expected_email"] = email
-    ctx["expected_name"] = email.split("@")[0]
+    ctx["expected_name"] = email.split("@", maxsplit=1)[0]
     ctx["is_new_user"] = False
 
 

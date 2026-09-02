@@ -41,7 +41,7 @@ CRUD (tag, annotate, delete, rollback, diff) is the data layer under
 - [x] Delete refuses the latest snapshot of a pipeline
 - [x] Backward compatibility for pre-versioning snapshot records
 - [x] Versioning CRUD is the back-end of the `snapshots` endpoints under
-      `/api/v1/pipelines` and the `runs-diff` surface
+      `/api/v1/pipelines`
 
 ## Known Gaps
 

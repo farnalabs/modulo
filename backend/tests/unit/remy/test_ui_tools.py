@@ -190,7 +190,7 @@ class TestPermissionModePresets:
         for tool_name in READ_TOOLS:
             assert preset[tool_name] == "always_allowed"
         assert preset["navigate"] == "always_allowed"
-        for tool_name in {"click", "fill", "select", "go_back", "press"}:
+        for tool_name in ("click", "fill", "select", "go_back", "press"):
             assert preset[tool_name] == "requires_approval"
 
     @pytest.mark.parametrize(

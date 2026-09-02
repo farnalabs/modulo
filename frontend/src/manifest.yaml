@@ -139,6 +139,7 @@ routes:
         sidebar_order: 2
         type: page
         <<: *community
+        visibility: private_preview
         deprecated: false
 
     /pipelines/:id/editor:
@@ -376,6 +377,7 @@ routes:
         sidebar_group: system
         sidebar_order: 7
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -387,6 +389,7 @@ routes:
         sidebar_group: system
         sidebar_order: 8
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -422,6 +425,7 @@ routes:
         sidebar_group: system
         sidebar_order: 2
         type: form_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -445,6 +449,7 @@ routes:
         sidebar_order: 4
         type: form_page
         <<: *community
+        visibility: private_preview
         deprecated: false
 
     /admin/users:
@@ -557,6 +562,7 @@ routes:
         sidebar_order: 7
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /admin/feature-flags:
@@ -567,6 +573,7 @@ routes:
         sidebar_group: system
         sidebar_order: 4
         type: list_page
+        visibility: private_preview
         deprecated: false
 
         <<: *team
@@ -634,6 +641,7 @@ routes:
         sidebar_order: 8
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /admin/errors:
@@ -714,6 +722,7 @@ routes:
         sidebar_order: 4
         type: list_page
         <<: *team
+        visibility: private_preview
         deprecated: false
 
     /lifecycle-maps:

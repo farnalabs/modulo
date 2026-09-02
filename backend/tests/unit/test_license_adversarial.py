@@ -100,7 +100,7 @@ class TestTamperedSignature:
         tampered = list(base64.urlsafe_b64decode(sig_b64 + "=="))
         tampered[0] ^= 0xFF
         tampered_sig_b64 = base64.urlsafe_b64encode(bytes(tampered)).rstrip(b"=").decode()
-        tampered_key = f"{valid_license_key.split('.')[0]}.{tampered_sig_b64}"
+        tampered_key = f"{valid_license_key.split('.', maxsplit=1)[0]}.{tampered_sig_b64}"
 
         result = parse_and_verify(tampered_key)
         assert result.valid is False
