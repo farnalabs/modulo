@@ -275,9 +275,14 @@ jobs:
       # Per-test timeout: without it a single hung test stalls the whole job
       # silently until the job-level kill (observed 2026-08-27, run
       # 33063471418: zero output for 41 min after 93%). 300s matches ci.yml.
+      #
+      # -n 2 is safe: the shared-DB setup (alembic upgrade + bootstrap_role grants
+      # + FORCE RLS patch) is serialised across xdist workers by the session
+      # advisory lock (72002, 1) in tests/integration/conftest.py (#2396), so only
+      # one worker mutates the schema while the other blocks until it commits.
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"

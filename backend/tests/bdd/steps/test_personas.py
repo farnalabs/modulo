@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import json
 import uuid
-import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1819,11 +1818,8 @@ def check_docker_available():
 def start_compose_stack(ctx):
     """Start Postgres and Redis via testcontainers, configure app, start TestClient."""
     from fastapi.testclient import TestClient
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from testcontainers.community.postgres import PostgresContainer
-        from testcontainers.community.redis import RedisContainer
+    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.community.redis import RedisContainer
 
     from modulo.api.main import app
 
