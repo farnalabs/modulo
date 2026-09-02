@@ -291,6 +291,17 @@ async def test_gh_list_runs_non_list_workflow_runs_no_crash(gh_runner):
     assert runs == []
 
 
+def test_gh_parse_run_null_id_maps_to_empty_string(gh_runner):
+    run = gh_runner._parse_run({"id": None})
+    assert not run.id
+    assert "None" not in run.id
+
+
+def test_gh_parse_run_falsy_int_id_preserved(gh_runner):
+    run = gh_runner._parse_run({"id": 0})
+    assert run.id == "0"
+
+
 # ---------------------------------------------------------------------------
 # GitLab CI — health check (respx)
 # ---------------------------------------------------------------------------
@@ -376,6 +387,20 @@ async def test_gl_get_run_status(gl_runner):
 async def test_gl_get_run_status_invalid_id_raises(gl_runner):
     with pytest.raises(ValueError, match="Invalid run_id format"):
         await gl_runner.get_run_status("bogus")
+
+
+def test_gl_parse_run_null_id_and_project_id_map_to_empty_strings(gl_runner):
+    run = gl_runner._parse_run({"id": None, "project_id": None})
+    assert not run.id
+    assert not run.pipeline_id
+    assert "None" not in run.id
+    assert "None" not in run.pipeline_id
+
+
+def test_gl_parse_run_falsy_int_ids_preserved(gl_runner):
+    run = gl_runner._parse_run({"id": 0, "project_id": 0})
+    assert run.id == "0"
+    assert run.pipeline_id == "0"
 
 
 # ---------------------------------------------------------------------------

@@ -90,9 +90,10 @@ class GitHubActionsCIRunner(CIRunnerBase):
         else:
             status = CIRunStatus.UNKNOWN
 
+        raw_id = raw.get("id")
         actor = raw.get("actor")
         return CIRun(
-            id=str(raw.get("id", "")),
+            id=str(raw_id) if raw_id is not None else "",
             pipeline_id=raw.get("workflow_id", ""),
             status=status,
             url=raw.get("html_url", ""),
