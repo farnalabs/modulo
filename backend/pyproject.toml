@@ -513,7 +513,14 @@ dev = [
     # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
     # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).
     # Replace with a >=8.1.1 PyPI pin once the fix is released.
-    "pytest-bdd @ git+https://github.com/pytest-dev/pytest-bdd@60f6625b71b5552af02a4830e3d520f5ab6838e4",
+    #
+    # Pinned by REF (refs/pull/827/head), not by commit SHA: uv fetches git deps in
+    # refspec form (+<ref>:refs/...), and GitHub rejects anonymous fetch-by-SHA in
+    # that form (auth prompt -> "could not read Username" under terminal prompts
+    # disabled), which broke `uv sync --frozen` on every PR on 2026-09-02.
+    # refs/pull/827/head resolves to the same fix commit (60f6625b) and fetches
+    # anonymously. Replace with a >=8.1.1 PyPI pin once released.
+    "pytest-bdd @ git+https://github.com/pytest-dev/pytest-bdd@refs/pull/827/head",
     "pytest-cov>=7.1.0",
     "pytest-playwright>=0.8.0",
     "pytest-timeout>=2.4.0",
