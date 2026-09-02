@@ -69,6 +69,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import RunsListView from '../views/RunsListView.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { api } from '../lib/api/client'
 
 const baseRun = {
@@ -87,8 +88,15 @@ const baseRun = {
   account_id: null,
 }
 
-function listWith(items: unknown[]) {
-  return { items, total: items.length, page: 1, page_size: 20, next_cursor: null, has_more: false }
+function listWith(items: unknown[], opts: { next_cursor?: string | null; has_more?: boolean; total?: number } = {}) {
+  return {
+    items,
+    total: opts.total ?? items.length,
+    page: 1,
+    page_size: 20,
+    next_cursor: opts.next_cursor ?? null,
+    has_more: opts.has_more ?? false,
+  }
 }
 
 const manyRuns = Array.from({ length: 25 }, (_, i) => ({ ...baseRun, run_id: `run${i}` }))
@@ -418,7 +426,7 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('reloads runs with the search term after typing (debounced), resetting to page 1', async () => {
+  it('reloads runs with the search term after typing (debounced), resetting to the first page', async () => {
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
@@ -454,101 +462,200 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('restores the page from the route query on mount (back-navigation)', async () => {
-    routeMocks.query = { page: '2' }
-    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+  it('restores the cursor from the route query on mount (back-navigation deep link)', async () => {
+    routeMocks.query = { cursor: 'deep-link-cursor' }
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-2', has_more: true })
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
 
     expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
-      params: { query: expect.objectContaining({ page: 2 }) },
+      params: { query: expect.objectContaining({ cursor: 'deep-link-cursor' }) },
     }))
-    expect(wrapper.text()).toContain('Page 2')
+    // The visited-page count is unknowable for a fresh deep link — no page label.
+    expect(wrapper.text()).not.toContain('Page ')
     wrapper.unmount()
   })
 
-  it('falls back to page 1 for invalid or malformed page params', async () => {
-    const badPages: unknown[] = ['abc', '0', '-1', ['2', '3']]
-    for (const badPage of badPages) {
-      routeMocks.query = { page: badPage }
+  it('ignores malformed cursor route params and loads without a cursor', async () => {
+    for (const badCursor of ['', ['a', 'b'], { c: 1 }]) {
+      routeMocks.query = { cursor: badCursor as unknown as Record<string, unknown> }
       const wrapper = mountView()
       await flushPromises()
       await nextTick()
 
-      expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
-        params: { query: expect.objectContaining({ page: 1 }) },
-      }))
+      const lastCall = (api.GET as any).mock.calls.at(-1)
+      expect(lastCall[1].params.query.cursor).toBeUndefined()
       wrapper.unmount()
     }
   })
 
-  it('persists the next page to the route query when paginating', async () => {
-    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+  it('loads the first page without a cursor and writes no cursor query on a bare mount', async () => {
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
 
-    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
-    expect(nextBtn).toBeDefined()
-    await nextBtn!.trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
-      params: { query: expect.objectContaining({ page: 2 }) },
-    }))
-    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { page: '2' } })
-    expect(wrapper.text()).toContain('Page 2')
+    const firstCall = (api.GET as any).mock.calls[0]
+    expect(firstCall[1].params.query.cursor).toBeUndefined()
+    expect(firstCall[1].params.query.page_size).toBe(20)
+    expect(routerMocks.replace).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('preserves an active status filter in the URL when paginating', async () => {
-    routeMocks.query = { status: 'running' }
-    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+  it('requests the next page via next_cursor and persists the cursor to the route query', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
 
-    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
-    expect(nextBtn).toBeDefined()
-    await nextBtn!.trigger('click')
+    const nextBtn = wrapper.find('[data-testid="runs-list-next-page"]')
+    expect(nextBtn.exists()).toBe(true)
+    await nextBtn.trigger('click')
     await flushPromises()
     await nextTick()
 
-    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
-      params: { query: expect.objectContaining({ page: 2, status: 'running' }) },
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-1' }) },
     }))
-    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { status: 'running', page: '2' } })
+    expect(routerMocks.replace).toHaveBeenLastCalledWith({ query: { cursor: 'cursor-1' } })
+    wrapper.unmount()
+  })
+
+  it('walks forward via cursors and pops the stack for prev back to the first page', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 35 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    // Page 1 is loaded; the response to the next click must be page 2.
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(5, 25), { next_cursor: 'cursor-2', has_more: true, total: 35 })
+    const nextBtn = wrapper.find('[data-testid="runs-list-next-page"]')
+    await nextBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-1' }) },
+    }))
+
+    // Page 2 is loaded; the response to the next click must be page 3 (last).
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(10, 30), { next_cursor: null, has_more: false, total: 35 })
+    await nextBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-2' }) },
+    }))
+
+    const prevBtn = wrapper.find('[data-testid="runs-list-prev-page"]')
+    await prevBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-1' }) },
+    }))
+
+    await prevBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    const lastCall = (api.GET as any).mock.calls.at(-1)
+    expect(lastCall[1].params.query.cursor).toBeUndefined()
+    expect(wrapper.text()).toContain('Page 1')
+    wrapper.unmount()
+  })
+
+  it('resets the cursor to the first page when the status filter changes', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="runs-list-next-page"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-1' }) },
+    }))
+
+    const filterBar = wrapper.findComponent(FilterBar)
+    filterBar.vm.$emit('update:filter', 'status', 'running')
+    await flushPromises()
+    await nextTick()
+
+    const lastCall = (api.GET as any).mock.calls.at(-1)
+    expect(lastCall[1].params.query.status).toBe('running')
+    expect(lastCall[1].params.query.cursor).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('resets the cursor when the debounced search term changes', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="runs-list-next-page"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    vi.useFakeTimers()
+    await searchInput.setValue('foo')
+    vi.advanceTimersByTime(300)
+    vi.useRealTimers()
+    await flushPromises()
+    await nextTick()
+
+    const lastCall = (api.GET as any).mock.calls.at(-1)
+    expect(lastCall[1].params.query.search).toBe('foo')
+    expect(lastCall[1].params.query.cursor).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('disables Next when has_more is false and Prev on the first page', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun], { next_cursor: null, has_more: false })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect((wrapper.find('[data-testid="runs-list-next-page"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.find('[data-testid="runs-list-prev-page"]').element as HTMLButtonElement).disabled).toBe(true)
     wrapper.unmount()
   })
 
   it('keeps untracked query params (e.g. theme=agent) in the URL when paginating', async () => {
     routeMocks.query = { theme: 'agent' }
-    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
 
-    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
+    const nextBtn = wrapper.find('[data-testid="runs-list-next-page"]')
     expect(nextBtn).toBeDefined()
     await nextBtn!.trigger('click')
     await flushPromises()
     await nextTick()
 
-    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { theme: 'agent', page: '2' } })
+    expect(routerMocks.replace).toHaveBeenLastCalledWith({ query: { theme: 'agent', cursor: 'cursor-1' } })
     wrapper.unmount()
   })
 
-  it('defaults to page 1 and writes no page query on a bare mount', async () => {
+  it('preserves an active status filter in the URL when paginating', async () => {
+    routeMocks.query = { status: 'running' }
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
 
-    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
-      params: { query: expect.objectContaining({ page: 1 }) },
+    const nextBtn = wrapper.find('[data-testid="runs-list-next-page"]')
+    expect(nextBtn).toBeDefined()
+    await nextBtn!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ cursor: 'cursor-1', status: 'running' }) },
     }))
-    expect(routerMocks.replace).not.toHaveBeenCalled()
+    expect(routerMocks.replace).toHaveBeenLastCalledWith({ query: { status: 'running', cursor: 'cursor-1' } })
     wrapper.unmount()
   })
 

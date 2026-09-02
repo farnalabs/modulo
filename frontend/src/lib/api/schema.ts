@@ -25719,6 +25719,8 @@ export interface operations {
                 search?: string | null;
                 page?: number;
                 page_size?: number;
+                /** @description Cursor from previous response */
+                cursor?: string | null;
                 variant_group_id?: string | null;
                 batch_id?: string | null;
                 _fresh?: boolean;

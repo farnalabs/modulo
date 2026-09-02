@@ -1078,6 +1078,80 @@ def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
     assert item["aggregate_cost_usd"] == "3.000000"
 
 
+def test_list_runs_passes_cursor_param_through_to_crud(client: TestClient) -> None:
+    """The request-side cursor query param round-trips into the CRUD cursor path."""
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    page = _make_page([run], 5)
+    page.next_cursor = "Y3Vyc29yLXRva2Vu"
+    page.has_more = True
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=page,
+        ) as mock_list,
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs", params={"cursor": "Y3Vyc29yLXRva2Vu"})
+
+    assert resp.status_code == 200
+    assert mock_list.await_args.kwargs["cursor"] == "Y3Vyc29yLXRva2Vu"
+    body = resp.json()
+    assert body["next_cursor"] == "Y3Vyc29yLXRva2Vu"
+    assert body["has_more"] is True
+
+
+def test_list_runs_without_cursor_leaves_cursor_none(client: TestClient) -> None:
+    """Omitting the cursor param keeps the offset path (cursor=None) intact."""
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ) as mock_list,
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    assert mock_list.await_args.kwargs["cursor"] is None
+
+
+def test_list_runs_invalid_cursor_returns_422(client: TestClient) -> None:
+    """A malformed cursor is a client error (422), never a 500."""
+
+    async def _raise_invalid_cursor(*args: Any, **kwargs: Any) -> MagicMock:
+        raise ValueError("Invalid cursor value")
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            side_effect=_raise_invalid_cursor,
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs", params={"cursor": "not-a-valid-cursor"})
+
+    assert resp.status_code == 422
+    assert "Invalid cursor" in resp.json()["detail"]
+
+
 def test_list_runs_includes_truncated_error_detail_preview(client: TestClient) -> None:
     run_id = uuid.uuid4()
     run = _make_listable_run(run_id)

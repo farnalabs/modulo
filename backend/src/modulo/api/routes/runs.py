@@ -332,6 +332,7 @@ class _ListRunsQuery:
     search: str | None = None
     page: int = 1
     page_size: int = 20
+    cursor: str | None = None
     variant_group_id: uuid.UUID | None = None
     batch_id: uuid.UUID | None = None
 
@@ -432,6 +433,7 @@ async def _do_list_runs(
             search=query.search,
             page=query.page,
             page_size=query.page_size,
+            cursor=query.cursor,
             variant_group_id=query.variant_group_id,
             batch_id=query.batch_id,
         )
@@ -479,6 +481,7 @@ async def list_runs_endpoint(
     search: str | None = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=256, description="Cursor from previous response"),
     variant_group_id: uuid.UUID | None = Query(None),
     batch_id: uuid.UUID | None = Query(None),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
@@ -492,10 +495,18 @@ async def list_runs_endpoint(
             search=search,
             page=page,
             page_size=page_size,
+            cursor=cursor,
             variant_group_id=variant_group_id,
             batch_id=batch_id,
         )
         return await _run_with_retry(lambda: _do_list_runs(factory, user, query))
+    except ValueError:
+        # Malformed cursor (CursorPaginator.decode_cursor raises ValueError).
+        _log.warning("runs.list_runs_endpoint: invalid cursor")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid cursor value",
+        ) from None
     except IntegrityError:
         _log.exception("runs.list_runs_endpoint")
         raise HTTPException(
