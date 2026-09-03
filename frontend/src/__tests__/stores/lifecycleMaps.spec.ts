@@ -372,7 +372,7 @@ describe('useLifecycleMapsStore', () => {
     await store.fetchJourneys('map-1')
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/lifecycle-maps/map-1/journeys?limit=200',
+      '/api/v1/lifecycle-maps/map-1/journeys?limit=50',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(store.journeys).toHaveLength(1)
@@ -541,5 +541,80 @@ describe('useLifecycleMapsStore', () => {
     await expect(
       store.importMap({ primitive_type: 'lifecycle_map', format_version: '1', name: 'X', description: null, content_json: {} } as never),
     ).rejects.toThrow('Import returned no map')
+  })
+
+  it('deleteMap issues a DELETE and removes the map from the list', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      json: async () => null,
+    } as unknown as Response)
+    const store = useLifecycleMapsStore()
+    store.maps = [{ id: 'map-1', name: 'Launch Flow' } as never]
+
+    await store.deleteMap('map-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    expect(store.maps).toEqual([])
+  })
+
+  it('deleteMap clears the current map when it matches', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      json: async () => null,
+    } as unknown as Response)
+    const store = useLifecycleMapsStore()
+    store.currentMap = map()
+
+    await store.deleteMap('map-1')
+
+    expect(store.currentMap).toBeNull()
+  })
+
+  it('deleteMap rethrows the error', async () => {
+    fetchMock.mockResolvedValue(errorResponse(403, 'not allowed'))
+    const store = useLifecycleMapsStore()
+
+    await expect(store.deleteMap('map-1')).rejects.toThrow('not allowed')
+  })
+
+  it('fetchJourneys records the next cursor and loadMoreJourneys appends the next page', async () => {
+    fetchMock.mockResolvedValueOnce(okJsonResponse({
+      items: [journey()],
+      next_cursor: 'cursor-abc',
+    }))
+    const store = useLifecycleMapsStore()
+    await store.fetchJourneys('map-1')
+    expect(store.journeys).toHaveLength(1)
+    expect(store.hasMoreJourneys).toBe(true)
+
+    fetchMock.mockResolvedValueOnce(okJsonResponse({
+      items: [journey({ ref: '789', unattributed: true, current_stage: null })],
+      next_cursor: null,
+    }))
+    await store.loadMoreJourneys('map-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1/journeys?limit=50&cursor=cursor-abc',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(store.journeys).toHaveLength(2)
+    expect(store.hasMoreJourneys).toBe(false)
+  })
+
+  it('loadMoreJourneys is a no-op when there is no next cursor', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ items: [journey()], next_cursor: null }))
+    const store = useLifecycleMapsStore()
+    await store.fetchJourneys('map-1')
+
+    await store.loadMoreJourneys('map-1')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
