@@ -9,14 +9,21 @@ node is sandbox for wall-clock summing and non-sandbox for self-report.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
+import pytest
+
 from modulo.core.cost_controller.breakdown.params import (
+    _PARAM_REGISTRY,
+    REPORTED_TOKEN_CHAIN,
     CostComponentConfig,
     RunCostTelemetry,
     build_params,
     build_telemetry,
+    coerce_reported_token,
 )
+from modulo.core.node_output_split import TELEMETRY_FIELDS
 
 
 def _comp(
@@ -313,6 +320,101 @@ def test_build_telemetry_reported_sums_default_zero_without_union_keys() -> None
     assert tele.tokens_total_reported == 0
     assert tele.tokens_cache_read_reported == 0
     assert tele.tokens_cache_write_reported == 0
+
+
+# ---------------------------------------------------------------------------
+# reported tokens — the shared chain + shared tri-state coercion (FAR-532 wave-2)
+# ---------------------------------------------------------------------------
+
+
+def test_reported_token_chain_is_cross_referenced() -> None:
+    """FAR-532 wave-2: the shared chain's stage names are real — every
+    counter is a ``RunCostTelemetry`` field AND a registered formula
+    identifier, every node field is in the split-telemetry vocabulary, and
+    the producer keys cover exactly the pinned output.json contract."""
+    telemetry = RunCostTelemetry(wall_clock_elapsed_s=Decimal(0))
+    for binding in REPORTED_TOKEN_CHAIN:
+        assert hasattr(telemetry, binding.counter)
+        assert binding.counter in _PARAM_REGISTRY
+        assert binding.node_field in TELEMETRY_FIELDS
+    assert {binding.producer_key for binding in REPORTED_TOKEN_CHAIN} == {
+        "input",
+        "output",
+        "total",
+        "cache_read",
+        "cache_write",
+    }
+
+
+def test_shared_coerce_reported_token_tri_state_and_tolerance() -> None:
+    """FAR-532 wave-2: the ONE shared predicate — bool / non-numeric /
+    negative / above-ceiling → None; valid 0 passes; an integral float
+    normalises to int; a non-integral float and NaN/Inf stay invalid."""
+    assert coerce_reported_token(True) is None
+    assert coerce_reported_token("7") is None
+    assert coerce_reported_token(-1) is None
+    assert coerce_reported_token(0) == 0
+    assert coerce_reported_token(1234.0) == 1234
+    assert isinstance(coerce_reported_token(1234.0), int)
+    assert coerce_reported_token(1.5) is None
+    assert coerce_reported_token(float("nan")) is None
+    assert coerce_reported_token(float("inf")) is None
+    assert coerce_reported_token(10**18) is None
+    at_ceiling = 1_000_000_000_000
+    assert coerce_reported_token(at_ceiling) == at_ceiling
+
+
+def test_build_telemetry_reported_integral_floats_are_coerced() -> None:
+    """FAR-532 wave-2: an integral float in a union ``reported_*`` value is
+    normalised to int by the shared predicate; a non-integral float and an
+    above-ceiling value are skipped."""
+    entries = {
+        "n1": {"reported_input_tokens": 100.0, "reported_output_tokens": 1.5},
+        "n2": {"reported_total_tokens": 10**18},
+    }
+    tele, _per_node_cost = build_telemetry(entries, [_comp()])
+    assert tele.tokens_input_reported == 100
+    assert tele.tokens_output_reported == 0
+    assert tele.tokens_total_reported == 0
+
+
+def test_build_telemetry_reported_accumulation_is_explicit_and_mixed_valid() -> None:
+    """FAR-532 wave-2: the accumulation spells every counter field explicitly
+    (no setattr) and accumulates exactly the valid values from a
+    mixed-validity union — a valid 0 contributes 0, absent keys contribute
+    nothing, invalid values are skipped without corrupting neighbours."""
+    entries = {
+        "n1": {
+            "reported_input_tokens": 10,
+            "reported_output_tokens": True,
+            "reported_total_tokens": -1,
+            "reported_cache_read_tokens": 0,
+            "reported_cache_write_tokens": 3,
+        },
+        "n2": {"reported_input_tokens": 5},
+    }
+    tele, _per_node_cost = build_telemetry(entries, [_comp()])
+    assert tele.tokens_input_reported == 15
+    assert tele.tokens_output_reported == 0
+    assert tele.tokens_total_reported == 0
+    assert tele.tokens_cache_read_reported == 0
+    assert tele.tokens_cache_write_reported == 3
+
+
+def test_build_telemetry_logs_skipped_reported_values(caplog: pytest.LogCaptureFixture) -> None:
+    """FAR-532 wave-2: a PRESENT but malformed reported value is logged
+    (``cost_tokens_reported_skipped``) so a malformed report is
+    distinguishable from a never-reported one; ABSENT keys stay silent."""
+    entries = {
+        "n1": {"reported_input_tokens": "many", "reported_total_tokens": 7},
+        "n2": {"reported_output_tokens": 4},
+    }
+    with caplog.at_level(logging.DEBUG, logger="modulo.core.cost_controller.breakdown.params"):
+        build_telemetry(entries, [_comp()])
+    skipped = [record for record in caplog.records if record.getMessage() == "cost_tokens_reported_skipped"]
+    assert len(skipped) == 1
+    assert skipped[0].node_id == "n1"
+    assert skipped[0].union_key == "reported_input_tokens"
 
 
 def test_build_params_exposes_reported_token_params() -> None:

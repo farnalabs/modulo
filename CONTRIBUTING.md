@@ -65,15 +65,10 @@ with the following defaults:
 | `DATABASE_URL` | `postgresql+asyncpg://modulo:modulo@localhost:5434/modulo` |
 | `REDIS_URL` | `redis://localhost:6380/0` |
 
-To use MariaDB instead of PostgreSQL, apply the override:
-
-```powershell
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.mariadb.yml up -d
-```
-
-The backend auto-detects MariaDB and configures the connection string
-(`mysql+aiomysql://modulo:modulo@localhost:5435/modulo`). Note that MariaDB is
-deprecated (2026-07-11); PostgreSQL is the supported primary database.
+No maintained Docker override ships for MariaDB. To run against MariaDB, point
+`DATABASE_URL` at your own MariaDB instance and set `MODULO_DB=mariadb` (e.g.
+`DATABASE_URL=mysql+aiomysql://modulo:modulo@localhost:3306/modulo`). PostgreSQL
+is the supported primary database; MariaDB is a conformance-tier backend only.
 
 ---
 
@@ -216,8 +211,8 @@ modulo/
        Repos/devtools/adr/, 2026-09-02 — FAR-434)
       (product map: frontend/src/manifest.yaml — feature registry + per-route refs, ADR 008)
 ├── deploy/
-│   ├── compose/                  # Non-default compose files: docker-compose.{prod,test,mariadb}.yml
-│   ├── docker/                   # Dockerfile.{all-in-one,backend,frontend}
+│   ├── compose/                  # Non-default compose files: docker-compose.{prod,test}.yml
+│   ├── docker/                   # Dockerfile.all-in-one
 │   └── fly/                      # fly.staging.toml + Fly helper scripts
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
 ├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability
