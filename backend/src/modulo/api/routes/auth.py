@@ -55,7 +55,6 @@ from modulo.db.crud.invitations import (
 )
 from modulo.db.crud.org_membership import (
     create_membership,
-    get_membership_by_account_and_org,
     list_memberships_for_account,
     reactivate_membership,
 )
@@ -697,7 +696,14 @@ async def accept_invite(
                 # tells them to sign in with their existing credentials.
                 existing_account = True
 
-            membership = await get_membership_by_account_and_org(session, account.id, invitation.organisation_id)
+            membership = (
+                await session.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.account_id == account.id,
+                        OrgMembership.organisation_id == invitation.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
             if membership is None:
                 await create_membership(
                     session,
