@@ -345,7 +345,6 @@ Compose files (`docker-compose*.yml` at the repo root; the non-default ones live
 - `docker-compose.local.yml` – with observability profile (otel-collector, Prometheus, Grafana)
 - `deploy/compose/docker-compose.prod.yml` – self-hosted single-server production (prebuilt image)
 - `deploy/compose/docker-compose.test.yml` – CI test environment
-- `deploy/compose/docker-compose.mariadb.yml` – MariaDB alternative (experimental multi-backend – **deprecated 2026-07-11**, not actively tested or maintained)
 
 ### Kubernetes (Helm)
 
