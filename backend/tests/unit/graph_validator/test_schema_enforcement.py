@@ -143,7 +143,7 @@ def test_nullable_output_to_non_nullable_input_rejected():
 
 
 def test_non_nullable_output_to_nullable_input_accepted():
-    """ "string" output → ["string", "null"] input should be accepted."""
+    """\"string\" output → ["string", "null"] input should be accepted."""
     gv = GraphValidator()
     errors = gv._check_schema_fields(
         {"type": "string"},

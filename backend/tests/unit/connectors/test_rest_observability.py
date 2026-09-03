@@ -32,8 +32,6 @@ import httpx
 import pytest
 from redis.exceptions import RedisError
 
-import modulo.connectors.rest.rest_metrics as rest_metrics
-import modulo.connectors.rest.rest_rollback as rest_rollback
 from modulo.connectors._rate_bucket import PerDestinationRateLimiter, RedisTokenBucket, SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.rest import (
@@ -42,6 +40,8 @@ from modulo.connectors.rest import (
     RESTFanOutFailureError,
     RESTResponseTooLargeError,
     SecurityGuard,
+    rest_metrics,
+    rest_rollback,
 )
 from modulo.connectors.rest.rest_rollback import RestRollbackSignal, evaluate_rest_rollback, is_unknown_like
 
