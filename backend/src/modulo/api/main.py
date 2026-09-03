@@ -246,15 +246,14 @@ async def _run_bootstrap(settings: Settings) -> None:
     admin URL falls back to the app URL when DATABASE_ADMIN_URL is unset (like
     env.py).
 
-    A failed allow-list / role-posture assertion (bootstrap's
-    ``_assert_role_posture``) is currently logged as a WARNING (non-fatal): it
-    blocks boot only until every deployed environment has a non-superuser app
-    role and ``DATABASE_ADMIN_URL`` provisioned — today both staging and prod
-    carry legacy superuser app roles, so a fatal assertion would block every
-    deploy. The break-glass boundary remains enforced by the DDL migrations.
-    Other bootstrap failures (e.g. a transient DB blip while applying
-    roles/grants) are logged and non-fatal: they are re-attempted on the
-    post-alembic run and on the next boot.
+    The bootstrap emits explicit role attributes (LOGIN/NOLOGIN,
+    BYPASSRLS/NOBYPASSRLS) so every boot drives the roles toward the asserted
+    posture. A failed allow-list / role-posture assertion (bootstrap's
+    ``_assert_role_posture``) therefore indicates genuine drift the bootstrap
+    could not repair (or missing ``DATABASE_ADMIN_URL`` provisioning), and is
+    logged as a WARNING (non-fatal) so a transient DB blip never blocks boot —
+    it is re-attempted on the post-alembic run and on the next boot. The
+    break-glass boundary remains enforced by the DDL migrations.
     """
     from modulo.db.bootstrap_role import bootstrap_roles
 
