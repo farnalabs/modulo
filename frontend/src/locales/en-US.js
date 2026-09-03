@@ -2761,15 +2761,21 @@ export default {
       "import_invalid_json": "The pasted content is not valid JSON.",
       "importing": "Importing...",
       "cancel": "Cancel",
+      "delete": "Delete",
+      "delete_confirm_title": "Delete lifecycle map",
+      "delete_confirm_body": "This will delete \"{name}\". Existing runs are unaffected, but the map will no longer be available or listed.",
       "journey": {
         "detail_title": "Journey: {journey}",
         "close": "Close",
         "loading": "Loading journey...",
+        "loading_more": "Loading more...",
+        "load_more": "Load more",
         "no_runs": "No runs yet",
         "run_count": "{count} run | {count} runs",
+        "open": "Open {label} journey details",
         "unattributed": "Unattributed",
         "unattributed_hint": "{count} unattributed run | {count} unattributed runs",
-        "unattributed_desc": "A stage pipeline saw this work item, but the journey never advanced onto the map.",
+        "unattributed_desc": "These runs completed a stage pipeline but did not advance onto this map's journey — no journey step was attributed. They appear here because a map stage pipeline saw the work item, but the journey never advanced into a map stage.",
         "provenance": {
           "derived": "Derived",
           "reported": "Reported"

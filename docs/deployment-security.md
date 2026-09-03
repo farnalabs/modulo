@@ -26,7 +26,9 @@ expects a proxy to handle it.
 | **Caddy** | Automatic ACME (Let's Encrypt). Reference Caddyfile in `deploy/caddy/`. |
 | **nginx** | Manual cert + `ssl_certificate` directives. See `docs/deployment.md` §TLS/HTTPS. |
 
-Cipher requirements (from `configs/nginx/ssl.conf` where shipped):
+Cipher requirements (recommended baseline for user-managed nginx TLS; when
+using Caddy, TLS is terminated by Caddy with its ACME defaults, so these
+directives are not needed there):
 
 ```
 ssl_protocols TLSv1.2 TLSv1.3;
@@ -105,10 +107,11 @@ Modulo refuses to start if `SECRET_KEY` is absent or shorter than 32 bytes.
 | Generation | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | Rotation impact | Does NOT re-encrypt existing secrets automatically |
 
-After rotating `FERNET_KEY`, run the credential re-encryption command:
+After rotating `FERNET_KEY`, trigger credential re-encryption via the admin API:
 
 ```bash
-uv run modulo rotate-credentials
+curl -X POST https://modulo.example.com/api/v1/admin/rotation/rotate-key \
+  -H "Authorization: Bearer <admin-jwt>"
 ```
 
 Secret rotation procedure is documented in `docs/security/secret-management.md`
@@ -160,18 +163,18 @@ Row-Level Security is enabled for Postgres deployments. Verify enforcement:
 
 ```sql
 -- Connect as the application user
-SET session_modulo.org_id = 'other-org-uuid';
+SELECT set_config('app.organisation_id', 'other-org-uuid', true);
 SELECT * FROM users;
 -- Expected: empty set or only rows visible to the session org
 ```
 
-The application sets `session_modulo.org_id` at connection pool checkout.
-If RLS is bypassed, the query returns rows across organisations.
+The application sets `app.organisation_id` at connection pool checkout via
+`set_config`. If RLS is bypassed, the query returns rows across organisations.
 
 **Checklist:**
 - [ ] Every table has `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;`
-- [ ] Every table has a policy: `CREATE POLICY org_isolation ON <name> USING (organisation_id = current_setting('session_modulo.org_id')::uuid);`
-- [ ] Run the RLS test suite: `uv run pytest tests/unit/test_rls.py -v`
+- [ ] Every table has a policy: `CREATE POLICY org_isolation ON <name> USING (organisation_id = current_setting('app.organisation_id')::uuid);`
+- [ ] Run the RLS test suite: `uv run pytest tests/unit/db/test_rls.py -v`
 
 **SQLite note:** RLS is not available in SQLite. `WHERE-clause` filtering is
 used instead, which is application-level only – do not rely on it for
@@ -216,12 +219,20 @@ Then use `modulo_migrate` in migration contexts and `modulo_app` for runtime.
 Migrations use PostgreSQL advisory locks to prevent concurrent execution:
 
 ```python
-# alembic/env.py
-await conn.execute(sa.text("SELECT pg_advisory_xact_lock(19910914)"))
+# alembic/env.py (polling loop; key is (72001, 1))
+for _ in range(240):
+    result = await conn.execute(
+        text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+        {"k1": 72001, "k2": 1},
+    )
+    if result.scalar():
+        break
+    await asyncio.sleep(1.0)
 ```
 
-This works across replicas. **The lock ID (19910914) must not conflict** with
-other applications sharing the same Postgres instance.
+This uses `pg_try_advisory_lock` (non-blocking) with a polling loop, not the
+blocking `pg_advisory_xact_lock`. **The lock key (72001, 1) must not conflict**
+with other applications sharing the same Postgres instance.
 
 **Safety rules:**
 - Never run `alembic upgrade head` on a replica connected to a production DB
@@ -248,19 +259,24 @@ Backups are encrypted with AES-256-CBC (PBKDF2, 600K iterations). See
 
 ### 4.1 Rate Limiting Configuration
 
-Rate limiting uses a Redis token-bucket algorithm. Configuration is per-route
-in the application settings or environment:
+Rate limiting uses a Redis token-bucket algorithm. Auth-specific rate limiting
+is configured via environment variables:
 
 ```env
-# Default rate limits (requests per window)
-RATE_LIMIT_DEFAULT=100/minute
-RATE_LIMIT_AUTH=20/minute      # Login/register endpoints
-RATE_LIMIT_MCP=300/minute      # MCP tool invocations
-RATE_LIMIT_WS_CONNECT=10/minute  # WebSocket connection requests
+# Auth rate limiting
+MODULO_AUTH_RATE_LIMIT_ENABLED=true
+MODULO_AUTH_MAX_ATTEMPTS=10     # Failed attempts before lockout
+MODULO_AUTH_WINDOW_SECONDS=60   # Sliding window in seconds
+
+# Global bypass token (for trusted internal callers). The server reads the
+# token from the MODULO_RATELIMIT_BYPASS_TOKEN setting; trusted callers send it
+# as the MODULO_RATELIMIT_BYPASS_TOKEN HTTP header.
+MODULO_RATELIMIT_BYPASS_TOKEN=<random-token>
 ```
 
-**Key derivation** is auth-aware – unauthenticated requests are keyed by IP,
-authenticated requests by user ID. This prevents IP-based collisions behind NAT.
+Route-level limits are defined in code. **Key derivation** is auth-aware:
+unauthenticated requests are keyed by IP, authenticated requests by user ID.
+This prevents IP-based collisions behind NAT.
 
 **Verify:**
 ```bash
@@ -308,7 +324,7 @@ CORS_MAX_AGE=3600
 Verify the backend response includes all headers below:
 
 ```
-Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://modulo.example.com; base-uri 'self'; form-action 'self'
+Content-Security-Policy: default-src 'self'; connect-src 'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
@@ -317,7 +333,7 @@ Referrer-Policy: strict-origin-when-cross-origin
 
 **Verify:**
 ```bash
-curl -si https://modulo.example.com/health | grep -iE "^(content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy):"
+curl -si https://modulo.example.com/healthz | grep -iE "^(content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy):"
 ```
 
 ### 4.5 API Key Management
@@ -343,11 +359,10 @@ that image to GHCR after the critical-vulnerability gate passes:
 
 ```bash
 # Manual scan
-trivy image ghcr.io/farnalabs/modulo-backend:latest
-trivy image ghcr.io/farnalabs/modulo-frontend:latest
+trivy image ghcr.io/farnalabs/modulo:latest
 
 # Scan with severity filter
-trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo-backend:latest
+trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:latest
 ```
 
 **SLAs** (from `docs/security/dependency-policy.md`):
@@ -360,9 +375,11 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo-backend:latest
 
 ### 5.2 Minimal Base Images
 
-- Backend image: `python:3.12-slim` (Debian-based, ~120 MB).
-- Frontend image: `nginx:alpine` (~25 MB) – multi-stage build, only nginx +
-  compiled assets in the final layer.
+- Backend image: `python:3.14-slim` (Debian-based, ~120 MB).
+- Frontend image: multi-stage `node:22-alpine` (build stage) → `nginx:alpine`
+  (final stage, serves the compiled assets); the published prod image runs as
+  `USER nginx` (`frontend/Dockerfile.prod`). In dev the Vite server runs as
+  `USER node` (`frontend/Dockerfile`).
 - Do not replace these with `:latest` or full distroless images without
   verifying that `uv`, Python, and all native dependencies (`psycopg` C
   extension, `cryptography` Rust extensions) are available.
@@ -372,19 +389,23 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo-backend:latest
 Both backend and frontend containers run as a non-root user by default:
 
 ```dockerfile
-# Dockerfile
-RUN groupadd -r modulo && useradd -r -g modulo modulo
-USER modulo
+# Backend Dockerfile
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Frontend Dockerfile (prod final stage)
+USER nginx
 ```
 
 **Verify:**
 ```bash
-docker run --rm ghcr.io/farnalabs/modulo-backend:latest whoami
-# Expected: modulo (not root)
+docker run --rm ghcr.io/farnalabs/modulo:latest whoami
+# Expected: appuser (not root)
 ```
 
-The Dockerfiles already enforce a non-root user (`USER modulo` in the final
-image stage), so no runtime override is needed under Docker Compose or Fly.io.
+The Dockerfiles already enforce a non-root user (`USER appuser` in backend,
+`USER nginx` in the frontend prod image), so no runtime override is needed
+under Docker Compose or Fly.io.
 
 ### 5.4 Read-Only Filesystem
 
@@ -410,7 +431,7 @@ tag. This prevents tag-mutation attacks on the registry:
 
 ```yaml
 modulo:
-  image: ghcr.io/farnalabs/modulo-backend@sha256:<digest>
+  image: ghcr.io/farnalabs/modulo@sha256:<digest>
 ```
 
 For `docker compose` development, use `pull_policy: always` to pick up newly
@@ -526,7 +547,7 @@ Configure alerts for these events in your monitoring system:
 ```bash
 # Docker Compose – re-tag and restart the previous image
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag modulo-backend:old modulo-backend:latest
+docker tag modulo:old modulo:latest
 docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
@@ -601,7 +622,7 @@ before marking a production deployment as complete.
 ### Database
 
 - [ ] RLS is enabled on all tenant-scoped tables
-- [ ] RLS test suite passes: `uv run pytest tests/unit/test_rls.py -v`
+- [ ] RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] Postgres connections use `sslmode=require` (or `verify-full`)
 - [ ] Alembic advisory lock ID does not conflict with other applications on the same Postgres instance
 - [ ] Backup encryption passphrase is 32+ characters and stored separately

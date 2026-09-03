@@ -1894,6 +1894,15 @@ elements:
       - testid: lifecycle-map-import-confirm
         type: button
         dynamic_testid: false
+      - testid: lifecycle-map-view-delete
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-delete-error
+        type: alert
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-load-more
+        type: button
+        dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
         type: button
@@ -3158,6 +3167,14 @@ features:
         description: Feature licensing and plan tiers
     feat-lifecycle-maps:
         description: Lifecycle maps and stage workflows
+        status: covered
+        behaviours:
+            - "[x] Detail page delete: DELETE /api/v1/lifecycle-maps/{id} soft-deletes the map (204) and frees its stage pipelines; the detail page offers a Delete button behind a confirmation dialog and navigates back to the list on success"
+            - "[x] Stage layout positions persist: editor drags save stage x/y into content_json (GET/PUT /versions round-trips them), the read-only renderer uses persisted x/y when present, and maps saved before position persistence fall back to a topology-aware auto-layout"
+            - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
+            - "[x] Unattributed journeys list is keyset-paginated (GET /{id}/journeys?limit&cursor) with a load-more control, never dumps 200 rows at once; journey cards render the kind uppercased (PR 2391), are keyboard-accessible with an aria-label, and open the journeys detail endpoint"
+        deferrals:
+            - Attributed journeys on the read-only renderer are grouped per stage as before; only the unattributed list is paginated
     feat-mcp:
         description: Model Context Protocol tool configuration
     feat-model-backends:

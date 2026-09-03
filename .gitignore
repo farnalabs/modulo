@@ -50,6 +50,8 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/.cache/
+# vitest --coverage output (sonar.javascript.lcov.reportPaths source)
+frontend/coverage/
 *.local
 
 # IDE

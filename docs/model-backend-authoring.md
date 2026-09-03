@@ -16,7 +16,7 @@ ModelBackendBase (ABC)      ← modulo/model_backends/base.py
 
 ```python
 class ModelBackendBase(ABC):
-    """Abstract base for all model backend implementations."""
+    """Abstract base for all model backends (real + stub)."""
 
     supports_tools: bool = False
 
@@ -97,8 +97,9 @@ class MyCustomBackend(ModelBackendBase):
 with a minimal ping `invoke(..., max_tokens=1)`. Override it when a cheaper
 or more accurate probe (such as `openai_compatible_health_check`, which GETs
 `{base_url}/models`) is available. `health_check()` can be invoked directly via
-`ModelBackendHub.health_check(backend_id)`; it is not run automatically at load
-time.
+`ModelBackendHub.health_check(backend_id)` where `backend_id` is a `uuid.UUID`
+(the DB primary key, distinct from the `backend_id` string property on the
+backend class); it is not run automatically at load time.
 
 ```python
 from langchain_core.messages import HumanMessage

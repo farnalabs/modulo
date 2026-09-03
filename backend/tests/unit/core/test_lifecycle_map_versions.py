@@ -468,6 +468,40 @@ def test_normalize_content_accepts_unconnected_and_parallel_edges() -> None:
     assert len(result["edges"]) == 3
 
 
+def test_normalize_content_preserves_stage_positions() -> None:
+    """Stage x/y (layout positions) survive normalize so editor drags persist."""
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo", "x": 120.0, "y": 240.0},
+                {"id": "s2", "name": "Deploy", "type": "external", "x": 420.0, "y": 240.0},
+            ],
+            "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+        }
+    )
+    first, second = result["stages"]
+    assert first["x"] == 120.0
+    assert first["y"] == 240.0
+    assert second["x"] == 420.0
+    assert second["y"] == 240.0
+
+
+def test_normalize_content_does_not_inject_positions_for_legacy_stages() -> None:
+    """Maps saved before layout persistence keep no x/y keys (backward compat)."""
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Deploy", "type": "external"},
+            ],
+            "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+        }
+    )
+    for stage in result["stages"]:
+        assert "x" not in stage
+        assert "y" not in stage
+
+
 # ---------------------------------------------------------------------------
 # clean_legacy_content — repair legacy graphs blocked by FAR-175 (FAR-203)
 #

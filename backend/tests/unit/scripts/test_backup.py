@@ -147,6 +147,14 @@ async def test_run_pg_dump_failure_exits(tmp_manifest_dir, capsys):
     assert "pg_dump failed: connection failed" in capsys.readouterr().out
 
 
+async def test_run_pg_dump_rejects_flag_like_db_url():
+    # A db_url that starts with '-' would be interpreted as a pg_dump flag
+    # (argument-injection). The guard must reject it before any subprocess
+    # call so this security invariant cannot be silently dropped.
+    with pytest.raises(ValueError, match="invalid database URL"):
+        await run_pg_dump("-f=/tmp/evil", "pg_dump", "/tmp/dump.pgdump")
+
+
 # ---------------------------------------------------------------------------
 # collect_secrets
 # ---------------------------------------------------------------------------
@@ -366,6 +374,32 @@ def test_encrypt_archive_deletes_plaintext_on_success(tmp_manifest_dir):
     assert "pass:pass" in args
 
 
+def test_encrypt_archive_rejects_flag_like_tar_path(tmp_manifest_dir):
+    # A tar_path that starts with '-' would be interpreted as an openssl flag
+    # (argument-injection). The guard must reject it before any subprocess
+    # call so this security invariant cannot be silently dropped.
+    with (
+        patch("scripts.backup.shutil.which", return_value="/usr/bin/openssl"),
+        patch("scripts.backup.subprocess.run") as mock_run,
+        pytest.raises(ValueError, match="invalid archive path"),
+    ):
+        encrypt_archive("-evil", "pass")
+    mock_run.assert_not_called()
+
+
+def test_encrypt_archive_rejects_flag_like_passphrase(tmp_manifest_dir):
+    # A passphrase that starts with '-' would be interpreted as an openssl flag.
+    plain = str(Path(tmp_manifest_dir) / "a.tar.gz")
+    Path(plain).write_text("x")
+    with (
+        patch("scripts.backup.shutil.which", return_value="/usr/bin/openssl"),
+        patch("scripts.backup.subprocess.run") as mock_run,
+        pytest.raises(ValueError, match="invalid passphrase"),
+    ):
+        encrypt_archive(plain, "-evil")
+    mock_run.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # get_org_id
 # ---------------------------------------------------------------------------
@@ -458,6 +492,7 @@ async def test_main_full_flow(tmp_manifest_dir, capsys):
         patch("scripts.backup.parse_args", return_value=ns),
         patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
         patch("scripts.backup.check_disk_space") as mock_disk,
+        patch("scripts.backup.shutil.which", return_value="/usr/bin/pg_dump"),
         patch("scripts.backup.get_org_id", return_value="org123"),
         patch("scripts.backup.run_pg_dump", new=AsyncMock()) as mock_dump,
         patch("scripts.backup.collect_secrets", return_value=["secrets.env"]) as mock_secrets,
@@ -503,6 +538,7 @@ async def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsy
         patch("scripts.backup.parse_args", return_value=ns),
         patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
         patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.shutil.which", return_value="/usr/bin/pg_dump"),
         patch("scripts.backup.get_org_id", return_value="org123"),
         patch("scripts.backup.run_pg_dump", new=AsyncMock()),
         patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),
@@ -535,6 +571,7 @@ async def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
         patch("scripts.backup.parse_args", return_value=ns),
         patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
         patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.shutil.which", return_value="/usr/bin/pg_dump"),
         patch("scripts.backup.get_org_id", return_value="org123"),
         patch("scripts.backup.run_pg_dump", new=AsyncMock()),
         patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),

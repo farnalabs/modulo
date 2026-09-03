@@ -13,8 +13,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
-  - `ghcr.io/anomalyco/modulo-backend:latest`
-  - `ghcr.io/anomalyco/modulo-frontend:latest`
+  - `ghcr.io/farnalabs/modulo:latest`
 - [ ] **`install.sh`** is uploaded to `https://modulo.run/install.sh`
 - [ ] **DNS** is configured for the target domain
   - A/AAAA record or CNAME to the reverse proxy or load balancer
@@ -51,7 +50,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **CORS** verified: no wildcard, correct origins, no trailing slashes
 - [ ] **CSRF protection** enabled on all state-changing endpoints
 - [ ] **Row-Level Security** is enabled on all tenant-scoped tables
-  - RLS test suite passes: `uv run pytest tests/unit/test_rls.py -v`
+  - RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs (Trivy scan)
 - [ ] **Containers** run as non-root user
@@ -66,7 +65,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
 
 ## 4. Observability
 
-- [ ] **Health endpoint** (`/health` or `/healthz`) is reachable and returns 200
+- [ ] **Health endpoint** (`/healthz` or `/healthz/ready`) is reachable and returns 200
 - [ ] **OpenTelemetry** is configured (if desired) with `MODULO_TELEMETRY_ENABLED=true`
 - [ ] **Grafana** dashboards are loaded (optional):
   - Pipeline performance
@@ -144,7 +143,7 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 - [ ] **All unit tests pass**: `uv run pytest tests/unit/ -v`
 - [ ] **All integration tests pass**: `uv run pytest tests/integration/ -v`
 - [ ] **All BDD scenarios pass**: `uv run pytest tests/bdd/ -v`
-- [ ] **RLS test suite passes**: `uv run pytest tests/unit/test_rls.py -v`
+- [ ] **RLS test suite passes**: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Load tests** within baseline targets (see [`docs/performance.md`](./performance.md))
 - [ ] **Frontend builds without errors**: `npm run build` in `frontend/`
 - [ ] **TypeScript checks pass**: `vue-tsc --noEmit` in `frontend/`
@@ -177,7 +176,6 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
 | Deployment journeys | [`docs/deployment-journey.md`](./deployment-journey.md) |
 | Security hardening | [`docs/deployment-security.md`](./deployment-security.md) |
-| Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |
 | Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |
 | Upgrade process | [`docs/upgrade-process.md`](./upgrade-process.md) |
 | Troubleshooting | [`docs/troubleshooting.md`](./troubleshooting.md) |

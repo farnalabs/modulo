@@ -455,8 +455,9 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VITE_PRIMEUI_LICENSE: ${{ secrets.VITE_PRIMEUI_LICENSE }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
@@ -476,7 +477,7 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${VITE_PRIMEUI_LICENSE}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Build + push succeeded on attempt $attempt"
               exit 0
@@ -527,7 +528,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
           set +e
@@ -739,7 +740,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
@@ -783,7 +784,7 @@ jobs:
           # command exits (--restart=no leaves it 'stopped'); remove it in
           # every outcome (success, failure, cancel) so it cannot accumulate
           # against the Fly machine limit. This step must never fail the job.
-          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
           MID=""
           if [ -f /tmp/premigrate-machine-id.txt ]; then
             MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"
@@ -1211,8 +1212,9 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VITE_PRIMEUI_LICENSE: ${{ secrets.VITE_PRIMEUI_LICENSE }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
@@ -1232,7 +1234,7 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${VITE_PRIMEUI_LICENSE}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Build + push succeeded on attempt $attempt"
               exit 0
@@ -1283,7 +1285,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
           set +e
@@ -1497,7 +1499,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
         run: |
-          curl -fsSL https://fly.io/install.sh | sh
+          bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
 
@@ -1542,7 +1544,7 @@ jobs:
           # command exits (--restart=no leaves it 'stopped'); remove it in
           # every outcome (success, failure, cancel) so it cannot accumulate
           # against the Fly machine limit. This step must never fail the job.
-          curl -fsSL https://fly.io/install.sh | sh 2>/dev/null || true
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
           MID=""
           if [ -f /tmp/premigrate-machine-id.txt ]; then
             MID="$(cat /tmp/premigrate-machine-id.txt 2>/dev/null || true)"

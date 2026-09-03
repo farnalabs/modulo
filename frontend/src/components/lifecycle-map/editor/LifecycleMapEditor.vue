@@ -155,6 +155,7 @@ import GraduationDialog from './GraduationDialog.vue'
 import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
+import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
 import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 import Button from 'primevue/button'
 
@@ -216,7 +217,7 @@ function createFlowNode(stage: LifecycleStage): any {
   return {
     id: stage.id,
     type: 'lifecycle-stage',
-    position: { x: 0, y: 0 },
+    position: { x: stage.x ?? 0, y: stage.y ?? 0 },
     data: {
       name: stage.name,
       description: stage.description,
@@ -227,6 +228,23 @@ function createFlowNode(stage: LifecycleStage): any {
       graduated: stage.graduated,
     },
   }
+}
+
+function buildFlowNodes(version: LifecycleMapVersion): any[] {
+  const stages = version.stages ?? []
+  const edges = version.edges ?? []
+  const layout = computeLifecycleMapLayout(
+    stages.map((s) => ({ id: s.id })),
+    edges.map((e) => ({ source: e.source_stage_id, target: e.target_stage_id })),
+  )
+  return stages.map((stage) => {
+    const node = createFlowNode(stage)
+    const hasPosition = stage.x != null && stage.y != null
+    node.position = hasPosition
+      ? { x: stage.x as number, y: stage.y as number }
+      : layout[stage.id] ?? { x: 0, y: 0 }
+    return node
+  })
 }
 
 function createFlowEdge(edge: LifecycleEdge): any {
@@ -256,6 +274,8 @@ function stageToBackend(node: any): LifecycleStage {
     external_url: node.data.external_url || null,
     owner: node.data.owner || null,
     graduated: node.data.graduated || false,
+    x: node.position?.x,
+    y: node.position?.y,
   }
 }
 
@@ -295,7 +315,7 @@ async function loadData() {
     if (versionList.length > 0) {
       const latest = versionList[0]
       currentVersionId.value = latest.id
-      flowNodes.value = (latest.stages || []).map(createFlowNode)
+      flowNodes.value = buildFlowNodes(latest)
       flowEdges.value = (latest.edges || []).map(createFlowEdge)
     }
   } catch (e: unknown) {
@@ -337,7 +357,7 @@ async function handleSave() {
 function onLoadVersion(versionId: string) {
   const version = versions.value.find((v) => v.id === versionId)
   if (!version) return
-  flowNodes.value = (version.stages ?? []).map(createFlowNode)
+  flowNodes.value = buildFlowNodes(version)
   flowEdges.value = (version.edges ?? []).map(createFlowEdge)
   currentVersionId.value = versionId
   selectedNode.value = null
@@ -447,19 +467,14 @@ function autoLayout() {
   const nodes = flowNodes.value
   if (nodes.length === 0) return
 
-  const startX = 100
-  const startY = 80
-  const spacingX = 280
-  const spacingY = 160
-  const cols = Math.ceil(Math.sqrt(nodes.length))
+  const layout = computeLifecycleMapLayout(
+    nodes.map((node) => ({ id: node.id as string })),
+    flowEdges.value.map((edge) => ({ source: edge.source as string, target: edge.target as string })),
+  )
 
-  nodes.forEach((node: any, index: number) => {
-    const row = Math.floor(index / cols)
-    const col = index % cols
-    node.position = {
-      x: startX + col * spacingX,
-      y: startY + row * spacingY,
-    }
+  nodes.forEach((node) => {
+    const pos = layout[node.id as string]
+    if (pos) node.position = { x: pos.x, y: pos.y }
   })
 }
 
