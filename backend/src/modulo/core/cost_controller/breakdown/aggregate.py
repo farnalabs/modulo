@@ -228,9 +228,11 @@ def _eval_self_reported(
             # non-billing state, not a normal $0.000000 line. Keep
             # ``source``/``missing_self_report`` readable for the breakdown
             # rendering and the run-warnings surface, and stamp a reason so the
-            # frontend never renders a confusing numeric basis (``reported=0,
-            # node_count=0``). The numeric basis is intentionally left intact
-            # for audit; the breakdown renderer keys off this reason.
+            # numeric basis is self-describing for audit. The renderer keys off
+            # ``missing_self_report`` (see ``compute_run_warnings`` /
+            # ``RunDetailView``), not this reason field — ``missing_self_report_reason``
+            # is a diagnostic stamp only and is intentionally not consumed on the
+            # wire (``RunDetailView``'s interface field mirrors it but is dead).
             entry["missing_self_report_reason"] = "agent_not_reported"
     return entry, amount
 

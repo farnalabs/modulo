@@ -33,7 +33,6 @@ function openRunWarnings() {
     :aria-label="label"
     v-tooltip.top="{ value: label, showDelay: 300 }"
     @click.stop="openRunWarnings"
-    @keydown.stop
   >
     <AlertTriangle aria-hidden="true" class="h-3.5 w-3.5" />
     {{ count }}

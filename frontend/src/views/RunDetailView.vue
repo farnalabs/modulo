@@ -1307,11 +1307,21 @@ watch(
   async (warnings) => {
     if (hasScrolledToWarnings) return
     if (!shouldScrollToWarnings.value || warnings.length === 0) return
-    await nextTick()
-    document.getElementById('warnings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // The warnings <section id="warnings"> may still be settling in the DOM on
+    // the reactive pass that populates ``runWarnings`` (deferred cost_breakdown
+    // load, async GET). Retry across a few ticks so a momentarily-missing target
+    // doesn't make the scroll silently no-op.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await nextTick()
+      const el = document.getElementById('warnings')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        break
+      }
+    }
     hasScrolledToWarnings = true
   },
-  { immediate: true },
+  { immediate: true, flush: 'post' },
 )
 
 function parseBreakdownAmount(value: string | number | undefined): number {
