@@ -173,7 +173,7 @@ def test_accept_invite_existing_member_does_not_duplicate_membership(client: Tes
             **patches,
             "validate_password_strength": MagicMock(),
             "get_account_by_email": AsyncMock(return_value=account),
-            "get_membership_by_account_and_org": AsyncMock(return_value=MagicMock()),
+            "get_membership_by_account_and_org": AsyncMock(return_value=MagicMock(deactivated_at=None)),
             "create_membership": create_membership,
         },
     ):
@@ -228,18 +228,24 @@ def test_accept_invite_invalid_token_generic_400(client: TestClient) -> None:
     assert resp.json()["detail"] == _GENERIC_DETAIL
 
 
-def test_accept_invite_expiry_and_revocation_share_byte_identical_rejection(client: TestClient) -> None:
-    """Expired / consumed / revoked rows never match the lookup, so the exact
-    same generic 400 covers every failure flavour — asserted byte-identical."""
-    bodies: list[bytes] = []
-    for lookup_result in (None,):
-        with patch.dict(
-            "modulo.api.routes.auth.__dict__",
-            {"get_valid_by_token_hash": AsyncMock(return_value=lookup_result)},
-        ):
-            resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
-        bodies.append(resp.content)
-    assert len({bytes(b) for b in bodies}) == 1
+@pytest.mark.parametrize(
+    "flavour",
+    ["expired", "consumed", "revoked"],
+)
+def test_accept_invite_non_live_invitation_flavours_share_byte_identical_rejection(
+    client: TestClient, flavour: str
+) -> None:
+    """Expired / consumed / revoked rows never match the liveness predicate, so
+    ``get_valid_by_token_hash`` returns None for every non-live flavour and the
+    API response is byte-identical (the lookup cannot distinguish them — by
+    design)."""
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {"get_valid_by_token_hash": AsyncMock(return_value=None)},
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": f"tok-{flavour}", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 400
+    assert resp.content == f'{{"detail":"{_GENERIC_DETAIL}"}}'.encode()
 
 
 def test_accept_invite_weak_password_422(client: TestClient) -> None:
@@ -320,3 +326,59 @@ def test_accept_invite_audit_failure_is_fail_open(client: TestClient) -> None:
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
     assert resp.status_code == 200
+
+
+def test_accept_invite_tombstoned_membership_is_reactivated(client: TestClient) -> None:
+    """A tombstoned membership (deactivated_at set) is not a live membership:
+    acceptance reactivates it with the invitation's role instead of skipping —
+    the row is preserved but the holder gains access."""
+    invitation = _make_invitation()
+    account = _make_account(auth_provider="local", password_hash="$2b$12$existing")
+    tombstoned = MagicMock(deactivated_at="2026-08-01T00:00:00+00:00")
+    patches = _base_patches(invitation)
+    reactivate = AsyncMock(return_value=MagicMock())
+    create_membership = AsyncMock(return_value=MagicMock())
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(return_value=account),
+            "get_membership_by_account_and_org": AsyncMock(return_value=tombstoned),
+            "reactivate_membership": reactivate,
+            "create_membership": create_membership,
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 200
+    assert resp.json()["existing_account"] is True
+    create_membership.assert_not_awaited()
+    reactivate.assert_awaited_once_with(ANY, tombstoned, "runner")
+
+
+def test_accept_invite_record_success_failure_is_fail_open(client: TestClient) -> None:
+    """A limiter outage AFTER the enrollment commit must not turn the succeeded
+    operation into a 500 (the token is consumed; a retry would 400)."""
+    fake_limiter = MagicMock()
+    fake_limiter.record_failure = AsyncMock()
+    fake_limiter.record_success = AsyncMock(side_effect=RuntimeError("redis down"))
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    with (
+        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=fake_limiter),
+        patch.dict(
+            "modulo.api.routes.auth.__dict__",
+            {
+                **patches,
+                "validate_password_strength": MagicMock(),
+                "get_account_by_email": AsyncMock(return_value=None),
+                "create_account": AsyncMock(return_value=_make_account()),
+                "get_membership_by_account_and_org": AsyncMock(return_value=None),
+                "create_membership": AsyncMock(return_value=MagicMock()),
+            },
+        ),
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 200
+    assert resp.json()["existing_account"] is False
+    fake_limiter.record_success.assert_awaited_once()

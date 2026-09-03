@@ -57,6 +57,7 @@ from modulo.db.crud.org_membership import (
     create_membership,
     get_membership_by_account_and_org,
     list_memberships_for_account,
+    reactivate_membership,
 )
 from modulo.db.crud.token_family import (
     advance_sequence,
@@ -636,7 +637,9 @@ async def accept_invite(
       (b) non-local (SSO/SCIM) account → 409, never set a local password;
       (c) local without password_hash → set it + membership;
       (d) local with password_hash → membership only when absent, password
-          untouched, ``existing_account=true`` in the response.
+          untouched, ``existing_account=true`` in the response. A tombstoned
+          membership (deactivated_at set, FAR-533) is reactivated with the
+          invitation's role instead of skipped, preserving the row.
 
     The invitation compare-and-swap consumption runs as the FINAL DB statement
     of the success path: if another consumer raced us, the CAS matches zero
@@ -694,13 +697,21 @@ async def accept_invite(
                 # tells them to sign in with their existing credentials.
                 existing_account = True
 
-            if await get_membership_by_account_and_org(session, account.id, invitation.organisation_id) is None:
+            membership = await get_membership_by_account_and_org(session, account.id, invitation.organisation_id)
+            if membership is None:
                 await create_membership(
                     session,
                     account_id=account.id,
                     org_id=invitation.organisation_id,
                     role=invitation.org_role,
                 )
+            elif membership.deactivated_at is not None:
+                # A tombstoned membership (per-org deactivation, gh-1794/FAR-533)
+                # is not a live membership: acceptance REACTIVATES it with the
+                # invitation's role instead of skipping — otherwise the token is
+                # consumed while the holder gains no access. The row is kept
+                # (history), aligned with the tombstone design.
+                await reactivate_membership(session, membership, invitation.org_role)
 
             consumed = await consume_invitation(session, invitation)
             if not consumed:
@@ -713,9 +724,21 @@ async def accept_invite(
             )
 
         # Committed: mirror login's success path so a few denied attempts on
-        # stale tokens never leak into login lockout on this IP.
+        # stale tokens never leak into login lockout on this IP. Fail-open
+        # (same pattern as the audit helper): the enrollment already succeeded
+        # and the token is consumed — a limiter outage must not turn it into a
+        # 500 (a retry would then fail with a misleading 400).
         if limiter is not None:
-            await limiter.record_success(ip)
+            try:
+                await limiter.record_success(ip)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "auth.accept_invite.rate_limit_success_recording_failed",
+                    extra={"invitation_id": str(invitation.id)},
+                    exc_info=True,
+                )
     except IntegrityError:
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(

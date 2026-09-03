@@ -50,12 +50,16 @@ describe('AcceptInviteView', () => {
   })
 
   it('submits the token + password and shows success for a new account', async () => {
-    window.history.replaceState({}, '', '/accept-invite?token=tok-123')
+    // The one-time token is delivered in the URL FRAGMENT, not the query string.
+    window.history.replaceState({}, '', '/accept-invite#token=tok-123')
     mockPost.mockResolvedValue({ detail: 'Invitation accepted', existing_account: false })
     const wrapper = mountView()
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="accept-invite-submit"]').exists()).toBe(true)
     })
+    // The secret is scrubbed from the address bar as soon as the view mounts.
+    expect(window.location.hash).toBe('')
+    expect(window.location.pathname).toBe('/accept-invite')
     await wrapper.find('[data-testid="accept-invite-password"]').setValue('C0rr3ct-Horse-Battery')
     await wrapper.find('[data-testid="accept-invite-confirm"]').setValue('C0rr3ct-Horse-Battery')
     await wrapper.find('form').trigger('submit.prevent')
@@ -69,7 +73,7 @@ describe('AcceptInviteView', () => {
   })
 
   it('blocks submission client-side when passwords do not match', async () => {
-    window.history.replaceState({}, '', '/accept-invite?token=tok-123')
+    window.history.replaceState({}, '', '/accept-invite#token=tok-123')
     const wrapper = mountView()
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="accept-invite-submit"]').exists()).toBe(true)
@@ -83,7 +87,7 @@ describe('AcceptInviteView', () => {
   })
 
   it('surfaces a server rejection inline', async () => {
-    window.history.replaceState({}, '', '/accept-invite?token=expired-tok')
+    window.history.replaceState({}, '', '/accept-invite#token=expired-tok')
     mockPost.mockRejectedValue(new Error('Invalid or expired invitation'))
     const wrapper = mountView()
     await vi.waitFor(() => {

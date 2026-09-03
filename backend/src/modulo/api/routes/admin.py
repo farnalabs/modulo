@@ -2,13 +2,14 @@
 
 import asyncio
 import logging
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1619,11 +1620,34 @@ async def admin_reset_password(
 
 # ── User Invitations ─────────────────────────────────────────
 
+# Basic email shape check (no email-validator dependency): something@something.tld
+# with no whitespace. Deliberately permissive — it exists to reject obvious
+# garbage (and over-length input that would 503 on a Postgres DataError) with a
+# 422, not to be an RFC-5322 validator.
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 
 class InviteUserRequest(BaseModel):
-    email: str = Field(min_length=1)
-    display_name: str = Field(min_length=1)
+    email: str = Field(min_length=3, max_length=320)
+    display_name: str = Field(min_length=1, max_length=255)
     org_role: str = Field(default="runner")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _strip_email(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        if not _EMAIL_PATTERN.match(v):
+            raise ValueError("A valid email address is required")
+        return v
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _strip_display_name(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
 
 
 class InviteUserResponse(BaseModel):
@@ -1730,7 +1754,10 @@ async def admin_invite_user(
             existing = await get_account_by_email(session, req.email)
             if existing is not None:
                 membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
-                if membership is not None:
+                # A tombstoned membership (deactivated_at set, gh-1794/FAR-533)
+                # is not a live membership: the admin may re-invite, and
+                # acceptance reactivates it (see auth.accept_invite).
+                if membership is not None and membership.deactivated_at is None:
                     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_MSG_EMAIL_ALREADY_MEMBER)
 
             if await has_live_for_email(session, org_id=current_user.organisation_id, email=req.email):
@@ -1770,7 +1797,10 @@ async def admin_invite_user(
     base_url = settings.modulo_public_url.rstrip("/")
     return InviteUserResponse(
         id=str(invitation.id),
-        invite_url=f"{base_url}/accept-invite?token={plaintext}",
+        # The plaintext token rides in the URL FRAGMENT (never sent to servers,
+        # proxies, or Referer logs) — same secret-in-URL convention as the MCP
+        # setup handoff and SSO routes.
+        invite_url=f"{base_url}/accept-invite#token={plaintext}",
         expires_at=expires_at.isoformat(),
     )
 

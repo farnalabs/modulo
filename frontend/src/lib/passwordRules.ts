@@ -3,12 +3,17 @@ export type PasswordRuleCode = 'too_short' | 'missing_uppercase' | 'missing_lowe
 export const PASSWORD_MIN_LENGTH = 8
 
 /**
- * Single source of truth for client-side password rules (FAR-461).
+ * Client-side password UX pre-check (FAR-461). This is NOT a mirror of the
+ * backend contract: the backend (`validate_password_strength` in
+ * `auth/passwords.py`) requires length ≥ 8, ≤ 72 UTF-8 bytes, and ≥ 30 bits
+ * of Shannon entropy — with NO character-class rules. These client rules are
+ * intentionally stricter than the backend (requiring upper + lower + digit
+ * classes implies ≳ 47 bits), so a password accepted here is guaranteed to
+ * pass the server. The two rule sets evolve independently: this is a
+ * sign-up-UX nudge only, and the backend remains the authoritative gate.
  *
- * Mirrors the backend `validate_password_strength` contract: minimum length
- * plus at least one uppercase letter, one lowercase letter, and one digit.
  * Returns the FIRST failing rule as a stable error-code string, or null when
- * the password satisfies every rule.
+ * the password satisfies every client rule.
  */
 export function validatePasswordClient(password: string): PasswordRuleCode | null {
   if (password.length < PASSWORD_MIN_LENGTH) {

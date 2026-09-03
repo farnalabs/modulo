@@ -76,13 +76,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 
 const { t } = useI18n()
-const route = useRoute()
 const router = useRouter()
 const { post } = useApi()
 
@@ -94,13 +93,20 @@ const success = ref(false)
 // Branch (d): the invited email already has a local account with a password.
 const usedExistingAccount = ref(false)
 
-const inviteToken = computed<string>(() => {
-  const q = route.query.token
-  if (typeof q === 'string' && q) return q
-  // Fallback for public SPA deployments where query state is read from the URL directly.
-  const fromUrl = new URLSearchParams(window.location.search).get('token')
-  return fromUrl ?? ''
-})
+// The one-time invite token is delivered in the URL FRAGMENT (#token=...) —
+// never the query string — so it is not sent to the server nor leaked via
+// Referer/access logs (same convention as ModelBackendSetupView). Strip it
+// from the address bar / history so the secret does not linger.
+const tokenFromFragment = readFragmentToken()
+if (tokenFromFragment) {
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+}
+const inviteToken = ref(tokenFromFragment)
+
+function readFragmentToken(): string {
+  const token = new URLSearchParams(window.location.hash.slice(1)).get('token')
+  return token ?? ''
+}
 
 const missingToken = computed(() => inviteToken.value === '')
 const successMessage = computed(() =>

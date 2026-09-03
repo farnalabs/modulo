@@ -222,6 +222,35 @@ describe('AdminUsersView', () => {
     // Copying from the shared dialog copies the create-time credential.
     await wrapper.find('[data-testid="admin-users-copy-password"]').trigger('click')
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Sup3rSecret!')
+    // Success state (not the error state) after a resolved copy.
+    await flushPromises()
+    expect(wrapper.find('[data-testid="admin-users-copy-error"]').exists()).toBe(false)
+  })
+
+  it('shows a visible error state when the clipboard write is rejected', async () => {
+    mockPost.mockResolvedValue({ id: 'u-new', email: 'carol@example.com', display_name: 'Carol', org_role: 'runner' })
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('carol@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Carol')
+    await wrapper.find('[data-testid="admin-users-create-password"]').setValue('Sup3rSecret!')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-users-copy-password"]').trigger('click')
+    await flushPromises()
+
+    // A rejected copy must NOT claim "Copied!" — the show-once secret needs an
+    // honest visible error state instead.
+    expect(wrapper.find('[data-testid="admin-users-copy-error"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Copied!')
   })
 
   it('reuses the same dialog after reset password with the enforced-change wording', async () => {

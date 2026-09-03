@@ -2,20 +2,20 @@
 
 Invitations live OUTSIDE the ``rls_org_isolation`` regime (pre-authenticated
 consumption), so every helper scopes by organisation explicitly. Token
-plaintexts are ``secrets.token_urlsafe(32)``; only their SHA-256 hex is
-persisted.
+plaintexts are 256-bit urlsafe values minted by
+``modulo.util.one_time_token.generate_token`` (shared with the MCP setup
+handoff); only their SHA-256 hex is persisted.
 """
 
-import hashlib
-import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.invitation import Invitation
+from modulo.util.one_time_token import generate_token, hash_token
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
@@ -23,11 +23,28 @@ if TYPE_CHECKING:
 
 def hash_invitation_token(token: str) -> str:
     """SHA-256 hex of a token plaintext — the value stored in invitations.token_hash."""
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hash_token(token)
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _live_conditions(
+    invitation: type[Invitation],
+) -> tuple[ColumnElement[bool], ColumnElement[bool], ColumnElement[bool]]:
+    """Liveness predicate shared by every lookup/mutation: an invitation is
+    live when it is un-consumed, un-revoked, and not yet expired.
+
+    Kept in ONE place so ``get_valid_by_token_hash`` (the pre-CAS read) and
+    ``consume_invitation``'s CAS WHERE clause stay semantically identical —
+    that invariant is what makes double consumption impossible.
+    """
+    return (
+        invitation.consumed_at.is_(None),
+        invitation.revoked_at.is_(None),
+        invitation.expires_at > _now(),
+    )
 
 
 async def create_invitation(
@@ -42,7 +59,7 @@ async def create_invitation(
 ) -> tuple[Invitation, str]:
     """Create an invitation. Returns ``(invitation, plaintext)`` — the plaintext
     is shown to the inviting admin exactly once and never persisted."""
-    plaintext = secrets.token_urlsafe(32)
+    plaintext = generate_token()
     invitation = Invitation(
         organisation_id=organisation_id,
         email=email,
@@ -65,9 +82,7 @@ async def has_live_for_email(session: AsyncSession, *, org_id: uuid.UUID, email:
         .where(
             Invitation.organisation_id == org_id,
             Invitation.email == email,
-            Invitation.consumed_at.is_(None),
-            Invitation.revoked_at.is_(None),
-            Invitation.expires_at > _now(),
+            *_live_conditions(Invitation),
         )
         .limit(1)
     )
@@ -84,9 +99,7 @@ async def get_valid_by_token_hash(session: AsyncSession, token_hash: str) -> Inv
         select(Invitation)
         .where(
             Invitation.token_hash == token_hash,
-            Invitation.consumed_at.is_(None),
-            Invitation.revoked_at.is_(None),
-            Invitation.expires_at > _now(),
+            *_live_conditions(Invitation),
         )
         .with_for_update()
     )
@@ -106,9 +119,7 @@ async def consume_invitation(session: AsyncSession, invitation: Invitation) -> b
             update(Invitation)
             .where(
                 Invitation.id == invitation.id,
-                Invitation.consumed_at.is_(None),
-                Invitation.revoked_at.is_(None),
-                Invitation.expires_at > _now(),
+                *_live_conditions(Invitation),
             )
             .values(consumed_at=_now())
         ),
@@ -129,9 +140,7 @@ async def revoke_invitation(session: AsyncSession, *, invitation_id: uuid.UUID, 
             .where(
                 Invitation.id == invitation_id,
                 Invitation.organisation_id == org_id,
-                Invitation.consumed_at.is_(None),
-                Invitation.revoked_at.is_(None),
-                Invitation.expires_at > _now(),
+                *_live_conditions(Invitation),
             )
             .values(revoked_at=_now())
         ),
@@ -149,9 +158,7 @@ async def list_pending_for_org(
     """List pending (not consumed / not revoked / not expired) org invitations."""
     conditions = (
         Invitation.organisation_id == org_id,
-        Invitation.consumed_at.is_(None),
-        Invitation.revoked_at.is_(None),
-        Invitation.expires_at > _now(),
+        *_live_conditions(Invitation),
     )
 
     count_q = select(func.count()).select_from(Invitation).where(*conditions)

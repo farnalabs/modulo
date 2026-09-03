@@ -297,6 +297,14 @@
           {{ copied ? $t('views.AdminUsersView.copied') : $t('views.AdminUsersView.copy') }}
         </Button>
       </div>
+      <p
+        v-if="copyError"
+        role="alert"
+        data-testid="admin-users-copy-error"
+        class="mt-2 text-sm text-destructive"
+      >
+        {{ copyError }}
+      </p>
       <template #footer>
         <div class="flex justify-end">
           <Button
@@ -452,6 +460,11 @@ const credentialTitle = computed(() => {
     : t('views.AdminUsersView.password_reset')
 })
 const copied = ref(false)
+// Clipboard failure must be visible: for a show-once secret a silent (or
+// lying "Copied!") failure can lock the admin out of the credential.
+// Literal text: the locale bundle (locales/en-US.js) has no copy-failure key
+// and is owned by another delivery slice.
+const copyError = ref('')
 
 async function showCredential(kind: CredentialKind, value: string, email: string, expiresAt = '') {
   // Clear any previous secret before swapping the dialog contents.
@@ -478,6 +491,7 @@ function dismissCredentialState() {
   credentialExpiresAt.value = ''
   inviteQrDataUrl.value = ''
   copied.value = false
+  copyError.value = ''
 }
 
 function dismissCredentialDialog() {
@@ -488,11 +502,17 @@ function dismissCredentialDialog() {
 
 let copyTimeout: ReturnType<typeof setTimeout> | null = null
 
-function copyCredential() {
-  navigator.clipboard.writeText(credentialValue.value)
-  copied.value = true
+async function copyCredential() {
+  copyError.value = ''
   if (copyTimeout) clearTimeout(copyTimeout)
-  copyTimeout = setTimeout(() => { copied.value = false }, 2000)
+  try {
+    await navigator.clipboard.writeText(credentialValue.value)
+    copied.value = true
+    copyTimeout = setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    copied.value = false
+    copyError.value = 'Copy failed — select the value above and copy it manually.'
+  }
 }
 
 // ── Flash + user actions ─────────────────────────────────────
