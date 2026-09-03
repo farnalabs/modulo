@@ -68,6 +68,11 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
+      # Scheduled runs start from an empty workspace - check out the repo so
+      # the pinned installer script below exists. Same checkout ref the other
+      # workflows use (deploy.yml, ci.yml); the job only needs contents: read.
+      - uses: actions/checkout@v7
+
       # Installed the same way the deploy workflow installs flyctl (the
       # pinned, sha256-verified installer in .github/scripts/) so both
       # workflows run the same flyctl.

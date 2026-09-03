@@ -29,8 +29,8 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading flyctl ${FLYCTL_VERSION} (linux x86_64)..."
-curl -fsSL --retry 3 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
-curl -fsSL --retry 3 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
 
 expected_sha="$(awk -v file="${tarball}" '$2 == file { print $1 }' "${work_dir}/checksums.txt")"
 if [ -z "${expected_sha}" ]; then
@@ -41,9 +41,14 @@ fi
 # Verify BEFORE extracting or executing anything from the tarball.
 echo "${expected_sha}  ${work_dir}/${tarball}" | sha256sum --check --strict -
 
-mkdir -p "${FLYCTL_INSTALL}"
+# Official fly.io installer layout: $FLYCTL_INSTALL/bin/flyctl plus a $FLYCTL_INSTALL/bin/fly
+# alias symlink. Consumers add $FLYCTL_INSTALL/bin to PATH and invoke both
+# `fly` (deploy.yml) and `flyctl` interchangeably, so both names must exist.
+mkdir -p "${FLYCTL_INSTALL}/bin"
 tar -xzf "${work_dir}/${tarball}" -C "${work_dir}"
-install -m 0755 "${work_dir}/flyctl" "${FLYCTL_INSTALL}/flyctl"
+install -m 0755 "${work_dir}/flyctl" "${FLYCTL_INSTALL}/bin/flyctl"
+ln -sf flyctl "${FLYCTL_INSTALL}/bin/fly"
 
-"${FLYCTL_INSTALL}/flyctl" version
-echo "flyctl ${FLYCTL_VERSION} installed to ${FLYCTL_INSTALL}/flyctl"
+"${FLYCTL_INSTALL}/bin/flyctl" version
+"${FLYCTL_INSTALL}/bin/fly" version
+echo "flyctl ${FLYCTL_VERSION} installed to ${FLYCTL_INSTALL}/bin/flyctl (alias: ${FLYCTL_INSTALL}/bin/fly)"
