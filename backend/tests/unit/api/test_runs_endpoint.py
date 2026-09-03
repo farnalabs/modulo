@@ -538,7 +538,7 @@ def test_get_run_warnings_is_empty_when_no_breakdown(client: TestClient) -> None
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
     assert resp.status_code == 200
-    assert resp.json()["warnings"] == []
+    assert not resp.json()["warnings"]
 
 
 # ---------------------------------------------------------------------------
