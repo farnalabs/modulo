@@ -162,7 +162,7 @@
                 {{ formatDateShort(new Date(inv.expires_at)) }}
               </td>
               <td class="table-cell-numeric">
-                <Button severity="danger" outlined :disabled="actionLoading[inv.id]" @click="openRevoke(inv)">
+                <Button severity="danger" outlined :disabled="actionLoading[inv.id]" data-testid="admin-invitations-revoke" @click="openRevoke(inv)">
                   {{ $t('views.AdminUsersView.revoke_invitation') }}
                 </Button>
               </td>
@@ -186,7 +186,7 @@
       @confirm="submitCreate"
     >
       <form @submit.prevent="submitCreate">
-        <div class="mb-3 flex gap-2" role="tablist" aria-label="Add user mode">
+        <div class="mb-3 flex gap-2" role="tablist" :aria-label="$t('views.AdminUsersView.add_user_mode')">
           <button
             type="button"
             role="tab"
@@ -363,6 +363,7 @@ import Dialog from 'primevue/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
+import type { components } from '../lib/api/client'
 import { generateStrongPassword } from '../utils/password'
 import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 import Select from 'primevue/select'
@@ -385,22 +386,8 @@ interface UserListResponse {
   page_size: number
 }
 
-interface InvitationItem {
-  id: string
-  email: string
-  display_name: string
-  org_role: string
-  invited_by: string
-  created_at: string
-  expires_at: string
-}
-
-interface InvitationListResponse {
-  items: InvitationItem[]
-  total: number
-  page: number
-  page_size: number
-}
+type InvitationItem = components['schemas']['InvitationItem']
+type InvitationListResponse = components['schemas']['InvitationListResponse']
 
 const { t } = useI18n()
 const { get, put: httpPut, post, delete: httpDelete } = useApi()
@@ -470,8 +457,6 @@ const credentialTitle = computed(() => {
 const copied = ref(false)
 // Clipboard failure must be visible: for a show-once secret a silent (or
 // lying "Copied!") failure can lock the admin out of the credential.
-// Literal text: the locale bundle (locales/en-US.js) has no copy-failure key
-// and is owned by another delivery slice.
 const copyError = ref('')
 
 async function showCredential(kind: CredentialKind, value: string, email: string, expiresAt = '') {
@@ -519,7 +504,7 @@ async function copyCredential() {
     copyTimeout = setTimeout(() => { copied.value = false }, 2000)
   } catch {
     copied.value = false
-    copyError.value = 'Copy failed — select the value above and copy it manually.'
+    copyError.value = t('views.AdminUsersView.copy_failed_manual')
   }
 }
 
