@@ -297,7 +297,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | – | OTel gRPC/HTTP exporter endpoint |
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider |
 | `MODULO_ADMIN_SECRET` | No | – | Shared secret for `modulo-migrate` CLI auth |
-| `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL |
+
 
 ---
 
@@ -307,7 +307,7 @@ Modulo supports three deployment modes depending on your needs.
 
 ### Standalone (single-user, local)
 
-Three environment variables are **required** and have no default — the app
+Three environment variables are **required** and have no default: the app
 refuses to start without them:
 
 | Variable | Purpose | How to generate |

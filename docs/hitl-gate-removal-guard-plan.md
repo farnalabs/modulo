@@ -25,7 +25,7 @@ HITL gates (`hitl_gate_config` on a pipeline edge, PRD §5/§7.x/§8.8) are the 
 Field-level, on an edge with a non-null `hitl_gate_config`:
 - `human_only: true → false`.
 - `required_team_id` changed to `null` or to any different team ID.
-- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:296-393`'s `_hitl_gate` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
+- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:3446-3521`'s `_hitl_gate` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
 - `eval_condition` changed at all – same reasoning.
 
 `claim_expiry_minutes` is deliberately NOT a weakening-capable field: a shorter expiry is stricter, not weaker. On expiry the claim is reset and the run returns to `awaiting_human` (`expiry_job.py`) – it never releases the gate or auto-approves the run, so a decrease cannot reduce the HITL control's effect (review finding on §1; verified against `expiry_job.py` / `pipeline_execution.py` resume semantics).
@@ -68,7 +68,7 @@ Four independent complete redesigns across iterations 9-12 were each found broke
 - Dedicated `AuditEvent` via `append_audit_event()`, same transaction as graph persistence.
 - Denied attempts audited: `hitl_gate_removal_denied`, reason-coded (insufficient-role / role-changed-reauth-required / role-check-db-error / correlation-key-mismatch / legacy-snapshot-ambiguous / mcp-weakening-not-permitted).
 - Counters for allowed/blocked, tagged by `weakening_type` and reason code.
-- **Notifier silent-loss bug fixed (found in iteration 16, unrelated to ADR-017)**: `_dispatch_inline()`'s `if not endpoints: return []` early return (`core/notifier/__init__.py:282-285`), which previously made in-app `Notification` creation unreachable whenever an org had zero webhook subscribers, is removed – webhook dispatch (a no-op zero-iteration loop when `endpoints` is empty) and in-app notification creation become two independent, always-executed steps. This is a small, general fix, not HITL-specific, but was found while building this plan's alerting and should ship with it (or earlier, as a standalone one-line fix, if that's faster – flagged in Recommendation #3 below).
+- **Notifier silent-loss bug fixed (found in iteration 16, unrelated to ADR-017)**: `_dispatch_inline()`'s `if not endpoints: return []` early return (`core/notifier/__init__.py:360-361`), which previously made in-app `Notification` creation unreachable whenever an org had zero webhook subscribers, is removed – webhook dispatch (a no-op zero-iteration loop when `endpoints` is empty) and in-app notification creation become two independent, always-executed steps. This is a small, general fix, not HITL-specific, but was found while building this plan's alerting and should ship with it (or earlier, as a standalone one-line fix, if that's faster – flagged in Recommendation #3 below).
 - New event types require explicit `event_mapper.py` `_EVENT_CONFIG` registration with `scope: "admin"`.
 
 ### 6. Frontend
