@@ -160,22 +160,30 @@ def _eval_calculated(
     try:
         params = build_params(telemetry, component, settings=settings)
         amount = evaluate_formula(component.formula, params, CALCULATED_ALLOWED_IDENTS)
-        entry["basis"] = _basis_within_limit(
-            {
-                "wall_clock_hours": float(params.get("wall_clock_hours", Decimal(0))),
-                "tokens_input": int(telemetry.tokens_input),
-                "tokens_output": int(telemetry.tokens_output),
-                "nodes_estimated": telemetry.nodes_estimated,
-                # Agent-reported token sums (FAR-491) — DISPLAY-ONLY basis
-                # surfacing; never an input to the system's built-in money
-                # math (operator formulas may reference these identifiers).
-                "tokens_input_reported": int(telemetry.tokens_input_reported),
-                "tokens_output_reported": int(telemetry.tokens_output_reported),
-                "tokens_total_reported": int(telemetry.tokens_total_reported),
-                "tokens_cache_read_reported": int(telemetry.tokens_cache_read_reported),
-                "tokens_cache_write_reported": int(telemetry.tokens_cache_write_reported),
-            }
-        )
+        basis: dict[str, Any] = {
+            "wall_clock_hours": float(params.get("wall_clock_hours", Decimal(0))),
+            "tokens_input": int(telemetry.tokens_input),
+            "tokens_output": int(telemetry.tokens_output),
+            "nodes_estimated": telemetry.nodes_estimated,
+            # Agent-reported token sums (FAR-491) — DISPLAY-ONLY basis
+            # surfacing; never an input to the system's built-in money
+            # math (operator formulas may reference these identifiers).
+            "tokens_input_reported": int(telemetry.tokens_input_reported),
+            "tokens_output_reported": int(telemetry.tokens_output_reported),
+            "tokens_total_reported": int(telemetry.tokens_total_reported),
+            "tokens_cache_read_reported": int(telemetry.tokens_cache_read_reported),
+            "tokens_cache_write_reported": int(telemetry.tokens_cache_write_reported),
+        }
+        # Partial-report consistency signal (FAR-532 wave-2, display-only):
+        # the producer contract pins total == input + output, so a summed
+        # reported total that disagrees with summed input + output means the
+        # report is partial or internally inconsistent (e.g. total present
+        # with input/output omitted). Surface it in the basis instead of
+        # rendering a silently-mismatched triple. A fully-absent report
+        # (0 == 0 + 0) is never flagged.
+        if telemetry.tokens_total_reported != telemetry.tokens_input_reported + telemetry.tokens_output_reported:
+            basis["tokens_reported_inconsistent"] = True
+        entry["basis"] = _basis_within_limit(basis)
         amount = amount.quantize(_QUANT, rounding=ROUND_HALF_UP)
         entry["amount_usd"] = _entry_amount(amount)
         return entry, amount

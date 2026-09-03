@@ -61,8 +61,10 @@ from modulo.core.cost_controller.breakdown.metrics import (
 from modulo.core.cost_controller.breakdown.params import (
     INPUT_TOKEN_RATE,
     OUTPUT_TOKEN_RATE,
+    REPORTED_TOKEN_CHAIN,
     CostComponentConfig,
     build_telemetry,
+    coerce_reported_token,
 )
 from modulo.core.cost_controller.system_config import (
     acquire_kv_lock,
@@ -492,26 +494,13 @@ def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | Non
 #: entries: reported tokens are DISPLAY-ONLY analytics and must not feed
 #: ``Run.total_tokens``, the ``llm_tokens`` cost component, or the system's
 #: built-in money math (operator-defined formulas may reference them).
-_REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = (
-    ("model_tokens_input", "reported_input_tokens"),
-    ("model_tokens_output", "reported_output_tokens"),
-    ("model_tokens_total", "reported_total_tokens"),
-    ("model_tokens_cache_read", "reported_cache_read_tokens"),
-    ("model_tokens_cache_write", "reported_cache_write_tokens"),
+#: DERIVED from the shared ``REPORTED_TOKEN_CHAIN`` (FAR-532 wave-2) so the
+#: producer -> ``model_tokens_*`` -> ``reported_*`` -> counter chain cannot
+#: drift between layers; reading order is (src, dst) — SOURCE first,
+#: DESTINATION second — matching node_runner's ``_TOKEN_USAGE_FIELD_MAP``.
+_REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
+    (binding.node_field, binding.union_key) for binding in REPORTED_TOKEN_CHAIN
 )
-
-
-def _coerce_reported_token(value: Any) -> int | None:
-    """Tri-state reported-token coercion — the same rule as extraction.
-
-    Bool / non-int / negative → ``None`` (treated as ABSENT, never a ``0``
-    placeholder). A valid ``0`` report is a real report and passes through.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    if value < 0:
-        return None
-    return value
 
 
 def _fold_token_usage(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
@@ -519,19 +508,23 @@ def _fold_token_usage(node_dict: dict[str, Any], output_obj: dict[str, Any] | No
 
     The node-output dict carries ``model_tokens_*`` (extracted by node_runner
     from the sandbox agent's output.json ``token_usage``). When the output is
-    PRESENT each mapped field is folded (validated tri-state — an invalid
-    stored value is treated as ABSENT and popped); when the output LACKS the
-    field any previously folded value is popped so a stale fold can never
-    survive a re-enrich. When the output is ABSENT entirely the stored-union
-    values are left untouched (the fallback authority — mirrors
-    ``_fold_model_cost``'s branch 3). Server-measured token keys are never
-    read or written here.
+    PRESENT each mapped field is folded (validated tri-state via the shared
+    ``coerce_reported_token`` — an invalid stored value is treated as ABSENT
+    and popped); when the output LACKS the field any previously folded value
+    is popped so a stale fold can never survive a re-enrich. When the output
+    is ABSENT entirely the stored-union values are the fallback authority but
+    are RE-VALIDATED tri-state (invalid stored values popped — the mirror of
+    ``_fold_model_cost``'s branch-3 re-clamp defence; FAR-532 wave-2).
+    Server-measured token keys are never read or written here.
     """
     if output_obj is None:
+        for _src, dst in _REPORTED_TOKEN_FIELD_MAP:
+            if dst in node_dict and coerce_reported_token(node_dict[dst]) is None:
+                node_dict.pop(dst, None)
         return
     for src, dst in _REPORTED_TOKEN_FIELD_MAP:
         if src in output_obj:
-            coerced = _coerce_reported_token(output_obj[src])
+            coerced = coerce_reported_token(output_obj[src])
             if coerced is None:
                 node_dict.pop(dst, None)
             else:
@@ -673,7 +666,15 @@ def _write_back_node_cost(
 
 
 def _derive_total_tokens(enriched: dict[str, dict[str, Any]]) -> int:
-    """Derive ``Run.total_tokens`` from the SERVER-measured entries only (v22 M1)."""
+    """Derive ``Run.total_tokens`` from the SERVER-measured entries only (v22 M1).
+
+    The enriched union ALSO carries the agent-reported ``reported_*`` token
+    keys (FAR-491) — including ``reported_total_tokens`` — and this function
+    DELIBERATELY IGNORES them: reported tokens are display-only analytics, so
+    ``Run.total_tokens`` stays server-measured-only by design (FAR-532 wave-2
+    documents this where the summing happens — the union carries the reported
+    fields; the sum never reads them).
+    """
     total = 0
     for entry in (enriched or {}).values():
         if not isinstance(entry, dict):
