@@ -569,9 +569,14 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          PR_NUM="${{ github.event.pull_request.number }}"
-          BRANCH="${{ github.event.pull_request.head.ref }}"
+          # PR_NUM / BRANCH are mapped through the step env block (S7630):
+          # GitHub expressions inside a run block are interpolated before the
+          # shell parses the script, so untrusted branch-name content could
+          # break out into code execution. Via env: they are data, never code.
+          # (Same pattern as the "Trigger Modulo Branch Fixer" step below.)
 
           # Count how many times the branch fixer has already pushed fix commits
           # to this PR. Each successful fix produces exactly one commit with
