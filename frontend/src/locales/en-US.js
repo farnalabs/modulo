@@ -832,7 +832,8 @@ export default {
       "type_label": "Type",
       "manual": "Manual",
       "agent": "Agent",
-      "sandbox_agent": "Sandbox Agent",
+      "node_type_agent": "Inline Prompt",
+      "sandbox_agent": "Runner",
       "node_router_badge": "ROUTER",
       "node_router_label": "Router",
       "node_hitl_badge": "HITL",
@@ -1493,7 +1494,7 @@ export default {
     },
     "AdminSandboxConcurrencyView": {
       "max_concurrent_sandbox_runs": "Max concurrent sandbox runs",
-      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many sandbox-agent runs execute at once across the org. Leave empty for unlimited.",
+      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many Runner runs execute at once across the org. Leave empty for unlimited.",
       "leave_empty_for_unlimited": "Leave empty for unlimited.",
       "concurrent_run_limit": "Concurrent sandbox run limit",
       "save": "Save",
@@ -2877,6 +2878,11 @@ export default {
     }
   },
   "components": {
+    "RunnerTier": {
+      "bundled_docker": "Bundled Runner (Docker)",
+      "external_e2b": "External Runner (E2B)",
+      "local": "Local"
+    },
     "Sparkline": {
       "no_data": "No data",
       "chart_series": "Chart with {count} data points: {values}"
