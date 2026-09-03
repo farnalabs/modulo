@@ -11943,6 +11943,10 @@ export interface components {
              * @default false
              */
             graduated: boolean;
+            /** X */
+            x?: number | null;
+            /** Y */
+            y?: number | null;
         };
         /**
          * LifecycleMapStageItem
@@ -11968,6 +11972,10 @@ export interface components {
             pipeline_id?: string | null;
             /** External Url */
             external_url?: string | null;
+            /** X */
+            x?: number | null;
+            /** Y */
+            y?: number | null;
         };
         /**
          * LifecycleMapTransfer
