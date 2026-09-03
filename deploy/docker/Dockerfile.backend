@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.27
 FROM python:3.14-slim AS builder
 WORKDIR /app
 ENV UV_LINK_MODE=copy
