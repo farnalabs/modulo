@@ -1,0 +1,273 @@
+# "Flyctl version drift check" - weekly sentinel for the pinned flyctl version.
+#
+# Why this workflow exists
+# ------------------------
+# .github/scripts/install-flyctl.sh pins the flyctl version used by CI and the
+# deploy workflow (the FLYCTL_VERSION default, e.g. v0.4.97) per the
+# verified-install requirement (FAR-565, SonarQube S8482): the release tarball
+# is downloaded directly from the superfly/flyctl GitHub release and its sha256
+# is verified against the release's own checksums.txt before anything is
+# executed. A pin is the point of that design - but nothing notices when the
+# pin goes stale, and dependabot cannot see a version embedded in a custom
+# shell script. This workflow closes that gap: every Monday 06:00 UTC it
+# compares the pin against the latest superfly/flyctl release tag and manages a
+# single tracking issue so staleness is visible.
+#
+# Idempotent issue management
+# ---------------------------
+# - Pin behind latest: one open "[flyctl-drift]" issue is created (labeled
+#   infrastructure + agent-generated). If one is already open, it is updated
+#   ONLY when the (pin, latest) pair changed - a comment is appended, so
+#   weekly runs never spam an unchanged issue.
+# - Pin current (or newer): any open "[flyctl-drift]" issue is closed with a
+#   closure comment ("pin caught up (or was bumped) - latest is vX.Y.Z"), so
+#   the check self-heals. The closure comment is posted BEFORE the close and
+#   the close only runs if the comment succeeded: the comment is the audit
+#   trail, and a reason-less closure is worse than one more week open (the
+#   next weekly run retries).
+#
+# Failure policy
+# --------------
+# Every ambiguity fails LOUDLY (job failure + annotation) instead of silently
+# skipping - a silent skip would hide a stale pin indefinitely. This mirrors
+# the FAR-528 lesson: distinguish "API failed" from "condition met"; a guard
+# that concludes success on unknown state is the worst failure mode. In
+# particular, a releases/latest API failure FAILS the job (never "treat as
+# not stale"), and a missing install-flyctl.sh fails the run too (until the
+# pinned installer merges, the check cannot do its job - the loud red run IS
+# the signal).
+#
+# The run-blocks never interpolate ${{ }} expressions (FAR-565 convention):
+# all dynamic values enter via job/step env: and are referenced as shell
+# variables, and every version is regex-validated (vX.Y.Z) before it is ever
+# interpolated into an issue title, body, or comment.
+
+name: "Flyctl version drift check"
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: flyctl-version-drift
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    name: Compare pinned flyctl version to latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # github.token: same-repo API reads/writes must use the workflow runtime
+      # token - a scoped PAT yields 404, which looks exactly like an empty
+      # result (FAR-528 lesson).
+      GH_TOKEN: ${{ github.token }}
+      PIN_SCRIPT: .github/scripts/install-flyctl.sh
+      TITLE_PREFIX: "[flyctl-drift]"
+    steps:
+      - name: Check out repository (read the pinned installer)
+        uses: actions/checkout@v7
+
+      - name: Compare pinned version to latest release
+        id: compare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
+
+          # --- 1. Extract the pinned version ------------------------------
+          if [ ! -f "$PIN_SCRIPT" ]; then
+            echo "::error::${PIN_SCRIPT} not found - the pinned flyctl installer (FAR-565) has not merged or was moved; the drift check cannot determine the pinned version. Failing loudly instead of silently skipping."
+            exit 1
+          fi
+          # The pin is the FLYCTL_VERSION default, e.g.
+          #   FLYCTL_VERSION="${FLYCTL_VERSION:-v0.4.97}"
+          PIN="$(sed -nE 's/^FLYCTL_VERSION="\$\{FLYCTL_VERSION:-(v[0-9]+\.[0-9]+\.[0-9]+)\}".*/\1/p' "$PIN_SCRIPT" | head -n1)"
+          if [ -z "$PIN" ]; then
+            echo "::error::could not extract a FLYCTL_VERSION default (vX.Y.Z) from ${PIN_SCRIPT} - the pin format changed; update this workflow's extraction."
+            exit 1
+          fi
+
+          # --- 2. Fetch the latest release tag -----------------------------
+          # An API failure is NOT "not stale": fail the job loudly so the gap
+          # is visible rather than silently skipped (FAR-528 lesson).
+          LATEST="$(gh api repos/superfly/flyctl/releases/latest --jq .tag_name 2>/dev/null || true)"
+          if [ -z "$LATEST" ]; then
+            echo "::warning::gh api repos/superfly/flyctl/releases/latest failed - cannot determine the latest flyctl release this cycle. Failing the job instead of treating the pin as current: a silent skip would hide a stale pin indefinitely. Transient API failures resolve by the next weekly run."
+            exit 1
+          fi
+
+          # Both values must look like vX.Y.Z before anything downstream
+          # (issue titles/bodies/comments) ever interpolates them.
+          if [ "$(printf '%s\n%s\n' "$PIN" "$LATEST" | grep -Evc '^v[0-9]+\.[0-9]+\.[0-9]+$')" -ne 0 ]; then
+            echo "::error::unexpected version shape (pin='${PIN}', latest='${LATEST}') - refusing to compare or publish."
+            exit 1
+          fi
+
+          # --- 3. Compare (MAJOR.MINOR.PATCH, numeric via sort -V) ---------
+          if [ "${PIN#v}" = "${LATEST#v}" ]; then
+            STALE=false
+          elif [ "$(printf '%s\n%s\n' "${PIN#v}" "${LATEST#v}" | sort -V | head -n1)" = "${PIN#v}" ]; then
+            STALE=true # pin sorts before latest -> pin is older
+          else
+            STALE=false # pin is newer than the latest release (pre-bumped) -> not stale
+          fi
+
+          echo "pinned=${PIN} latest=${LATEST} stale=${STALE}"
+          {
+            echo "### Flyctl version drift check"
+            echo ""
+            echo "| pinned (install-flyctl.sh) | latest release | stale |"
+            echo "| --- | --- | --- |"
+            echo "| ${PIN} | ${LATEST} | ${STALE} |"
+          } >> "$SUMMARY"
+
+          echo "stale=${STALE}" >> "$GITHUB_OUTPUT"
+          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the drift issue
+        if: steps.compare.outputs.stale == 'true'
+        shell: bash
+        env:
+          PIN: ${{ steps.compare.outputs.pin }}
+          LATEST: ${{ steps.compare.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
+          TITLE="${TITLE_PREFIX} pinned ${PIN} is behind latest ${LATEST}"
+
+          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title 2>/dev/null)" || {
+            echo "::error::could not list open issues (gh api failure) - cannot check for an existing [flyctl-drift] issue; failing instead of risking a duplicate."
+            exit 1
+          }
+          # First (lowest-numbered) open issue whose title starts with the
+          # stable marker prefix; empty when none. Client-side filtering via
+          # jq is immune to GitHub search-syntax quirks around "[...]".
+          ISSUE_NUM="$(printf '%s' "$OPEN_JSON" | jq -r --arg p "$TITLE_PREFIX" '[.[] | select((.title | startswith($p)))] | sort_by(.number) | .[0].number // ""')"
+
+          if [ -z "$ISSUE_NUM" ]; then
+            # Ensure the labels exist before create - `gh issue create
+            # --label` hard-fails on a missing label, and `infrastructure`
+            # is not part of this repo's current default label set. No-op
+            # for labels that already exist (checked first; never force-
+            # overwrites an existing label's color/description).
+            ensure_label() {
+              local name="$1" color="$2" desc="$3"
+              if gh label list --repo "$GITHUB_REPOSITORY" --limit 200 --json name --jq '.[].name' 2>/dev/null | grep -Fxq "$name"; then
+                return 0
+              fi
+              if gh label create "$name" --repo "$GITHUB_REPOSITORY" --color "$color" --description "$desc"; then
+                echo "created missing label '${name}'"
+              else
+                echo "::warning::could not create label '${name}' - the drift issue may be created without it."
+              fi
+            }
+            ensure_label "infrastructure" "1D76DB" "Infrastructure and CI-workflow work"
+            ensure_label "agent-generated" "BFD4F2" "Created by an automated agent"
+
+            BODY_FILE="$(mktemp)"
+            cat > "$BODY_FILE" <<BODY_EOF
+          ## flyctl version pin is stale
+
+          The pinned flyctl version in \`.github/scripts/install-flyctl.sh\` (the \`FLYCTL_VERSION\` default) is behind the latest superfly/flyctl release.
+
+          | | |
+          | --- | --- |
+          | Pinned | ${PIN} |
+          | Latest | ${LATEST} |
+
+          **What pins it:** \`.github/scripts/install-flyctl.sh\` - the verified installer (FAR-565) that downloads the flyctl release tarball and sha256-verifies it against the release's own checksums.txt before executing anything.
+
+          **How to bump (one line):** edit the \`FLYCTL_VERSION\` default in \`.github/scripts/install-flyctl.sh\` to ${LATEST} and open a PR - the sha256 is read from the release's own checksums.txt, so no second edit is needed.
+
+          **Release:** https://github.com/superfly/flyctl/releases/tag/${LATEST}
+
+          ---
+          Auto-raised by the "Flyctl version drift check" workflow (weekly, Mondays 06:00 UTC). This issue is idempotent: it closes itself automatically once the pin catches up (or is bumped).
+          BODY_EOF
+            if gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label infrastructure --label agent-generated --body-file "$BODY_FILE"; then
+              echo "::notice::created drift issue: ${TITLE}"
+              echo "- Created drift issue: \`${TITLE}\`" >> "$SUMMARY"
+            else
+              echo "::error::gh issue create failed - the drift could not be tracked. Check labels/permissions and re-run via workflow_dispatch."
+              exit 1
+            fi
+          else
+            EXISTING_TITLE="$(printf '%s' "$OPEN_JSON" | jq -r --arg n "$ISSUE_NUM" '.[] | select(.number == ($n | tonumber)) | .title' | head -n1)"
+            if [ "$EXISTING_TITLE" = "$TITLE" ]; then
+              echo "::notice::drift issue #${ISSUE_NUM} already open with identical versions - no update needed."
+              echo "- Drift issue #${ISSUE_NUM} already open with identical versions (no update)." >> "$SUMMARY"
+            else
+              COMMENT_FILE="$(mktemp)"
+              cat > "$COMMENT_FILE" <<COMMENT_EOF
+          Version update detected by the drift check:
+
+          | | |
+          | --- | --- |
+          | Pinned | ${PIN} |
+          | Latest | ${LATEST} |
+
+          (Previously tracked as: ${EXISTING_TITLE})
+          COMMENT_EOF
+              if gh issue comment "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --body-file "$COMMENT_FILE"; then
+                echo "::notice::appended version update to drift issue #${ISSUE_NUM}."
+                echo "- Appended version update to drift issue #${ISSUE_NUM}." >> "$SUMMARY"
+              else
+                echo "::error::gh issue comment failed on #${ISSUE_NUM} - the version change is not recorded."
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Self-heal - close any open drift issue
+        if: steps.compare.outputs.stale != 'true'
+        shell: bash
+        env:
+          LATEST: ${{ steps.compare.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
+
+          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title 2>/dev/null)" || {
+            echo "::error::could not list open issues (gh api failure) - cannot close any stale [flyctl-drift] issue; failing instead of leaving them open silently."
+            exit 1
+          }
+          ISSUE_NUMS="$(printf '%s' "$OPEN_JSON" | jq -r --arg p "$TITLE_PREFIX" '[.[] | select((.title | startswith($p)))] | sort_by(.number) | .[].number' 2>/dev/null || true)"
+
+          if [ -z "$ISSUE_NUMS" ]; then
+            echo "::notice::pin is current (latest ${LATEST}) and no open [flyctl-drift] issue - nothing to do."
+            exit 0
+          fi
+
+          COMMENT_FILE="$(mktemp)"
+          cat > "$COMMENT_FILE" <<COMMENT_EOF
+          pin caught up (or was bumped) - latest is ${LATEST}
+
+          The pinned flyctl version now matches (or is newer than) the latest superfly/flyctl release, so this issue closes itself.
+
+          https://github.com/superfly/flyctl/releases/tag/${LATEST}
+          COMMENT_EOF
+
+          CLOSED=0
+          for NUM in $ISSUE_NUMS; do
+            # Comment BEFORE close, and only close if the comment posted - the
+            # comment is the closure's audit trail (reason-less bot closures
+            # are un-auditable). On failure: warn and retry next weekly run.
+            if gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body-file "$COMMENT_FILE" \
+              && gh issue close "$NUM" --repo "$GITHUB_REPOSITORY"; then
+              CLOSED=$((CLOSED + 1))
+              echo "::notice::closed drift issue #${NUM} (pin caught up; latest ${LATEST})."
+            else
+              echo "::warning::closure comment or close failed for issue #${NUM} - it may still be open; the next weekly run retries."
+            fi
+          done
+          echo "- Closed ${CLOSED} drift issue(s) - pin caught up (latest ${LATEST})." >> "$SUMMARY"
