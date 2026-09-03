@@ -103,6 +103,11 @@ jobs:
             # after a long backoff.
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+            # Truncate the shared response file before each attempt so a curl
+            # failure that writes no output cannot leak the previous attempt's
+            # stale body into the logs (control flow keys off HTTP_CODE, but
+            # the echoed body should stay honest).
+            : > "${RESPONSE_FILE}"
             HTTP_CODE=$(curl -s -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
