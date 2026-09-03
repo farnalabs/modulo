@@ -663,7 +663,6 @@
         v-if="runWarnings.length > 0"
         id="warnings"
         data-testid="run-detail-warnings"
-        role="status"
         aria-live="polite"
         class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
       >
