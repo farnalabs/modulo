@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -303,3 +304,104 @@ def test_revoke_invitation_requires_admin(operator_client: TestClient) -> None:
     invitation_id = uuid.uuid4()
     resp = operator_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 403
+
+
+def test_invite_user_integrity_error_conflicts(admin_client: TestClient) -> None:
+    """A DB-level IntegrityError (e.g. a unique/check violation surfaced after
+    the application-level 409 guards) maps to 409, never 500."""
+    with (
+        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch(
+            "modulo.api.routes.admin.create_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))
+        ),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.post(
+            "/api/v1/admin/users/invite",
+            json={"email": "new.member@example.com", "display_name": "New Member", "org_role": "runner"},
+        )
+    assert resp.status_code == 409
+
+
+def test_invite_user_programming_error_feature_unavailable(admin_client: TestClient) -> None:
+    """A ProgrammingError (missing migration column) degrades to 501 instead of 500."""
+    with (
+        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch(
+            "modulo.api.routes.admin.create_invitation",
+            new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
+        ),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.post(
+            "/api/v1/admin/users/invite",
+            json={"email": "new.member@example.com", "display_name": "New Member", "org_role": "runner"},
+        )
+    assert resp.status_code == 501
+
+
+def test_invite_user_sqlalchemy_error_503(admin_client: TestClient) -> None:
+    """A generic SQLAlchemyError degrades to 503 (database temporarily unavailable)."""
+    with (
+        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.admin.create_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.post(
+            "/api/v1/admin/users/invite",
+            json={"email": "new.member@example.com", "display_name": "New Member", "org_role": "runner"},
+        )
+    assert resp.status_code == 503
+
+
+def test_list_invitations_programming_error_501(admin_client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin.list_pending_for_org",
+        new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
+    ):
+        resp = admin_client.get("/api/v1/admin/users/invitations")
+    assert resp.status_code == 501
+
+
+def test_list_invitations_sqlalchemy_error_503(admin_client: TestClient) -> None:
+    with patch("modulo.api.routes.admin.list_pending_for_org", new=AsyncMock(side_effect=SQLAlchemyError("down"))):
+        resp = admin_client.get("/api/v1/admin/users/invitations")
+    assert resp.status_code == 503
+
+
+def test_revoke_invitation_integrity_error_conflicts(admin_client: TestClient) -> None:
+    invitation_id = uuid.uuid4()
+    with (
+        patch(
+            "modulo.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))
+        ),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
+    assert resp.status_code == 409
+
+
+def test_revoke_invitation_programming_error_501(admin_client: TestClient) -> None:
+    invitation_id = uuid.uuid4()
+    with (
+        patch(
+            "modulo.api.routes.admin.revoke_invitation",
+            new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
+        ),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
+    assert resp.status_code == 501
+
+
+def test_revoke_invitation_sqlalchemy_error_503(admin_client: TestClient) -> None:
+    invitation_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+    ):
+        resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
+    assert resp.status_code == 503

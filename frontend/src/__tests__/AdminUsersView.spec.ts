@@ -338,6 +338,59 @@ describe('AdminUsersView', () => {
     expect(wrapper.find('[data-testid="admin-users-create-password"]').exists()).toBe(false)
   })
 
+  it('submits an invite and surfaces the single-use invite link', async () => {
+    mockPost.mockResolvedValue({
+      id: 'inv-2',
+      invite_url: 'https://app.test/accept-invite#token=abc123',
+      expires_at: '2026-08-23T10:00:00+00:00',
+    })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('invitee@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Invitee')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith('/api/v1/admin/users/invite', {
+        email: 'invitee@example.com',
+        display_name: 'Invitee',
+        org_role: 'runner',
+      })
+    })
+    // The one-time invite URL is handed to the admin exactly once, in the
+    // shared credential dialog (never persisted by the frontend).
+    await vi.waitFor(() => {
+      const cred = wrapper.find('[data-testid="admin-users-credential-value"]')
+      expect(cred.exists()).toBe(true)
+      expect(cred.text()).toContain('token=abc123')
+    })
+  })
+
+  it('shows an inline error when sending an invite fails', async () => {
+    mockPost.mockRejectedValue(new Error('A user with this email already exists in this organisation'))
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('invitee@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Invitee')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain(
+        'A user with this email already exists in this organisation',
+      )
+    })
+  })
+
   it('clears the temporary password when the credential dialog is dismissed', async () => {
     mockPost.mockResolvedValue({ temporary_password: '$2b$12$tempsecret' })
     const wrapper = mountView()

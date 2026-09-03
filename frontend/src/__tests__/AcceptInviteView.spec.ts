@@ -102,4 +102,36 @@ describe('AcceptInviteView', () => {
       expect(err.text()).toContain('Invalid or expired invitation')
     })
   })
+
+  it('shows the existing-account success message when the email already has a local password', async () => {
+    window.history.replaceState({}, '', '/accept-invite#token=tok-123')
+    mockPost.mockResolvedValue({ detail: 'Invitation accepted', existing_account: true })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="accept-invite-submit"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="accept-invite-password"]').setValue('C0rr3ct-Horse-Battery')
+    await wrapper.find('[data-testid="accept-invite-confirm"]').setValue('C0rr3ct-Horse-Battery')
+    await wrapper.find('form').trigger('submit.prevent')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="accept-invite-success"]').exists()).toBe(true)
+    })
+    // Branch (d): the holder already had a local account, so the UI tells them
+    // to sign in with their existing credentials rather than "check your email".
+    expect(wrapper.text()).toContain('Membership added')
+  })
+
+  it('blocks submission when the password fails the strength rule', async () => {
+    window.history.replaceState({}, '', '/accept-invite#token=tok-123')
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="accept-invite-submit"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="accept-invite-password"]').setValue('abc')
+    await wrapper.find('[data-testid="accept-invite-confirm"]').setValue('abc')
+    await wrapper.find('form').trigger('submit.prevent')
+    await nextTick()
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="accept-invite-error"]').exists()).toBe(true)
+  })
 })

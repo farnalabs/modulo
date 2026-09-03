@@ -7,6 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -382,3 +383,63 @@ def test_accept_invite_record_success_failure_is_fail_open(client: TestClient) -
     assert resp.status_code == 200
     assert resp.json()["existing_account"] is False
     fake_limiter.record_success.assert_awaited_once()
+
+
+def test_accept_invite_integrity_error_conflicts(client: TestClient) -> None:
+    """A DB-level IntegrityError (e.g. a unique/check violation) maps to 409, never 500."""
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    patches["create_account"] = AsyncMock(side_effect=IntegrityError("dup", None, None))
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(return_value=None),
+            "get_membership_by_account_and_org": AsyncMock(return_value=None),
+            "create_membership": AsyncMock(return_value=MagicMock()),
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "This email cannot be enrolled with this invitation."
+
+
+def test_accept_invite_programming_error_501(client: TestClient) -> None:
+    """A ProgrammingError (missing migration column) degrades to 501."""
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    patches["create_account"] = AsyncMock(side_effect=ProgrammingError("no column", None, None))
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(return_value=None),
+            "get_membership_by_account_and_org": AsyncMock(return_value=None),
+            "create_membership": AsyncMock(return_value=MagicMock()),
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 501
+    assert resp.json()["detail"] == "Feature is not available. Run database migrations to enable it."
+
+
+def test_accept_invite_sqlalchemy_error_503(client: TestClient) -> None:
+    """A generic SQLAlchemyError degrades to 503."""
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    patches["create_account"] = AsyncMock(side_effect=SQLAlchemyError("down"))
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(return_value=None),
+            "get_membership_by_account_and_org": AsyncMock(return_value=None),
+            "create_membership": AsyncMock(return_value=MagicMock()),
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Invitation acceptance is temporarily unavailable. Please try again."
