@@ -315,7 +315,12 @@ jobs:
     # runner cost — the badge tracks main, not PRs. Reuses the coverage-report
     # artifact backend-test already uploads instead of re-running the backend
     # suite.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # workflow_dispatch is allowed so this otherwise push-to-main-only job can be
+    # validated manually BEFORE merge (a push-main-only job is invisible to PR CI,
+    # which is how the missing @vitest/coverage-v8 provider nearly shipped broken).
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch'
     needs: [backend-test]
     runs-on: ubicloud-standard-2
     steps:
