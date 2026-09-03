@@ -1591,6 +1591,105 @@ class TestRunExecutorWithWatchdog:
         fail.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_heartbeat_loss_cancellation_is_classified_not_propagated(self) -> None:
+        """S7497 contract pin (FAR-598): heartbeat-loss cancellation is swallowed.
+
+        The heartbeat loop fail-closes (``health_failed``) and the abort watcher
+        cancels the executor. The CancelledError handler must await the
+        watchdogs (so the terminal write commits), kill the sandbox,
+        terminal-fail with ``executor_heartbeat_lost`` and return
+        ``{"status": "failed"}``. The cancellation must NOT escape into the SAQ
+        worker: SAQ retries cancelled jobs (``job.retry("cancelled")``), which
+        would re-enqueue a job for an already-terminal run.
+        """
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        async def _fail_closed_health(*_a: object, health_failed: asyncio.Event | None = None, **_kw: object) -> None:
+            # Set the INTERNAL event run_executor_with_watchdog passed in —
+            # the abort watcher watches that instance, not a local one.
+            if health_failed is not None:
+                health_failed.set()
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock, side_effect=_fail_closed_health),
+            patch.object(pe, "_kill_sandbox_best_effort", new_callable=AsyncMock) as kill,
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed") as read_status,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        assert result == {"status": "failed"}
+        kill.assert_awaited_once()
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_heartbeat_lost"
+        read_status.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_supersession_cancellation_is_classified_not_propagated(self) -> None:
+        """S7497 contract pin (FAR-598): supersession cancellation is swallowed.
+
+        The heartbeat loop sets ``superseded`` (a successor re-claimed the run)
+        and the abort watcher cancels the executor. The CancelledError handler
+        must classify the cause and return without raising — the run row now
+        belongs to the successor, so no terminal write and no sandbox kill may
+        happen, and the cancellation must not leak into the SAQ worker (SAQ
+        would retry a job whose run is owned by another claim).
+        """
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        async def _superseding_heartbeat(*_a: object, superseded: asyncio.Event | None = None, **_kw: object) -> None:
+            # Set the INTERNAL event run_executor_with_watchdog passed in —
+            # the abort watcher watches that instance, not a local one.
+            if superseded is not None:
+                superseded.set()
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock, side_effect=_superseding_heartbeat),
+            patch.object(pe, "_kill_sandbox_best_effort", new_callable=AsyncMock) as kill,
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            # The successor owns the row now — it is back to ``running``.
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="running") as read_status,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        # The successor's row is not complete/awaiting_human -> failed outcome;
+        # the successor's claim is untouched.
+        assert result == {"status": "failed"}
+        kill.assert_not_awaited()
+        fail.assert_not_awaited()
+        read_status.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_executor_exception_terminal_fails_with_executor_failed(self) -> None:
         """A generic executor exception is terminal-failed with
         ``executor_failed`` (token-guarded) and the outcome is ``failed`` — never
