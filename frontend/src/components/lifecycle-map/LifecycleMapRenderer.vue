@@ -81,6 +81,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import type { Node, Edge } from '@vue-flow/core'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
 import type { JourneySummary } from '../../types/lifecycleMap'
+import { computeLifecycleMapLayout } from '../../stores/lifecycleMaps'
 import JourneyCard from './JourneyCard.vue'
 
 const props = defineProps<{
@@ -137,16 +138,20 @@ function stageNodeClasses(data: Record<string, unknown>): Record<string, boolean
 const flowNodes = computed<Node<Record<string, unknown>>[]>(() => {
   if (!props.mapData) return []
   const stages = props.mapData.stages ?? []
-  const cols = Math.ceil(Math.sqrt(stages.length))
-  const spacingX = 300
-  const spacingY = 160
-  return stages.map((stage, i) => {
-    const col = i % cols
-    const row = Math.floor(i / cols)
+  const transitions = props.mapData.transitions ?? []
+  const autoLayout = computeLifecycleMapLayout(
+    stages.map((s) => ({ id: s.id })),
+    transitions.map((t) => ({ source: t.source_stage_id, target: t.target_stage_id })),
+  )
+  return stages.map((stage) => {
+    const hasPosition = stage.x != null && stage.y != null
+    const position = hasPosition
+      ? { x: stage.x as number, y: stage.y as number }
+      : autoLayout[stage.id] ?? { x: 0, y: 0 }
     return {
       id: stage.id,
       type: 'stage',
-      position: { x: col * spacingX + 40, y: row * spacingY + 40 },
+      position,
       data: {
         stageId: stage.id,
         label: stage.name,

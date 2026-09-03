@@ -156,6 +156,8 @@ class LifecycleMapStageEditorItem(BaseModel):
     external_url: str | None = None
     owner: str | None = None
     graduated: bool = False
+    x: float | None = None
+    y: float | None = None
 
 
 class LifecycleMapEdgeEditorItem(BaseModel):
@@ -194,6 +196,8 @@ class LifecycleMapStageItem(BaseModel):
     graduated: bool = False
     pipeline_id: str | None = None
     external_url: str | None = None
+    x: float | None = None
+    y: float | None = None
 
 
 class LifecycleMapTransitionItem(BaseModel):
@@ -380,6 +384,8 @@ def _build_version_entry(lm: Any) -> LifecycleMapVersionResponse:
             external_url=s.get("external_url"),
             owner=s.get("owner"),
             graduated=bool(s.get("graduated", False)),
+            x=s.get("x"),
+            y=s.get("y"),
         )
         for s in (content.get("stages") or [])
         if isinstance(s, dict)
@@ -425,6 +431,8 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
             graduated=bool(s.get("graduated", False)),
             pipeline_id=s.get("pipeline_id"),
             external_url=s.get("external_url"),
+            x=s.get("x"),
+            y=s.get("y"),
         )
         for s in (content.get("stages") or [])
         if isinstance(s, dict)

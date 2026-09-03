@@ -48,6 +48,9 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
             {{ $t('views.LifecycleMapView.edit') }}
           </Button>
+          <Button severity="danger" outlined size="small" data-testid="lifecycle-map-view-delete" :aria-label="$t('views.LifecycleMapView.delete')" :disabled="!mapData" @click="showDeleteDialog = true">
+            {{ $t('views.LifecycleMapView.delete') }}
+          </Button>
         </div>
         <p
           v-if="exportError"
@@ -119,6 +122,20 @@
             >
               <JourneyCard :journey="journey" @open="openJourneyDetail(journey)" />
             </div>
+          </div>
+          <div v-if="store.hasMoreJourneys" class="mt-3">
+            <Button
+              severity="secondary"
+              outlined
+              size="small"
+              :loading="store.isLoadingMoreJourneys"
+              :disabled="store.isLoadingMoreJourneys"
+              :aria-label="$t('views.LifecycleMapView.journey.load_more')"
+              data-testid="lifecycle-map-journeys-load-more"
+              @click="loadMoreJourneys"
+            >
+              {{ store.isLoadingMoreJourneys ? $t('views.LifecycleMapView.journey.loading_more') : $t('views.LifecycleMapView.journey.load_more') }}
+            </Button>
           </div>
         </section>
 
@@ -223,6 +240,20 @@
         </div>
       </template>
     </Dialog>
+
+    <!-- Delete confirmation dialog -->
+    <FormDialog
+      v-model:open="showDeleteDialog"
+      :title="$t('views.LifecycleMapView.delete_confirm_title')"
+      :description="$t('views.LifecycleMapView.delete_confirm_body', { name: mapData?.name || '' })"
+      :confirm-text="$t('views.LifecycleMapView.delete')"
+      :loading="deleting"
+      @confirm="handleDeleteConfirm"
+    >
+      <p v-if="deleteError" role="alert" class="mt-3 text-sm text-destructive" data-testid="lifecycle-map-delete-error">
+        {{ deleteError }}
+      </p>
+    </FormDialog>
   </div>
 </template>
 
@@ -236,6 +267,7 @@ import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRen
 import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
 import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
+import FormDialog from '../../components/shared/FormDialog.vue'
 import { formatRunDate } from '../../utils/runUtils'
 import { shortId } from '../../utils/format'
 import Button from 'primevue/button'
@@ -295,6 +327,30 @@ async function onVersionChange(): Promise<void> {
 async function loadJourneys(): Promise<void> {
   if (!mapId.value) return
   await store.fetchJourneys(mapId.value)
+}
+
+async function loadMoreJourneys(): Promise<void> {
+  if (!mapId.value) return
+  await store.loadMoreJourneys(mapId.value)
+}
+
+const showDeleteDialog = ref(false)
+const deleting = ref(false)
+const deleteError = ref<string | null>(null)
+
+async function handleDeleteConfirm(): Promise<void> {
+  if (!mapId.value || deleting.value) return
+  deleting.value = true
+  deleteError.value = null
+  try {
+    await store.deleteMap(mapId.value)
+    showDeleteDialog.value = false
+    router.push('/lifecycle-maps')
+  } catch (e: unknown) {
+    deleteError.value = formatApiError(e)
+  } finally {
+    deleting.value = false
+  }
 }
 
 async function openJourneyDetail(journey: JourneySummary): Promise<void> {

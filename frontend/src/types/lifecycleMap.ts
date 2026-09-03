@@ -11,6 +11,8 @@ export interface LifecycleStage {
   external_url: string | null
   owner: string | null
   graduated: boolean
+  x?: number | null
+  y?: number | null
 }
 
 export interface LifecycleEdge {

@@ -20,6 +20,8 @@ export interface LifecycleMapStage {
   graduated: boolean
   pipeline_id: string | null
   external_url: string | null
+  x?: number | null
+  y?: number | null
 }
 
 export interface LifecycleMapTransition {
@@ -73,8 +75,8 @@ export interface LifecycleStage {
   id: string
   name: string
   type: 'modulo' | 'external' | 'manual' | 'placeholder'
-  x: number
-  y: number
+  x?: number
+  y?: number
   pipeline_id: string | null
   external_url: string | null
   owner: string | null
@@ -90,8 +92,128 @@ export interface LifecycleEdge {
   estimated_frequency: string | null
 }
 
+const JOURNEY_PAGE_SIZE = 50
+
+const LAYOUT_SPACING_X = 300
+const LAYOUT_SPACING_Y = 180
+const LAYOUT_MARGIN_X = 80
+const LAYOUT_MARGIN_Y = 80
+
+export function formatRefLabel(kind: string, ref: string): string {
+  const normalized = kind.trim().toUpperCase()
+  return normalized ? `${normalized} ${ref}` : ref
+}
+
+export interface LayoutNodeRef {
+  id: string
+}
+
+export interface LayoutEdgeRef {
+  source: string
+  target: string
+}
+
+/** Layered (Sugiyama-style) layout for a lifecycle-map stage graph.
+ *
+ * Ranks stages left-to-right by longest-path layering so linear chains read
+ * horizontally; within a rank, stages are ordered by the average position of
+ * their predecessors in the previous rank (barycentre) so split sources and
+ * rejoin targets stay clustered. Returns a map of stage id → {x, y}.
+ */
+export function computeLifecycleMapLayout(
+  stages: LayoutNodeRef[],
+  edges: LayoutEdgeRef[],
+): Record<string, { x: number; y: number }> {
+  const positions: Record<string, { x: number; y: number }> = {}
+  const ids = stages.map((s) => s.id)
+  if (ids.length === 0) return positions
+
+  const adjacency = new Map<string, string[]>()
+  const inDegree = new Map<string, number>()
+  for (const id of ids) {
+    adjacency.set(id, [])
+    inDegree.set(id, 0)
+  }
+  for (const edge of edges) {
+    if (!adjacency.has(edge.source) || !adjacency.has(edge.target)) continue
+    adjacency.get(edge.source)!.push(edge.target)
+    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1)
+  }
+
+  // Kahn's algorithm (deterministic: seeded by input order) yields a topo order.
+  const indeg = new Map(inDegree)
+  const queue = ids.filter((id) => (indeg.get(id) ?? 0) === 0)
+  const ordered: string[] = []
+  const seen = new Set<string>()
+  while (queue.length) {
+    const node = queue.shift()!
+    if (seen.has(node)) continue
+    seen.add(node)
+    ordered.push(node)
+    for (const next of adjacency.get(node) ?? []) {
+      indeg.set(next, (indeg.get(next) ?? 0) - 1)
+      if (indeg.get(next) === 0) queue.push(next)
+    }
+  }
+  // Any node Kahn missed (defensive: cycles are rejected at save, but if one
+  // slipped in, append leftovers by input order so nothing is dropped).
+  for (const id of ids) {
+    if (!seen.has(id)) ordered.push(id)
+  }
+
+  // Longest-path layering: rank = max(pred rank) + 1.
+  const rank = new Map<string, number>()
+  for (const node of ordered) {
+    let r = 0
+    for (const edge of edges) {
+      if (edge.target === node) {
+        const predRank = rank.get(edge.source)
+        if (predRank != null) r = Math.max(r, predRank + 1)
+      }
+    }
+    rank.set(node, r)
+  }
+
+  const byRank = new Map<number, string[]>()
+  for (const node of ordered) {
+    const r = rank.get(node) ?? 0
+    if (!byRank.has(r)) byRank.set(r, [])
+    byRank.get(r)!.push(node)
+  }
+  const ranks = [...byRank.keys()].sort((a, b) => a - b)
+
+  // Barycentre ordering within each rank (from rank 1) keeps splits/rejoins tight.
+  for (let i = 1; i < ranks.length; i++) {
+    const nodes = byRank.get(ranks[i])!
+    const prevNodes = byRank.get(ranks[i - 1]) ?? []
+    const prevIndex = new Map(prevNodes.map((id, idx) => [id, idx]))
+    const barycentre = (node: string): number => {
+      const predPositions: number[] = []
+      for (const edge of edges) {
+        if (edge.target === node && prevIndex.has(edge.source)) {
+          predPositions.push(prevIndex.get(edge.source)!)
+        }
+      }
+      if (predPositions.length === 0) return nodes.indexOf(node)
+      return predPositions.reduce((a, b) => a + b, 0) / predPositions.length
+    }
+    byRank.set(ranks[i], [...nodes].sort((a, b) => barycentre(a) - barycentre(b)))
+  }
+
+  for (const r of ranks) {
+    const nodes = byRank.get(r)!
+    nodes.forEach((node, idx) => {
+      positions[node] = {
+        x: LAYOUT_MARGIN_X + r * LAYOUT_SPACING_X,
+        y: LAYOUT_MARGIN_Y + idx * LAYOUT_SPACING_Y,
+      }
+    })
+  }
+  return positions
+}
+
 export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
-  const { get, post, put, patch } = useApi()
+  const { get, post, put, patch, delete: del } = useApi()
 
   const maps = ref<LifecycleMapSummary[]>([])
   const currentMap = ref<LifecycleMap | null>(null)
@@ -113,7 +235,9 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
   const pipelines = ref<PipelineSummary[]>([])
 
   const journeys = ref<JourneySummary[]>([])
+  const journeysCursor = ref<string | null>(null)
   const isLoadingJourneys = ref(false)
+  const isLoadingMoreJourneys = ref(false)
   const journeysError = ref<string | null>(null)
   const journeyDetail = ref<JourneyDetail | null>(null)
   const journeyDetailError = ref<string | null>(null)
@@ -135,18 +259,40 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     journeys.value.filter((journey) => journey.unattributed)
   )
 
+  const hasMoreJourneys = computed(() => journeysCursor.value != null)
+
   async function fetchJourneys(mapId: string): Promise<void> {
     if (isLoadingJourneys.value) return
     isLoadingJourneys.value = true
     journeysError.value = null
     try {
-      const data = await get<JourneyListResponse>(`/api/v1/lifecycle-maps/${mapId}/journeys?limit=200`)
+      const data = await get<JourneyListResponse>(`/api/v1/lifecycle-maps/${mapId}/journeys?limit=${JOURNEY_PAGE_SIZE}`)
       journeys.value = data?.items ?? []
+      journeysCursor.value = data?.next_cursor ?? null
     } catch (e: unknown) {
       journeysError.value = formatApiError(e)
       journeys.value = []
+      journeysCursor.value = null
     } finally {
       isLoadingJourneys.value = false
+    }
+  }
+
+  async function loadMoreJourneys(mapId: string): Promise<void> {
+    if (!journeysCursor.value || isLoadingMoreJourneys.value || isLoadingJourneys.value) return
+    isLoadingMoreJourneys.value = true
+    journeysError.value = null
+    try {
+      const cursor = encodeURIComponent(journeysCursor.value)
+      const data = await get<JourneyListResponse>(
+        `/api/v1/lifecycle-maps/${mapId}/journeys?limit=${JOURNEY_PAGE_SIZE}&cursor=${cursor}`
+      )
+      journeys.value.push(...(data?.items ?? []))
+      journeysCursor.value = data?.next_cursor ?? null
+    } catch (e: unknown) {
+      journeysError.value = formatApiError(e)
+    } finally {
+      isLoadingMoreJourneys.value = false
     }
   }
 
@@ -309,6 +455,15 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     return data
   }
 
+  async function deleteMap(id: string): Promise<void> {
+    await del<void>(`/api/v1/lifecycle-maps/${id}`)
+    maps.value = maps.value.filter((m) => m.id !== id)
+    if (currentMap.value?.id === id) {
+      currentMap.value = null
+      currentMapVersion.value = null
+    }
+  }
+
   return {
     maps,
     currentMap,
@@ -320,7 +475,10 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     saving,
     pipelines,
     journeys,
+    journeysCursor,
     isLoadingJourneys,
+    isLoadingMoreJourneys,
+    hasMoreJourneys,
     journeysError,
     journeyDetail,
     journeyDetailError,
@@ -338,9 +496,11 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     graduateStage,
     fetchPipelines,
     fetchJourneys,
+    loadMoreJourneys,
     fetchJourneyDetail,
     clearJourneyDetail,
     exportMap,
     importMap,
+    deleteMap,
   }
 })
