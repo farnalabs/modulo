@@ -123,21 +123,26 @@
               <JourneyCard :journey="journey" @open="openJourneyDetail(journey)" />
             </div>
           </div>
-          <div v-if="store.hasMoreJourneys" class="mt-3">
-            <Button
-              severity="secondary"
-              outlined
-              size="small"
-              :loading="store.isLoadingMoreJourneys"
-              :disabled="store.isLoadingMoreJourneys"
-              :aria-label="$t('views.LifecycleMapView.journey.load_more')"
-              data-testid="lifecycle-map-journeys-load-more"
-              @click="loadMoreJourneys"
-            >
-              {{ store.isLoadingMoreJourneys ? $t('views.LifecycleMapView.journey.loading_more') : $t('views.LifecycleMapView.journey.load_more') }}
-            </Button>
-          </div>
         </section>
+
+        <div
+          v-if="store.hasMoreJourneys"
+          class="mt-4 flex items-center justify-center"
+          data-testid="lifecycle-map-journeys-pagination"
+        >
+          <Button
+            severity="secondary"
+            outlined
+            size="small"
+            :loading="store.isLoadingMoreJourneys"
+            :disabled="store.isLoadingMoreJourneys"
+            :aria-label="$t('views.LifecycleMapView.journey.load_more')"
+            data-testid="lifecycle-map-journeys-load-more"
+            @click="loadMoreJourneys"
+          >
+            {{ store.isLoadingMoreJourneys ? $t('views.LifecycleMapView.journey.loading_more') : $t('views.LifecycleMapView.journey.load_more') }}
+          </Button>
+        </div>
 
         <ErrorAlert
           v-if="journeysError"
