@@ -374,7 +374,7 @@ def test_encrypt_archive_deletes_plaintext_on_success(tmp_manifest_dir):
     assert "pass:pass" in args
 
 
-def test_encrypt_archive_rejects_flag_like_tar_path(tmp_manifest_dir, capsys):
+def test_encrypt_archive_rejects_flag_like_tar_path(tmp_manifest_dir):
     # A tar_path that starts with '-' would be interpreted as an openssl flag
     # (argument-injection). The guard must reject it before any subprocess
     # call so this security invariant cannot be silently dropped.
