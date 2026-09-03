@@ -565,12 +565,51 @@ jobs:
           # flyctl instead prints the launched id on a stable human line
           # (" Machine ID: <id>") at create time, so we capture the raw output
           # and parse that below.
-          RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
-            --entrypoint /bin/bash \
-            --vm-size shared-cpu-1x --memory 1024 \
-            --detach \
-            "/release.sh")"
-          if [ $? -ne 0 ]; then
+          # registry.fly.io is eventually consistent: the manifest the build
+          # step above just pushed can still 404 (MANIFEST_UNKNOWN) when the
+          # machine is created seconds later, which aborted the entire deploy
+          # even though build+push had succeeded (run 33695710304, 2026-09-02:
+          # manifest pushed 23:52:50, launch 404'd 23:52:58). Retry the launch
+          # on that transient registry error only; every other launch failure
+          # (bad image ref, quota, auth) still fails fast on the first attempt.
+          LAUNCH_ATTEMPTS=6
+          LAUNCH_INTERVAL_SEC=10
+          launch_attempt=0
+          RUN_OUTPUT=""
+          LAUNCH_RC=1
+          while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
+            launch_attempt=$(( launch_attempt + 1 ))
+            # stderr goes to a file (not into RUN_OUTPUT) so the " Machine ID:"
+            # parse below keeps seeing stdout exactly as it did before.
+            # --detach means RC=0 iff creation succeeded, so a retried attempt
+            # does not leak a second machine; the single destroy below is
+            # sufficient to clean up the one machine this loop creates.
+            RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
+              --entrypoint /bin/bash \
+              --vm-size shared-cpu-1x --memory 1024 \
+              --detach \
+              "/release.sh" 2>/tmp/premigrate-launch-err.txt)"
+            LAUNCH_RC=$?
+            cat /tmp/premigrate-launch-err.txt >&2 || true
+            if [ "$LAUNCH_RC" -eq 0 ]; then
+              break
+            fi
+            # Case-insensitive and tolerant of flyctl wording drift
+            # ("failed to get image manifest", which the literal
+            # "failed to get manifest" does NOT match as a substring), and
+            # matches the "not found [http 404]" text that flyctl prints on
+            # the same error line. Without this the retry would silently
+            # degrade back to fail-fast if the wording changed.
+            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+              /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              break
+            fi
+            if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
+              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              sleep "$LAUNCH_INTERVAL_SEC"
+            fi
+          done
+          if [ "$LAUNCH_RC" -ne 0 ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
             exit 1
           fi
@@ -1282,12 +1321,53 @@ jobs:
           # flyctl instead prints the launched id on a stable human line
           # (" Machine ID: <id>") at create time, so we capture the raw output
           # and parse that below.
-          RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
-            --entrypoint /bin/bash \
-            --vm-size shared-cpu-1x --memory 1024 \
-            --detach \
-            "/release.sh")"
-          if [ $? -ne 0 ]; then
+          # registry.fly.io is eventually consistent: the manifest the build
+          # step above just pushed can still 404 (MANIFEST_UNKNOWN) when the
+          # machine is created seconds later, which aborts the entire deploy
+          # even though build+push had succeeded. This launch consumes the same
+          # just-pushed image ref as the staging pre-migrate (which hit exactly
+          # this race in run 33695710304, 2026-09-02: manifest pushed 23:52:50,
+          # launch 404'd 23:52:58), so it carries the identical exposure. Retry
+          # the launch on that transient registry error only; every other launch
+          # failure (bad image ref, quota, auth) still fails fast on attempt 1.
+          LAUNCH_ATTEMPTS=6
+          LAUNCH_INTERVAL_SEC=10
+          launch_attempt=0
+          RUN_OUTPUT=""
+          LAUNCH_RC=1
+          while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
+            launch_attempt=$(( launch_attempt + 1 ))
+            # stderr goes to a file (not into RUN_OUTPUT) so the " Machine ID:"
+            # parse below keeps seeing stdout exactly as it did before.
+            # --detach means RC=0 iff creation succeeded, so a retried attempt
+            # does not leak a second machine; the single destroy below is
+            # sufficient to clean up the one machine this loop creates.
+            RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
+              --entrypoint /bin/bash \
+              --vm-size shared-cpu-1x --memory 1024 \
+              --detach \
+              "/release.sh" 2>/tmp/premigrate-launch-err.txt)"
+            LAUNCH_RC=$?
+            cat /tmp/premigrate-launch-err.txt >&2 || true
+            if [ "$LAUNCH_RC" -eq 0 ]; then
+              break
+            fi
+            # Case-insensitive and tolerant of flyctl wording drift
+            # ("failed to get image manifest", which the literal
+            # "failed to get manifest" does NOT match as a substring), and
+            # matches the "not found [http 404]" text that flyctl prints on
+            # the same error line. Without this the retry would silently
+            # degrade back to fail-fast if the wording changed.
+            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+              /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              break
+            fi
+            if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
+              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              sleep "$LAUNCH_INTERVAL_SEC"
+            fi
+          done
+          if [ "$LAUNCH_RC" -ne 0 ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
             exit 1
           fi
