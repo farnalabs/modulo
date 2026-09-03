@@ -499,9 +499,14 @@ markers = [
 [tool.coverage.run]
 source = ["src/modulo"]
 omit = ["*/tests/*", "*/migrations/*", "*/stub/*"]
+# FAR-571: measure COMBINED line+branch coverage — `coverage report` and
+# --cov-fail-under now include branch coverage; CI floors are calibrated to match.
+branch = true
 
 [tool.coverage.report]
-fail_under = 80
+# FAR-571: combined line+branch floor, calibrated from the unit suite
+# (measured 83.87%); ratchet back toward 90 per the coverage campaign (FAR-575).
+fail_under = 82
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

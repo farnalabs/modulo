@@ -66,6 +66,23 @@ export default defineConfig({
     css: {
       include: [/json-viewer/, /vue-json-pretty/],
     },
+    // FAR-571 coverage gate: line coverage over production src only — test
+    // files are the measurement instrument, not code under test. The v8
+    // provider matches the installed @vitest/coverage-v8; the lcov reporter
+    // feeds SonarCloud (sonar.javascript.lcov.reportPaths in
+    // sonar-project.properties). Branch threshold deliberately deferred to
+    // Wave 6 (no reliable baseline yet).
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      include: ['src/**'],
+      exclude: ['src/__tests__/**', 'tests/**'],
+      // FAR-571: measured 59.03% lines over src/** (1479 unit tests) — at or
+      // above the 55% calibration threshold, so the gate goes straight to 50.
+      thresholds: {
+        lines: 50,
+      },
+    },
   },
   css: {
     postcss: {

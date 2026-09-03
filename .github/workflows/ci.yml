@@ -303,7 +303,9 @@ jobs:
         # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
         # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
         # remain the safety net for heavy mount+settle specs.
-        run: pnpm exec vitest run src --pool=threads --maxWorkers=2
+        # FAR-571: --coverage enables the line-coverage gate; thresholds,
+        # provider, reporter and include/exclude live in vite.config.ts.
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage
       - run: pnpm run build
       - run: pnpm audit --audit-level=critical
 
