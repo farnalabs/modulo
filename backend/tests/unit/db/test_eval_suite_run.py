@@ -738,11 +738,11 @@ def test_single_migration_head() -> None:
     # 0174_per_org_last_admin_guard (FAR-539 per-org last-admin guard) chains off 0173.
     chaining_off_0173 = [p for p in revisions if parents[p] == "0173_per_org_deactivation"]
     assert [_basename(p) for p in chaining_off_0173] == ["0174_per_org_last_admin_guard.py"]
-    # 0175_invitations (FAR-461 in-app invite tokens) chains off 0174.
+    # 0176_invitations (FAR-461 in-app invite tokens) chains off 0174.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
-    assert [_basename(p) for p in chaining_off_0174] == ["0175_invitations.py"]
-    # Nothing chains off 0175 -> it is the single head.
-    chaining_off_0175 = [p for p in revisions if parents[p] == "0175_invitations"]
+    assert [_basename(p) for p in chaining_off_0174] == ["0176_invitations.py"]
+    # Nothing chains off 0176_invitations -> it is the single head.
+    chaining_off_0175 = [p for p in revisions if parents[p] == "0176_invitations"]
     assert chaining_off_0175 == []
 
 
