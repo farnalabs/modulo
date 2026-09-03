@@ -677,9 +677,13 @@ def test_single_migration_head() -> None:
     # 0155_add_hot_query_indexes (main) chains off 0154.
     chaining_off_0154 = [p for p in revisions if parents[p] == "0154_add_web_vital_events_time_index"]
     assert [_basename(p) for p in chaining_off_0154] == ["0155_add_hot_query_indexes.py"]
-    # 0156_add_soft_delete_partial_uniques (main) chains off 0155_add_hot_query_indexes.
+    # 0175_dedupe_soft_delete_names (FAR-567, spliced upstream 2026-09-03 to dedupe
+    # live duplicate (organisation_id, name) rows) chains off 0155_add_hot_query_indexes.
     chaining_off_0155 = [p for p in revisions if parents[p] == "0155_add_hot_query_indexes"]
-    assert [_basename(p) for p in chaining_off_0155] == ["0156_add_soft_delete_partial_uniques.py"]
+    assert [_basename(p) for p in chaining_off_0155] == ["0175_dedupe_soft_delete_names.py"]
+    # 0156_add_soft_delete_partial_uniques (main) chains off 0175_dedupe_soft_delete_names.
+    chaining_off_0175 = [p for p in revisions if parents[p] == "0175_dedupe_soft_delete_names"]
+    assert [_basename(p) for p in chaining_off_0175] == ["0156_add_soft_delete_partial_uniques.py"]
     # 0157_add_numeric_check_constraints (main) chains off 0156_add_soft_delete_partial_uniques.
     chaining_off_0156 = [p for p in revisions if parents[p] == "0156_add_soft_delete_partial_uniques"]
     assert [_basename(p) for p in chaining_off_0156] == ["0157_add_numeric_check_constraints.py"]
