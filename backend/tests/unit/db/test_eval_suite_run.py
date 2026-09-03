@@ -368,15 +368,31 @@ async def test_baseline_window_returns_n_most_recent() -> None:
 # --------------------------------------------------------------------------- #
 # ORM org isolation (generic-backend tenant filter)                           #
 # --------------------------------------------------------------------------- #
-def _register_tenant_filter_on_session() -> Session:
+@pytest.fixture
+def _tenant_filter_registered() -> None:
+    """Register the ORM tenant filter for one test, then REMOVE it.
+
+    ``event.listen(Session, ...)`` targets the Session CLASS — i.e. the whole
+    pytest process. Without removal the listener leaks into every later test
+    module: once any later test sets ``session.info['org_id']`` (e.g.
+    seed_demo's ``set_rls_org``), every SELECT on that session silently gains
+    ``WHERE organisation_id = <leaked org>``, hiding rows from other orgs and
+    failing unrelated tests with NoResultFound.
+    """
+    event.listen(Session, "do_orm_execute", _inject_tenant_filter)
+    yield
+    event.remove(Session, "do_orm_execute", _inject_tenant_filter)
+
+
+def _tenant_filtered_session() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=[SuiteRun.__table__, EvalResult.__table__])
-    event.listen(Session, "do_orm_execute", _inject_tenant_filter)
     return Session(engine)
 
 
+@pytest.mark.usefixtures("_tenant_filter_registered")
 def test_org_isolation_positive_control() -> None:
-    session = _register_tenant_filter_on_session()
+    session = _tenant_filtered_session()
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
     session.add_all([_new_run(org_a), _new_run(org_b)])
@@ -393,8 +409,9 @@ def test_org_isolation_positive_control() -> None:
     session.close()
 
 
+@pytest.mark.usefixtures("_tenant_filter_registered")
 def test_org_isolation_no_tenant_key_sees_all() -> None:
-    session = _register_tenant_filter_on_session()
+    session = _tenant_filtered_session()
     session.add_all([_new_run(uuid.uuid4()), _new_run(uuid.uuid4())])
     session.commit()
     session.info.pop(_TENANT_KEY, None)

@@ -205,10 +205,20 @@ export interface NavVisibilityContext {
   devMode: boolean
   tierInfoLoaded: boolean
   isAtMinimumTier: (tier: string) => boolean
+  // FAR-535: computed ONCE per context construction by the caller (never read
+  // from localStorage inside the per-item function) — private_preview surfaces
+  // are hidden for demo sessions even when dev mode is enabled.
+  isDemoSession: boolean
 }
 
 export function isNavItemVisible(item: NavItem, ctx: NavVisibilityContext): boolean {
   if ((item.visibility === 'private_preview' || item.visibility === 'in_dev') && !ctx.devMode) return false
+  // FAR-535: demo sessions never see private_preview surfaces — even when the
+  // instance runs with dev mode enabled. Server-side mutation denial still
+  // holds; this keeps the nav consistent with the demo spec (read-only, no
+  // preview tools). The demo state is sourced from the context, not from
+  // localStorage, so every consumer gates identically without per-item reads.
+  if (item.visibility === 'private_preview' && ctx.isDemoSession) return false
   if (!item.requiredRoles && !item.requiredTier && !item.requiredPermissions) return true
   if (item.requiredTier && !ctx.tierInfoLoaded) return false
   return canSeeItem(

@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin } from './lib/api/client'
+import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin, isDemoSession, wasDemoSessionEnded } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
 import { applyMustChangePassword, syncFromMe, useMustChangePassword } from './lib/mustChangePassword'
@@ -125,6 +125,22 @@ onAuthChange((token) => {
 onMounted(() => {
   if (isAuthenticated.value) {
     void syncFromMe()
+    return
+  }
+  // FAR-535: a prior demo session with no new auth since must never trigger
+  // first-mount auto-login — that would silently log the visitor in as the
+  // instance's auto-login account, an escalation out of the read-only demo.
+  // Two signals cover the flows:
+  // - persisted demo marker with no stored token (mid-session clear, page
+  //   still alive), and
+  // - the persisted demo-ended tombstone (qa iter 1), which survives
+  //   clearAccessToken + reload — the real expiry path, where neither token
+  //   nor marker exist any more.
+  // Hand back to the /demo route instead: its guard re-issues a fresh demo
+  // session, or lands on /login when the demo environment has since been
+  // disabled.
+  if (isDemoSession() || wasDemoSessionEnded()) {
+    void router.push('/demo')
     return
   }
   runAutoLogin(true)

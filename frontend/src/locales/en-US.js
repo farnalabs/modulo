@@ -1111,6 +1111,10 @@ export default {
     "AuthCallbackView": {
       "signing_in": "Signing you in..."
     },
+    "DemoView": {
+      "preparing": "Preparing the demo...",
+      "signing_in": "Signing you in to the read-only demo workspace."
+    },
     "AnalyticsView": {
       "analytics": "Analytics",
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
@@ -2884,6 +2888,10 @@ export default {
       "run_retention_link": "Run Retention",
       "housekeeping_link": "Run Housekeeping",
       "operator_bypass_note": "Operators can bypass this limit if required."
+    },
+    "DemoBanner": {
+      "title": "Demo mode",
+      "subtitle": "Read-only sample data — explore freely."
     },
     "lifecycle-map": {
       "editor": {

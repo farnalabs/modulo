@@ -128,6 +128,12 @@ ignore_imports =
     # only invokes it (same cross-boundary wiring category as the classify.py /
     # audit_logger exceptions above).
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
+    # FAR-535 — the demo auto-login gate (kill switch + demo-org slug/role
+    # constants) lives in modulo.core.demo as the neutral surface shared by the
+    # auth route and this boot seed. The seed only READS the constants/config
+    # helper (no core business logic flows into db), the same narrow
+    # cross-boundary category as the pure-decision-function exemptions above.
+    modulo.db.seed_demo -> modulo.core.demo
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core

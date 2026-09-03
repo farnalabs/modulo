@@ -8,6 +8,7 @@ vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBtb2R1bG8ucnVuIiwib3JnX3JvbGUiOiJhZG1pbiJ9.fakesignature'),
   clearAccessToken: vi.fn(),
+  isDemoSession: vi.fn().mockReturnValue(false),
 }))
 
 function mockMatchMedia(matches: boolean) {

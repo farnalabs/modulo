@@ -6,6 +6,7 @@ import {
   attemptTokenRefresh,
   clearAccessToken,
   redirectToLogin,
+  wasDemoSessionEnded,
 } from './auth'
 
 export {
@@ -15,6 +16,9 @@ export {
   setRefreshToken,
   onAuthChange,
   getAuthHeaders,
+  isDemoSession,
+  setDemoSession,
+  wasDemoSessionEnded,
 } from './auth'
 
 // Decides the app's initial auth state at startup (used by App.vue). An
@@ -32,7 +36,15 @@ export function getInitialAuthState(hasToken: boolean): boolean {
 // auto-login is configured. A fresh unauthenticated start (first mount) or a
 // successful re-authentication must never re-run it, otherwise the login
 // endpoint would be hammered in a loop.
+// FAR-535: a cleared DEMO session is additionally never recovered — the demo
+// session must die with its short-lived token instead of escalating into the
+// instance's silent auto-login account. qa iter 2: the gate reads the PERSISTED
+// demo-ended tombstone (lib/api/auth.ts), not an in-memory flag — the tombstone
+// is written before the marker is removed in clearAccessToken (same in-session
+// semantics) but is shared across tabs, so a second tab's stale state can no
+// longer permit the escalation. It resets on any new successful auth.
 export function shouldReRunAutoLogin(wasAuthenticated: boolean, hasToken: boolean, hasAutoLogin: boolean): boolean {
+  if (wasDemoSessionEnded()) return false
   return wasAuthenticated && !hasToken && hasAutoLogin
 }
 

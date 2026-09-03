@@ -25,6 +25,7 @@ vi.mock('@/manifest.yaml', () => ({
 
 import SidebarNav from '../../components/SidebarNav.vue'
 import { usePlanStore } from '../../stores/planStore'
+import { setDemoSession } from '../../lib/api/auth'
 
 function mountSidebar(props = {}) {
   const pinia = createPinia()
@@ -123,6 +124,27 @@ describe('SidebarNav', () => {
 
     const { wrapper: devWrapper, store } = mountSidebar()
     store.devMode = true
+    await flushPromises()
+    const devHrefs = devWrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
+    expect(devHrefs).toContain('/evals/editor')
+    expect(devWrapper.text()).toContain('MONITOR')
+  })
+
+  it('hides private_preview items during a demo session even when dev mode is enabled', async () => {
+    // FAR-535: a demo visitor on an instance with devMode ON must not see
+    // private_preview surfaces in the nav (server-side denial still holds).
+    setDemoSession(true)
+    const { wrapper, store } = mountSidebar()
+    store.devMode = true
+    await flushPromises()
+    const hrefs = wrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
+    expect(hrefs).not.toContain('/evals/editor')
+    expect(wrapper.text()).not.toContain('MONITOR')
+
+    // Without the demo flag the dev-mode behaviour is unchanged.
+    setDemoSession(false)
+    const { wrapper: devWrapper, store: devStore } = mountSidebar()
+    devStore.devMode = true
     await flushPromises()
     const devHrefs = devWrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
     expect(devHrefs).toContain('/evals/editor')

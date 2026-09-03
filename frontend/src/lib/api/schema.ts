@@ -1072,6 +1072,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/demo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Demo Login
+         * @description Auto-login the env-configured read-only demo user (FAR-535).
+         *
+         *     The browser sends NO credentials — the server reads the demo email/password
+         *     from settings (MODULO_DEMO_USER / MODULO_DEMO_PASSWORD). Kill switch: when
+         *     MODULO_DEMO_ENABLED is falsy or either credential is unset the endpoint
+         *     answers a plain 404 so it never reveals that a demo feature exists.
+         *
+         *     The minted access token carries the SHORT demo TTL (modulo_demo_token_minutes,
+         *     default 2h, hard-capped at 4h) and NO refresh token is issued — the demo
+         *     session dies with the access token. Note the session persists until its TTL
+         *     expiry after the kill switch is flipped (no refresh token can extend it; the
+         *     4h cap bounds that residual window). The session is minted ONLY for a viewer
+         *     membership in the demo org: if the env user authenticates but has no viewer
+         *     membership in the demo org (operator misconfiguration — e.g.
+         *     MODULO_DEMO_USER naming a privileged account) the endpoint answers the same
+         *     plain 404, so a demo request can never mint a token for another org or
+         *     elevated role. Credential mismatches answer the SAME plain 404 (not
+         *     login's 401): the endpoint takes no client credentials, so a login-identical
+         *     401 would serve no purpose and would leak that the feature exists. Rate
+         *     limiting: the demo path NEVER touches the shared AuthRateLimiter at ANY
+         *     layer — handler AND middleware (AuthRateLimitMiddleware exempts
+         *     /api/v1/auth/demo) — so anonymous demo visitors cannot lock real users out
+         *     of /login; the demo abuse cap is the per-IP RateLimitMiddleware rule
+         *     (10/hour, with the process-local token-bucket floor when Redis is absent).
+         */
+        post: operations["demo_login_api_v1_auth_demo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/refresh": {
         parameters: {
             query?: never;
@@ -19648,6 +19691,37 @@ export interface operations {
                 "application/json": components["schemas"]["LoginRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    demo_login_api_v1_auth_demo_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

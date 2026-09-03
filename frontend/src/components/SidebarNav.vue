@@ -99,8 +99,8 @@ import SidebarGroup from "./SidebarGroup.vue";
 
 import { getVisibleNavGroups } from "../config/navigation";
 import type { NavGroup } from "../config/navigation";
+import { useNavVisibilityContext } from "../composables/useNavVisibilityContext";
 import { useSidebar } from "../composables/useSidebar";
-import { usePlanStore } from "../stores/planStore";
 
 const osOptions = {
   scrollbars: {
@@ -124,7 +124,6 @@ defineEmits<{
 const route = useRoute();
 const { t } = useI18n();
 const { toggleGroup, isGroupCollapsed } = useSidebar();
-const planStore = usePlanStore();
 
 function groupLabel(group: NavGroup): string {
   return group.labelKey ? t(group.labelKey) : group.label;
@@ -155,18 +154,20 @@ const activeGroupIds = computed(() => {
   return ids
 })
 
-const tierInfoLoaded = computed(() => planStore.tierRanks ? Object.keys(planStore.tierRanks).length > 0 : false);
+// qa iter 2 (FAR-535): consume the shared nav-visibility composable instead
+// of hand-building a second NavVisibilityContext inline — the composable is
+// the single construction point, so context fields (isDemoSession,
+// tierInfoLoaded, devMode) are defined exactly once. Role/admin/permission
+// values still come from this component's props (they are passed down from
+// AppLayout's decoded JWT), supplied as a getter so prop changes stay
+// reactive; every other field uses the composable's own defaults.
+const navVisibility = useNavVisibilityContext(() => ({
+  isSystemAdmin: props.isSystemAdmin,
+  userRole: props.userRole,
+  userPermissions: props.userPermissions,
+}));
 
-const visibleSidebarGroups = computed(() =>
-  getVisibleNavGroups({
-    isSystemAdmin: props.isSystemAdmin,
-    userRole: props.userRole || null,
-    userPermissions: props.userPermissions || [],
-    devMode: planStore.devMode,
-    tierInfoLoaded: tierInfoLoaded.value,
-    isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),
-  }),
-);
+const visibleSidebarGroups = computed(() => getVisibleNavGroups(navVisibility.value));
 </script>
 
 <style scoped>

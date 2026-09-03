@@ -73,6 +73,23 @@ events) issues exactly one license.
 
 ---
 
+## Demo Mode
+
+Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visitor in as a known read-only demo user in a dedicated `Demo` organisation with benign sample data. All three variables must be set — otherwise the endpoint answers 404 and nothing is seeded.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_DEMO_ENABLED` | Yes (for demo) | `false` | Kill switch. Truthy (`true`/`1`) activates the `POST /api/v1/auth/demo` endpoint and the demo seed. |
+| `MODULO_DEMO_USER` | Yes (for demo) | – | Email of the demo user account (created/updated idempotently at boot). |
+| `MODULO_DEMO_PASSWORD` | Yes (for demo) | – | Password of the demo user. The seed re-stamps the stored hash to match on every boot, so rotating the secret takes effect on restart. |
+| `MODULO_DEMO_TOKEN_MINUTES` | No | `120` | Demo access-token TTL in minutes. The demo session carries no refresh token and dies with this token. |
+
+Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role — an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
+
+The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent — it creates the `demo` organisation, the user, and minimal "Demo"-prefixed sample data (schemas, one pipeline, two synthetic runs) at boot, or immediately via `python -m modulo.db.seed_demo`. Rate limiting: 10 requests/hour per IP on the demo endpoint.
+
+---
+
 ## SSO / SAML 2.0
 
 Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env vars or the admin SSO providers UI.

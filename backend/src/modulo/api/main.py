@@ -954,6 +954,11 @@ async def _run_boot_guards_and_seeds(settings: Settings) -> None:
     if settings.modulo_seed_demo_orgs:
         await _boot_seed("demo_orgs", _seed_demo_orgs(settings))
 
+    # Demo auto-login experience (FAR-535). Fires only when MODULO_DEMO_ENABLED
+    # is truthy AND MODULO_DEMO_USER/MODULO_DEMO_PASSWORD are set — otherwise the
+    # seed is a no-op and the default release path behaviour is unchanged.
+    await _boot_seed("demo_user", _seed_demo_login(settings))
+
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:
         await _init_checkpointer(
@@ -1090,6 +1095,35 @@ async def _seed_demo_orgs(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
     await seed_demo_orgs(factory)
+
+
+async def _seed_demo_login(settings: Settings) -> str | None:
+    """Seed the demo org/user + sample data (FAR-535).
+
+    Idempotent and self-gating: ``seed_demo_runtime`` returns None (and writes
+    nothing) unless MODULO_DEMO_ENABLED + MODULO_DEMO_USER + MODULO_DEMO_PASSWORD
+    are set. Delegates to the seed module's single transaction wrapper with the
+    DI engine-backed session factory — one wrapper, one engine path per caller.
+
+    Failure sanitization: ``_boot_seed`` prints ``repr(exc)`` for a failed
+    seed and logs the traceback, and SQLAlchemy DBAPIError/StatementError
+    reprs embed ``[parameters: (...)]`` — for the demo account INSERT those
+    bind params include the bcrypt password_hash. So this wrapper re-raises
+    as ``DemoSeedError`` carrying ONLY the sanitized text (no chaining);
+    other seeds keep ``_boot_seed``'s original behaviour. Boot semantics are
+    unchanged: ``_boot_seed`` still swallows the failure (non-fatal).
+    """
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.db.seed_demo import DemoSeedError, _safe_exc_text, seed_demo_runtime
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    try:
+        return await seed_demo_runtime(session_factory=factory)
+    except Exception as exc:
+        detail = _safe_exc_text(exc)
+        logger.warning("startup.demo_user_seed_failed", extra={"error": detail})
+        raise DemoSeedError(detail) from None
 
 
 async def _seed_tier_catalog() -> None:

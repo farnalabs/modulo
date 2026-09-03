@@ -19,10 +19,44 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
-from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
+from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule, TokenBucket
 from modulo.settings import Settings, get_settings
 
 RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
+
+# FAR-535: process-local floor for the demo auto-login path. The demo
+# endpoint mints real sessions with zero user input, so its 10/hour cap must
+# survive EVERY degraded registry state:
+#   * Redis configured and healthy — the shared registry enforces the rule.
+#   * Redis unconfigured (or sqlite mode) — the registry is _NoopRateLimiter,
+#     which allows everything; the floor enforces 10/hour per-process.
+#   * Redis configured but failing at request time — the registry check
+#     raises and the middleware would normally fail open; for the demo rule
+#     the floor engages instead. Other routes keep failing open.
+DEMO_RULE_PREFIX = "/api/v1/auth/demo"
+_DEMO_FLOOR_RATE_PER_HOUR = 10
+_DEMO_FLOOR_BURST = 10
+_DEMO_FLOOR_MAX_KEYS = 1024  # trivial bound: drop-oldest on overflow, no background cleanup
+_demo_floor_buckets: dict[str, TokenBucket] = {}
+
+
+async def _consume_demo_floor(key: str) -> bool:
+    """Consume one token from the per-key process-local demo bucket.
+
+    Keys are RateLimitMiddleware client keys (per-IP for anonymous demo
+    traffic, whose path segment is constant). Bounded: when the dict exceeds
+    ``_DEMO_FLOOR_MAX_KEYS`` the oldest entry is dropped — a deliberate
+    simplest-possible bound, no background sweeper.
+    """
+    bucket = _demo_floor_buckets.get(key)
+    if bucket is None:
+        if len(_demo_floor_buckets) >= _DEMO_FLOOR_MAX_KEYS:
+            oldest = next(iter(_demo_floor_buckets))
+            del _demo_floor_buckets[oldest]
+        bucket = TokenBucket(rate=_DEMO_FLOOR_RATE_PER_HOUR / 3600, burst=_DEMO_FLOOR_BURST)
+        _demo_floor_buckets[key] = bucket
+    return await bucket.consume()
+
 
 redis_available: bool = False
 
@@ -94,7 +128,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limits per-route based on pre-defined rules.
 
     Uses Redis sliding window (ZADD + ZREMRANGEBYSCORE) when Redis is
-    configured; falls back to in-memory token bucket otherwise.
+    configured and reachable. In the two degraded states — Redis unconfigured
+    (the registry is _NoopRateLimiter) and Redis configured but failing at
+    request time (the registry check raises) — requests normally fail open,
+    except the demo auto-login rule, which falls back to the process-local
+    token-bucket floor (see ``_consume_demo_floor``).
 
     Accepts optional ``settings`` and ``registry`` constructor params.
     When provided, these are used instead of calling ``get_settings()``
@@ -102,6 +140,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     RULES: ClassVar[list[RateLimitRule]] = [
+        # FAR-535: demo auto-login — 10/hour per IP. Strict: the endpoint mints
+        # a real session with zero user input, so it must be expensive to abuse.
+        # Enforced by the Redis registry when it can enforce (healthy Redis),
+        # and by the process-local token-bucket floor (see _consume_demo_floor)
+        # whenever the registry cannot — noop registry (Redis unconfigured /
+        # sqlite mode) or a runtime check failure (Redis configured but
+        # failing). Declared FIRST: _rule_for returns the first matching
+        # prefix and no other rule overlaps /api/v1/auth/demo, but leading
+        # specificity keeps future prefix additions from silently overriding
+        # this limit.
+        RateLimitRule(path_prefix="/api/v1/auth/demo", max_requests=10, window_s=3600),
         # PRD §7.18: POST /api/v1/runs — 60/min
         RateLimitRule(path_prefix="/api/v1/runs", max_requests=60, window_s=60),
         # PRD §7.18: webhook POST — 100/min
@@ -144,6 +193,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             client_key = self._client_key(request)
             rule = self._rule_for(request)
 
+            registry_failed = False
             try:
                 allowed = await self._registry.check(
                     client_key,
@@ -153,12 +203,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             except asyncio.CancelledError:
                 raise
             except Exception:
+                registry_failed = True
                 _log.warning(
                     "ratelimit.check_failed",
                     extra={"client_key": client_key},
                     exc_info=True,
                 )
                 allowed = True
+            if rule.path_prefix == DEMO_RULE_PREFIX and (
+                registry_failed or isinstance(self._registry, _NoopRateLimiter)
+            ):
+                # FAR-535 demo floor: engaged whenever the shared registry
+                # cannot enforce the demo cap — either it degrades to the noop
+                # limiter (Redis unconfigured / sqlite mode) or its runtime
+                # check raises (Redis configured but failing). The bucket's
+                # verdict is honoured (429 with Retry-After on exhaustion);
+                # a failing registry must NOT bypass the cap. Other routes
+                # keep the existing fail-open behaviour (allowed stays True).
+                allowed = await _consume_demo_floor(client_key)
             if not allowed:
                 _log.warning("ratelimit.exceeded", extra={"client_key": client_key})
                 return ProblemDetail.from_type(
@@ -290,6 +352,8 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
 
     Returns 429 with ``Retry-After`` header when the IP has exceeded
     the allowed number of failed attempts within the sliding window.
+    FAR-535: the demo auto-login path (/api/v1/auth/demo) is exempt —
+    the demo path never touches the shared AuthRateLimiter at any layer.
     """
 
     def __init__(
@@ -327,7 +391,16 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
-        return request.url.path.startswith("/api/v1/auth/")
+        path = request.url.path
+        # FAR-535: the demo auto-login path NEVER touches the shared
+        # AuthRateLimiter — at ANY layer, handler AND middleware. Exempting it
+        # here (mirroring the /hitl/ special-case in RateLimitMiddleware) means
+        # demo requests can neither inherit /login lockouts (429) nor re-arm
+        # lockout keys (setex). Its abuse cap is the RateLimitMiddleware demo
+        # rule (10/hour, with the process-local floor when Redis is absent).
+        if path.startswith(DEMO_RULE_PREFIX):
+            return False
+        return path.startswith("/api/v1/auth/")
 
     @staticmethod
     def _client_ip(request: Request) -> str:

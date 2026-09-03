@@ -8,6 +8,7 @@ vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
+  isDemoSession: vi.fn().mockReturnValue(false),
 }))
 
 vi.mock('vue-router', async () => {

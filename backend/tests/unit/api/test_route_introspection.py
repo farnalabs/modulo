@@ -94,6 +94,10 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/refresh"): "auth (no principal)",
     ("POST", "/api/v1/auth/logout"): "auth (refresh-token auth)",
     ("POST", "/api/v1/auth/saml/acs"): "SAML ACS (IdP session)",
+    # FAR-535: demo auto-login MINTS the principal — the kill switch + demo-org
+    # viewer scoping are the gates; a permission tag would require the session
+    # the endpoint exists to create.
+    ("POST", "/api/v1/auth/demo"): "demo auto-login (mints the principal)",
     # Composite templates: creation/update/delete/publish routes are now
     # permission-tagged (pipeline.*); only stateless detect-params remains exempt.
     ("POST", "/api/v1/pipelines/{pipeline_id}/save-as-composite"): "composite creation-only (ADR 3.6)",

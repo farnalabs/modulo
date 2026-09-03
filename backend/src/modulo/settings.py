@@ -41,6 +41,23 @@ class Settings(BaseSettings):
     # False by default — nothing seeds unless an operator opts in.
     modulo_seed_demo_orgs: bool = Field(False)
 
+    # Demo auto-login experience (FAR-535). All three must be set — MODULO_DEMO_ENABLED
+    # truthy plus a non-empty MODULO_DEMO_USER email and MODULO_DEMO_PASSWORD — for the
+    # POST /api/v1/auth/demo endpoint and the demo-org seed to activate. Default off:
+    # the endpoint answers 404 (it must not reveal that a demo feature exists) and the
+    # seed no-ops. MODULO_DEMO_PASSWORD is repr=False so it never leaks into
+    # logs/settings dumps.
+    modulo_demo_enabled: bool = Field(False)
+    modulo_demo_user: str = Field("")
+    modulo_demo_password: str = Field(default="", repr=False)
+    # Demo access-token TTL in minutes (2 hours by default, hard-capped at 4h).
+    # The demo JWT is minted with this explicit expiry instead of
+    # modulo_access_token_minutes, so a demo session dies quickly and carries no
+    # refresh token to extend it. Because no refresh token exists, a session
+    # minted before the kill switch is flipped still persists until its TTL
+    # expires — the 4h cap bounds that residual exposure window.
+    modulo_demo_token_minutes: int = Field(120, ge=1, le=240)
+
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.

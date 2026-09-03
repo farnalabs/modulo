@@ -7,6 +7,7 @@ import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
 import LoginView from '../views/LoginView.vue'
 import AuthCallbackView from '../views/AuthCallbackView.vue'
+import { resolveDemoEntry } from '../lib/api/demo'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -116,6 +117,7 @@ const EnvironmentProfileList = () => import('../views/environment-profiles/Envir
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
+const DemoView = () => import('../views/DemoView.vue')
 const RemyOnlyView = () => import('../views/RemyOnlyView.vue')
 
 const router = createRouter({
@@ -147,6 +149,18 @@ const router = createRouter({
       name: 'oauth-authorize',
       component: OAuthConsentView,
       meta: { public: true, breadcrumb: 'Authorize' },
+    },
+    {
+      // Demo auto-login (FAR-535): public one-shot route. The beforeEach guard
+      // intercepts /demo and performs the hand-off pre-mount (clear stored
+      // auth → POST /api/v1/auth/demo → store the short-lived read-only demo
+      // token), redirecting to the dashboard — or to /login on failure, never
+      // surfacing an error that reveals demo internals. The component is a
+      // defensive splash only; the guard always redirects before it mounts.
+      path: '/demo',
+      name: 'demo',
+      component: DemoView,
+      meta: { public: true, breadcrumb: 'Demo' },
     },
     {
       path: '/',
@@ -562,6 +576,23 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   try {
+    // FAR-535 demo auto-login: /demo never renders as a page. The guard owns
+    // the hand-off so it runs pre-mount — main.ts awaits router.isReady()
+    // BEFORE App mounts, so an anonymous visitor hitting /demo lands straight
+    // on the dashboard with the demo session already stored (App.vue's
+    // unauthenticated LoginView branch never has a chance to flash).
+    // qa iter 1: a LIVE session must never be torn down by merely visiting
+    // /demo — previously every navigation re-ran the hand-off, so
+    // Back/Forward to /demo logged a real user out, raced the auto-login
+    // recovery listener, and re-minted a token (burning the 10/hour budget).
+    // With a token present (demo flag set or a real session) the visitor goes
+    // straight to the dashboard; only a tokenless browser runs the hand-off.
+    // qa iter 2: the rule lives in resolveDemoEntry (lib/api/demo.ts) so the
+    // guard and DemoView's fallback cannot drift.
+    if (to.name === 'demo') {
+      return { name: await resolveDemoEntry() }
+    }
+
     const routeName = to.name
     if (typeof routeName === 'string') {
       const entry = manifestByName.get(routeName)
