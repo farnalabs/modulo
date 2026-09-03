@@ -17,8 +17,11 @@
 # ---------------------------
 # - Pin behind latest: one open "[flyctl-drift]" issue is created (labeled
 #   infrastructure + agent-generated). If one is already open, it is updated
-#   ONLY when the (pin, latest) pair changed - a comment is appended, so
-#   weekly runs never spam an unchanged issue.
+#   ONLY when the (pin, latest) pair changed - a comment is appended AND the
+#   issue title is refreshed to the new (pin, latest) pair, so weekly runs
+#   never spam an unchanged issue and never re-post the same comment after
+#   latest moves once (the change-detection guard compares against the
+#   title).
 # - Pin current (or newer): any open "[flyctl-drift]" issue is closed with a
 #   closure comment ("pin caught up (or was bumped) - latest is vX.Y.Z"), so
 #   the check self-heals. The closure comment is posted BEFORE the close and
@@ -60,7 +63,7 @@ concurrency:
 jobs:
   drift-check:
     name: Compare pinned flyctl version to latest release
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     timeout-minutes: 10
     env:
       # github.token: same-repo API reads/writes must use the workflow runtime
@@ -144,7 +147,7 @@ jobs:
           SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
           TITLE="${TITLE_PREFIX} pinned ${PIN} is behind latest ${LATEST}"
 
-          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title 2>/dev/null)" || {
+          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title 2>/dev/null)" || {
             echo "::error::could not list open issues (gh api failure) - cannot check for an existing [flyctl-drift] issue; failing instead of risking a duplicate."
             exit 1
           }
@@ -190,6 +193,8 @@ jobs:
 
           **Release:** https://github.com/superfly/flyctl/releases/tag/${LATEST}
 
+          **Do not retitle this issue** - it is found by its `[flyctl-drift]` title prefix.
+
           ---
           Auto-raised by the "Flyctl version drift check" workflow (weekly, Mondays 06:00 UTC). This issue is idempotent: it closes itself automatically once the pin catches up (or is bumped).
           BODY_EOF
@@ -220,6 +225,17 @@ jobs:
               if gh issue comment "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --body-file "$COMMENT_FILE"; then
                 echo "::notice::appended version update to drift issue #${ISSUE_NUM}."
                 echo "- Appended version update to drift issue #${ISSUE_NUM}." >> "$SUMMARY"
+                # Refresh the title to the new (pin, latest) pair: the spam
+                # guard above compares against the issue TITLE, so a stale
+                # title would make every future weekly run re-post this same
+                # comment. A failed retitle only degrades to one extra
+                # comment on the next run - warn, never abort.
+                if gh issue edit "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --title "$TITLE"; then
+                  echo "::notice::retitled drift issue #${ISSUE_NUM} to: ${TITLE}"
+                  echo "- Retitled drift issue #${ISSUE_NUM} to \`${TITLE}\`." >> "$SUMMARY"
+                else
+                  echo "::warning::gh issue edit (retitle) failed on #${ISSUE_NUM} - the next weekly run may re-post the update comment once."
+                fi
               else
                 echo "::error::gh issue comment failed on #${ISSUE_NUM} - the version change is not recorded."
                 exit 1
@@ -237,11 +253,15 @@ jobs:
 
           SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
 
-          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title 2>/dev/null)" || {
+          OPEN_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title 2>/dev/null)" || {
             echo "::error::could not list open issues (gh api failure) - cannot close any stale [flyctl-drift] issue; failing instead of leaving them open silently."
             exit 1
           }
-          ISSUE_NUMS="$(printf '%s' "$OPEN_JSON" | jq -r --arg p "$TITLE_PREFIX" '[.[] | select((.title | startswith($p)))] | sort_by(.number) | .[].number' 2>/dev/null || true)"
+          # No 2>/dev/null || true here: a jq failure aborts under set -e
+          # (fail-loud, same as the create path). The no-issues case is not
+          # a failure - an empty array iterates to empty output with exit 0,
+          # so ISSUE_NUMS is empty and the -z check below handles it.
+          ISSUE_NUMS="$(printf '%s' "$OPEN_JSON" | jq -r --arg p "$TITLE_PREFIX" '[.[] | select((.title | startswith($p)))] | sort_by(.number) | .[].number')"
 
           if [ -z "$ISSUE_NUMS" ]; then
             echo "::notice::pin is current (latest ${LATEST}) and no open [flyctl-drift] issue - nothing to do."
