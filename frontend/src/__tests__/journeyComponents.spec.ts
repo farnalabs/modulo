@@ -116,7 +116,7 @@ function mountCard(journey: JourneySummary) {
 describe('JourneyCard', () => {
   it('renders the kind:ref label', () => {
     const wrapper = mountCard(makeJourney())
-    expect(wrapper.text()).toContain('pr 123')
+    expect(wrapper.text()).toContain('PR 123')
   })
 
   it('renders the translated status badge', () => {
@@ -138,7 +138,7 @@ describe('JourneyCard', () => {
 
   it('renders the unattributed faded state with a chip and no status badge', () => {
     const wrapper = mountCard(makeJourney({ unattributed: true, current_stage: null, run_count: 0 }))
-    expect(wrapper.text()).toContain('pr 123')
+    expect(wrapper.text()).toContain('PR 123')
     expect(wrapper.text()).toContain('Unattributed')
     expect(wrapper.classes()).toContain('border-dashed')
     expect(wrapper.classes()).toContain('opacity-60')
