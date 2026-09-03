@@ -3,7 +3,7 @@
 Admins mint an enrollment link instead of typing a temporary password: the
 SHA-256 hex of a ``secrets.token_urlsafe(32)`` plaintext is stored here; the
 plaintext is shown to the inviting admin exactly once (never persisted) and
-embedded in ``<origin>/accept-invite?token=...``.
+embedded in ``<origin>/accept-invite#token=...``.
 
 Deliberately NOT an :class:`OrgScoped` subclass — this table sits outside the
 ``rls_org_isolation`` regime because consumption happens on the

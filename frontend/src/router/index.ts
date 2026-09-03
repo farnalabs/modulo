@@ -164,7 +164,7 @@ const router = createRouter({
       meta: { public: true, breadcrumb: 'Demo' },
     },
     {
-      // One-time invite enrollment (FAR-461): <origin>/accept-invite?token=...
+      // One-time invite enrollment (FAR-461): <origin>/accept-invite#token=...
       // Public by design — the token IS the credential; no session exists yet.
       // The view sets a password and then hands off to /login.
       path: '/accept-invite',
