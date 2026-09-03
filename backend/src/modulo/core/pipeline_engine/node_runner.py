@@ -78,6 +78,7 @@ from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
+from modulo.core.cost_controller.breakdown.params import REPORTED_TOKEN_CHAIN, coerce_reported_token
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
@@ -580,12 +581,12 @@ def _extract_reported_cost(
 #: contract (FAR-491) pins ``token_usage: {input, output, total, cache_read?,
 #: cache_write?}`` — producer semantics are ``total = input + output`` and the
 #: cache keys appear only when the sandbox's opencode.db exposes the columns.
-_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = (
-    ("model_tokens_input", "input"),
-    ("model_tokens_output", "output"),
-    ("model_tokens_total", "total"),
-    ("model_tokens_cache_read", "cache_read"),
-    ("model_tokens_cache_write", "cache_write"),
+#: DERIVED from the shared ``REPORTED_TOKEN_CHAIN`` (FAR-532 wave-2) so the
+#: producer -> ``model_tokens_*`` -> ``reported_*`` -> counter chain cannot
+#: drift between layers; reading order is (src, dst) — SOURCE first,
+#: DESTINATION second — matching finalize's ``_REPORTED_TOKEN_FIELD_MAP``.
+_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
+    (binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN
 )
 
 
@@ -598,13 +599,18 @@ def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
     / ``model_tokens_cache_read`` / ``model_tokens_cache_write``. A truthy
     producer ``schema_drift`` flag returns ``{}`` (no report) — a
     drifted-schema node reports NO tokens, mirroring
-    ``_extract_reported_cost``. Tri-state per key: absent / non-int / bool /
-    negative → the key is OMITTED (never a ``0`` or ``null`` placeholder —
-    mirrors ``_build_model_cost_fields``). A valid ``0`` report is a real
-    report and IS written. These fields are DISPLAY-ONLY: they feed
-    ``node_telemetry_json`` and the union's ``reported_*`` analytics fields,
-    never an input to the system's built-in money math (operator-defined
-    formulas may reference them).
+    ``_extract_reported_cost``. Tri-state per key via the SHARED
+    ``coerce_reported_token`` predicate (FAR-532 wave-2 — the same rule
+    finalize's fold and the telemetry accumulation apply): absent /
+    non-numeric / bool / negative / above the plausibility ceiling → the key
+    is OMITTED (never a ``0`` or ``null`` placeholder — mirrors
+    ``_build_model_cost_fields``); an INTEGRAL float (``1234.0``) is
+    tolerated and normalised to ``int`` (the cost extractor's finite-numeric
+    tolerance pattern), a non-integral float stays invalid. A valid ``0``
+    report is a real report and IS written. These fields are DISPLAY-ONLY:
+    they feed ``node_telemetry_json`` and the union's ``reported_*``
+    analytics fields, never an input to the system's built-in money math
+    (operator-defined formulas may reference them).
     """
     if not isinstance(output_json, dict):
         return {}
@@ -614,13 +620,11 @@ def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
     if not isinstance(usage, dict):
         return {}
     fields: dict[str, Any] = {}
-    for field_name, usage_key in _TOKEN_USAGE_FIELD_MAP:
-        value = usage.get(usage_key)
-        if isinstance(value, bool) or not isinstance(value, int):
+    for usage_key, field_name in _TOKEN_USAGE_FIELD_MAP:
+        coerced = coerce_reported_token(usage.get(usage_key))
+        if coerced is None:
             continue
-        if value < 0:
-            continue
-        fields[field_name] = value
+        fields[field_name] = coerced
     return fields
 
 

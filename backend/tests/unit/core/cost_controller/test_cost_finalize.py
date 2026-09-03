@@ -19,7 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD
+from modulo.core.cost_controller.breakdown.params import REPORTED_TOKEN_CHAIN
 from modulo.core.cost_controller.finalize import (
+    _REPORTED_TOKEN_FIELD_MAP,
     _derive_total_tokens,
     _enrich_union,
     _fold_token_usage,
@@ -276,11 +278,51 @@ def test_enrich_union_sandbox_without_report_has_no_reported_keys() -> None:
 
 def test_fold_token_usage_output_absent_keeps_stored_reported() -> None:
     """Branch 3 (output ABSENT): the stored-union reported_* values are the
-    fallback authority — left untouched, mirroring ``_fold_model_cost``."""
+    fallback authority — left untouched when valid, mirroring
+    ``_fold_model_cost``."""
     node_dict = {"reported_input_tokens": 5, "reported_total_tokens": 5}
     _fold_token_usage(node_dict, None)
     assert node_dict["reported_input_tokens"] == 5
     assert node_dict["reported_total_tokens"] == 5
+
+
+def test_fold_token_usage_output_absent_revalidates_stored_reported() -> None:
+    """Branch 3 defence (FAR-532 wave-2): when the output is ABSENT the
+    stored-union reported_* values are RE-VALIDATED tri-state (the mirror of
+    ``_fold_stored_clamped``'s re-clamp) — an invalid stored value is popped,
+    never carried into analytics; a valid 0 is a real report and stays."""
+    node_dict: dict[str, Any] = {
+        "reported_input_tokens": True,
+        "reported_output_tokens": "many",
+        "reported_total_tokens": -3,
+        "reported_cache_read_tokens": 0,
+        "reported_cache_write_tokens": 4,
+    }
+    _fold_token_usage(node_dict, None)
+    assert "reported_input_tokens" not in node_dict
+    assert "reported_output_tokens" not in node_dict
+    assert "reported_total_tokens" not in node_dict
+    assert node_dict["reported_cache_read_tokens"] == 0
+    assert node_dict["reported_cache_write_tokens"] == 4
+
+
+def test_fold_token_usage_rejects_above_ceiling_values() -> None:
+    """FAR-532 wave-2: the plausibility ceiling applies at the fold — a
+    pathological 10**18 stored value is popped on re-validation and an
+    above-ceiling output value is omitted tri-state (not clamped)."""
+    stored: dict[str, Any] = {"reported_total_tokens": 10**18}
+    _fold_token_usage(stored, None)
+    assert not stored
+    folded: dict[str, Any] = {}
+    _fold_token_usage(folded, {"model_tokens_total": 10**18})
+    assert not folded
+
+
+def test_reported_token_field_map_derives_from_shared_chain() -> None:
+    """FAR-532 wave-2: the fold map is DERIVED from the shared
+    ``REPORTED_TOKEN_CHAIN`` in (src, dst) reading order — matching
+    node_runner's extraction map, so the layers cannot drift apart."""
+    assert tuple((b.node_field, b.union_key) for b in REPORTED_TOKEN_CHAIN) == _REPORTED_TOKEN_FIELD_MAP
 
 
 def test_fold_token_usage_output_without_fields_pops_stale_reported() -> None:

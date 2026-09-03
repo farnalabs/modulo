@@ -428,3 +428,36 @@ def test_calculated_basis_carries_reported_tokens_display_only() -> None:
     assert basis["tokens_output"] == 50
     # The amount is rate * wall_clock_hours — reported tokens never touch money.
     assert total == Decimal("1.000000")
+    # A consistent report (total == input + output) is never flagged.
+    assert "tokens_reported_inconsistent" not in basis
+
+
+def test_calculated_basis_flags_inconsistent_reported_tokens() -> None:
+    """FAR-532 wave-2 (display-only): a partial reported token report — summed
+    total disagreeing with summed input + output (e.g. total present with
+    input/output omitted) — is surfaced as a basis note instead of rendering a
+    silently-mismatched triple; a fully-absent report (0 == 0 + 0) is never
+    flagged."""
+    comp = CostComponentConfig(
+        name="calc",
+        display_name="Calc",
+        kind="calculated",
+        rate_usd=Decimal("1.0"),
+        formula="rate * wall_clock_hours",
+    )
+    partial = _tel(wall_clock_elapsed_s=Decimal(3600), tokens_total_reported=1801)
+    breakdown, _total = build_cost_breakdown(partial, [comp])
+    assert breakdown[0]["basis"]["tokens_reported_inconsistent"] is True
+
+    consistent = _tel(
+        wall_clock_elapsed_s=Decimal(3600),
+        tokens_input_reported=1234,
+        tokens_output_reported=567,
+        tokens_total_reported=1801,
+    )
+    breakdown_ok, _ok_total = build_cost_breakdown(consistent, [comp])
+    assert "tokens_reported_inconsistent" not in breakdown_ok[0]["basis"]
+
+    absent = _tel(wall_clock_elapsed_s=Decimal(3600))
+    breakdown_absent, _absent_total = build_cost_breakdown(absent, [comp])
+    assert "tokens_reported_inconsistent" not in breakdown_absent[0]["basis"]
