@@ -610,15 +610,16 @@ jobs:
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          BODY=$(cat << ENDJSON
-          {
-            "branchName": "${BRANCH}",
-            "prNumber": ${PR_NUM},
-            "runUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-            "failureDescription": "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})"
-          }
-          ENDJSON
-          )
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
+          # name (legal in git refnames, e.g. containing '"') cannot inject
+          # keys or break the payload. See FAR-568.
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber "${PR_NUM}" \
+            --arg runUrl "${RUN_URL}" \
+            --arg failureDescription "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})" \
+            '{branchName: $branchName, prNumber: $prNumber, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
@@ -695,18 +696,15 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           TIMESTAMP=$(date +%s)
-          PAYLOAD=$(cat << ENDJSON
-          {
-            "action": "check_run",
-            "repository": {"full_name": "${REPO}"},
-            "pull_request": {
-              "number": ${PR_NUMBER},
-              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
-            }
-          }
-          ENDJSON
-          )
-          BODY=$(echo "${PAYLOAD}")
+          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
+          # name (legal in git refnames, e.g. containing '"') cannot inject
+          # keys or break the payload. See FAR-568.
+          BODY=$(jq -n \
+            --arg repo "${REPO}" \
+            --argjson prNumber "${PR_NUMBER}" \
+            --arg sha "${SHA}" \
+            --arg ref "${BRANCH}" \
+            '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
