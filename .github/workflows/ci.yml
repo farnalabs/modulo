@@ -307,6 +307,49 @@ jobs:
       - run: pnpm run build
       - run: pnpm audit --audit-level=critical
 
+  sonarcloud-scan:
+    name: SonarCloud scan (coverage import)
+    # SonarCloud automatic analysis (the GitHub App) cannot import coverage
+    # reports, so a CI-based scanner run is the only way the coverage measure
+    # (and the README coverage badge) exists. Gated to push-to-main to bound
+    # runner cost — the badge tracks main, not PRs. Reuses the coverage-report
+    # artifact backend-test already uploads instead of re-running the backend
+    # suite.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend-test]
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # SonarCloud needs full history for blame/new-code detection
+      - name: Download backend coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: backend    # artifact root is backend/ (upload path backend/coverage.xml) → restores backend/coverage.xml
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Run unit tests with coverage (vitest lcov)
+        working-directory: frontend
+        # Same invocation as the "frontend" job (FAR-101: cap 2 workers on the
+        # 2-vCPU runner) plus coverage: v8 provider, lcov reporter →
+        # frontend/coverage/lcov.info for sonar.javascript.lcov.reportPaths.
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
     # FAILS if the committed schema differs from what the generator produces.
