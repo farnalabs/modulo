@@ -129,6 +129,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
+from modulo.util.emails import normalize_email
 
 # Uptime tracking -- set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
@@ -549,7 +550,7 @@ async def _seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     colon = entry.find(":")
     if colon < 1:
         return
-    email = entry[:colon]
+    email = normalize_email(entry[:colon])
     pw_part = entry[colon + 1 :]
 
     result = await session.execute(select(Account).where(Account.email == email))
@@ -690,7 +691,7 @@ async def _seed_system_schemas(settings: Settings) -> None:
     """Seed system schemas for all existing organisations."""
     import uuid as _uuid
 
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.db.models.account import Account
@@ -704,7 +705,9 @@ async def _seed_system_schemas(settings: Settings) -> None:
         orgs = (await session.execute(select(Organisation).order_by(Organisation.created_at))).scalars().all()
 
         admin = (
-            await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))
+            await session.execute(
+                select(Account).where(func.lower(Account.email) == "admin").order_by(Account.created_at).limit(1)
+            )
         ).scalar_one_or_none()
 
         system_account_id: _uuid.UUID | None = None
@@ -729,7 +732,7 @@ async def _seed_environment_profiles(settings: Settings) -> None:
     Creates a reusable sandbox profile for the dogfood pipeline. Skips if
     a profile named 'modulo-dev' already exists.
     """
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.db.crud.environment_profile import create_environment_profile
@@ -758,7 +761,7 @@ async def _seed_environment_profiles(settings: Settings) -> None:
             return
 
         admin_result = await session.execute(
-            select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1)
+            select(Account).where(func.lower(Account.email) == "admin").order_by(Account.created_at).limit(1)
         )
         admin = admin_result.scalar_one_or_none()
         if admin is None:

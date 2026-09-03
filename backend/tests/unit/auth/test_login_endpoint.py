@@ -119,6 +119,33 @@ def test_login_success(client: TestClient) -> None:
     assert body["must_change_password"] is False
 
 
+def test_login_case_variant_email_succeeds(client: TestClient) -> None:
+    """FAR-584: a case-variant of the stored address authenticates the same
+    account — the route hands the submitted email straight to the (now
+    case-insensitive) account lookup."""
+    mock_user = _make_mock_user()
+    mock_family = MagicMock()
+    mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
+    lookup = AsyncMock(return_value=mock_user)
+    with (
+        patch("modulo.api.routes.auth.get_account_by_email", new=lookup),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+    ):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "ADMIN@Example.COM", "password": "testpass"},
+        )
+    assert resp.status_code == 200
+    assert "access_token" in resp.json()
+    lookup.assert_awaited_once()
+
+
 def test_login_response_flags_must_change_password(client: TestClient) -> None:
     """FAR-460: an admin reset leaves must_change_password=True; the login
     response carries the flag so the frontend can force the change flow."""

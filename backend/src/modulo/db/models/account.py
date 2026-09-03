@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Index, String, Uuid, func
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,10 +17,15 @@ class Account(Base, TimestampMixin):
             "NOT is_break_glass OR break_glass_expires_at IS NOT NULL OR break_glass_deactivated_at IS NOT NULL",
             name="ck_accounts_break_glass_expiry",
         ),
+        # FAR-584: emails are case-insensitive. Case-insensitive uniqueness is
+        # enforced by this functional unique index (migration 0176 created the
+        # DB-side twin after backfilling + collision-guarding existing rows);
+        # the plain case-sensitive UNIQUE constraint on email is retired.
+        Index("uq_accounts_email_lower", func.lower(sa_text("email")), unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
-    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     auth_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default="local")

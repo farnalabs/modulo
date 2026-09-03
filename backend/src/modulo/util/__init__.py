@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-__all__ = ["DEFAULT_LOG_LIMIT", "is_valid_http_url", "sanitise_log_value"]
+from modulo.util.emails import normalize_email
+
+__all__ = ["DEFAULT_LOG_LIMIT", "is_valid_http_url", "normalize_email", "sanitise_log_value"]
 
 #: Default cap (in code points) for :func:`sanitise_log_value`. Overridable via
 #: the ``limit`` argument when a call site needs a tighter bound.

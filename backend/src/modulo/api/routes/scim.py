@@ -53,6 +53,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+from modulo.util.emails import normalize_email
 
 _CODE_SCIM_LIST_USERS = "scim.list_users"
 _MSG_SCIM_ENDPOINT_FAILED_DATABASE = "SCIM endpoint failed: database migration required"
@@ -542,7 +543,7 @@ def _apply_user_replace_op(account: Account, op: ScimPatchOperation) -> bool:
     deactivate_requested = False
     if isinstance(op.value, dict):
         if "userName" in op.value:
-            account.email = str(op.value["userName"])
+            account.email = normalize_email(str(op.value["userName"]))
         if "active" in op.value:
             account.active = bool(op.value["active"])
             deactivate_requested = not bool(op.value["active"])
@@ -570,7 +571,7 @@ def _apply_user_add_op(account: Account, op: ScimPatchOperation) -> bool:
     """Apply an ``add`` PATCH operation to a user; True when deactivation requested."""
     deactivate_requested = False
     if isinstance(op.value, dict) and "userName" in op.value:
-        account.email = str(op.value["userName"])
+        account.email = normalize_email(str(op.value["userName"]))
         if "active" in op.value:
             account.active = bool(op.value["active"])
             deactivate_requested = not bool(op.value["active"])

@@ -56,6 +56,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.settings import get_settings
+from modulo.util.emails import normalize_email
 
 _log = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ async def _seed_demo_account(session: AsyncSession, email: str, password: str) -
     """
     from modulo.auth.passwords import hash_password, verify_password
 
+    email = normalize_email(email)
     result = await session.execute(select(Account).where(Account.email == email))
     account = result.scalar_one_or_none()
     if account is None:

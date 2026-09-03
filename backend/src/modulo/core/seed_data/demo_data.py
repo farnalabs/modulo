@@ -33,6 +33,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.settings import get_settings
+from modulo.util.emails import normalize_email
 
 _log = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ async def seed_demo_org(
         raise LicenseSigningError(
             f"No license signing private key configured for demo org {slug!r} (set MODULO_LICENSE_PRIVATE_KEY)."
         )
+
+    admin_email = normalize_email(admin_email)
 
     # 1. Organisation (idempotent by slug, with concurrency safety)
     org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))

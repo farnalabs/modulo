@@ -26,12 +26,17 @@ def test_account_columns() -> None:
     assert "updated_at" in cols
 
 
-def test_account_email_unique() -> None:
+def test_account_email_case_insensitive_unique_index() -> None:
+    """FAR-584: uniqueness is enforced case-insensitively via the functional
+    unique index on ``LOWER(email)`` (migration 0176), not by a plain
+    case-sensitive UNIQUE constraint on the column."""
     table = Base.metadata.tables["accounts"]
-    has_unique = any(
-        isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["email"] for c in table.constraints
-    )
-    assert has_unique
+    indexes = {ix.name: ix for ix in table.indexes}
+    index = indexes.get("uq_accounts_email_lower")
+    assert index is not None
+    assert index.unique
+    expressions = " ".join(str(getattr(el, "text", el)) for el in index.expressions)
+    assert "lower" in expressions.lower()
 
 
 def test_account_auth_provider_check() -> None:

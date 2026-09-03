@@ -1294,3 +1294,51 @@ class TestLicenseGate:
         )
         app.dependency_overrides.clear()
         assert resp.status_code == 402
+
+
+# ── Email normalisation (FAR-584) ────────────────────────────────────
+
+
+class TestEmailNormalization:
+    """SCIM provisioning stores and patches emails in canonical
+    (trimmed, lowercased) form — case-variants of an address are the same
+    account everywhere."""
+
+    async def test_scim_create_user_normalizes_email(self) -> None:
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        with (
+            patch("modulo.db.crud.scim.Account", return_value=MagicMock()) as mock_account,
+            patch("modulo.db.crud.scim.create_membership", new_callable=AsyncMock),
+        ):
+            from modulo.db.crud.scim import scim_create_user
+
+            await scim_create_user(
+                session,
+                org_id=_ORG_ID,
+                email="  Jane.Doe@Example.COM ",
+                display_name="Jane Doe",
+            )
+
+        kwargs = mock_account.call_args.kwargs
+        assert kwargs["email"] == "jane.doe@example.com"
+
+    def test_scim_patch_replace_op_normalizes_email(self) -> None:
+        from modulo.api.routes.scim import ScimPatchOperation, _apply_user_replace_op
+
+        account = MagicMock()
+        op = ScimPatchOperation(op="replace", value={"userName": "  Jane.Doe@Example.COM "})
+
+        _apply_user_replace_op(account, op)
+
+        assert account.email == "jane.doe@example.com"
+
+    def test_scim_patch_add_op_normalizes_email(self) -> None:
+        from modulo.api.routes.scim import ScimPatchOperation, _apply_user_add_op
+
+        account = MagicMock()
+        op = ScimPatchOperation(op="add", value={"userName": "  Jane.Doe@Example.COM "})
+
+        _apply_user_add_op(account, op)
+
+        assert account.email == "jane.doe@example.com"

@@ -24,6 +24,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
+from modulo.util.emails import normalize_email
 
 # ── User provisioning ─────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ async def scim_create_user(
     active: bool = True,
     org_role: str = "runner",
 ) -> Account:
+    email = normalize_email(email)
     existing = await get_account_by_email(session, email)
     if existing is not None:
         membership = await get_membership_by_account_and_org(session, existing.id, org_id)

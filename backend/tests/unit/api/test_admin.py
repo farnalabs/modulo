@@ -1293,6 +1293,32 @@ class TestAdminCreateUserAudit:
         assert resp.status_code == 201
         assert resp.json()["org_role"] == "viewer"
 
+    def test_create_user_case_variant_email_conflicts_409(self, client: TestClient) -> None:
+        """FAR-584: creating a user with a case-variant of an existing
+        account's email conflicts (409) — the email lookup is
+        case-insensitive, so no duplicate account can be minted."""
+        existing = _fake_lifecycle_account()
+        membership = MagicMock()
+        with (
+            patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=existing)),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=membership),
+            ),
+        ):
+            resp = client.post(
+                self.URL,
+                json={
+                    "email": "LIFECYCLE@Test.Com",
+                    "display_name": "Case Variant",
+                    "password": "Str0ngPassw0rd",
+                    "org_role": "runner",
+                },
+            )
+
+        assert resp.status_code == 409
+        assert "already exists" in resp.json()["detail"]
+
 
 class TestAdminResetPasswordLifecycle:
     """POST /api/v1/admin/users/{id}/reset-password forces a password change
