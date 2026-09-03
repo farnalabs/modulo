@@ -205,6 +205,10 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
                     lookup_sites.add(rel)
                 else:
                     role_sites.add(rel)
+    # A site that resolves roles (and denies on None) is a role-resolution site;
+    # if it also performs a direct membership lookup it must NOT be counted as a
+    # membership-lookup (fold) site, which by definition never resolves roles.
+    lookup_sites -= role_sites
     return role_sites, lookup_sites
 
 
