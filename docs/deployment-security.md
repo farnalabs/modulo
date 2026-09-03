@@ -26,7 +26,9 @@ expects a proxy to handle it.
 | **Caddy** | Automatic ACME (Let's Encrypt). Reference Caddyfile in `deploy/caddy/`. |
 | **nginx** | Manual cert + `ssl_certificate` directives. See `docs/deployment.md` §TLS/HTTPS. |
 
-Cipher requirements (from `deploy/nginx/default.conf` where shipped):
+Cipher requirements (recommended baseline for user-managed nginx TLS; when
+using Caddy, TLS is terminated by Caddy with its ACME defaults, so these
+directives are not needed there):
 
 ```
 ssl_protocols TLSv1.2 TLSv1.3;
@@ -266,8 +268,10 @@ MODULO_AUTH_RATE_LIMIT_ENABLED=true
 MODULO_AUTH_MAX_ATTEMPTS=10     # Failed attempts before lockout
 MODULO_AUTH_WINDOW_SECONDS=60   # Sliding window in seconds
 
-# Global bypass token (for trusted internal callers)
-MODULO_RATE_LIMIT_BYPASS_TOKEN=<random-token>
+# Global bypass token (for trusted internal callers). The server reads the
+# token from the MODULO_RATELIMIT_BYPASS_TOKEN setting; trusted callers send it
+# as the MODULO_RATELIMIT_BYPASS_TOKEN HTTP header.
+MODULO_RATELIMIT_BYPASS_TOKEN=<random-token>
 ```
 
 Route-level limits are defined in code. **Key derivation** is auth-aware:
@@ -355,11 +359,10 @@ that image to GHCR after the critical-vulnerability gate passes:
 
 ```bash
 # Manual scan
-trivy image ghcr.io/farnalabs/modulo-backend:latest
-trivy image ghcr.io/farnalabs/modulo-frontend:latest
+trivy image ghcr.io/farnalabs/modulo:latest
 
 # Scan with severity filter
-trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo-backend:latest
+trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:latest
 ```
 
 **SLAs** (from `docs/security/dependency-policy.md`):
@@ -373,7 +376,10 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo-backend:latest
 ### 5.2 Minimal Base Images
 
 - Backend image: `python:3.14-slim` (Debian-based, ~120 MB).
-- Frontend image: `node:22-alpine` (multi-stage build, compiled assets served via Vite in dev or nginx in prod).
+- Frontend image: multi-stage `node:22-alpine` (build stage) → `nginx:alpine`
+  (final stage, serves the compiled assets); the published prod image runs as
+  `USER nginx` (`frontend/Dockerfile.prod`). In dev the Vite server runs as
+  `USER node` (`frontend/Dockerfile`).
 - Do not replace these with `:latest` or full distroless images without
   verifying that `uv`, Python, and all native dependencies (`psycopg` C
   extension, `cryptography` Rust extensions) are available.
@@ -387,8 +393,8 @@ Both backend and frontend containers run as a non-root user by default:
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Frontend Dockerfile
-USER node
+# Frontend Dockerfile (prod final stage)
+USER nginx
 ```
 
 **Verify:**
@@ -398,7 +404,8 @@ docker run --rm ghcr.io/farnalabs/modulo:latest whoami
 ```
 
 The Dockerfiles already enforce a non-root user (`USER appuser` in backend,
-`USER node` in frontend), so no runtime override is needed under Docker Compose or Fly.io.
+`USER nginx` in the frontend prod image), so no runtime override is needed
+under Docker Compose or Fly.io.
 
 ### 5.4 Read-Only Filesystem
 
@@ -424,7 +431,7 @@ tag. This prevents tag-mutation attacks on the registry:
 
 ```yaml
 modulo:
-  image: ghcr.io/farnalabs/modulo-backend@sha256:<digest>
+  image: ghcr.io/farnalabs/modulo@sha256:<digest>
 ```
 
 For `docker compose` development, use `pull_policy: always` to pick up newly
@@ -540,7 +547,7 @@ Configure alerts for these events in your monitoring system:
 ```bash
 # Docker Compose – re-tag and restart the previous image
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag modulo-backend:old modulo-backend:latest
+docker tag modulo:old modulo:latest
 docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
