@@ -315,12 +315,19 @@ jobs:
     # runner cost — the badge tracks main, not PRs. Reuses the coverage-report
     # artifact backend-test already uploads instead of re-running the backend
     # suite.
+    # Also runs on pull_request: a job-level `if` that is false on PRs registers
+    # the check as "skipped", and the PR Reviewer gate counts any non-success
+    # conclusion (including "skipped") as a merge-blocking failure — so a
+    # push-to-main-only job would block every PR indefinitely (FAR-568 fix PR).
+    # The push-to-main run still refreshes the README badge; the extra PR runs
+    # additionally decorate the PR via SonarCloud's auto-detected PR context.
     # workflow_dispatch is allowed so this otherwise push-to-main-only job can be
     # validated manually BEFORE merge (a push-main-only job is invisible to PR CI,
     # which is how the missing @vitest/coverage-v8 provider nearly shipped broken).
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'pull_request'
     needs: [backend-test]
     runs-on: ubicloud-standard-2
     steps:
