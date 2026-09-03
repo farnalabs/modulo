@@ -308,7 +308,15 @@
       <template #footer>
         <div class="flex justify-end">
           <Button
-            :data-testid="credentialKind === 'invite' ? 'admin-users-invite-done' : 'admin-users-reset-done'"
+            v-if="credentialKind === 'invite'"
+            data-testid="admin-users-invite-done"
+            @click="dismissCredentialDialog"
+          >
+            {{ $t('views.AdminUsersView.done') }}
+          </Button>
+          <Button
+            v-else
+            data-testid="admin-users-reset-done"
             @click="dismissCredentialDialog"
           >
             {{ $t('views.AdminUsersView.done') }}
