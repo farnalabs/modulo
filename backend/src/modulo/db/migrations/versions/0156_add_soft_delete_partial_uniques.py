@@ -22,7 +22,8 @@ from alembic import op
 from sqlalchemy import text
 
 revision: str = "0156_add_soft_delete_partial_uniques"
-down_revision: str | None = "0155_add_hot_query_indexes"
+# 0175 (spliced upstream 2026-09-03) soft-deletes live duplicate (organisation_id, name) rows before these indexes are created; body unchanged.
+down_revision: str | None = "0175_dedupe_soft_delete_names"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
