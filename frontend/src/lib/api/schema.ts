@@ -3806,6 +3806,12 @@ export interface paths {
          *       * **Skip** — omit ``input_data`` (or set ``null``); the node is marked
          *         completed with no output and the run resumes.
          *
+         *     FAR-541: HITL gate targets are refused (422) — gate decisions must go
+         *     through the approve/reject endpoints. When the run is parked at an
+         *     undecided claim row, the recovery payload is stamped with that row's gate
+         *     id so the per-consumer stamp checks accept it (manual nodes: the node id;
+         *     conformance blocks: the guardrail gate id — the operator break-glass).
+         *
          *     Requires operator or admin role.
          */
         post: operations["recover_run_node_api_v1_runs__run_id__nodes__node_id__recover_post"];

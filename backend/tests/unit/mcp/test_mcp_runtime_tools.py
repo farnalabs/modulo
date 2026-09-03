@@ -19,6 +19,7 @@ from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
+    DecisionPayloadError,
     GateAlreadyDecidedError,
     GateNotFoundError,
     NotTeamMemberError,
@@ -712,6 +713,11 @@ class TestReviewHitl(_AuthContext):
 
         assert result == {"status": "approved", "gate_id": "gate-1"}
         manager.approve.assert_awaited_once()
+        # FAR-541: the persisted decision payload is stamped with the gate id.
+        assert manager.approve.await_args.kwargs["decision_payload"] == {
+            "action": "approved",
+            "gate_id": "gate-1",
+        }
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -736,6 +742,11 @@ class TestReviewHitl(_AuthContext):
 
         assert result == {"status": "rejected", "gate_id": "gate-1"}
         manager.reject.assert_awaited_once()
+        # FAR-541: the persisted decision payload is stamped with the gate id.
+        assert manager.reject.await_args.kwargs["decision_payload"] == {
+            "action": "rejected",
+            "gate_id": "gate-1",
+        }
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -766,6 +777,12 @@ class TestReviewHitl(_AuthContext):
 
         assert result == {"status": "delivered_manual", "gate_id": "gate-1"}
         manager.deliver_manual.assert_awaited_once()
+        # FAR-541: the persisted decision payload is stamped with the gate id.
+        assert manager.deliver_manual.await_args.kwargs["decision_payload"] == {
+            "action": "deliver_manual",
+            "gate_id": "gate-1",
+            "output": {"result": "ok"},
+        }
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -943,6 +960,42 @@ class TestReviewHitl(_AuthContext):
         result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok")
 
         assert result["error"] == "already_decided"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_decision_payload_refusal_maps_to_error_response(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-541 (iteration 4): a ``_decide`` refusal (DecisionPayloadError)
+        surfaces as the MCP error shape (``invalid_decision_payload``) instead
+        of an unhandled exception — mirroring the HTTP API's 422."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock(side_effect=DecisionPayloadError("decision_payload must be a JSON object"))
+
+        mock_sesh = AsyncMock()
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        gate_result = MagicMock()
+        gate_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()),
+            gate_id="gate-1",
+            action="approve",
+            claim_token="tok",
+            output={"not": "relevant"},
+        )
+
+        assert result["error"] == "invalid_decision_payload"
+        assert "must be a JSON object" in result["detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")

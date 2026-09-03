@@ -167,6 +167,55 @@ class TestResumeSandboxCapacityExceeded:
         assert executor.resume.await_count == 1
 
 
+class TestResumeDataGateStamp:
+    """FAR-541: every decision payload is STAMPED with the gate (or manual
+    node) id it resolves — both on the persisted ``decision_payload`` (the
+    reconcile reconstructs its resume from it) and on the ``executor.resume``
+    injection (the per-gate consumer verifies the stamp)."""
+
+    @pytest.mark.parametrize(
+        ("path", "payload", "hitl_method"),
+        [
+            ("hitl/gate-1/approve", {"claim_token": "tok", "notes": "n"}, "approve"),
+            (
+                "hitl/gate-1/approve-with-modification",
+                {"claim_token": "tok", "modified_output": {"k": "v"}},
+                "approve_with_modification",
+            ),
+            ("hitl/gate-1/reject", {"claim_token": "tok", "reason": "not good"}, "reject"),
+            ("hitl/gate-1/deliver-manual", {"claim_token": "tok", "output": {"o": 1}}, "deliver_manual"),
+            ("manual/node-1/submit", {"claim_token": "tok", "output": {"o": 1}}, "approve"),
+        ],
+    )
+    def test_route_stamps_decision_payload_and_resume_data(
+        self,
+        client: TestClient,
+        path: str,
+        payload: dict[str, Any],
+        hitl_method: str,
+    ) -> None:
+        expected_stamp = "node-1" if path.startswith("manual/") else "gate-1"
+        manager = MagicMock()
+        method_mock = AsyncMock(return_value=MagicMock())
+        setattr(manager, hitl_method, method_mock)
+        executor = MagicMock()
+        executor.resume = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        ):
+            resp = client.post(f"/api/v1/runs/{_RUN_ID}/{path}", json=payload)
+
+        assert resp.status_code == 200
+        method_mock.assert_awaited_once()
+        persisted = method_mock.await_args.kwargs["decision_payload"]
+        assert persisted["gate_id"] == expected_stamp
+        injected = executor.resume.await_args.kwargs["resume_data"]
+        assert injected == persisted
+        assert injected["gate_id"] == expected_stamp
+
+
 class TestApproveWithModificationSQLAlchemyError:
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve_with_modification",

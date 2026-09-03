@@ -180,14 +180,22 @@ def eval_scores(eval_name: str, score: float, ctx):
 def human_rejects_gate(ctx):
     if "state" not in ctx:
         ctx["state"] = {"artifacts": [], "_hitl_gates": []}
-    ctx["state"]["_hitl_decision"] = {"action": "rejected"}
+    # FAR-541: the decision is stamped with the gate it resolves.
+    ctx["state"]["_hitl_decision"] = {
+        "action": "rejected",
+        "gate_id": ctx.get("gate_config", {}).get("gate_id", "gate"),
+    }
 
 
 @when("a human approves the gate")
 def human_approves_gate(ctx):
     if "state" not in ctx:
         ctx["state"] = {"artifacts": [], "_hitl_gates": []}
-    ctx["state"]["_hitl_decision"] = {"action": "approved"}
+    # FAR-541: the decision is stamped with the gate it resolves.
+    ctx["state"]["_hitl_decision"] = {
+        "action": "approved",
+        "gate_id": ctx.get("gate_config", {}).get("gate_id", "gate"),
+    }
 
 
 @when("the run resumes")
@@ -321,7 +329,8 @@ def run_routes_to(target: str, ctx):
     gate_config = ctx.get("gate_config", {})
     reject_target = gate_config.get("reject_target", "?")
     normal_target = "next-node"
-    router = _make_gate_kickback_router(normal_target, reject_target)
+    gate_id = gate_config.get("gate_id", "gate")
+    router = _make_gate_kickback_router(normal_target, reject_target, gate_id=gate_id)
     decision = ctx.get("state", {}).get("_hitl_decision", {})
     result = router({"_hitl_decision": decision})
     assert result == target, f"Expected route to {target!r}, got {result!r}"

@@ -513,19 +513,19 @@ async def test_conditional_accepts_persisted_naming():
 
 def test_gate_kickback_router_routes_to_reject_on_rejection():
     """Router returns reject_target when _hitl_decision action is rejected."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
-    assert router({"_hitl_decision": {"action": "rejected"}}) == "reject_target"
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
+    assert router({"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_src_tgt"}}) == "reject_target"
 
 
 def test_gate_kickback_router_routes_to_normal_on_approval():
     """Router returns normal_target when _hitl_decision action is approved."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
-    assert router({"_hitl_decision": {"action": "approved"}}) == "normal_target"
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
+    assert router({"_hitl_decision": {"action": "approved", "gate_id": "hitl_gate_src_tgt"}}) == "normal_target"
 
 
 def test_gate_kickback_router_falls_back_to_normal_without_decision():
     """Router returns normal_target when no _hitl_decision is in state."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
     assert router({}) == "normal_target"
     assert router({"some_key": "value"}) == "normal_target"
 
@@ -535,8 +535,8 @@ def test_gate_kickback_router_rejection_kicks_back_to_reject_no_correction_marke
     state — no correction node exists in node_runner and nothing reads
     ``_correction_pending``. A rejection kicks back to the plain reject target
     and stamps NO ``_correction_pending`` marker."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
-    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
+    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_src_tgt"}}
     assert router(state) == "reject_target"
     assert "_correction_pending" not in state
 
@@ -544,16 +544,16 @@ def test_gate_kickback_router_rejection_kicks_back_to_reject_no_correction_marke
 def test_gate_kickback_router_without_correction_target_kicks_back_to_reject():
     """Back-compat: a rejection kicks back to reject_target and stamps no
     correction marker (T1's recover_node override stays the break-glass path)."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
-    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
+    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_src_tgt"}}
     assert router(state) == "reject_target"
     assert "_correction_pending" not in state
 
 
 def test_gate_kickback_router_approval_routes_to_normal_target():
     """Approval (and absence of a decision) route to normal_target."""
-    router = _make_gate_kickback_router("normal_target", "reject_target")
-    assert router({"_hitl_decision": {"action": "approved"}}) == "normal_target"
+    router = _make_gate_kickback_router("normal_target", "reject_target", gate_id="hitl_gate_src_tgt")
+    assert router({"_hitl_decision": {"action": "approved", "gate_id": "hitl_gate_src_tgt"}}) == "normal_target"
     assert router({}) == "normal_target"
 
 

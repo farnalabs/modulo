@@ -82,7 +82,7 @@ async def test_hitl_gate_first_call_preserves_existing_hitl_gates():
 async def test_hitl_gate_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner.interrupt",
-        lambda _payload: {"action": "approved", "notes": "Command resume"},
+        lambda _payload: {"action": "approved", "gate_id": "review-step", "notes": "Command resume"},
     )
     node_fn = make_hitl_gate_fn({"gate_id": "review-step"})
 
@@ -99,13 +99,17 @@ async def test_hitl_gate_resume_with_approved():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "notes": "Looks good"},
+            "_hitl_decision": {"action": "approved", "gate_id": "review-step", "notes": "Looks good"},
         }
     )
 
     assert len(result["artifacts"]) == 1
     assert result["artifacts"][0]["result"] == "approved"
-    assert result["artifacts"][0]["human_data"] == {"action": "approved", "notes": "Looks good"}
+    assert result["artifacts"][0]["human_data"] == {
+        "action": "approved",
+        "gate_id": "review-step",
+        "notes": "Looks good",
+    }
 
 
 async def test_hitl_gate_resume_with_rejected():
@@ -115,7 +119,7 @@ async def test_hitl_gate_resume_with_rejected():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "rejected", "reason": "Not good enough"},
+            "_hitl_decision": {"action": "rejected", "gate_id": "review-step", "reason": "Not good enough"},
         }
     )
 
@@ -131,7 +135,7 @@ async def test_hitl_gate_resume_preserves_existing_artifacts():
     result = await node_fn(
         {
             "artifacts": [prior_artifact],
-            "_hitl_decision": {"action": "approved"},
+            "_hitl_decision": {"action": "approved", "gate_id": "review-step"},
         }
     )
 
@@ -169,7 +173,7 @@ async def test_manual_node_first_call_raises_interrupt():
 async def test_manual_node_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner.interrupt",
-        lambda _payload: {"output": {"answer": "provided"}},
+        lambda _payload: {"gate_id": "manual-step", "output": {"answer": "provided"}},
     )
     node_fn = make_manual_node_fn({"id": "manual-step", "manual_prompt": "Provide output"})
 
@@ -185,7 +189,7 @@ async def test_manual_node_resume_with_output():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "manual_output", "output": {"title": "Test"}},
+            "_hitl_decision": {"action": "manual_output", "gate_id": "manual-node-1", "output": {"title": "Test"}},
         }
     )
 
@@ -204,7 +208,11 @@ async def test_manual_node_resume_validates_required_fields():
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_decision": {"action": "manual_output", "output": {"title": "Only title"}},
+                "_hitl_decision": {
+                    "action": "manual_output",
+                    "gate_id": "manual-node-2",
+                    "output": {"title": "Only title"},
+                },
             }
         )
 
@@ -216,7 +224,7 @@ async def test_manual_node_resume_without_schema_passes_any_data():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "manual_output", "output": {"anything": 42}},
+            "_hitl_decision": {"action": "manual_output", "gate_id": "manual-node-3", "output": {"anything": 42}},
         }
     )
 
@@ -767,7 +775,7 @@ async def test_eval_condition_resume_skips_condition_and_eval():
         {
             "artifacts": [],
             "x": "fail",
-            "_hitl_decision": {"action": "approved"},
+            "_hitl_decision": {"action": "approved", "gate_id": "resume-eval-cond"},
         }
     )
 
@@ -824,7 +832,7 @@ async def test_resume_skips_condition_and_eval():
             "artifacts": [],
             "score": 0.2,
             "level": "fail",
-            "_hitl_decision": {"action": "approved"},
+            "_hitl_decision": {"action": "approved", "gate_id": "resume-gate"},
         }
     )
 
@@ -847,7 +855,7 @@ async def test_hitl_gate_resume_with_deliver_manual():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "deliver_manual", "output": manual_output},
+            "_hitl_decision": {"action": "deliver_manual", "gate_id": "review-step", "output": manual_output},
         }
     )
 
@@ -857,6 +865,7 @@ async def test_hitl_gate_resume_with_deliver_manual():
     assert result["output"] == manual_output
     assert result["artifacts"][0]["human_data"] == {
         "action": "deliver_manual",
+        "gate_id": "review-step",
         "output": manual_output,
     }
 
@@ -869,7 +878,7 @@ async def test_hitl_gate_resume_with_deliver_manual_empty_output():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "deliver_manual", "output": {}},
+            "_hitl_decision": {"action": "deliver_manual", "gate_id": "review-step", "output": {}},
         }
     )
 
@@ -892,7 +901,7 @@ async def test_hitl_gate_resume_with_modified_output_writes_output_key():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "modified_output": modified},
+            "_hitl_decision": {"action": "approved", "gate_id": "modify-gate", "modified_output": modified},
         }
     )
 
@@ -909,7 +918,7 @@ async def test_hitl_gate_resume_without_modified_output_skips_output_key():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "notes": "Looks good"},
+            "_hitl_decision": {"action": "approved", "gate_id": "plain-approve", "notes": "Looks good"},
         }
     )
 

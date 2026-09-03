@@ -1343,9 +1343,14 @@ def _f6a_row(status: str, *, stale: bool = True) -> SimpleNamespace:
 
 class TestReconcileF6aRecovery:
     @pytest.mark.asyncio
-    async def test_awaiting_human_no_job_stale_redispatches_resume_run(self, monkeypatch) -> None:
-        """F6a: an awaiting_human run with no SAQ job + stale heartbeat is
-        recovered as resume_run (a half-resumed run whose job was lost)."""
+    async def test_awaiting_human_no_job_stale_no_decision_skips_run(self, monkeypatch) -> None:
+        """F6a / FAR-541 auto-approve guard: an awaiting_human run with no SAQ
+        job + stale heartbeat is NOT re-dispatched as resume_run when no human
+        has committed a gate decision for it. Pre-FAR-541 this auto-resumed with
+        an empty decision, which the HITL gate treated as an approval (auto-
+        approving the gate). The committed-decision guard in
+        ``_awaiting_human_has_committed_decision`` now skips genuinely-waiting
+        runs so a lost resume job can never silently approve a gate."""
         from modulo.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
@@ -1384,9 +1389,9 @@ class TestReconcileF6aRecovery:
         ):
             summary = await ch.dispatcher_reconcile()
 
-        assert summary["repaired"] == 1
-        reenqueue.assert_awaited_once()
-        assert reenqueue.await_args.args[3] == "resume_run"
+        assert summary["repaired"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio

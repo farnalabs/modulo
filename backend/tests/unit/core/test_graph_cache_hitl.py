@@ -33,7 +33,7 @@ def _gate_fn(correction_target: str | None = None, *, org_id: uuid.UUID | None =
 
 def _state(**overrides: dict) -> dict:
     state: dict = {
-        "_hitl_decision": {"action": "rejected", "reason": "secret detected"},
+        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_a_b", "reason": "secret detected"},
         "_run_id": uuid.uuid4(),
         "output": {"body": "secret: hunter2"},
     }
@@ -83,7 +83,7 @@ async def test_approve_with_correction_target_does_not_dispatch():
         "modulo.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(return_value=None),
     ) as dispatch:
-        result = await gate(_state(_hitl_decision={"action": "approved"}))
+        result = await gate(_state(_hitl_decision={"action": "approved", "gate_id": "hitl_gate_a_b"}))
 
     dispatch.assert_not_awaited()
     assert result["artifacts"][0]["result"] == "approved"

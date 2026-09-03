@@ -194,33 +194,43 @@ def test_conditional_router_jmespath_nested():
 
 def test_gate_kickback_router_empty_hitl_decision():
     """Empty _hitl_decision dict routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject")
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
     assert router({"_hitl_decision": {}}) == "normal"
 
 
 def test_gate_kickback_router_non_dict_hitl_decision():
     """Non-dict _hitl_decision value routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject")
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
     assert router({"_hitl_decision": "garbage"}) == "normal"
 
 
 def test_gate_kickback_router_no_action_key():
     """_hitl_decision without 'action' key routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject")
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
     assert router({"_hitl_decision": {"status": "pending"}}) == "normal"
 
 
 def test_gate_kickback_router_non_rejected_action():
     """_hitl_decision with non-'rejected' action routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject")
-    assert router({"_hitl_decision": {"action": "approved"}}) == "normal"
-    assert router({"_hitl_decision": {"action": "escalated"}}) == "normal"
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    assert router({"_hitl_decision": {"action": "approved", "gate_id": "hitl_gate_a_b"}}) == "normal"
+    assert router({"_hitl_decision": {"action": "escalated", "gate_id": "hitl_gate_a_b"}}) == "normal"
 
 
 def test_gate_kickback_router_rejected_action():
     """_hitl_decision with 'rejected' action routes to reject_target."""
-    router = _make_gate_kickback_router("normal", "reject")
-    assert router({"_hitl_decision": {"action": "rejected"}}) == "reject"
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    assert router({"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_a_b"}}) == "reject"
+
+
+def test_gate_kickback_router_foreign_rejection_routes_normal():
+    """FAR-541: a stale rejection stamped for a DIFFERENT gate never kicks
+    THIS edge to the reject target — the router is reachable without the gate
+    consuming a decision (condition/autonomy skip) and ``_hitl_decision`` is
+    never cleared from state."""
+    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    assert router({"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_c_d"}}) == "normal"
+    assert router({"_hitl_decision": {"action": "rejected"}}) == "normal"
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +351,9 @@ async def test_gate_with_reject_edge_routes_on_rejection():
     initial_state: dict[str, Any] = {
         "run_context": {"cancelled": False, "input": {}},
         "artifacts": [],
-        "_hitl_decision": {"action": "rejected"},
+        # FAR-541: the resume decision is stamped with the gate it resolves
+        # (gate id = hitl_gate_<source>_<target>).
+        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_source_target"},
     }
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     result = await compiled.ainvoke(initial_state, config)
@@ -378,7 +390,9 @@ async def test_gate_with_reject_target_routes_on_rejection():
     initial_state: dict[str, Any] = {
         "run_context": {"cancelled": False, "input": {}},
         "artifacts": [],
-        "_hitl_decision": {"action": "rejected"},
+        # FAR-541: the resume decision is stamped with the gate it resolves
+        # (gate id = hitl_gate_<source>_<target>).
+        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_source_target"},
     }
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     result = await compiled.ainvoke(initial_state, config)

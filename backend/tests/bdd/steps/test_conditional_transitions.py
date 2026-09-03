@@ -153,11 +153,14 @@ def run_reaches_no_match(node_id: str, ctx):
 
 @when("a human rejects the gate")
 def human_rejects_gate(ctx):
+    gate_id = ctx.get("hitl_gate_config", {}).get("gate_id", f"hitl_gate_source_{ctx['hitl_target']}")
     router = _make_gate_kickback_router(
         ctx["hitl_target"],
         ctx.get("reject_edge", {}).get("target", "fixup"),
+        gate_id=gate_id,
     )
-    state = {"_hitl_decision": {"action": "rejected"}}
+    # FAR-541: the decision is stamped with the gate it resolves.
+    state = {"_hitl_decision": {"action": "rejected", "gate_id": gate_id}}
     ctx["routed_target"] = router(state)
 
 

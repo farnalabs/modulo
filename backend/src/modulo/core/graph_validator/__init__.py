@@ -41,6 +41,13 @@ from modulo.db.models.schema import SchemaVersion
 
 _log = logging.getLogger(__name__)
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
+# FAR-541 (iteration 4, m4): node ids starting with this prefix are reserved —
+# the executor synthesizes HITL gate nodes as ``hitl_gate_<gate_id>``
+# (node_runner/graph_cache), and consumer/stamp checks (recover-node 422
+# guard, dispatcher reconcile, HITL routing) key on the prefix to tell a real
+# gate apart from manual nodes and guardrail rows. A user node id squatting
+# the prefix would be misrouted as a gate.
+HITL_GATE_NODE_ID_PREFIX = "hitl_gate_"
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
         "string": str,
@@ -1300,14 +1307,29 @@ class GraphValidator:
 
     @staticmethod
     def _collect_node_ids(nodes: list[dict[str, Any]], result: ValidationResult) -> set[str] | None:
-        """Collect unique node ids; emits TOPOLOGY_NODE_MISSING_ID and returns None on a missing id."""
+        """Collect unique node ids; emits TOPOLOGY_NODE_MISSING_ID and returns None on a missing id.
+
+        FAR-541 (iteration 4, m4): also rejects node ids squatting the
+        reserved ``hitl_gate_`` prefix (TOPOLOGY_NODE_RESERVED_ID_PREFIX) —
+        the executor synthesizes HITL gate nodes under that prefix and the
+        stamp/reconcile checks route on it.
+        """
         node_ids: set[str] = set()
         for n in nodes:
             nid = n.get("id")
             if nid is None:
                 result.error("TOPOLOGY_NODE_MISSING_ID", "A node is missing its 'id' field")
                 return None
-            node_ids.add(str(nid))
+            nid_str = str(nid)
+            if nid_str.startswith(HITL_GATE_NODE_ID_PREFIX):
+                result.error(
+                    "TOPOLOGY_NODE_RESERVED_ID_PREFIX",
+                    f"Node id '{nid_str}' uses the reserved '{HITL_GATE_NODE_ID_PREFIX}' prefix "
+                    "(synthesized HITL gate nodes)",
+                    node_id=nid_str,
+                )
+                return None
+            node_ids.add(nid_str)
         return node_ids
 
     @staticmethod

@@ -177,6 +177,11 @@ async def test_manual_node_first_call_raises_interrupt():
     assert isinstance(value, dict)
     assert value["manual"] is True
     assert value["node_id"] == "manual-unit-1"
+    # FAR-541 (iteration 3): the interrupt payload stamps its own identity —
+    # ``_handle_graph_interrupt`` keys the pending claim row on ``gate_id``
+    # verbatim, so the manual node's row is keyed by the NODE id (previously ""
+    # — invisible to the recover-node guard and the HITL decision API).
+    assert value["gate_id"] == "manual-unit-1"
 
 
 async def test_manual_node_awaiting_human_sets_artifact():
@@ -202,7 +207,7 @@ async def test_manual_node_accepts_human_output_on_resume():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"output": {"review": "approved", "comments": "LGTM"}},
+            "_hitl_decision": {"gate_id": "manual-unit-3", "output": {"review": "approved", "comments": "LGTM"}},
         }
     )
 
@@ -229,7 +234,7 @@ async def test_manual_node_validates_required_fields():
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_decision": {"output": {"decision": "approve"}},  # missing "reason"
+                "_hitl_decision": {"gate_id": "manual-unit-4", "output": {"decision": "approve"}},  # missing "reason"
             }
         )
 
@@ -248,7 +253,7 @@ async def test_manual_node_valid_output_passes_validation():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"output": {"decision": "approve", "notes": "ok"}},
+            "_hitl_decision": {"gate_id": "manual-unit-5", "output": {"decision": "approve", "notes": "ok"}},
         }
     )
 
@@ -263,7 +268,7 @@ async def test_manual_node_no_schema_passes_any_output():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"output": {"anything": 42, "nested": {"key": True}}},
+            "_hitl_decision": {"gate_id": "manual-unit-6", "output": {"anything": 42, "nested": {"key": True}}},
         }
     )
 
@@ -279,7 +284,7 @@ async def test_manual_node_preserves_prior_artifacts():
     result = await node_fn(
         {
             "artifacts": [prior],
-            "_hitl_decision": {"output": {"data": "ok"}},
+            "_hitl_decision": {"gate_id": "manual-unit-7", "output": {"data": "ok"}},
         }
     )
 
@@ -300,7 +305,7 @@ async def test_manual_node_decision_without_output_is_ignored():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"approved": True, "reviewer": "alice"},
+            "_hitl_decision": {"gate_id": "manual-unit-11", "approved": True, "reviewer": "alice"},
         }
     )
 
@@ -316,7 +321,7 @@ async def test_manual_node_handles_non_dict_decision():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"output": "plain string"},
+            "_hitl_decision": {"gate_id": "manual-unit-8", "output": "plain string"},
         }
     )
 
@@ -341,3 +346,84 @@ async def test_manual_node_with_output_schema_id():
     value = actual.value if hasattr(actual, "value") else actual
     assert "output_schema_id" in value
     assert value["output_schema_id"] is not None
+
+
+async def test_manual_node_foreign_decision_stays_interrupted():
+    """FAR-541 (C1 consumer matrix): a decision stamped for a DIFFERENT node
+    must never complete this manual node (historically with
+    ``manual_output=None``) — the node re-interrupts and keeps waiting."""
+    node_def = {"id": "manual-unit-12", "node_type": "manual"}
+    node_fn = make_manual_node_fn(node_def)
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_decision": {
+                    "action": "manual_output",
+                    "gate_id": "some-other-node",
+                    "output": {"answer": 42},
+                },
+            }
+        )
+
+
+async def test_manual_node_unstamped_decision_stays_interrupted():
+    """FAR-541: a decision without a stamp cannot be attributed to this node —
+    the node re-interrupts rather than completing with foreign output."""
+    node_def = {"id": "manual-unit-13", "node_type": "manual"}
+    node_fn = make_manual_node_fn(node_def)
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_decision": {"action": "manual_output", "output": {"answer": 42}},
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# Recover-node roundtrip (FAR-541 iteration 3, FIX 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_manual_node_completes_from_recover_node_replay_payload():
+    """FAR-541 FIX 3 roundtrip (replay): recover-node stamps the recovery
+    payload with the run's pending claim row's gate_id — for a manual node that
+    row is keyed by the NODE id (FIX 2 stamp) — and the consumer accepts
+    exactly that payload, completing with the recovery output."""
+    node_def = {"id": "manual-unit-14", "node_type": "manual"}
+    node_fn = make_manual_node_fn(node_def)
+
+    # The exact payload the recover-node route dispatches when the run's
+    # undecided claim row is keyed by this node's id (routes/runs.py):
+    # {"action": "replay", "gate_id": <row.gate_id>, "output": <input_data>}.
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "replay", "gate_id": "manual-unit-14", "output": {"answer": 42}},
+        }
+    )
+
+    assert result["manual_output"] == {"answer": 42}
+    assert result["artifacts"][0]["status"] == "completed"
+    assert result["artifacts"][0]["human_output"] == {"answer": 42}
+
+
+async def test_manual_node_completes_from_recover_node_skip_payload():
+    """FAR-541 FIX 3 roundtrip (skip): a recover-node skip (no input_data)
+    stamps the same identity — the node completes with no output."""
+    node_def = {"id": "manual-unit-15", "node_type": "manual"}
+    node_fn = make_manual_node_fn(node_def)
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "skip", "gate_id": "manual-unit-15", "output": None},
+        }
+    )
+
+    assert result.get("manual_output") is None
+    assert result["artifacts"][0]["status"] == "completed"
+    assert result["artifacts"][0]["human_output"] is None

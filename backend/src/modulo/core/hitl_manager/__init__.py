@@ -381,7 +381,11 @@ class HITLManager:
         Logs a ``hitl.output_modified`` audit event documenting the change,
         then logs the standard ``hitl.output_delivered`` event.
 
-        Raises on missing token, expired token, or decided gate.
+        Raises on missing token, expired token, or decided gate, and
+        ``DecisionPayloadError`` when the supplied *decision_payload* violates
+        the payload contract (FAR-541 iteration 4: ``_decide`` is the single
+        stamp authority — foreign-stamped, non-serialisable, and oversized
+        payloads are refused).
         """
         if decision_payload is None:
             decision_payload = {"action": "approved", "modified_output": modified_output}
@@ -421,7 +425,11 @@ class HITLManager:
     ) -> HitlClaim:
         """Record approval and log a ``hitl.output_delivered`` audit event.
 
-        Raises on missing token, expired token, or decided gate.
+        Raises on missing token, expired token, or decided gate, and
+        ``DecisionPayloadError`` when the supplied *decision_payload* violates
+        the payload contract (FAR-541 iteration 4: ``_decide`` is the single
+        stamp authority — foreign-stamped, non-serialisable, and oversized
+        payloads are refused).
         """
         if decision_payload is None:
             decision_payload = {"action": "approved"}
@@ -459,7 +467,11 @@ class HITLManager:
     ) -> HitlClaim:
         """Record rejection and log a ``hitl.output_rejected`` audit event.
 
-        Raises on missing token, expired token, or decided gate.
+        Raises on missing token, expired token, or decided gate, and
+        ``DecisionPayloadError`` when the supplied *decision_payload* violates
+        the payload contract (FAR-541 iteration 4: ``_decide`` is the single
+        stamp authority — foreign-stamped, non-serialisable, and oversized
+        payloads are refused).
         """
         if decision_payload is None:
             decision_payload = {"action": "rejected"}
@@ -507,7 +519,11 @@ class HITLManager:
         the expected output schema (if available) and the run resumes past the
         HITL gate with the manually-supplied value.
 
-        Raises on missing token, expired token, or decided gate.
+        Raises on missing token, expired token, or decided gate, and
+        ``DecisionPayloadError`` when the supplied *decision_payload* violates
+        the payload contract (FAR-541 iteration 4: ``_decide`` is the single
+        stamp authority — foreign-stamped, non-serialisable, and oversized
+        payloads are refused).
         Sets ``delivered_at`` on the claim after successful audit logging.
         On audit failure the exception propagates and the transaction rolls back.
         """
@@ -677,13 +693,46 @@ class HITLManager:
         decision: str,
         decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
+        """Record a decision on the claim row — the STAMP authority (FAR-541).
+
+        Decision-payload contract (FAR-541 iteration 3): the persisted payload
+        shape is ``{"action": <verdict>, "gate_id": <this row's gate id>}``
+        plus any per-action members (``output``/``modified_output``/``reason``/
+        ``notes``). ``_decide`` is the single stamp authority: a payload
+        WITHOUT a ``gate_id`` is stamped with this row's gate id here; a
+        payload already stamped for a DIFFERENT gate raises
+        ``DecisionPayloadError`` (a foreign-stamped decision is never
+        persisted). Call-site stamps (API routes / MCP) remain — they feed the
+        DIRECT ``executor.resume`` injection which bypasses ``_decide``.
+
+        Recognized actions are enforced at RESUME time by each consumer, not
+        here:
+
+        * HITL gate nodes: ``approved`` / ``rejected`` / ``deliver_manual``
+        * manual nodes: the node's own id as ``gate_id`` + ``output``
+        * conformance overrides: ``approved`` / ``deliver_manual`` / ``skip`` /
+          ``replay`` (the latter two are stamped by the recover-node route)
+
+        Raises on missing token, expired token, decided gate, or a
+        malformed/foreign-stamped payload.
+        """
         now = datetime.now(UTC)
+
+        # FAR-541 (iteration 3): stamp authority. A payload without a stamp is
+        # stamped with THIS row's gate id; a foreign stamp is refused before
+        # any DB write. Copied (not mutated) so the caller's dict — reused for
+        # the direct executor.resume injection — is untouched. A non-dict
+        # payload skips stamping here and is rejected by the validator below.
+        if decision_payload is None:
+            decision_payload = {"action": decision, "gate_id": gate_id}
+        elif isinstance(decision_payload, dict) and decision_payload.get("gate_id") is None:
+            decision_payload = {**decision_payload, "gate_id": gate_id}
 
         # Validate the resume payload shape at write (B1): it must be a dict
         # and any output/modified_output members must be dicts. Oversized
         # payloads are refused with a clear 422 so the human's verdict is never
         # silently truncated or auto-approved as an empty dict on recovery.
-        self._validate_decision_payload(decision_payload)
+        self._validate_decision_payload(decision_payload, gate_id=gate_id)
 
         # Validate JWT signature and scope before attempting the SQL UPDATE.
         # Expiry is checked separately via the SQL WHERE clause (expires_at > now)
@@ -741,13 +790,17 @@ class HITLManager:
         return token.count(".") == 2
 
     @staticmethod
-    def _validate_decision_payload(payload: dict[str, Any] | None) -> None:
+    def _validate_decision_payload(payload: dict[str, Any] | None, *, gate_id: str | None = None) -> None:
         """Validate the resume payload shape at write (B1).
 
         Rules:
         - ``None`` is allowed (legacy/payload-less decisions).
         - A non-dict payload is rejected (a gate must never be recovered with
           a corrupted decision).
+        - FAR-541 (iteration 3): when *gate_id* is given and the payload is
+          stamped for a DIFFERENT gate, it is rejected — a foreign-stamped
+          decision must never be persisted (``_decide`` stamps missing stamps
+          itself; only a MISMATCH reaches this check).
         - ``output`` / ``modified_output`` members must be dicts.
         - The serialised payload must not exceed ``_DECISION_PAYLOAD_MAX_BYTES``.
 
@@ -757,6 +810,12 @@ class HITLManager:
             return
         if not isinstance(payload, dict):
             raise DecisionPayloadError("decision_payload must be a JSON object")
+        if gate_id is not None:
+            stamped = payload.get("gate_id")
+            if stamped is not None and str(stamped) != str(gate_id):
+                raise DecisionPayloadError(
+                    f"decision_payload is stamped for gate {stamped!r}, not the target gate {gate_id!r}"
+                )
         for key in ("output", "modified_output"):
             value = payload.get(key)
             if value is not None and not isinstance(value, dict):

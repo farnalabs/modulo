@@ -1152,7 +1152,10 @@ async def test_approve_audit_cancellation_propagates():
 
 
 async def test_approve_persists_decision_payload():
-    """approve() persists the full resume payload into decision_payload."""
+    """approve() persists the full resume payload into decision_payload.
+
+    FAR-541 (iteration 3): the payload is stamped by _decide with the row's
+    gate id when it does not already carry one."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
@@ -1169,11 +1172,15 @@ async def test_approve_persists_decision_payload():
     )
     values = _update_values(captured[0])
     assert values["decision"] == "approved"
-    assert values["decision_payload"] == payload
+    assert values["decision_payload"] == {"action": "approved", "notes": "looks good", "gate_id": _GATE}
+    # The caller's dict is copied, not mutated (it feeds the direct resume too).
+    assert payload == {"action": "approved", "notes": "looks good"}
 
 
 async def test_approve_without_payload_defaults_to_action():
-    """approve() with no payload still persists a faithful {"action": "approved"}."""
+    """approve() with no payload persists a faithful stamped
+    ``{"action": "approved", "gate_id": <row gate>}`` (FAR-541 iteration 3:
+    _decide is the stamp authority)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
@@ -1181,11 +1188,12 @@ async def test_approve_without_payload_defaults_to_action():
     mgr = HITLManager()
     await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
     values = _update_values(captured[0])
-    assert values["decision_payload"] == {"action": "approved"}
+    assert values["decision_payload"] == {"action": "approved", "gate_id": _GATE}
 
 
 async def test_approve_with_modification_persists_modified_output_payload():
-    """approve_with_modification() persists the modified_output into the payload."""
+    """approve_with_modification() persists the modified_output into the
+    payload (stamped with the row's gate id by _decide)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
@@ -1201,11 +1209,11 @@ async def test_approve_with_modification_persists_modified_output_payload():
         modified_output=modified,
     )
     values = _update_values(captured[0])
-    assert values["decision_payload"] == {"action": "approved", "modified_output": modified}
+    assert values["decision_payload"] == {"action": "approved", "modified_output": modified, "gate_id": _GATE}
 
 
 async def test_reject_persists_reason_payload():
-    """reject() persists the reason into the decision payload."""
+    """reject() persists the reason into the decision payload (stamped)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, decision="rejected")
@@ -1214,11 +1222,12 @@ async def test_reject_persists_reason_payload():
     await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", reason="needs rework")
     values = _update_values(captured[0])
     assert values["decision"] == "rejected"
-    assert values["decision_payload"] == {"action": "rejected", "reason": "needs rework"}
+    assert values["decision_payload"] == {"action": "rejected", "reason": "needs rework", "gate_id": _GATE}
 
 
 async def test_deliver_manual_persists_output_payload():
-    """deliver_manual() persists the manual output into the decision payload."""
+    """deliver_manual() persists the manual output into the decision payload
+    (stamped with the row's gate id by _decide)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="deliver_manual")
@@ -1235,7 +1244,46 @@ async def test_deliver_manual_persists_output_payload():
     )
     values = _update_values(captured[0])
     assert values["decision"] == "deliver_manual"
-    assert values["decision_payload"] == {"action": "deliver_manual", "output": manual}
+    assert values["decision_payload"] == {"action": "deliver_manual", "output": manual, "gate_id": _GATE}
+
+
+async def test_decide_accepts_payload_stamped_for_this_gate():
+    """FAR-541 (iteration 3): a payload already stamped with the row's own
+    gate id is persisted verbatim — no duplicate stamp, no error."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    await mgr.approve(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        decision_payload={"action": "approved", "gate_id": _GATE, "notes": "ok"},
+    )
+    values = _update_values(captured[0])
+    assert values["decision_payload"] == {"action": "approved", "gate_id": _GATE, "notes": "ok"}
+
+
+async def test_decide_rejects_foreign_stamped_payload():
+    """FAR-541 (iteration 3): a payload stamped for a DIFFERENT gate is
+    refused with DecisionPayloadError BEFORE any DB write — a foreign-stamped
+    decision must never be persisted."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    session, _captured = _session_decide_capture(gate.id, None)
+    mgr = HITLManager()
+    with pytest.raises(DecisionPayloadError, match="stamped for gate 'some-other-gate'"):
+        await mgr.approve(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="good-token",
+            decision_payload={"action": "approved", "gate_id": "some-other-gate"},
+        )
 
 
 async def test_decision_payload_must_be_dict():

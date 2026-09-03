@@ -254,7 +254,13 @@ async def approve_gate(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
-    resume_data: dict[str, Any] = {"action": "approved"}
+    # FAR-541: every resume decision is STAMPED with the gate it resolves so a
+    # per-gate consumer (``_hitl_gate_resume_result``) can reject a foreign
+    # decision left in state by an earlier gate (decisions are per-RUN but
+    # consumers are per-gate; ``_hitl_decision`` is never cleared). HITLManager._decide
+    # would stamp the persisted payload anyway; this explicit stamp feeds the
+    # DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
     if req.notes:
         resume_data["notes"] = req.notes
 
@@ -348,8 +354,14 @@ async def approve_gate_with_modification(
     documenting the change.
     """
     mgr = HITLManager()
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # The real writer contract: action "approved" + "modified_output" (there is
+    # no "approved_with_modification" action). _decide would stamp the persisted
+    # payload anyway; this explicit stamp feeds the DIRECT executor.resume
+    # injection below, which bypasses _decide.
     resume_data: dict[str, Any] = {
         "action": "approved",
+        "gate_id": gate_id,
         "modified_output": req.modified_output,
     }
     if req.notes:
@@ -438,7 +450,8 @@ async def reject_gate(
     principal: TenantPrincipal = require_permission("hitl.reject"),
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
-    resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    resume_data: dict[str, Any] = {"action": "rejected", "gate_id": gate_id, "reason": req.reason}
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -538,7 +551,10 @@ async def deliver_manual_output(
             detail="output must be a non-empty object",
         )
 
-    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # _decide would stamp the persisted payload anyway; this explicit stamp
+    # feeds the DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": req.output}
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -624,7 +640,11 @@ async def submit_manual_output(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
-    resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
+    # FAR-541: stamped with the NODE id being delivered to — the manual node's
+    # consumer (``_manual_node``) resumes only on a decision stamped for it.
+    # _decide would stamp the persisted payload anyway; this explicit stamp
+    # feeds the DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "manual_output", "gate_id": gate_id, "output": req.output}
     mgr = HITLManager()
     try:
         async with session.begin():

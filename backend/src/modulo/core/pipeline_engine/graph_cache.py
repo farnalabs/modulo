@@ -210,6 +210,8 @@ def _validate_router_config(router_config: dict[str, Any], node_id: str) -> None
 def _make_gate_kickback_router(
     normal_target: str,
     reject_target_str: str,
+    *,
+    gate_id: str,
 ) -> Callable[[dict[str, Any]], str]:
     """Build a router that kicks back to reject_target on HITL rejection.
 
@@ -221,11 +223,25 @@ def _make_gate_kickback_router(
     declares a ``correction_target`` (the automated reject→correction path).
     Routing a rejection to the ``correction_target`` here would be dead routing
     state; T1's ``recover_node`` override stays the break-glass path.
+
+    FAR-541 gate-identity check: this router sits on the gate's outgoing edge,
+    so it normally runs immediately after the gate node consumed and validated
+    a decision stamped for THIS gate. But the edge is ALSO reachable when the
+    gate completed WITHOUT consuming a decision (condition / eval-condition /
+    autonomy skip), and ``_hitl_decision`` is never cleared from state — a
+    stale ``rejected`` from an EARLIER gate would misroute this edge to the
+    reject target. The decision's stamp must therefore match ``gate_id``; a
+    stale/foreign/missing stamp routes to the normal target.
     """
 
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
-        if decision and isinstance(decision, dict) and decision.get("action") == "rejected":
+        if (
+            decision
+            and isinstance(decision, dict)
+            and decision.get("gate_id") == gate_id
+            and decision.get("action") == "rejected"
+        ):
             return reject_target_str
         return normal_target
 
@@ -824,6 +840,7 @@ def _add_hitl_gate_edge(
         gate_router = _make_gate_kickback_router(
             target,
             reject_target_str,
+            gate_id=gate_id,
         )
         graph.add_conditional_edges(gate_id, gate_router)
         target_ids.add(reject_target_str)
