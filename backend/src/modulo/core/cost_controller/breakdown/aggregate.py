@@ -215,6 +215,15 @@ def _eval_self_reported(
     }
     if telemetry.eligible_sandbox_node_count > 0:
         entry["missing_self_report"] = missing
+        if missing and amount == Decimal(0):
+            # A missing self-report with zero reported amount is a CLEAR
+            # non-billing state, not a normal $0.000000 line. Keep
+            # ``source``/``missing_self_report`` readable for the breakdown
+            # rendering and the run-warnings surface, and stamp a reason so the
+            # frontend never renders a confusing numeric basis (``reported=0,
+            # node_count=0``). The numeric basis is intentionally left intact
+            # for audit; the breakdown renderer keys off this reason.
+            entry["missing_self_report_reason"] = "agent_not_reported"
     return entry, amount
 
 

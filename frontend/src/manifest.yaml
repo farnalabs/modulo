@@ -3211,6 +3211,13 @@ features:
         description: Remy assistant configuration and skills
     feat-runs:
         description: Run execution, history, detail, and output diffs
+        status: partial
+        behaviours:
+            # Run-level cost warnings (missing self-report surfacing)
+            - "[x] A self_reported cost component with at least one eligible sandbox node but no agent report is a CLEAR non-billing state: its breakdown entry stays visible (source self_reported, missing_self_report true, missing_self_report_reason agent_not_reported) but never renders as a normal $0.000000 money line in the run detail breakdown (no numeric basis, no phantom reported=0/node_count=0)"
+            - "[x] The run detail response (GET /api/v1/runs/{id}) surfaces a structured warnings list ({\"code\", \"severity\", \"message\"}) derived from the run's cost_breakdown; a missing agent model-cost self-report emits code missing_self_report with severity warning"
+            - "[x] The runs-list item (GET /api/v1/runs) carries warnings_count so the runs table renders a warning badge without loading the full run (computed from a single deferred cost_breakdown load, never N+1)"
+            - "[x] The run detail page renders a Warnings section (id=warnings) listing each warning and scrolls to it when navigated from the list badge (?warn=1) or a #warnings deep link"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, and sandbox concurrency
     feat-schemas:

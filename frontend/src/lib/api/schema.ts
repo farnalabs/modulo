@@ -14592,6 +14592,15 @@ export interface components {
             cost_breakdown?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Run-level cost warnings derived from cost_breakdown (empty when none) */
+            warnings?: {
+                /** A stable warning code (e.g. missing_self_report) */
+                code?: string;
+                /** Severity tag (e.g. warning) */
+                severity?: string;
+                /** Plain human-readable fallback message (frontend renders i18n by code) */
+                message?: string;
+            }[] | null;
             /**
              * Child Runs Cost Usd
              * @default 0.000000
