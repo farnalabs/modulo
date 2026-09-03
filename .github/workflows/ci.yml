@@ -313,15 +313,25 @@ jobs:
     name: SonarCloud scan (coverage import)
     # SonarCloud automatic analysis (the GitHub App) cannot import coverage
     # reports, so a CI-based scanner run is the only way the coverage measure
-    # (and the README coverage badge) exists. Gated to push-to-main to bound
-    # runner cost — the badge tracks main, not PRs. Reuses the coverage-report
+    # (and the README coverage badge) exists. Reuses the coverage-report
     # artifact backend-test already uploads instead of re-running the backend
     # suite.
-    # workflow_dispatch is allowed so this otherwise push-to-main-only job can be
-    # validated manually BEFORE merge (a push-main-only job is invisible to PR CI,
-    # which is how the missing @vitest/coverage-v8 provider nearly shipped broken).
+    # Runs on pull_request as well as push-to-main (FAR-571). A push-main-only
+    # job is invisible to PR CI, which is how the missing @vitest/coverage-v8
+    # provider nearly shipped broken — and, worse, it reports this check-run as
+    # `skipped` on every PR head commit, which the strict merge gate treats as a
+    # failure. A job that always ran but no-opped to green on PRs would be a
+    # vacuous pass signal, so the scan is made real on PRs instead of silenced.
+    # On pull_request the scanner auto-detects the GitHub Actions PR context and
+    # submits a PR-scoped analysis (sonar.pullrequest.*), so the quality gate is
+    # evaluated against the PR's new code and main's analysis is left untouched.
+    # Note: a workflow_dispatch run on a non-main branch has NO branch/PR
+    # parameter and is therefore recorded as main's analysis — verified on
+    # 2026-09-03, when validating this PR by dispatch overwrote main's dashboard.
+    # Prefer the pull_request run above for pre-merge validation.
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'pull_request'
       || github.event_name == 'workflow_dispatch'
     needs: [backend-test]
     runs-on: ubicloud-standard-2
