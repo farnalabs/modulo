@@ -105,6 +105,7 @@ def get_db_url(args_db_url: str | None) -> str:
 
 
 async def run_pg_dump(db_url: str, pg_dump: str, output_path: str) -> None:
+    _validate_arg(db_url, "database URL")
     print("Dumping Postgres schema+data...")
     proc = await asyncio.create_subprocess_exec(
         pg_dump,
@@ -188,6 +189,7 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
     if not shutil.which("openssl"):
         print("ERROR: openssl not found. Install OpenSSL to encrypt backups.")
         sys.exit(1)
+    _validate_arg(tar_path, "archive path")
     _validate_arg(passphrase, "passphrase")
     result = subprocess.run(
         [
