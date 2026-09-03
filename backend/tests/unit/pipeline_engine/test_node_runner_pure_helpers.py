@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from modulo.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
 from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
     _build_model_cost_fields,
@@ -234,6 +235,46 @@ class TestAgentReportedTokenUsage:
     def test_valid_zero_is_a_real_report_and_is_written(self) -> None:
         fields = _build_token_usage_fields({"token_usage": {"input": 0, "output": 0, "total": 0}})
         assert fields == {"model_tokens_input": 0, "model_tokens_output": 0, "model_tokens_total": 0}
+
+    def test_integral_float_token_counts_are_accepted(self) -> None:
+        """FAR-532 wave-2: a JSON float-encoding of a token count (e.g.
+        ``1234.0``) is tolerated — an integral float normalises to ``int``
+        (mirroring the cost extractor's finite-numeric tolerance); a
+        non-integral float and non-finite floats stay invalid."""
+        fields = _build_token_usage_fields(
+            {"token_usage": {"input": 1234.0, "output": 5.0, "total": 1801.0, "cache_read": 100.0}}
+        )
+        assert fields == {
+            "model_tokens_input": 1234,
+            "model_tokens_output": 5,
+            "model_tokens_total": 1801,
+            "model_tokens_cache_read": 100,
+        }
+        assert all(isinstance(value, int) for value in fields.values())
+
+    def test_magnitude_ceiling_omits_implausible_token_counts(self) -> None:
+        """FAR-532 wave-2: a pathological 10**18 token report is rejected
+        tri-state at extraction (a display-only trust-boundary bound,
+        mirroring the cost path's clamp stack); a value AT the ceiling is a
+        real report and is kept."""
+        fields = _build_token_usage_fields({"token_usage": {"input": 10**18, "output": 5, "total": 15}})
+        assert "model_tokens_input" not in fields
+        assert fields["model_tokens_output"] == 5
+        assert fields["model_tokens_total"] == 15
+        at_ceiling = _build_token_usage_fields(
+            {"token_usage": {"input": MAX_REPORTABLE_TOKEN_COUNT, "output": 1, "total": 2}}
+        )
+        assert at_ceiling["model_tokens_input"] == MAX_REPORTABLE_TOKEN_COUNT
+
+    def test_token_usage_field_map_derives_from_shared_chain(self) -> None:
+        """FAR-532 wave-2: the extraction map is DERIVED from the shared
+        ``REPORTED_TOKEN_CHAIN`` in (src, dst) reading order — the three
+        layers (producer key -> ``model_tokens_*`` -> ``reported_*`` ->
+        counter) cannot drift apart."""
+        assert (
+            tuple((binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN)
+            == nr._TOKEN_USAGE_FIELD_MAP
+        )
 
     def test_envelope_carries_reported_tokens_in_both_views(self) -> None:
         """The envelope's inner (artifact) and outer (telemetry) views both

@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
@@ -36,10 +36,12 @@ _log = logging.getLogger(__name__)
 __all__ = [
     "CALCULATED_ALLOWED_IDENTS",
     "REGISTERED_RATE_FALLBACKS",
+    "REPORTED_TOKEN_CHAIN",
     "CostComponentConfig",
     "RunCostTelemetry",
     "build_params",
     "build_telemetry",
+    "coerce_reported_token",
     "compute_run_warnings",
     "compute_run_warnings_count",
 ]
@@ -121,6 +123,90 @@ SELF_REPORTED_ALLOWED_IDENTS = frozenset({"reported"})
 # ``wall_clock_time_ms`` contributes regardless of the map (surfaced on the
 # enriched union as ``is_sandbox_for_wallclock`` for downstream readers only).
 _MISSING_MAP_SELF_REPORT_ELIGIBLE = False
+
+
+class ReportedTokenBinding(NamedTuple):
+    """One binding of the FAR-491 reported-token chain (FAR-532 wave-2).
+
+    The agent-reported token family flows through FOUR stages, and every
+    stage-pair mapping in the codebase is DERIVED from this single chain so
+    the layers cannot drift apart:
+
+    1. ``producer_key`` — the sandbox agent's output.json ``token_usage`` key
+       (the producer contract: ``{input, output, total, cache_read?,
+       cache_write?}``),
+    2. ``node_field`` — the node-output ``model_tokens_*`` telemetry field
+       written by node_runner extraction,
+    3. ``union_key`` — the enriched-union ``reported_*`` key the value folds
+       into (finalize),
+    4. ``counter`` — the ``RunCostTelemetry`` accumulation field AND the
+       formula-visible identifier (must stay a registered param).
+    """
+
+    producer_key: str
+    node_field: str
+    union_key: str
+    counter: str
+
+
+#: The canonical 5-key reported-token chain (FAR-491). Every site that maps
+#: one stage to the next (node_runner's extraction map, finalize's fold map,
+#: this module's telemetry accumulation) derives from THIS tuple — the
+#: ``marker_kind``-style literal scattering across the three layers is retired.
+REPORTED_TOKEN_CHAIN: tuple[ReportedTokenBinding, ...] = (
+    ReportedTokenBinding("input", "model_tokens_input", "reported_input_tokens", "tokens_input_reported"),
+    ReportedTokenBinding("output", "model_tokens_output", "reported_output_tokens", "tokens_output_reported"),
+    ReportedTokenBinding("total", "model_tokens_total", "reported_total_tokens", "tokens_total_reported"),
+    ReportedTokenBinding(
+        "cache_read", "model_tokens_cache_read", "reported_cache_read_tokens", "tokens_cache_read_reported"
+    ),
+    ReportedTokenBinding(
+        "cache_write", "model_tokens_cache_write", "reported_cache_write_tokens", "tokens_cache_write_reported"
+    ),
+)
+
+#: The plausibility ceiling for ONE agent-reported token count (FAR-532
+#: wave-2). Display-only trust-boundary bound — the analog of the reported-
+#: cost band pattern (``MAX_REPORTABLE_BAND_USD``), NOT money math: a report
+#: above this is treated as implausible and omitted tri-state (with a log) at
+#: every consumer layer. 1e12 tokens is orders of magnitude beyond any single
+#: node's real usage yet far below the pathological 10**18 class.
+MAX_REPORTABLE_TOKEN_COUNT = 1_000_000_000_000
+
+
+def coerce_reported_token(value: Any) -> int | None:
+    """Tri-state reported-token coercion — the ONE shared rule (FAR-491).
+
+    The single predicate shared by all three consumer layers (node_runner
+    extraction, finalize fold, this module's accumulation): bool /
+    non-numeric / negative / above ``MAX_REPORTABLE_TOKEN_COUNT`` → ``None``
+    (treated as ABSENT, never a ``0`` placeholder); a valid ``0`` report is a
+    real report and passes through. Tolerance (FAR-532 wave-2, documented
+    choice): an INTEGRAL float (e.g. ``1234.0``) is accepted and normalised
+    to ``int`` — mirroring ``_extract_reported_cost``'s finite-numeric
+    tolerance for JSON float-encoding; a non-integral float (``1.5``) and
+    non-finite floats (NaN/Inf) stay invalid.
+
+    DISPLAY-ONLY: callers fold these into ``reported_*`` analytics fields —
+    never into server-measured token totals or money math.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        coerced = value
+    elif isinstance(value, float) and value.is_integer():  # NaN/Inf are not integer-valued
+        coerced = int(value)
+    else:
+        return None
+    if coerced < 0:
+        return None
+    if coerced > MAX_REPORTABLE_TOKEN_COUNT:
+        _log.warning(
+            "cost_tokens_reported_out_of_band",
+            extra={"value": coerced, "ceiling": MAX_REPORTABLE_TOKEN_COUNT},
+        )
+        return None
+    return coerced
 
 
 @dataclass(frozen=True)
@@ -248,25 +334,36 @@ def _record_self_reported(
     per_node_cost[node_id] = amount
 
 
-def _record_reported_tokens(telemetry: RunCostTelemetry, entry: dict[str, Any]) -> None:
+def _record_reported_tokens(telemetry: RunCostTelemetry, entry: dict[str, Any], node_id: str | None = None) -> None:
     """Accumulate one node's agent-reported token usage (DISPLAY-ONLY, FAR-491).
 
-    Sums the union's ``reported_*`` keys — validated tri-state (bool /
-    non-int / negative are skipped; a valid ``0`` contributes 0). These
-    counters never feed a cost calculation the system itself computes
-    (operator formulas may reference them).
+    Sums the union's ``reported_*`` keys — validated through the shared
+    ``coerce_reported_token`` tri-state (bool / non-numeric / negative /
+    above-ceiling are skipped; a valid ``0`` contributes 0). A PRESENT but
+    invalid value is logged (``cost_tokens_reported_skipped``) so a malformed
+    report is distinguishable from a never-reported one (FAR-532 wave-2);
+    ABSENT keys contribute nothing silently. These counters never feed a cost
+    calculation the system itself computes (operator formulas may reference
+    them). The accumulation targets are spelled explicitly (no setattr) —
+    each counter field is named in full (FAR-532 wave-2).
     """
-    for union_key, counter in (
-        ("reported_input_tokens", "tokens_input_reported"),
-        ("reported_output_tokens", "tokens_output_reported"),
-        ("reported_total_tokens", "tokens_total_reported"),
-        ("reported_cache_read_tokens", "tokens_cache_read_reported"),
-        ("reported_cache_write_tokens", "tokens_cache_write_reported"),
-    ):
-        value = entry.get(union_key)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    values: dict[str, int] = {}
+    for binding in REPORTED_TOKEN_CHAIN:
+        if binding.union_key not in entry:
             continue
-        setattr(telemetry, counter, getattr(telemetry, counter) + value)
+        coerced = coerce_reported_token(entry[binding.union_key])
+        if coerced is None:
+            _log.debug(
+                "cost_tokens_reported_skipped",
+                extra={"node_id": node_id, "union_key": binding.union_key, "raw": entry[binding.union_key]},
+            )
+            continue
+        values[binding.union_key] = coerced
+    telemetry.tokens_input_reported += values.get("reported_input_tokens", 0)
+    telemetry.tokens_output_reported += values.get("reported_output_tokens", 0)
+    telemetry.tokens_total_reported += values.get("reported_total_tokens", 0)
+    telemetry.tokens_cache_read_reported += values.get("reported_cache_read_tokens", 0)
+    telemetry.tokens_cache_write_reported += values.get("reported_cache_write_tokens", 0)
 
 
 def _record_estimated_node(
@@ -406,7 +503,7 @@ def build_telemetry(
             )
         else:
             _record_self_reported(telemetry, entry, node_id, per_node_cost, consuming_comp, reported_usd, raw_usd)
-        _record_reported_tokens(telemetry, entry)
+        _record_reported_tokens(telemetry, entry, node_id)
         telemetry.node_count += 1
 
     _mark_missing_report_keys(telemetry, consuming)
