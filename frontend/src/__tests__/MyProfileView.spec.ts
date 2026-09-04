@@ -295,3 +295,165 @@ describe('MyProfileView', () => {
     expect(wrapper.text()).not.toContain('Password changed successfully')
   })
 })
+
+describe('MyProfileView HITL email alerts', () => {
+  const PROFILE = {
+    id: '1',
+    email: 'user@example.com',
+    display_name: 'Test User',
+    org_role: 'admin',
+    active: true,
+    created_at: '2025-01-01T00:00:00Z',
+    is_system_admin: false,
+  }
+
+  const PIPELINES = {
+    items: [
+      { id: 'p1', name: 'Pipeline One' },
+      { id: 'p2', name: 'Pipeline Two' },
+    ],
+  }
+
+  function mockPrefsGet(prefs: unknown, prefsError?: unknown) {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve(prefsError ? { data: undefined, error: prefsError } : { data: prefs, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({ data: PIPELINES, error: undefined })
+      }
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('renders stored preferences in the controls', async () => {
+    mockPrefsGet({ default: true, pipeline_overrides: { p1: true } })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-default"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    expect(
+      (wrapper.find('[data-testid="my-profile-hitl-email-default"]').element as HTMLInputElement).checked
+    ).toBe(true)
+    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    expect(selects.length).toBe(2)
+    expect((selects[0].element as HTMLSelectElement).value).toBe('on')
+    expect((selects[1].element as HTMLSelectElement).value).toBe('default')
+  })
+
+  it('renders defaults when no preference is stored', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: {} })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-default"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    expect(
+      (wrapper.find('[data-testid="my-profile-hitl-email-default"]').element as HTMLInputElement).checked
+    ).toBe(false)
+    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    expect(selects.length).toBe(2)
+    expect((selects[0].element as HTMLSelectElement).value).toBe('default')
+    expect((selects[1].element as HTMLSelectElement).value).toBe('default')
+  })
+
+  it('round-trips the saved preferences, sending only explicit overrides', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: { p1: true } })
+    mockPut.mockResolvedValue({ data: { default: true, pipeline_overrides: { p1: true } }, error: undefined })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    await wrapper.find('[data-testid="my-profile-hitl-email-default"]').setValue(true)
+    await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
+    await nextTick()
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/me/hitl-email-preferences', {
+      body: {
+        default: true,
+        pipeline_overrides: { p1: true },
+      },
+    })
+    expect(wrapper.text()).toContain('HITL email preferences saved.')
+
+    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    await selects[1].setValue('off')
+    await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
+    await nextTick()
+
+    expect(mockPut).toHaveBeenLastCalledWith('/api/v1/me/hitl-email-preferences', {
+      body: {
+        default: true,
+        pipeline_overrides: { p1: true, p2: false },
+      },
+    })
+  })
+
+  it('clears an override back to the default before saving', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: { p1: true } })
+    mockPut.mockResolvedValue({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    await selects[0].setValue('default')
+    await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
+    await nextTick()
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/me/hitl-email-preferences', {
+      body: {
+        default: false,
+        pipeline_overrides: {},
+      },
+    })
+  })
+
+  it('shows an error and hides the controls when loading preferences fails', async () => {
+    mockPrefsGet(undefined, { detail: 'Failed to load preferences' })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-load-error"]').exists()).toBe(true)
+    })
+
+    expect(wrapper.text()).toContain('Failed to load preferences')
+    expect(wrapper.find('[data-testid="my-profile-hitl-email-retry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(false)
+  })
+
+  it('shows an error and re-enables the save button when saving fails', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: {} })
+    mockPut.mockResolvedValueOnce({ data: undefined, error: { detail: 'Save failed' } })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="my-profile-hitl-email-error"]').text()).toContain('Save failed')
+    expect(wrapper.text()).not.toContain('HITL email preferences saved.')
+    const save = wrapper.find('[data-testid="my-profile-hitl-email-save"]')
+    expect(save.attributes('disabled')).toBeUndefined()
+  })
+})

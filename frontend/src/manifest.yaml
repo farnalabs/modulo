@@ -1213,6 +1213,33 @@ elements:
       - testid: force-change-password-sign-out
         type: button
         dynamic_testid: false
+      - testid: my-profile-hitl-email-section
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-default
+        type: input
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-pipeline
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-pipeline-select
+        type: select
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-retry
+        type: button
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-save
+        type: button
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-error
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-success
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-load-error
+        type: element
+        dynamic_testid: false
     /admin/node-categories:
       - testid: admin-node-categories-add
         type: button
