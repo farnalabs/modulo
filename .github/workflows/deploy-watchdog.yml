@@ -1,0 +1,329 @@
+name: "Deploy: Staleness Watchdog"
+
+# Self-heals "main ahead of prod with no deploy in flight".
+#
+# Incident (2026-09-03 23:52 UTC): the merge queue correctly dispatched
+# deploy.yml after a PR merge; the deploy failed on a transient npm registry
+# timeout inside the pre-deploy frontend checks; NOTHING retried it (the
+# "Trigger Branch Fixer on deploy failure" step only fixes PR branches, not
+# main deploy failures), and prod stayed 4 commits stale for ~15h until a
+# manual `gh workflow run deploy.yml --ref main -f force_deploy=true`.
+#
+# This watchdog compares the SHA prod is running against main HEAD every
+# 30 minutes and re-dispatches deploy.yml when prod is stale, with bounded,
+# storm-proof retry semantics (see the dispatch decision below).
+
+on:
+  schedule:
+    # FAR-492: GitHub DROPS high-frequency cron events on high-activity repos
+    # (a sibling */10 workflow collapsed to 2-4 runs/day; 1/day crons never
+    # missed). */30 is chosen as the low end of the empirically safe
+    # frequency band - frequent enough to bound staleness to ~30 min,
+    # rare enough to survive the scheduler's dropping behaviour.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Overlapping scheduled ticks must not pile up, and an in-flight tick
+# (possibly about to dispatch a deploy) must not be cancelled by the next.
+concurrency:
+  group: deploy-watchdog
+  cancel-in-progress: false
+
+# contents: read -> checkout + commits/compare API reads
+# actions: write -> `gh workflow run deploy.yml` re-dispatch
+# FAR-528: use github.token for same-repo API reads - a PAT lacking the
+# Actions scope gets a 404 that looks exactly like "no runs found", which
+# historically starved production deploys for 2 days.
+permissions:
+  contents: read
+  actions: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  watchdog:
+    name: Detect prod staleness + re-dispatch deploy
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      # Design contract: every gh/flyctl call is wrapped so an API hiccup
+      # logs a ::warning:: and exits 0 (failing safe - never dispatch blind).
+      # The ONLY non-zero exit is the dispatch itself: a broken watchdog must
+      # be visible in the Actions tab via the ::error:: annotation.
+      - name: Check prod staleness and re-dispatch deploy if needed
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -o pipefail
+
+          REPO="${{ github.repository }}"
+          DEPLOY_WORKFLOW="deploy.yml"
+          PROD_APP="app-modulo"
+          RETRY_BOUND_MINUTES=60
+
+          # ---- 1. Deploy-run state: is a deploy already trying? ----
+          RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json databaseId,status,conclusion,createdAt 2>/dev/null)" || RUNS_JSON=""
+          if [ -z "$RUNS_JSON" ]; then
+            echo "::warning::Deploy-staleness watchdog: could not list deploy.yml runs (gh API error) - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+
+          ACTIVE_COUNT="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          import json, os
+          try:
+              runs = json.loads(os.environ["PAYLOAD"])
+          except Exception:
+              runs = []
+          print(sum(1 for r in runs if r.get("status") in ("in_progress", "queued")))
+          ')" || ACTIVE_COUNT="0"
+          if [ "$ACTIVE_COUNT" != "0" ]; then
+            echo "Deploy run(s) in progress/queued ($ACTIVE_COUNT) - nothing to do."
+            exit 0
+          fi
+
+          # ---- 2. main HEAD ----
+          # The checkout above is pinned to ref: main, so HEAD IS main's tip
+          # regardless of which ref dispatched this run (schedule ticks always
+          # run main; a manual dispatch from a feature branch must still
+          # compare prod against MAIN, not the branch tip).
+          MAIN_SHA="$(git rev-parse HEAD 2>/dev/null)" || MAIN_SHA=""
+          if [ -z "$MAIN_SHA" ]; then
+            echo "::warning::Deploy-staleness watchdog: could not resolve main HEAD sha - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          MAIN_SHORT="${MAIN_SHA:0:12}"
+
+          # ---- 3. Prod SHA via flyctl (installed exactly like deploy.yml) ----
+          if ! bash .github/scripts/install-flyctl.sh; then
+            echo "::warning::Deploy-staleness watchdog: flyctl install failed - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          if ! fly status --app "$PROD_APP" --json > /tmp/prod-status.json 2>/dev/null; then
+            echo "::warning::Deploy-staleness watchdog: fly status --app $PROD_APP failed - continuing; the latest-complete-release fallback below may still yield the prod SHA."
+            : > /tmp/prod-status.json
+          fi
+
+          # Extract the deploy SHA (registry.fly.io/app-modulo:deploy-<12-char-sha>).
+          #
+          # PRIMARY: fly status Machines filtered to STARTED machines in the
+          # serving "app" process group (group extraction is deploy.yml's
+          # worker-parse precedent). The group filter matters: a long-lived
+          # `fly_app_console` machine (fly console/SSH session) runs whatever
+          # image it was launched with and pollutes any "any started machine
+          # with a deploy tag" extraction - observed LIVE 2026-09-04 on prod:
+          # a started fly_app_console machine carried a stale
+          # deploy-a9b3ad4cb520 tag that is not even in the release history.
+          #
+          # DISAMBIGUATOR: when the machines view is empty or shows >1 distinct
+          # sha (mid-rollout residue after a failed deploy, a leaked console
+          # machine, flyctl shape drift), fall back to `fly releases` - the
+          # first release with Status "complete" (newest-first) is what prod
+          # settled on. This is deploy.yml's own rollback precedent (LAST_GOOD,
+          # deploy.yml "Post-deploy verify + auto-rollback" step) and is
+          # unambiguous by construction: a failed rollout is never "complete",
+          # so the last COMPLETE release is what prod actually serves.
+          PROD_SHAS="$(PROD_APP="$PROD_APP" python3 - <<'PYEOF'
+          import json, os, re, subprocess
+
+          SHA_RE = re.compile(r"deploy-([0-9a-f]{12})")
+
+          def process_group(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          def started_app_shas(machines):
+              shas = set()
+              for m in machines if isinstance(machines, list) else []:
+                  if not isinstance(m, dict):
+                      continue
+                  if str(m.get("state") or "").lower() != "started":
+                      continue
+                  if process_group(m) != "app":
+                      continue
+                  candidates = []
+                  ref = m.get("image_ref")
+                  if isinstance(ref, dict) and ref.get("tag"):
+                      candidates.append(str(ref["tag"]))
+                  cfg = m.get("config")
+                  if isinstance(cfg, dict) and cfg.get("image"):
+                      candidates.append(str(cfg["image"]))
+                  for c in candidates:
+                      mo = SHA_RE.search(c)
+                      if mo:
+                          shas.add(mo.group(1))
+              return sorted(shas)
+
+          def machines_from_status(data):
+              if isinstance(data, dict):
+                  return data.get("Machines") or data.get("machines") or []
+              if isinstance(data, list):
+                  return data
+              return []
+
+          def sha_from_latest_complete_release():
+              try:
+                  out = subprocess.run(
+                      ["fly", "releases", "--app", os.environ.get("PROD_APP", ""), "--json"],
+                      capture_output=True, text=True, timeout=60)
+                  releases = json.loads(out.stdout)
+              except Exception:
+                  return ""
+              if not isinstance(releases, list):
+                  return ""
+              for r in releases:
+                  if not isinstance(r, dict):
+                      continue
+                  if str(r.get("Status") or "").lower() == "complete":
+                      mo = SHA_RE.search(str(r.get("ImageRef") or ""))
+                      return mo.group(1) if mo else ""
+              return ""
+
+          shas = []
+          try:
+              with open("/tmp/prod-status.json") as f:
+                  data = json.load(f)
+              shas = started_app_shas(machines_from_status(data))
+          except Exception:
+              shas = []
+          if len(shas) != 1:
+              alt = sha_from_latest_complete_release()
+              if alt:
+                  shas = [alt]
+              else:
+                  shas = []
+          print(" ".join(shas))
+          PYEOF
+          )" || PROD_SHAS=""
+          SHA_COUNT="$(echo "$PROD_SHAS" | wc -w | tr -d ' ')"
+          if [ "$SHA_COUNT" -eq 0 ]; then
+            echo "::warning::Deploy-staleness watchdog: could not extract prod image SHA from $PROD_APP (neither fly status started-app-machines nor the latest complete release yielded a deploy-<sha> tag) - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          if [ "$SHA_COUNT" -gt 1 ]; then
+            echo "::warning::Deploy-staleness watchdog: multiple distinct prod SHAs ($PROD_SHAS) - unexpected after disambiguation - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          PROD_SHA="$PROD_SHAS"
+
+          # ---- 4. In sync, or is main genuinely ahead? ----
+          if [ "$PROD_SHA" = "$MAIN_SHORT" ]; then
+            echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync. Nothing to do."
+            exit 0
+          fi
+          # compare(base=PROD, head=MAIN): status "ahead" = prod is behind main
+          # (STALE); "behind" = prod is ahead of main (never deploy older main
+          # over a newer prod); "identical" = full shas match; "diverged" =
+          # main was rewritten since prod's deploy - ambiguous, never blindly
+          # dispatch over it. An API failure (incl. a prod sha unresolvable on
+          # main) fails safe below.
+          CMP_STATUS="$(gh api "repos/$REPO/compare/$PROD_SHA...$MAIN_SHORT" --jq '.status' 2>/dev/null)" || CMP_STATUS=""
+          case "$CMP_STATUS" in
+            "ahead")
+              echo "STALE: prod=$PROD_SHA is behind main=$MAIN_SHORT with no deploy in flight."
+              ;;
+            "identical")
+              echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync (compare). Nothing to do."
+              exit 0
+              ;;
+            "behind")
+              echo "prod=$PROD_SHA is AHEAD of main=$MAIN_SHORT - not stale; nothing to do."
+              exit 0
+              ;;
+            "diverged")
+              echo "::warning::Deploy-staleness watchdog: prod=$PROD_SHA has DIVERGED from main=$MAIN_SHORT (main rewritten?) - ambiguous, failing safe, no dispatch. Human review recommended."
+              exit 0
+              ;;
+            *)
+              echo "::warning::Deploy-staleness watchdog: compare API failed or prod sha $PROD_SHA unresolvable on main (status: '${CMP_STATUS:-<empty>}') - failing safe, no dispatch. Next tick retries."
+              exit 0
+              ;;
+          esac
+
+          # ---- 5. Dispatch decision (storm-guarded, bounded retry) ----
+          LAST_CONCLUSION="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          import json, os
+          try:
+              runs = json.loads(os.environ["PAYLOAD"])
+          except Exception:
+              runs = []
+          last = next((r for r in runs if r.get("status") == "completed"), None)
+          print((last or {}).get("conclusion") or "none")
+          ')" || LAST_CONCLUSION="none"
+          LAST_CREATED="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          import json, os
+          try:
+              runs = json.loads(os.environ["PAYLOAD"])
+          except Exception:
+              runs = []
+          last = next((r for r in runs if r.get("status") == "completed"), None)
+          print((last or {}).get("createdAt") or "")
+          ')" || LAST_CREATED=""
+
+          dispatch_plain() {
+            echo "Dispatching deploy.yml (ref main) WITHOUT force_deploy - letting the deploy throttle decide (it is authoritative; do not fight it)."
+            if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref main; then
+              echo "::error::Deploy-staleness watchdog: prod is STALE (prod=$PROD_SHA main=$MAIN_SHORT) and the plain re-dispatch of deploy.yml FAILED. Manual fix: gh workflow run \"Deploy: Staging + Prod\" --ref main -f force_deploy=true"
+              exit 1
+            fi
+            echo "Watchdog re-dispatched deploy.yml (prod=$PROD_SHA main=$MAIN_SHORT)."
+            exit 0
+          }
+
+          dispatch_forced() {
+            echo "Dispatching deploy.yml (ref main) WITH force_deploy=true - last deploy attempt failed >= ${RETRY_BOUND_MINUTES}min ago; bypassing the throttle once to escape a poisoned throttle window."
+            if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref main -f force_deploy=true; then
+              echo "::error::Deploy-staleness watchdog: prod is STALE (prod=$PROD_SHA main=$MAIN_SHORT) and the forced re-dispatch of deploy.yml FAILED. Manual fix: gh workflow run \"Deploy: Staging + Prod\" --ref main -f force_deploy=true"
+              exit 1
+            fi
+            echo "Watchdog re-dispatched deploy.yml with force_deploy=true (prod=$PROD_SHA main=$MAIN_SHORT)."
+            exit 0
+          }
+
+          case "$LAST_CONCLUSION" in
+            "success")
+              # Last completed deploy concluded success yet prod is stale: a
+              # throttled/skipped run or a dispatch gap. Plain dispatch - the
+              # throttle is authoritative; do not fight it.
+              dispatch_plain
+              ;;
+            "none")
+              # No completed deploy runs at all (fresh history) - plain
+              # dispatch; the throttle still gates it.
+              dispatch_plain
+              ;;
+            *)
+              # failure / cancelled / timed_out / any other non-success
+              # terminal state. Bounded retry: at most ~1 force-retry per
+              # hour after a failed deploy, so a red deploy is never hammered
+              # through a broken gate while the Branch Fixer / humans may
+              # still be on it. Within the bound: exit 0 - the next cron tick
+              # retries.
+              if [ -z "$LAST_CREATED" ]; then
+                echo "::warning::Deploy-staleness watchdog: last deploy run concluded '$LAST_CONCLUSION' but its createdAt is missing - failing safe, no dispatch. Next tick retries."
+                exit 0
+              fi
+              LAST_TS="$(date -u -d "$LAST_CREATED" +%s 2>/dev/null)" || LAST_TS=""
+              if [ -z "$LAST_TS" ]; then
+                echo "::warning::Deploy-staleness watchdog: cannot parse createdAt '$LAST_CREATED' - failing safe, no dispatch. Next tick retries."
+                exit 0
+              fi
+              AGE_MIN=$(( ( $(date -u +%s) - LAST_TS ) / 60 ))
+              if [ "$AGE_MIN" -lt "$RETRY_BOUND_MINUTES" ]; then
+                echo "Last deploy run concluded '$LAST_CONCLUSION' ${AGE_MIN}min ago (< ${RETRY_BOUND_MINUTES}min retry bound) - the Branch Fixer/humans may still be on it; the next cron tick retries."
+                exit 0
+              fi
+              dispatch_forced
+              ;;
+          esac
