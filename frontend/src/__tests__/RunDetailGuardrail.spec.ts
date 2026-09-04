@@ -96,9 +96,6 @@ function mountView(run: unknown = guardrailBlockedRun()) {
     if (url === '/api/v1/runs/{run_id}/io') {
       return Promise.resolve({ data: { outputs_json: {}, node_telemetry: {}, input_payload: {} }, error: undefined })
     }
-    if (url === '/api/v1/runs/{run_id}/workspace-lease') {
-      return Promise.resolve({ data: null, error: undefined })
-    }
     return Promise.resolve({ data: null, error: undefined })
   })
   return mount(RunDetailView, {
