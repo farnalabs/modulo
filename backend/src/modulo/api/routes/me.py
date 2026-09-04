@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from modulo.api.routes.admin_remy import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
+from modulo.core.hitl_email_alerts import PREFERENCE_KEY
 from modulo.core.remy.context_source_service import (
     ContextSourceResponseItem,
     RemyContextSourceService,
@@ -112,6 +113,87 @@ async def update_user_settings(
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8)
+
+
+# ── User-level HITL email-alert preferences (FAR-602) ─────────────────
+
+
+class HitlEmailPreferenceResponse(BaseModel):
+    """Canonical view of the caller's HITL email-alert preferences.
+
+    Absent/malformed stored data normalises to the all-off default so the
+    response always matches what ``resolve_hitl_email_pref`` would resolve.
+    """
+
+    default: bool = False
+    pipeline_overrides: dict[str, bool] = Field(default_factory=dict)
+
+
+class HitlEmailPreferenceUpdate(BaseModel):
+    """PUT body for the caller's own HITL email-alert preferences.
+
+    ``pipeline_overrides`` keys are validated as pipeline UUIDs (stored
+    stringified) and values as strict booleans — emails are OFF by default,
+    overridable per pipeline.
+    """
+
+    default: bool = False
+    pipeline_overrides: dict[uuid.UUID, StrictBool] = Field(default_factory=dict)
+
+
+def _hitl_email_pref_payload(preferences: Any) -> dict[str, Any]:
+    """Normalise the stored ``hitl_email`` preference block to the API shape."""
+    stored = preferences.get(PREFERENCE_KEY) if isinstance(preferences, dict) else None
+    if not isinstance(stored, dict):
+        return {"default": False, "pipeline_overrides": {}}
+    raw_overrides = stored.get("pipeline_overrides")
+    overrides = (
+        {str(key): value for key, value in raw_overrides.items() if isinstance(value, bool)}
+        if isinstance(raw_overrides, dict)
+        else {}
+    )
+    return {"default": stored.get("default") is True, "pipeline_overrides": overrides}
+
+
+@router.get("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
+@handle_db_errors("me.get_hitl_email_preferences")
+async def get_hitl_email_preferences(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Return the CALLER's HITL email-alert preferences (absent = all off)."""
+    async with session.begin():
+        account = await get_account_by_id(session, current_user.account_id)
+
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    return _hitl_email_pref_payload(account.preferences)
+
+
+@router.put("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
+@handle_db_errors("me.update_hitl_email_preferences")
+async def update_hitl_email_preferences(
+    req: HitlEmailPreferenceUpdate,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Persist the CALLER's HITL email-alert preferences under the
+    ``hitl_email`` key of ``Account.preferences`` (other keys untouched)."""
+    stored: dict[str, object] = {
+        PREFERENCE_KEY: {
+            "default": req.default,
+            "pipeline_overrides": {
+                str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()
+            },
+        }
+    }
+    async with session.begin():
+        account = await get_account_by_id(session, current_user.account_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+        merged = await update_account_preferences(session, current_user.account_id, stored)
+
+    return _hitl_email_pref_payload(merged)
 
 
 @router.put("/me/password", status_code=status.HTTP_200_OK)
