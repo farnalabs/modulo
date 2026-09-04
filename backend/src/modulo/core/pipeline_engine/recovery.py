@@ -146,8 +146,17 @@ async def recover_node(
     _require_node_not_completed(run, run_id, node_id)
     await _acquire_recovery_lock(session, run, run_id)
 
-    _apply_recovery_markers(run, node_id, input_data)
-    await session.flush()
+    # FAR-583: the marker write is a dual-write chokepoint. A DualWriteError is
+    # caught here (the catch/orchestrate contract): the caller's transaction is
+    # rolled back cleanly, the run is terminalized ``dual_write_failed`` by the
+    # separate-session orchestrator, and the error re-raises so the recovery
+    # attempt fails closed instead of resuming a run whose new-table evidence
+    # is missing.
+    from modulo.core.run_outputs_dualwrite import guard_dual_write
+
+    async with guard_dual_write(session):
+        await _apply_recovery_markers(session, run, node_id, input_data)
+        await session.flush()
     await _record_recovery_audit(session, org_id, run_id, node_id, node_type, input_data, actor_id)
 
     return run
@@ -248,7 +257,9 @@ async def _acquire_recovery_lock(session: AsyncSession, run: Run, run_id: uuid.U
     run.status = _RECOVERY_LOCK_STATUS
 
 
-def _apply_recovery_markers(run: Run, node_id: str, input_data: dict[str, Any] | None) -> None:
+async def _apply_recovery_markers(
+    session: AsyncSession, run: Run, node_id: str, input_data: dict[str, Any] | None
+) -> None:
     """Write the recovery markers into the run's split output columns.
 
     The PURE return lands in ``outputs_json`` and the marker in
@@ -257,6 +268,14 @@ def _apply_recovery_markers(run: Run, node_id: str, input_data: dict[str, Any] |
     ORM object (Agent Return Contract, FAR-125) — the caller flushes once so
     the pair lands atomically, mirroring ``update_run_outputs`` /
     ``update_run_status``.
+
+    FAR-583 dual-write: gains the same-transaction REPLACE write of the
+    new-table leg via the shared chokepoint helper
+    (:func:`modulo.db.crud.run.dual_write_run_node_outputs`) — the same
+    kill-switch + retry + fail-closed-abort semantics as
+    ``update_run_status``'s branches. Requires an active transaction on
+    *session* (the caller's); a :class:`DualWriteError` propagates to
+    :func:`recover_node`'s guard for the catch/orchestrate contract.
     """
     outputs = dict(run.outputs_json) if run.outputs_json else {}
     telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
@@ -269,6 +288,17 @@ def _apply_recovery_markers(run: Run, node_id: str, input_data: dict[str, Any] |
 
     run.outputs_json = outputs
     run.node_telemetry_json = telemetry
+
+    from modulo.db.crud.run import dual_write_run_node_outputs
+
+    await dual_write_run_node_outputs(
+        session,
+        run_id=run.id,
+        organisation_id=run.organisation_id,
+        outputs=outputs,
+        telemetry=telemetry,
+        origin="recovery.apply_recovery_markers",
+    )
 
 
 async def _record_recovery_audit(

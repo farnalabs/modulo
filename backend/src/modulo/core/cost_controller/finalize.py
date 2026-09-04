@@ -88,11 +88,13 @@ from modulo.core.node_output_split import (
     node_telemetry,
     split_node_output,
 )
+from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.core.spend_ceiling import (
     cents_from_usd,
     evaluate_spend_ceilings,
 )
 from modulo.db.crud.run import update_run_status
+from modulo.db.crud.run_node_outputs import DualWriteError
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
@@ -853,20 +855,23 @@ async def _fallback_write(
     if total > COST_COLUMN_CAP:
         total = COST_COLUMN_CAP
         breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
-    await update_run_status(
-        session,
-        run_id,
-        status,
-        error_code=error_code,
-        error_detail=error_detail,
-        total_cost_usd=total,
-        cost_breakdown=breakdown,
-        node_token_usage=merged.usage,
-        outputs_json=merged.outputs,
-        node_telemetry_json=merged.telemetry,
-        total_tokens=total_tokens,
-        claim_token=claim_token,
-    )
+    # FAR-583: the legacy fallback is itself a dual-write chokepoint — same
+    # catch/orchestrate contract as the main path.
+    async with guard_dual_write(session):
+        await update_run_status(
+            session,
+            run_id,
+            status,
+            error_code=error_code,
+            error_detail=error_detail,
+            total_cost_usd=total,
+            cost_breakdown=breakdown,
+            node_token_usage=merged.usage,
+            outputs_json=merged.outputs,
+            node_telemetry_json=merged.telemetry,
+            total_tokens=total_tokens,
+            claim_token=claim_token,
+        )
     if is_terminal:
         await _record_fallback_terminal_facts(session, run_id, status, merged.outputs)
     return total
@@ -1025,13 +1030,18 @@ async def _reduced_escape(
     try:
         async with ctx.session_factory() as fresh, fresh.begin():
             await set_rls_org(fresh, ctx.org_id)
-            run = await update_run_status(
-                fresh,
-                ctx.run_id,
-                ctx.status,
-                **ctx.finalize_fields,
-                claim_token=ctx.claim_token,
-            )
+            # FAR-583: the reduced escape is also a dual-write chokepoint (the
+            # finalize_fields may carry outputs/telemetry) — same catch/
+            # orchestrate contract; a DualWriteError aborts the escape and is
+            # logged by the outer except (the run stays for dispatcher_reconcile).
+            async with guard_dual_write(fresh):
+                run = await update_run_status(
+                    fresh,
+                    ctx.run_id,
+                    ctx.status,
+                    **ctx.finalize_fields,
+                    claim_token=ctx.claim_token,
+                )
             if run is not None:
                 await record_run_facts(fresh, run)
     except asyncio.CancelledError:
@@ -1605,6 +1615,15 @@ async def finalize_cost(
         )
     except asyncio.CancelledError:
         raise
+    except DualWriteError:
+        # FAR-583 fail-closed abort: the new-table dual-write leg failed after
+        # its bounded retry. The guard already rolled back the transaction and
+        # orchestrated the terminalize (``dual_write_failed``) + event +
+        # counters. Do NOT fall through to the legacy fallback — it would hit
+        # the same broken new-table leg and double-terminalize; let the abort
+        # propagate so the caller's ``session.begin()`` completes its rollback
+        # cleanly.
+        raise
     except Exception:
         _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
         record_fallback_legacy()
@@ -1764,21 +1783,29 @@ async def _write_finalized_run(
     built: _BuiltCost,
     write: _TerminalWrite,
 ) -> None:
-    """Persist the enriched finalization — the single ``update_run_status`` write."""
-    await update_run_status(
-        session,
-        run_id,
-        write.status,
-        error_code=write.error_code,
-        error_detail=write.error_detail,
-        total_cost_usd=built.total,
-        cost_breakdown=built.breakdown,
-        node_token_usage=built.enriched,
-        outputs_json=merged_outputs,
-        node_telemetry_json=merged_telemetry,
-        total_tokens=built.total_tokens,
-        claim_token=write.claim_token,
-    )
+    """Persist the enriched finalization — the single ``update_run_status`` write.
+
+    FAR-583: the write is a dual-write chokepoint — wrapped in the
+    ``guard_dual_write`` catch/orchestrate contract so a new-table failure
+    aborts fail-closed (rollback + terminalize ``dual_write_failed`` + event)
+    instead of falling through to the legacy fallback (which would hit the
+    same broken new-table leg and double-terminalize).
+    """
+    async with guard_dual_write(session):
+        await update_run_status(
+            session,
+            run_id,
+            write.status,
+            error_code=write.error_code,
+            error_detail=write.error_detail,
+            total_cost_usd=built.total,
+            cost_breakdown=built.breakdown,
+            node_token_usage=built.enriched,
+            outputs_json=merged_outputs,
+            node_telemetry_json=merged_telemetry,
+            total_tokens=built.total_tokens,
+            claim_token=write.claim_token,
+        )
 
 
 async def _record_terminal_analytics(

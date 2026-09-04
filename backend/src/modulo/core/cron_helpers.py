@@ -260,6 +260,16 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_errors": 0,
     "rollback_thresholds_checked": 0,
     "rollback_thresholds_flagged": 0,
+    # FAR-583 run_node_outputs migration counters. dual_write_* are bumped by
+    # the app-process chokepoint orchestration (core.run_outputs_dualwrite) via
+    # read-modify-writes of the shared Redis stats key; the sweep_* keys are
+    # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
+    "outputs_dual_write_failed": 0,
+    "outputs_dual_write_retries": 0,
+    "outputs_dual_write_degraded": 0,
+    "outputs_sweep_healed": 0,
+    "outputs_sweep_failed": 0,
+    "outputs_sweep_org_failed": 0,
 }
 
 
@@ -292,6 +302,12 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
+    _dispatcher_reconcile_stats["outputs_dual_write_failed"] = stats.get("outputs_dual_write_failed", 0)
+    _dispatcher_reconcile_stats["outputs_dual_write_retries"] = stats.get("outputs_dual_write_retries", 0)
+    _dispatcher_reconcile_stats["outputs_dual_write_degraded"] = stats.get("outputs_dual_write_degraded", 0)
+    _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
+    _dispatcher_reconcile_stats["outputs_sweep_failed"] = stats.get("outputs_sweep_failed", 0)
+    _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).

@@ -534,8 +534,10 @@ def _assert_runs_blob_columns_are_jsonb(bind: sa.Connection) -> None:
     This is the documented NO-NUL-PRE-SCAN deviation guard (see module
     docstring): jsonb cannot contain \\u0000, so the NUL-byte scan the
     json-to-jsonb lesson demands is unnecessary — but only while the columns
-    really are jsonb. The message is built with || concatenation (no RAISE
-    format placeholders) so no literal percent signs enter the statement.
+    really are jsonb. The offending column list is passed through RAISE's
+    ``%`` format placeholder (the message itself contains no literal percent
+    signs), not ``||`` concatenation — PL/pgSQL's RAISE statement does not
+    accept string-concatenation expressions after the message literal.
     """
     bind.execute(
         sa.text(
@@ -547,8 +549,8 @@ def _assert_runs_blob_columns_are_jsonb(bind: sa.Connection) -> None:
             "AND column_name IN ('outputs_json', 'node_telemetry_json', 'raw_output_markers') "
             "AND data_type <> 'jsonb'; "
             "IF bad IS NOT NULL THEN "
-            "RAISE EXCEPTION 'FAR-583: runs blob column(s) ' || bad || "
-            "' are not jsonb - the no-NUL-pre-scan deviation requires the jsonb invariant (0129/0147)'; "
+            "RAISE EXCEPTION 'FAR-583: runs blob column(s) % are not jsonb - "
+            "the no-NUL-pre-scan deviation requires the jsonb invariant (0129/0147)', bad; "
             "END IF; "
             "END $far583$;"
         )

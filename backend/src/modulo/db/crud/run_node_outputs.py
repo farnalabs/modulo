@@ -81,6 +81,7 @@ from modulo.db.models.run_node_outputs import (
 from modulo.db.rls import OutputsRlsMismatch, read_rls_org
 
 __all__ = [
+    "DualWriteError",
     "OutputsSentinelViolation",
     "RunBlobs",
     "backfill_run_node_outputs_batch",
@@ -106,6 +107,42 @@ class OutputsSentinelViolation(RuntimeError):  # noqa: N818  # name mandated by 
     rejects ``__``-prefixed node ids at save time; this is the storage-side
     backstop for legacy data paths.
     """
+
+
+class DualWriteError(RuntimeError):
+    """The new-table dual-write leg failed after its bounded retry (FAR-583).
+
+    Raised by the dual-write chokepoints (``crud.run``'s status write and the
+    recovery marker write) when the ``run_node_outputs`` REPLACE write could
+    not be completed inside the caller's transaction — including after ONE
+    bounded in-session retry of a retryable SQLSTATE. Fail-closed contract:
+    the raising chokepoint leaves its savepoint rolled back and lets the
+    exception propagate, so the caller's transaction rolls back cleanly and
+    the legacy run row is never half-written.
+
+    Carries the orchestration context so the core-side orchestrator
+    (:mod:`modulo.core.run_outputs_dualwrite`) can terminalize the run and
+    emit the failure event without re-deriving it. ``sqlstate`` is the
+    SQLSTATE of the LAST failure (None for non-SQL failures, e.g. a dialect
+    guard or an RLS org mismatch surfacing through the savepoint).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: uuid.UUID,
+        organisation_id: uuid.UUID | None,
+        claim_token: str | None = None,
+        sqlstate: str | None = None,
+        origin: str = "update_run_status",
+    ) -> None:
+        super().__init__(message)
+        self.run_id = run_id
+        self.organisation_id = organisation_id
+        self.claim_token = claim_token
+        self.sqlstate = sqlstate
+        self.origin = origin
 
 
 class RunBlobs(NamedTuple):

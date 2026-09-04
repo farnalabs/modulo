@@ -58,6 +58,12 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "AWS_REGION": _KeyConfig(default="us-east-1"),
     "MODULO_SCIM_TOKEN": _KeyConfig(default="", hot_reloadable=True),
     "MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(default="", hot_reloadable=True),
+    # FAR-583: the run_node_outputs dual-write kill-switch. Default ON
+    # (fail-closed); only the literal "false" disables dual-write (legacy-only
+    # writes + edge-triggered degraded event). Read PER CALL by
+    # core.run_outputs_dualwrite.is_dual_write_enabled — flippable mid-incident
+    # via the admin runtime-config override API without a redeploy.
+    "modulo_run_outputs_dual_write": _KeyConfig(default="true", hot_reloadable=True),
 }
 
 KNOWN_KEYS: tuple[str, ...] = tuple(_KEY_CONFIG.keys())

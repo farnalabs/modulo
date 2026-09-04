@@ -26,6 +26,7 @@ from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.run_node_outputs import DualWriteError, replace_run_node_outputs
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
@@ -42,6 +43,7 @@ from modulo.db.models.run import (
     TERMINAL_STATUSES,
     Run,
 )
+from modulo.db.rls import OutputsRlsMismatch, read_rls_org
 from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
@@ -1584,6 +1586,16 @@ async def update_run_outputs(
     provided, is the split-out per-node telemetry (Agent Return Contract,
     FAR-125) and is written atomically on the same ORM object — a single flush
     leaves no torn state between the two columns.
+
+    FAR-583 call-graph verdict: this function has ZERO production callers
+    (verified across ``backend/src`` — the only reference is a docstring
+    mention in ``core/pipeline_engine/recovery.py``; the sole real caller is
+    the unit test ``tests/unit/core/test_node_telemetry_column.py``). It is
+    therefore EXCLUDED from the dual-write chokepoint list and left
+    legacy-only: no production write can flow through it, so dual-writing it
+    would only add an unexercised code path. If this function ever gains a
+    production caller, route it through :func:`dual_write_run_node_outputs`
+    (the shared chokepoint helper) in the same change.
     """
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
@@ -1958,6 +1970,124 @@ def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
         run.node_telemetry_json = update.node_telemetry_json
 
 
+# ---------------------------------------------------------------------------
+# FAR-583 dual-write chokepoint support
+# ---------------------------------------------------------------------------
+
+# Retryable SQLSTATEs for the ONE bounded in-session retry of the new-table
+# leg (serialization failure, deadlock, connection exhaustion, statement
+# timeout). Hard errors (42501 RLS, 23503 FK, 23505 unique) fail immediately.
+_DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"40001", "40P01", "53300", "57014"})
+
+
+def _sqlstate_of(exc: BaseException) -> str | None:
+    """Extract the SQLSTATE from a SQLAlchemy DBAPI error (dialect-tolerant).
+
+    asyncpg exposes ``sqlstate``; psycopg exposes ``pgcode``. Wrapped causes
+    are walked the same way ``analytics.service._is_query_canceled`` does.
+    """
+    orig = getattr(exc, "orig", None)
+    for candidate in (orig, getattr(orig, "__cause__", None), getattr(exc, "__cause__", None)):
+        if candidate is None:
+            continue
+        state = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if state:
+            return str(state)
+    return None
+
+
+async def dual_write_run_node_outputs(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID | None,
+    outputs: dict[str, Any] | None,
+    telemetry: dict[str, Any] | None,
+    claim_token: str | None = None,
+    origin: str = "update_run_status",
+) -> None:
+    """Kill-switch-gated same-transaction REPLACE dual-write of the new table.
+
+    The single chokepoint helper every run-blob writer funnels through
+    (``update_run_status``'s ORM + fenced branches, and the recovery marker
+    write). Semantics (FAR-583 design §DUAL-WRITE):
+
+    * Kill-switch read PER CALL via ``core.run_outputs_dualwrite`` (the
+      sanctioned db→core lazy-import seam; ``.importlinter`` exempted).
+      OFF → no-op (the caller's legacy-only write proceeds unchanged — the
+      flag is a true emergency valve) with an edge-triggered degraded note.
+    * ON → the ``run_node_outputs`` REPLACE write
+      (:func:`replace_run_node_outputs` — upsert ``__final__``/metadata rows
+      + delete-absent ordered AFTER upserts, metadata flags re-derived) in a
+      SAVEPOINT inside the caller's transaction.
+    * On new-table failure: ONE bounded in-session retry for the retryable
+      SQLSTATEs; a hard error (or a second failure) raises
+      :class:`DualWriteError` with the savepoint rolled back — the caller's
+      transaction is left intact-but-poisoned so ITS rollback completes and
+      the legacy run row is never half-written (the core-side orchestrator
+      terminalizes the run and re-raises past the caller's transaction).
+    * A session with NO RLS org context skips the new-table leg entirely
+      (debug log): the repo's write gate requires a bound org, Postgres'
+      strict fail-closed policy would kill the INSERT with 42501 anyway, and
+      the only org-less sessions are unit tests / maintenance sessions where
+      the legacy write governs. A MISMATCHED org context raises
+      :class:`OutputsRlsMismatch` (fail-closed — never silently skip a
+      cross-tenant anomaly).
+    """
+    if outputs is None and telemetry is None:
+        return
+
+    from modulo.core.run_outputs_dualwrite import (
+        is_dual_write_enabled,
+        note_dual_write_disabled,
+        note_dual_write_retry,
+    )
+
+    if not is_dual_write_enabled():
+        await note_dual_write_disabled(run_id, organisation_id)
+        return
+
+    session_org = await read_rls_org(session)
+    if session_org is None:
+        _log.debug("run_outputs.dual_write_skipped_no_rls_org run=%s origin=%s", run_id, origin)
+        return
+    if organisation_id is None:
+        organisation_id = session_org
+    if session_org != organisation_id:
+        raise OutputsRlsMismatch(
+            f"run_node_outputs dual-write org mismatch on run {run_id}: "
+            f"session org {session_org} != row org {organisation_id}"
+        )
+
+    for attempt in (1, 2):
+        savepoint = session.begin_nested()
+        try:
+            async with savepoint:
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=organisation_id,
+                    outputs=outputs,
+                    telemetry=telemetry,
+                )
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+            if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
+                await note_dual_write_retry(run_id, state)
+                continue
+            raise DualWriteError(
+                f"run_node_outputs dual-write failed (origin={origin}, sqlstate={state}): {exc}",
+                run_id=run_id,
+                organisation_id=organisation_id,
+                claim_token=claim_token,
+                sqlstate=state,
+                origin=origin,
+            ) from exc
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -2020,6 +2150,24 @@ async def update_run_status(
     _apply_run_cost_fields(run, update)
     _apply_run_output_fields(run, update)
     await session.flush()
+    # FAR-583 dual-write: when the payload carries outputs/telemetry and the
+    # kill-switch is ON, mirror the staged legacy columns into run_node_outputs
+    # inside THIS transaction (REPLACE semantics). A failure raises
+    # DualWriteError — the caller's rollback completes cleanly and the core
+    # orchestrator terminalizes the run (fail-closed abort). Kill-switch OFF →
+    # legacy-only write, exactly as before this feature.
+    await dual_write_run_node_outputs(
+        session,
+        run_id=run_id,
+        # getattr: a fake Run stand-in (unit tests) carries no organisation_id;
+        # the helper resolves it from the session's RLS org (or skips when the
+        # session has none).
+        organisation_id=getattr(run, "organisation_id", None),
+        outputs=update.outputs_json,
+        telemetry=update.node_telemetry_json,
+        claim_token=update.claim_token,
+        origin="update_run_status.orm",
+    )
     if run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, run)
     return run
@@ -2116,7 +2264,23 @@ async def _update_run_status_fenced(
     # freshly-written facts.
     refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
     refreshed_run = refreshed.scalar_one_or_none()
-    if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
+    if refreshed_run is None:
+        return None
+    # FAR-583 dual-write: fenced branch — the REPLACE leg runs ONLY when the
+    # fence accepted the write (rowcount 1, checked above). The kill-switch +
+    # retry/abort contract is the shared helper's; a DualWriteError here rolls
+    # back the fenced status write together with the new-table leg (the run
+    # row is never half-written).
+    await dual_write_run_node_outputs(
+        session,
+        run_id=run_id,
+        organisation_id=refreshed_run.organisation_id,
+        outputs=update.outputs_json,
+        telemetry=update.node_telemetry_json,
+        claim_token=update.claim_token,
+        origin="update_run_status.fenced",
+    )
+    if refreshed_run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, refreshed_run)
     return refreshed_run
 

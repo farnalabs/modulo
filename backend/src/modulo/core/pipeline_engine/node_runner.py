@@ -1246,6 +1246,7 @@ async def _write_raw_output_marker(
     """
     from sqlalchemy import select as _sql_select
 
+    from modulo.db.crud.run_node_outputs import write_run_markers
     from modulo.db.models.run import Run as _RunModel
 
     try:
@@ -1298,6 +1299,28 @@ async def _write_raw_output_marker(
             markers[key] = persisted_marker
             run.raw_output_markers = markers
             await session.flush()
+            # FAR-583: post-merge marker row into run_node_outputs inside a
+            # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
+            # delivery_done monotone) — one row per attempt key, delete-absent.
+            # Savepoint failure rolls back ONLY the new-table insert; the
+            # legacy write above still commits. Log + counter, never raise
+            # (the persist's never-raise contract is preserved); the sweep +
+            # the 0177 repair heal the missing row.
+            try:
+                async with session.begin_nested():
+                    assert org_uuid is not None  # set_rls_org above required it
+                    await write_run_markers(
+                        session,
+                        run_id=run.id,
+                        organisation_id=org_uuid,
+                        markers=markers,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                from modulo.core.run_outputs_dualwrite import note_dual_write_marker_failure
+
+                await note_dual_write_marker_failure(run_id, node_id, key)
             _log.info(
                 "sandbox_agent.raw_output_marker_persisted",
                 extra={
@@ -1429,7 +1452,7 @@ async def _read_run_raw_output_markers_for_gate(
     claim_lease: str | None,
     node_id: str,
 ) -> dict[str, Any] | None:
-    """FAR-228 guard A: SINGLE fenced read of ``runs.raw_output_markers``.
+    """FAR-228 guard A: SINGLE fenced read of the run's raw-output markers.
 
     Bounded by ``_IDEMPOTENCY_GATE_READ_TIMEOUT`` (3s); fail-open to ``None``
     (provision normally) on any failure — the gate must never block dispatch.
@@ -1437,6 +1460,14 @@ async def _read_run_raw_output_markers_for_gate(
     marker (``_acquire_dispatch_marker``) so a superseded executor never reads
     a successor's markers as its own. This is a SEPARATE read from the atomic
     dispatch marker (A4) — do NOT fuse them.
+
+    FAR-583: the decision logic (the fence predicates above, the dict-or-None
+    contract below) is byte-for-byte unchanged — only the STORAGE SOURCE
+    moved: the markers are reassembled from ``run_node_outputs`` rows via the
+    repo reader, with the empty/mismatch fallback to the legacy
+    ``runs.raw_output_markers`` column (the same read today's single-column
+    SELECT served) when the new-table marker set is absent or key-set
+    mismatched. LOCK-FREE exactly as before (no FOR UPDATE on this read).
     """
     if session_factory is None or not claim_lease:
         return None
@@ -1448,6 +1479,7 @@ async def _read_run_raw_output_markers_for_gate(
         return None
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.run_node_outputs import read_run_markers_with_fallback
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async def _read() -> dict[str, Any] | None:
@@ -1457,7 +1489,7 @@ async def _read_run_raw_output_markers_for_gate(
             row = (
                 await session.execute(
                     _sql_text(
-                        "SELECT raw_output_markers FROM runs WHERE id=:rid AND organisation_id=:oid "
+                        "SELECT id FROM runs WHERE id=:rid AND organisation_id=:oid "
                         "AND claim_token=:tok AND status='running'"
                     ),
                     {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
@@ -1465,8 +1497,10 @@ async def _read_run_raw_output_markers_for_gate(
             ).fetchone()
             if row is None:
                 return None
-            value = row[0]
-            return value if isinstance(value, dict) else None
+            # Storage re-point (FAR-583): the fenced predicate above decides
+            # VISIBILITY byte-for-byte identically; the marker VALUES now
+            # reassemble from the new table with the legacy fallback.
+            return await read_run_markers_with_fallback(session, run_id=uuid.UUID(run_id), organisation_id=org_uuid)
 
     try:
         return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
@@ -1536,6 +1570,7 @@ async def _read_connector_idempotency_gate_state(
         return None, None
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.run_node_outputs import read_run_markers_with_fallback
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async def _read() -> tuple[dict[str, Any] | None, str | None]:
@@ -1544,17 +1579,20 @@ async def _read_connector_idempotency_gate_state(
             await set_rls_execution_context(session)
             row = (
                 await session.execute(
-                    _sql_text(
-                        "SELECT raw_output_markers, idempotency_key FROM runs "
-                        "WHERE id=:rid AND organisation_id=:oid FOR UPDATE"
-                    ),
+                    _sql_text("SELECT id, idempotency_key FROM runs WHERE id=:rid AND organisation_id=:oid FOR UPDATE"),
                     {"rid": run_id, "oid": str(org_uuid)},
                 )
             ).fetchone()
             if row is None:
                 return None, None
-            markers = row[0]
-            markers_dict = markers if isinstance(markers, dict) else None
+            # FAR-583 storage re-point: the run-row lock (FOR UPDATE OF runs)
+            # and the fencing semantics are unchanged; the marker VALUES now
+            # reassemble from the new table with the legacy fallback, read on
+            # the SAME locked transaction so the gate decision cannot read
+            # past an in-progress concurrent stamp.
+            markers_dict = await read_run_markers_with_fallback(
+                session, run_id=uuid.UUID(run_id), organisation_id=org_uuid
+            )
             persisted_key = row[1]
             return markers_dict, (str(persisted_key) if persisted_key else None)
 
