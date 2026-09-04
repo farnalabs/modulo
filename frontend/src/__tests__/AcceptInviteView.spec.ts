@@ -134,4 +134,23 @@ describe('AcceptInviteView', () => {
     expect(mockPost).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="accept-invite-error"]').exists()).toBe(true)
   })
+
+  it('releases the redirect timer if unmounted before it fires', async () => {
+    window.history.replaceState({}, '', '/accept-invite#token=tok-123')
+    mockPost.mockResolvedValue({ detail: 'Invitation accepted', existing_account: false })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="accept-invite-submit"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="accept-invite-password"]').setValue('C0rr3ct-Horse-Battery')
+    await wrapper.find('[data-testid="accept-invite-confirm"]').setValue('C0rr3ct-Horse-Battery')
+    await wrapper.find('form').trigger('submit.prevent')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="accept-invite-success"]').exists()).toBe(true)
+    })
+    // Unmount before the 1600ms redirect timer fires — the teardown must clear
+    // the pending timer rather than leak it.
+    wrapper.unmount()
+    expect(wrapper.exists()).toBe(false)
+  })
 })

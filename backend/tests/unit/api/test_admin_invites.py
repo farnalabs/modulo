@@ -405,3 +405,22 @@ def test_revoke_invitation_sqlalchemy_error_503(admin_client: TestClient) -> Non
     ):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 503
+
+
+def test_invite_user_audit_failure_is_fail_open(admin_client: TestClient) -> None:
+    """An audit-write failure must never fail the completed invite: the 201 still
+    returns with the minted link (the audit append is best-effort)."""
+    invitation, plaintext = _invitation_mock()
+    create_mock = AsyncMock(return_value=(invitation, plaintext))
+    with (
+        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.admin.create_invitation", new=create_mock),
+        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
+    ):
+        resp = admin_client.post(
+            "/api/v1/admin/users/invite",
+            json={"email": "new.member@example.com", "display_name": "New Member", "org_role": "runner"},
+        )
+    assert resp.status_code == 201
+    assert resp.json()["invite_url"] == f"{_PUBLIC_URL}/accept-invite#token={plaintext}"

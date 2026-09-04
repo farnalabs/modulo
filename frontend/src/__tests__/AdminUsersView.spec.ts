@@ -45,6 +45,13 @@ vi.mock('../composables/useDataFetch', async () => {
   }
 })
 
+// The invite link dialog renders a QR code (convenience copy of the URL). jsdom
+// has no canvas, so stub the QR encoder to a stable data URL and exercise the
+// QR <img> branch of the credential dialog.
+vi.mock('qrcode', () => ({
+  default: { toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,QRTEST') },
+}))
+
 import AdminUsersView from '../views/AdminUsersView.vue'
 import { generateStrongPassword } from '../utils/password'
 import { usePlanStore } from '../stores/planStore'
@@ -412,6 +419,107 @@ describe('AdminUsersView', () => {
     const codeAfter = wrapper.find('[data-testid="admin-users-credential-value"]')
     // Either unmounted or rendered empty — the secret must be gone either way.
     if (codeAfter.exists()) expect(codeAfter.text()).toBe('')
+  })
+
+  it('renders pagination controls and advances the page when total exceeds the page size', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users?')) {
+        return Promise.resolve({ ...USERS_RESPONSE, total: 120 })
+      }
+      if (path.startsWith('/api/v1/admin/users/invitations')) {
+        return Promise.resolve({ items: [], total: 0, page: 1, page_size: 100 })
+      }
+      throw new Error(`unexpected GET ${path}`)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const next = wrapper.find('[data-testid="admin-users-next"]')
+    expect(next.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-users-previous"]').exists()).toBe(true)
+
+    await next.trigger('click')
+    await flushPromises()
+    await nextTick()
+    // loadUsers re-fetches on the advanced page.
+    expect(mockGet).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/admin/users?page=2'),
+    )
+  })
+
+  it('shows the inactive badge for deactivated accounts', async () => {
+    mockGet.mockResolvedValue({
+      items: [{ ...USERS_RESPONSE.items[0], is_active: false }],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Inactive')
+  })
+
+  it('updates a user role through the select handler', async () => {
+    mockPut.mockResolvedValue({ id: 'u-1', org_role: 'operator', email: 'alice@example.com' })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    wrapper.vm.updateRole({ ...USERS_RESPONSE.items[0], id: 'u-1' }, 'operator')
+    await flushPromises()
+    await nextTick()
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/admin/users/u-1', { org_role: 'operator' })
+  })
+
+  it('deactivates and reactivates a user via the row actions', async () => {
+    mockPost.mockResolvedValue({ ...USERS_RESPONSE.items[0], is_active: false })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.vm.deactivate({ ...USERS_RESPONSE.items[0], id: 'u-1' })
+    await flushPromises()
+    await nextTick()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/admin/users/u-1/deactivate')
+
+    mockPost.mockResolvedValue({ ...USERS_RESPONSE.items[0], is_active: true })
+    await wrapper.vm.reactivate({ ...USERS_RESPONSE.items[0], id: 'u-1' })
+    await flushPromises()
+    await nextTick()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/admin/users/u-1/reactivate')
+  })
+
+  it('renders the invite QR code in the shared credential dialog', async () => {
+    mockPost.mockResolvedValue({
+      id: 'inv-2',
+      invite_url: 'https://app.test/accept-invite#token=abc123',
+      expires_at: '2026-08-23T10:00:00+00:00',
+    })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('invitee@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Invitee')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-invite-qr"]').exists()).toBe(true)
+    })
+  })
+
+  it('clears pending timers when the view is unmounted', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    wrapper.unmount()
+    expect(wrapper.exists()).toBe(false)
   })
 })
 

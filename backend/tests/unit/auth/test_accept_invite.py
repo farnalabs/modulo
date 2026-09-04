@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.routes.auth import router as auth_router
 from modulo.settings import Settings, get_settings
@@ -443,3 +444,23 @@ def test_accept_invite_sqlalchemy_error_503(client: TestClient) -> None:
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
     assert resp.status_code == 503
     assert resp.json()["detail"] == "Invitation acceptance is temporarily unavailable. Please try again."
+
+
+def test_accept_invite_unexpected_exception_maps_to_500(client: TestClient) -> None:
+    """Any non-DB, non-HTTP error inside the transaction degrades to 500, never
+    a raw 500 stack trace without the generic surface."""
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(side_effect=ValueError("boom")),
+            "get_membership_by_account_and_org": AsyncMock(return_value=None),
+            "create_membership": AsyncMock(return_value=MagicMock()),
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == MSG_INTERNAL_SERVER_ERROR
