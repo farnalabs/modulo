@@ -364,7 +364,7 @@ describe('SentryMonitorBackend', () => {
       type: 'api',
       category: 'api',
       data: { method: 'GET' },
-      timestamp: new Date(iso).getTime() / 1000,
+      timestamp: new Date(iso).getTime() / 1000, // nosemgrep: new-date-without-guard
     })
   })
 
