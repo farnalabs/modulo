@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
@@ -47,7 +47,7 @@ def _make_event(**kw):
     return e
 
 
-def _make_app():
+def _make_app(execute_result: MagicMock | None = None):
     app = FastAPI()
     app.include_router(errors_router)
 
@@ -68,7 +68,10 @@ def _make_app():
         exec_result = MagicMock()
         exec_result.scalar_one_or_none.return_value = None
         exec_result.scalars.return_value.all.return_value = []
-        session.execute = AsyncMock(return_value=exec_result)
+        if execute_result is not None:
+            session.execute = AsyncMock(return_value=execute_result)
+        else:
+            session.execute = AsyncMock(return_value=exec_result)
         return session
 
     from modulo.api.dependencies import get_db_session, get_plan_context
@@ -205,3 +208,69 @@ class TestListErrorEvents:
             client = TestClient(_make_app())
             resp = client.get(f"/api/v1/errors/{uuid.uuid4()}/events")
             assert resp.status_code == 404
+
+
+class TestSchedulerStarvation:
+    """GET /api/v1/errors/scheduler-starvation (FAR-604).
+
+    Pipelines with unstarted pending runs carrying a capacity-marker error_code
+    older than the starvation threshold — the pre-terminal runs the error
+    dashboard otherwise never sees.
+    """
+
+    def _make_row(self, **kw) -> MagicMock:
+        row = MagicMock()
+        row.pipeline_id = kw.get("pipeline_id", uuid.UUID("00000000-0000-0000-0000-000000000099"))
+        row.pipeline_name = kw.get("pipeline_name", "Starved Pipeline")
+        row.pending_count = kw.get("pending_count", 63)
+        row.oldest_created_at = kw.get("oldest_created_at", _NOW - timedelta(hours=13))
+        return row
+
+    def test_returns_starved_pipelines_with_threshold(self):
+        rows = [self._make_row()]
+        exec_result = MagicMock()
+        exec_result.all.return_value = rows
+        with patch("modulo.api.routes.errors.set_rls_org", AsyncMock()):
+            client = TestClient(_make_app(execute_result=exec_result))
+            resp = client.get("/api/v1/errors/scheduler-starvation")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["threshold_minutes"] == 10
+        item = data["items"][0]
+        assert item["pipeline_id"] == str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+        assert item["pipeline_name"] == "Starved Pipeline"
+        assert item["pending_count"] == 63
+        assert item["oldest_created_at"] == (_NOW - timedelta(hours=13)).isoformat()
+        expected_minutes = 13 * 60
+        assert abs(item["oldest_age_minutes"] - expected_minutes) < 5, "the oldest age must be reported in minutes"
+
+    def test_empty_when_no_starvation(self):
+        exec_result = MagicMock()
+        exec_result.all.return_value = []
+        with patch("modulo.api.routes.errors.set_rls_org", AsyncMock()):
+            client = TestClient(_make_app(execute_result=exec_result))
+            resp = client.get("/api/v1/errors/scheduler-starvation")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert not data["items"]
+
+    def test_static_route_wins_over_error_id_uuid_route(self):
+        # The route is declared BEFORE /{error_id} so the static path is matched
+        # directly — if it fell through to the UUID converter it would 422.
+        exec_result = MagicMock()
+        exec_result.all.return_value = []
+        with patch("modulo.api.routes.errors.set_rls_org", AsyncMock()):
+            client = TestClient(_make_app(execute_result=exec_result))
+            resp = client.get("/api/v1/errors/scheduler-starvation")
+        assert resp.status_code == 200, "a 422 here means the {error_id} route shadowed the static path"
+
+    def test_rls_org_scoped_before_query(self):
+        exec_result = MagicMock()
+        exec_result.all.return_value = []
+        with patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls:
+            client = TestClient(_make_app(execute_result=exec_result))
+            resp = client.get("/api/v1/errors/scheduler-starvation")
+        assert resp.status_code == 200
+        mock_rls.assert_awaited_once()

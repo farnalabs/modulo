@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from modulo.api.models.error import (
     ErrorIngestRequest,
     ErrorIngestResponse,
     ErrorListResponse,
+    SchedulerStarvationResponse,
     SessionKeyResponse,
 )
 from modulo.auth.jwt import TenantPrincipal
@@ -40,6 +41,8 @@ from modulo.db.crud.error_tracking import (
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.organisation import ORPHAN_ORG_ID as _ORPHAN_ORG_ID
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -50,6 +53,13 @@ _MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily una
 _MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 _MSG_NO_ORGANISATION = "No organisation"
+
+# Scheduler-starvation surfacing (FAR-604). Pending runs blocked on a capacity
+# cap carry a RAW marker in ``runs.error_code`` (``error_codes.LEGACY_ALIASES``
+# maps them to the dotted capacity.org / capacity.pipeline presentation codes).
+# The same raw pair is what the stale-run sweep / dispatcher reconcile key on.
+_STARVATION_THRESHOLD_MINUTES = 10
+_CAPACITY_STARVATION_RAW_CODES = ("pipeline_capacity", "org_capacity_limited")
 
 
 _log = logging.getLogger(__name__)
@@ -482,6 +492,94 @@ async def list_error_groups(
         ) from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get(
+    "/scheduler-starvation",
+    response_model=SchedulerStarvationResponse,
+    dependencies=[require_feature("error_tracking")],
+)
+@handle_db_errors("errors.scheduler_starvation")
+async def get_scheduler_starvation(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
+) -> dict[str, Any]:
+    """Scheduler-starvation condition for the error dashboard (FAR-604).
+
+    Pipelines having unstarted runs (``status='pending'``, ``started_at IS
+    NULL``) with a capacity-marker ``error_code`` created before the starvation
+    threshold (10 minutes). Declared BEFORE the ``/{error_id}`` routes so the
+    static path wins routing. Pre-terminal pending runs never produce error
+    events — the dashboard otherwise keys off ingested errors from terminal
+    failures — so a pipeline stuck at its concurrency cap is invisible without
+    this surface. Each item carries the pipeline id/name, the count of starved
+    pending runs, and the oldest run's creation instant + age. The aggregate is
+    one row per starved pipeline (bounded by the org's pipeline count), so no
+    pagination and ``total`` is the exact item count.
+    """
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+
+    threshold = datetime.now(UTC) - timedelta(minutes=_STARVATION_THRESHOLD_MINUTES)
+    oldest_created_at: Any = func.min(Run.created_at).label("oldest_created_at")
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            rows = (
+                await session.execute(
+                    select(
+                        Run.pipeline_id,
+                        Pipeline.name.label("pipeline_name"),
+                        func.count(Run.id).label("pending_count"),
+                        oldest_created_at,
+                    )
+                    .outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+                    .where(
+                        Run.organisation_id == org_id,
+                        Run.status == "pending",
+                        Run.started_at.is_(None),
+                        Run.error_code.in_(_CAPACITY_STARVATION_RAW_CODES),
+                        Run.created_at < threshold,
+                    )
+                    .group_by(Run.pipeline_id, Pipeline.name)
+                    .order_by(oldest_created_at.asc())
+                )
+            ).all()
+    except ProgrammingError as exc:
+        _log.exception("errors.scheduler_starvation")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("errors.scheduler_starvation")
+        _log.warning("error_tracking.scheduler_starvation_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception as exc:
+        _log.exception("error_tracking.scheduler_starvation_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+        ) from exc
+
+    now = datetime.now(UTC)
+    items = []
+    for row in rows:
+        oldest = row.oldest_created_at
+        items.append(
+            {
+                "pipeline_id": str(row.pipeline_id),
+                "pipeline_name": row.pipeline_name,
+                "pending_count": int(row.pending_count),
+                "oldest_created_at": oldest.isoformat() if oldest else "",
+                "oldest_age_minutes": round((now - oldest).total_seconds() / 60, 1) if oldest else 0.0,
+            }
+        )
+    return {"items": items, "total": len(items), "threshold_minutes": _STARVATION_THRESHOLD_MINUTES}
 
 
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])

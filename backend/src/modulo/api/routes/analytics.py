@@ -75,6 +75,12 @@ class AnalyticsBucket(BaseModel):
     success_rate: float | None = None
     failure_count: int = 0
     stall_count: int = 0
+    # FAR-604 capacity-starvation sub-bucket: failures whose error code is a
+    # capacity code (capacity_timeout / pipeline_capacity / org_capacity_limited),
+    # reported SEPARATELY from the generic failure_count, plus the queue-wait
+    # duration those runs endured (completed_at - created_at).
+    capacity_failure_count: int = 0
+    avg_capacity_wait_ms: float | None = None
     avg_queue_wait_ms: float | None = None
     avg_final_idle_ms: float | None = None
     avg_output_bytes: float | None = None
@@ -428,10 +434,12 @@ async def analytics_concurrency(
     Reconstructs "how many runs were running / queued at any instant" from the
     retained fact instants (``[started_at, completed_at)`` overlap — a run
     spanning a bucket boundary counts in both). ``pool_reference`` is the
-    binding concurrency cap for the query scope: the org's
-    ``run_concurrency_limit``, or the single filtered pipeline's
-    ``max_concurrent_runs``. ``dimension``/``error_code`` are not surfaced —
-    there is no per-dimension concurrency split.
+    binding concurrency cap for the query scope: a single filtered pipeline's
+    ``max_concurrent_runs`` (or a shared cap across equally-capped filtered
+    pipelines), else the org's ``run_concurrency_limit`` — and when no org cap
+    is configured, the tightest pipeline cap in scope (FAR-604).
+    ``dimension``/``error_code`` are not surfaced — there is no per-dimension
+    concurrency split.
     """
     org_id = _require_org(principal)
     params = AnalyticsParams(

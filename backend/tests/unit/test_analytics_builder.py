@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
 from modulo.core.analytics.builder import (
+    CAPACITY_ERROR_CODES,
     CONCURRENCY_MAX_RAW_ROWS,
     HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
@@ -281,6 +282,13 @@ class TestFAR102Filters:
             assert code not in sql, f"stall error code {code!r} must be bound, never interpolated"
         assert set(params["stall_error_codes"]) == set(STALL_ERROR_CODES)
 
+    def test_capacity_error_codes_are_bound_not_interpolated(self) -> None:
+        stmt, params = build_facts_query(_query())
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        for code in CAPACITY_ERROR_CODES:
+            assert code not in sql, f"capacity error code {code!r} must be bound, never interpolated"
+        assert set(params["capacity_error_codes"]) == set(CAPACITY_ERROR_CODES)
+
 
 class TestFAR102Metrics:
     """The FAR-102 bucket metrics: failure/stall counts + queue/idle/output averages."""
@@ -387,6 +395,90 @@ class TestFAR102Metrics:
         assert "executor_stalled" in STALL_ERROR_CODES
         assert "node_timeout" in STALL_ERROR_CODES
         assert "TimeoutError" in STALL_ERROR_CODES
+
+    def test_capacity_error_codes_constant_members(self) -> None:
+        assert "capacity_timeout" in CAPACITY_ERROR_CODES
+        assert "pipeline_capacity" in CAPACITY_ERROR_CODES
+        assert "org_capacity_limited" in CAPACITY_ERROR_CODES
+
+    def test_capacity_bucket_metrics_aggregate_from_rows(self) -> None:
+        # FAR-604: capacity-code failures are their own sub-bucket alongside the
+        # generic failure_count — never lumped into agent-failure rates.
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=3,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                failure_count=3,
+                stall_count=0,
+                capacity_failure_count=2,
+                avg_capacity_wait_ms=780.0,
+                avg_queue_wait_ms=None,
+                avg_final_idle_ms=None,
+                avg_output_bytes=None,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        bucket = out[0]
+        assert bucket["failure_count"] == 3
+        assert bucket["capacity_failure_count"] == 2
+        assert bucket["avg_capacity_wait_ms"] == 780.0
+
+    def test_capacity_wait_weighted_average_uses_row_count(self) -> None:
+        # Two rows for the same day: one has avg 100ms wait for 2 runs, one has
+        # avg 400ms for 1 run → weighted avg = (100*2 + 400*1)/3 = 200.
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=2,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                capacity_failure_count=2,
+                avg_capacity_wait_ms=100.0,
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                capacity_failure_count=1,
+                avg_capacity_wait_ms=400.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["avg_capacity_wait_ms"] == 200.0
+        assert out[0]["capacity_failure_count"] == 3
+
+    def test_zero_fill_capacity_metrics_are_null_safe(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 1),
+        )
+        bucket = out[0]
+        assert bucket["capacity_failure_count"] == 0
+        assert bucket["avg_capacity_wait_ms"] is None
 
 
 class TestDimensionedSelect:
@@ -841,6 +933,9 @@ class TestExtractedBucketHelpers:
             "duration_n": 4,
             "failure": 1,
             "stall": 0,
+            "capacity_failure": 1,
+            "capacity_wait_sum": 200.0,
+            "capacity_wait_n": 1,
             "queue_wait_sum": 40.0,
             "queue_wait_n": 2,
             "final_idle_sum": 10.0,
@@ -856,6 +951,8 @@ class TestExtractedBucketHelpers:
         assert out["avg_duration_ms"] == 200.0
         assert out["success_rate"] == 0.75
         assert out["failure_count"] == 1
+        assert out["capacity_failure_count"] == 1
+        assert out["avg_capacity_wait_ms"] == 200.0
         assert out["avg_queue_wait_ms"] == 20.0
         assert out["avg_final_idle_ms"] == 5.0
         assert out["avg_output_bytes"] == 1024.0

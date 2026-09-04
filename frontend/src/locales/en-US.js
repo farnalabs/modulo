@@ -810,7 +810,14 @@ export default {
       "no_message": "(no message)",
       "all_statuses": "All statuses",
       "no_error_groups_found": "No error groups found",
-      "apply_filters": "Apply Filters"
+      "apply_filters": "Apply Filters",
+      "scheduler_starvation": "Scheduler starvation",
+      "scheduler_starvation_hint": "Pipelines with runs stuck waiting for a capacity slot for over {minutes} minutes. Capacity-blocked pending runs never surface as errors — they are pre-terminal. Raise the pipeline's concurrency cap or clear the queue.",
+      "scheduler_starvation_pipeline": "Pipeline",
+      "scheduler_starvation_pending_count": "Pending runs",
+      "scheduler_starvation_oldest_wait": "Oldest wait",
+      "scheduler_starvation_age_minutes": "{minutes}m",
+      "scheduler_starvation_age_hours": "{hours}h"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
