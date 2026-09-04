@@ -3,6 +3,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useRemyStore } from '../composables/useRemyStore'
 import { useRemyStream } from '../composables/useRemyStream'
 import { executeCommandBatch } from '../composables/useUiCommandExecutor'
+import { usePlanStore } from '../stores/planStore'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'mock-token'),
@@ -44,6 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('useRemyStream', () => {
@@ -399,5 +401,218 @@ describe('useRemyStream', () => {
     expect(executeCommandBatch).not.toHaveBeenCalled()
     expect(postedBatches.length).toBe(1)
     expect(postedBatches[0].results).toEqual([])
+  })
+
+  it('skips the command batch when the remy_ui_driving feature flag is off', async () => {
+    setupStore()
+    vi.mocked(usePlanStore).mockImplementationOnce(() => ({
+      featureEnabled: () => false,
+    }) as any)
+    const postedBatches: any[] = []
+    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url === '/api/v1/remy/sessions/session-1/stream') {
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'click', args: { selector: '.x' } }] } }]),
+        })
+      }
+      if (url.includes('/ui-command-results')) {
+        postedBatches.push(JSON.parse(opts?.body || '{}'))
+        return Promise.resolve({ ok: true })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(executeCommandBatch).not.toHaveBeenCalled()
+    expect(postedBatches[0].results).toEqual([])
+  })
+
+  it('reports session-not-found without fetching', async () => {
+    setupStore()
+    global.fetch = vi.fn()
+
+    const { connectStream } = useRemyStream()
+    await connectStream('does-not-exist')
+
+    const store = useRemyStore()
+    expect(store.error).toBe('Session not found')
+    expect(store.isStreaming).toBe(false)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('aborts cleanly when the last message has no content', async () => {
+    const store = setupStore()
+    store.messages[0].content = ''
+    global.fetch = vi.fn()
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(store.messages).toHaveLength(0)
+    expect(store.isStreaming).toBe(false)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('appends a tool_result message for tool_call events', async () => {
+    const store = setupStore()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createMockSSEStream([
+        { event: 'tool_call', data: { tool_call_id: 'tc-9', tool_name: 'get_url', success: true } },
+      ]),
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    const lastMsg = store.messages[store.messages.length - 1]
+    expect(lastMsg.role).toBe('tool_result')
+    expect(lastMsg.content).toContain('get_url')
+    expect(lastMsg.tool_results_json).toMatchObject({ tool_call_id: 'tc-9', success: true })
+  })
+
+  it('uses the message field when an error event has no detail', async () => {
+    const store = setupStore()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createMockSSEStream([{ event: 'error', data: { message: 'fallback message' } }]),
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(store.error).toBe('fallback message')
+  })
+
+  it('surfaces the status text for non-403 failures', async () => {
+    const store = setupStore()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Server Error',
+      body: null,
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(store.error).toBe('Server Error')
+    expect(store.messages).toHaveLength(0)
+  })
+
+  it('stays silent (no store error) when the fetch aborts', async () => {
+    const store = setupStore()
+    global.fetch = vi.fn().mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(store.error).toBeNull()
+    expect(store.isStreaming).toBe(false)
+  })
+
+  it('appends raw token data when an SSE payload fails to parse', async () => {
+    const store = setupStore()
+    const encoder = new TextEncoder()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: token\ndata: not-json-at-all\n\n'))
+          controller.close()
+        },
+      }),
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    const lastMsg = store.messages[store.messages.length - 1]
+    expect(lastMsg.role).toBe('assistant')
+    expect(lastMsg.content).toBe('not-json-at-all')
+  })
+
+  it('ignores ping keepalives', async () => {
+    const store = setupStore()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createMockSSEStream([{ event: 'ping', data: {} }]),
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    // Only the original user message remains — no assistant/summary noise.
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0].role).toBe('user')
+  })
+
+  it('records the failure when command execution throws', async () => {
+    const store = setupStore()
+    vi.mocked(executeCommandBatch).mockRejectedValueOnce(new Error('cmd exploded'))
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/v1/remy/sessions/session-1/stream') {
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'c1', name: 'click', args: {} }] } }]),
+        })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(store.error).toBe('cmd exploded')
+    expect(store.isExecutingUi).toBe(false)
+  })
+
+  it('retries failed ui-command-result submissions and then reports the failure', async () => {
+    const store = setupStore()
+    let submitCalls = 0
+    vi.useFakeTimers()
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/v1/remy/sessions/session-1/stream') {
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'c1', name: 'get_url', args: {} }] } }]),
+        })
+      }
+      if (url.includes('/ui-command-results')) {
+        submitCalls += 1
+        return Promise.resolve({ ok: false, status: 502 })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    const p = connectStream('session-1')
+    await vi.advanceTimersByTimeAsync(5000)
+    await p
+
+    expect(submitCalls).toBe(3)
+    expect(store.error).toContain('Failed to submit UI command results (502)')
+  })
+
+  it('omits page_context when no route is set', async () => {
+    setupStore()
+    const store = useRemyStore()
+    store.pageContext = { route: '', params: {}, entities: [] }
+    const bodies: any[] = []
+    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url.includes('/stream')) {
+        bodies.push(JSON.parse(opts?.body || '{}'))
+        return Promise.resolve({ ok: true, body: createMockSSEStream([{ event: 'done', data: { message_id: 'm' } }]) })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+
+    expect(bodies[0].page_context).toBeUndefined()
   })
 })
