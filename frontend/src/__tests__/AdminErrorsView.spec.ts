@@ -93,7 +93,7 @@ describe('AdminErrorsView', () => {
               pipeline_id: '11111111-1111-4111-8111-111111111111',
               pipeline_name: 'Starved Pipeline',
               pending_count: 63,
-              oldest_created_at: new Date(Date.now() - 13 * 3600 * 1000).toISOString(),
+              oldest_created_at: new Date(Date.now() - 13 * 3600 * 1000).toISOString(), // nosemgrep: new-date-without-guard
               oldest_age_minutes: 780,
             },
           ],

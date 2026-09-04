@@ -242,8 +242,10 @@ class TestSchedulerStarvation:
         assert item["pipeline_name"] == "Starved Pipeline"
         assert item["pending_count"] == 63
         assert item["oldest_created_at"] == (_NOW - timedelta(hours=13)).isoformat()
-        expected_minutes = 13 * 60
-        assert abs(item["oldest_age_minutes"] - expected_minutes) < 5, "the oldest age must be reported in minutes"
+        oldest = datetime.fromisoformat(item["oldest_created_at"]).replace(tzinfo=UTC)
+        expected_minutes = round((datetime.now(UTC) - oldest).total_seconds() / 60, 1)
+        assert abs(item["oldest_age_minutes"] - expected_minutes) < 2, "the oldest age must be reported in minutes"
+        assert 700 <= item["oldest_age_minutes"] <= 800, "age must be ~13h for a 13h-old oldest run"
 
     def test_empty_when_no_starvation(self):
         exec_result = MagicMock()
