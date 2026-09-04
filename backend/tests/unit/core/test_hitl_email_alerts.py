@@ -265,7 +265,7 @@ class TestScheduleHitlEmailDispatch:
         assert events == ["session_closed", "sent"]
         assert session.begin.called
 
-    async def test_dispatch_session_factory_builds_on_the_shared_engine(self) -> None:
+    def test_dispatch_session_factory_builds_on_the_shared_engine(self) -> None:
         """One engine per process: the factory must build on get_shared_engine
         (a second engine would bypass the shared pool + its sizing)."""
         with patch("modulo.db.session.get_shared_engine") as mock_engine:
