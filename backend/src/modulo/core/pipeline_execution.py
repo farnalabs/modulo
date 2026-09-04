@@ -106,6 +106,21 @@ EXECUTOR_HEARTBEAT_LOST_ERROR_CODE = "executor_heartbeat_lost"
 # stalled node from a run that never dispatched a node at all.
 NODE_DEADLINE_EXCEEDED_ERROR_CODE = "node_deadline_exceeded"
 
+# FAR-603: bound on how long a cancelled executor waits for a watchdog task to
+# settle in the UNCLASSIFIED (worker-shutdown) cancellation path. A watchdog
+# with real work in flight — a classified stall whose ``fail_run_terminal`` is
+# committing — finishes in well under a second (a single fenced UPDATE plus two
+# fail-open follow-ups), so 5s is ~2 orders of magnitude above normal write
+# latency. A watchdog that is merely sleeping out its setup grace is a zombie
+# there: its exec target is already cancelled, so at grace expiry it stands
+# down WITHOUT writing, yet awaiting its full remaining grace — up to
+# ``saq_setup_grace_seconds`` (600s by default) — delayed the stand-down +
+# re-raise for the whole window and wedged worker shutdown per cancelled run.
+# Classified causes (stall_requested / health_failed / superseded) still wait
+# unconditionally so their terminal write always commits; only the zombie wait
+# is capped.
+_WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
+
 
 class ClaimSupersededError(Exception):
     """Raised when this executor's claim token no longer matches the run's current claim.
@@ -1266,6 +1281,50 @@ async def _await_executor_task(
         await _cancel_and_await_tasks(abort_watch_task, watchdog_task, node_deadline_task, exec_task, heartbeat_task)
 
 
+async def _await_watchdog_bounded(
+    task: asyncio.Task[Any] | None,
+    *,
+    stall_requested: asyncio.Event,
+    health_failed: asyncio.Event,
+    superseded: asyncio.Event,
+    label: str,
+    rid: uuid.UUID,
+) -> None:
+    """Await a watchdog task, bounded only in the unclassified path (FAR-603).
+
+    Waits up to ``_WATCHDOG_AWAIT_BOUND_SECONDS`` for *task* to settle — the
+    common case, which returns immediately. If the bound expires and a
+    classification signal is set, the cause is classified and the watchdog is
+    awaited to completion UNBOUNDED: its ``fail_run_terminal`` transaction must
+    never be aborted mid-write (cancelling a watchdog mid-write aborts the
+    terminal-fail transaction and leaves the run ``running`` forever — see the
+    CancelledError handler in :func:`_await_executor_task`). If the bound
+    expires with NO classification signal, this is a worker-shutdown
+    cancellation and the watchdog is a zombie — still sleeping out its setup
+    grace with no pending write (its exec target is already cancelled, so it
+    stands down without failing the run) — so log loudly and let the caller
+    proceed with the stand-down + re-raise immediately instead of waiting out
+    the full remaining grace.
+    """
+    if task is None or task.done():
+        return
+    done, _ = await asyncio.wait({task}, timeout=_WATCHDOG_AWAIT_BOUND_SECONDS)
+    if done:
+        return
+    if stall_requested.is_set() or health_failed.is_set() or superseded.is_set():
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return
+    _log.warning(
+        "pipeline_execution.watchdog_await_bound_exceeded run=%s watchdog=%s "
+        "bound=%ss — unclassified cancellation: proceeding with stand-down "
+        "instead of waiting out the watchdog's remaining setup grace",
+        rid,
+        label,
+        _WATCHDOG_AWAIT_BOUND_SECONDS,
+    )
+
+
 async def _resolve_cancel_outcome(
     *,
     watchdog_task: asyncio.Task[Any] | None,
@@ -1281,19 +1340,36 @@ async def _resolve_cancel_outcome(
 ) -> None:
     """Classify a cancelled execution: watchdog / heartbeat / supersession.
 
-    Awaits the in-flight watchdogs to completion FIRST so their
-    ``fail_run_terminal`` transactions commit, then handles the abort cause:
-    the node/executor watchdog (``stall_requested``), heartbeat loss
-    (``health_failed`` — kill the sandbox and terminal-fail with
-    ``executor_heartbeat_lost``), or a supersession (``superseded``). A
-    genuine worker-shutdown cancellation is re-raised so SAQ can retry.
+    Awaits the in-flight watchdogs so their ``fail_run_terminal`` transactions
+    commit, then handles the abort cause: the node/executor watchdog
+    (``stall_requested``), heartbeat loss (``health_failed`` — kill the sandbox
+    and terminal-fail with ``executor_heartbeat_lost``), or a supersession
+    (``superseded``). A genuine worker-shutdown cancellation is re-raised so
+    SAQ can retry. FAR-603: each watchdog await is bounded
+    (``_WATCHDOG_AWAIT_BOUND_SECONDS``) — a classified cause keeps waiting
+    unbounded so its terminal write always commits, but a watchdog that is
+    merely sleeping out its setup grace (the unclassified worker-shutdown
+    path, where it can never write) no longer delays the re-raise by its full
+    remaining grace.
     """
     if watchdog_task is not None and not watchdog_task.done():
-        with contextlib.suppress(asyncio.CancelledError):
-            await watchdog_task
+        await _await_watchdog_bounded(
+            watchdog_task,
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+            label="zombie-watchdog",
+            rid=rid,
+        )
     if not node_deadline_task.done():
-        with contextlib.suppress(asyncio.CancelledError):
-            await node_deadline_task
+        await _await_watchdog_bounded(
+            node_deadline_task,
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+            label="node-deadline-watchdog",
+            rid=rid,
+        )
     if stall_requested.is_set():
         _log.warning("run_executor_with_watchdog: execution cancelled by node/executor watchdog for run %s", rid)
     elif health_failed.is_set():
