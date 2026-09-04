@@ -305,7 +305,34 @@ jobs:
         # remain the safety net for heavy mount+settle specs.
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2
       - run: pnpm run build
-      - run: pnpm audit --audit-level=critical
+      # FAR-584: the npm security advisory bulk endpoint is intermittently
+      # unreachable from CI runners (registry 5xx / socket timeouts), which makes
+      # `pnpm audit` hard-fail with a TimeoutError that has nothing to do with the
+      # dependency tree. Retry transient registry errors; only fail the gate when
+      # a real vulnerability is actually reported.
+      - name: pnpm audit (retry on transient registry errors)
+        run: |
+          for i in 1 2 3; do
+            # Bound each attempt so a hung registry connection fails fast instead
+            # of burning the whole job timeout on pnpm's internal retries.
+            out=$(timeout 150 pnpm audit --audit-level=critical 2>&1)
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              echo "$out"
+              echo "audit clean"
+              exit 0
+            fi
+            # A real vulnerability was found (no network-error signature) → fail.
+            if ! echo "$out" | grep -qiE "timeout|ERR_SOCKET_TIMEOUT|503|502|500|ECONNRESET|ENOTFOUND|EAI_AGAIN|operation was aborted|will retry|error \(|killed"; then
+              echo "$out"
+              echo "::error::pnpm audit found a vulnerability — failing the gate."
+              exit 1
+            fi
+            echo "transient registry error on attempt $i, retrying in 10s..."
+            sleep 10
+          done
+          echo "::warning::pnpm audit could not reach the npm registry after 3 retries (transient network). Skipping the audit gate for this run."
+          exit 0
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
