@@ -32,6 +32,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.analytics.metrics import record_facts_write_failed
+from modulo.db.crud.run_node_outputs import (
+    read_run_outputs_with_fallback,
+    read_run_telemetry_with_fallback,
+)
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -125,38 +129,66 @@ def _fact_final_idle_ms(run: Run) -> int | None:
     return None
 
 
-def _fact_output_bytes(run: Run) -> int | None:
-    """Serialised size of Run.outputs_json (``json.dumps`` length) when present.
+async def _fact_output_bytes(session: AsyncSession, run: Run) -> int | None:
+    """Serialised size of the run's outputs (``json.dumps`` length) when present.
 
-    Since FAR-125 P1 ``outputs_json`` holds PURE returns (telemetry excluded),
-    so this fact measures the pure-return size. Historical values measured the
-    pre-P1 envelope size and are NOT comparable across the P1 boundary —
-    accepted, no fact backfill (pre-alpha). ``outputs_json`` is read via
-    ``getattr`` so any run-shaped object without the attribute degrades to NULL
-    instead of raising.
+    FAR-583: the payload is the REASSEMBLED run-level dict from the
+    ``run_node_outputs`` store (repo reader, legacy-dict shape), not the
+    ``runs.outputs_json`` column — same ``len(json.dumps(payload,
+    default=str))`` formula, applied to the reassembled value (``default=str``
+    is byte-identical for the JSON-typed payloads that reach it, and matches
+    ``run_retention._json_bytes``). Since FAR-125 P1 outputs hold PURE returns
+    (telemetry excluded), so this fact measures the pure-return size.
+
+    The reader serves the legacy column when the new table has no rows yet
+    (EMPTY fallback — pre-sweep stragglers), so the fact is stable across the
+    backfill window. A read failure degrades to NULL with a logged warning —
+    this component is best-effort inside the fail-open facts writer and must
+    never be the thing that fails a fact write (best-effort ops fail open
+    WITH a log).
     """
-    outputs_json = getattr(run, "outputs_json", None)
-    if outputs_json is None:
+    try:
+        outputs = await read_run_outputs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "analytics.facts.output_bytes_read_failed",
+            extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+            exc_info=True,
+        )
+        return None
+    if outputs is None:
         return None
     try:
-        return len(json.dumps(outputs_json))
+        return len(json.dumps(outputs, default=str))
     except (TypeError, ValueError):
         return None
 
 
-def _fact_telemetry_bytes(run: Run) -> int | None:
-    """Serialised size of Run.node_telemetry_json (``json.dumps`` length) when present.
+async def _fact_telemetry_bytes(session: AsyncSession, run: Run) -> int | None:
+    """Serialised size of the run's telemetry (``json.dumps`` length) when present.
 
-    Mirrors ``_fact_output_bytes``: NULL when the telemetry payload is absent
-    and NULL (never a raise) when it cannot be serialised. ``node_telemetry_json``
-    is read via ``getattr`` so any run-shaped object without the attribute
-    degrades to NULL instead of raising.
+    Mirrors ``_fact_output_bytes``: the payload is the REASSEMBLED telemetry
+    dict from the ``run_node_outputs`` store with the EMPTY fallback to the
+    legacy column; NULL when the payload is absent and NULL (never a raise)
+    when it cannot be serialised or the read fails (logged, best-effort).
     """
-    node_telemetry_json = getattr(run, "node_telemetry_json", None)
-    if node_telemetry_json is None:
+    try:
+        telemetry = await read_run_telemetry_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "analytics.facts.telemetry_bytes_read_failed",
+            extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+            exc_info=True,
+        )
+        return None
+    if telemetry is None:
         return None
     try:
-        return len(json.dumps(node_telemetry_json))
+        return len(json.dumps(telemetry, default=str))
     except (TypeError, ValueError):
         return None
 
@@ -290,8 +322,8 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "snapshot_id": getattr(run, "snapshot_id", None),
             "batch_id": getattr(run, "batch_id", None),
             "run_number": getattr(run, "run_number", None),
-            "output_bytes": _fact_output_bytes(run),
-            "telemetry_bytes": _fact_telemetry_bytes(run),
+            "output_bytes": await _fact_output_bytes(session, run),
+            "telemetry_bytes": await _fact_telemetry_bytes(session, run),
             "rate_limited": getattr(run, "rate_limit_key", None) is not None,
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait (started - created). getattr defensively for

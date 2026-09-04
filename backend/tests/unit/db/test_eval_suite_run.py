@@ -780,15 +780,20 @@ def test_single_migration_head() -> None:
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
     # 0189_agent_runner_bindings (this PR, FAR-592 / D6; renumbered from 0188 to avoid the
     # collision with main's 0188_pipeline_run_context_defaults_default, which chains off
-    # 0187 and is now the penultimate link) chains off 0188 and is the single head.
+    # 0187 and is now the penultimate link) chains off 0188.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
     assert [_basename(p) for p in chaining_off_0187] == ["0188_pipeline_run_context_defaults_default.py"]
     # 0189_agent_runner_bindings re-parents onto 0188_pipeline_run_context_defaults_default.
     chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
     assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
-    # Nothing chains off 0189_agent_runner_bindings -> it is the single head.
+    # 0190_run_node_outputs (FAR-583 per-node blob store) chains off
+    # 0189_agent_runner_bindings — 0175_dedupe_soft_delete_names is spliced
+    # mid-chain (0155 -> 0175 -> 0156).
     chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
-    assert chaining_off_0189 == []
+    assert [_basename(p) for p in chaining_off_0189] == ["0190_run_node_outputs.py"]
+    # Nothing chains off 0190 -> it is the single head.
+    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_run_node_outputs"]
+    assert chaining_off_0190 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

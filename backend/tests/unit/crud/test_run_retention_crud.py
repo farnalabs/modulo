@@ -143,10 +143,14 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(return_value=count_result)
         runs = [_run("complete"), _run("failed")]
 
+        # FAR-583: per-run blob bytes come from the repo reader; the mock
+        # session cannot execute it, so the orchestration-level test mocks
+        # the reader (zero bytes) like _checkpoint_detail above.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({"tid": 500}, {"tid": 2}))),
             patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=12345)),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -171,10 +175,14 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(side_effect=[total_result, terminal_result])
         runs = [_run("complete"), _run("failed")]
 
+        # FAR-583: per-run blob bytes come from the repo reader; the mock
+        # session cannot execute it, so the orchestration-level test mocks
+        # the reader (zero bytes) like _checkpoint_detail above.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
             patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=99)),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -226,6 +234,7 @@ class TestPurgeTerminalRuns:
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {"t1": 3}))),
             patch.object(rr, "_delete_checkpoints", new=delete_checkpoints),
             patch.object(rr, "_delete_run_id_rows", new=delete_run_id_rows),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session)
 
@@ -261,6 +270,7 @@ class TestPurgeTerminalRuns:
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
             patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
             patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session, batch_size=2)
 
@@ -289,6 +299,7 @@ class TestPurgeTerminalRuns:
         with (
             patch.object(rr, "_select_run_page", side_effect=fake_select),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session)
 
@@ -438,16 +449,30 @@ class TestEstimateHelpers:
     def test_json_bytes_measures_serialized_length(self) -> None:
         assert rr._json_bytes({"a": "bbbb"}) == len('{"a": "bbbb"}')
 
-    def test_run_row_bytes_sums_payload_columns(self) -> None:
+    def test_run_row_bytes_sums_payload_columns_and_node_output_bytes(self) -> None:
+        """FAR-583: the per-node blobs (outputs / telemetry / markers) come
+        from the run_node_outputs store, passed in as ``node_output_bytes``
+        (metadata rows already excluded by the repo reader); the remaining
+        run-row payloads are summed as before."""
+        run = _run("complete")
+        node_output_bytes = 4321
+        expected = node_output_bytes + sum(
+            rr._json_bytes(v)
+            for v in (
+                run.cost_breakdown,
+                run.input_payload,
+                run.run_classification,
+            )
+        )
+        assert rr._run_row_bytes(run, node_output_bytes) == expected
+
+    def test_run_row_bytes_defaults_to_zero_node_output_bytes(self) -> None:
         run = _run("complete")
         expected = sum(
             rr._json_bytes(v)
             for v in (
-                run.outputs_json,
-                run.node_telemetry_json,
                 run.cost_breakdown,
                 run.input_payload,
-                run.raw_output_markers,
                 run.run_classification,
             )
         )

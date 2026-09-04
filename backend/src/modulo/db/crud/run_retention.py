@@ -49,6 +49,11 @@ from typing import Any
 from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run_node_outputs import (
+    RunBlobs,
+    read_node_output_blob_bytes,
+    read_run_blobs_with_fallback,
+)
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.trigger_event import TriggerEvent
@@ -122,15 +127,21 @@ def _json_bytes(value: Any) -> int:
         return 0
 
 
-def _run_row_bytes(run: Run) -> int:
-    """Estimated bytes a single ``runs`` row contributes to the DB."""
+def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
+    """Estimated bytes a single ``runs`` row contributes to the DB.
+
+    FAR-583: the per-node blobs (outputs / telemetry / markers) are counted
+    from the ``run_node_outputs`` store (metadata rows EXCLUDED — the flags
+    payload overhead would skew the accounting), passed in as
+    *node_output_bytes* by the caller (batched via
+    ``read_node_output_blob_bytes``); the legacy ``runs`` blob columns are no
+    longer summed here. The remaining columns are still run-row payloads.
+    """
 
     return (
-        _json_bytes(run.outputs_json)
-        + _json_bytes(run.node_telemetry_json)
+        node_output_bytes
         + _json_bytes(run.cost_breakdown)
         + _json_bytes(run.input_payload)
-        + _json_bytes(run.raw_output_markers)
         + _json_bytes(run.run_classification)
     )
 
@@ -174,8 +185,14 @@ def _retention_conditions(
     return conditions
 
 
-def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int) -> dict[str, Any]:
-    """Serialise a run row for the export stream."""
+def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int, blobs: RunBlobs) -> dict[str, Any]:
+    """Serialise a run row for the export stream.
+
+    FAR-583: the three blob fields are the REASSEMBLED legacy-dict shapes
+    from the ``run_node_outputs`` store (repo reader with the EMPTY/MISMATCH
+    fallback to the legacy columns), so the export keeps serving the exact
+    pre-FAR-583 payload across the backfill window.
+    """
 
     return {
         "id": str(run.id),
@@ -193,9 +210,9 @@ def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int) ->
         "total_cost_usd": str(run.total_cost_usd) if run.total_cost_usd is not None else None,
         "cost_breakdown": run.cost_breakdown,
         "input_payload": run.input_payload,
-        "outputs_json": run.outputs_json,
-        "node_telemetry_json": run.node_telemetry_json,
-        "raw_output_markers": run.raw_output_markers,
+        "outputs_json": blobs.outputs,
+        "node_telemetry_json": blobs.telemetry,
+        "raw_output_markers": blobs.markers,
         "run_classification": run.run_classification,
         "error_code": run.error_code,
         "error_detail": run.error_detail,
@@ -327,10 +344,13 @@ async def list_retention_candidates(
     )
 
     bytes_by_thread, _count_by_thread = await _checkpoint_detail(session, [r.langgraph_thread_id for r in page], org_id)
+    node_bytes_by_run = await read_node_output_blob_bytes(session, [r.id for r in page])
 
     runs_out: list[dict[str, Any]] = []
     for run in page:
-        est = _run_row_bytes(run) + int(bytes_by_thread.get(run.langgraph_thread_id, 0))
+        est = _run_row_bytes(run, node_bytes_by_run.get(run.id, 0)) + int(
+            bytes_by_thread.get(run.langgraph_thread_id, 0)
+        )
         runs_out.append(
             {
                 "id": str(run.id),
@@ -434,7 +454,8 @@ async def _estimate_total_bytes(
             break
         threads = [r.langgraph_thread_id for r in page]
         bytes_by_thread, _counts = await _checkpoint_detail(session, threads, org_id)
-        total += sum(_run_row_bytes(r) for r in page) + sum(bytes_by_thread.values())
+        node_bytes_by_run = await read_node_output_blob_bytes(session, [r.id for r in page])
+        total += sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in page) + sum(bytes_by_thread.values())
         offset += len(page)
         if len(page) < page_size:
             break
@@ -479,12 +500,14 @@ async def iter_run_export(
             session, [r.langgraph_thread_id for r in page], org_id
         )
         for run in page:
+            blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)
             yield (
                 json.dumps(
                     _serialize_run(
                         run,
                         checkpoint_count=int(count_by_thread.get(run.langgraph_thread_id, 0)),
                         checkpoint_bytes=int(bytes_by_thread.get(run.langgraph_thread_id, 0)),
+                        blobs=blobs,
                     ),
                     default=str,
                 )
@@ -555,7 +578,10 @@ async def purge_terminal_runs(
         ids = [r.id for r in batch]
         thread_ids = [r.langgraph_thread_id for r in batch]
         checkpoint_bytes, checkpoint_counts = await _checkpoint_detail(session, thread_ids, org_id)
-        batch_freed = sum(_run_row_bytes(r) for r in batch) + sum(checkpoint_bytes.values())
+        node_bytes_by_run = await read_node_output_blob_bytes(session, ids)
+        batch_freed = sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in batch) + sum(
+            checkpoint_bytes.values()
+        )
 
         try:
             async with session.begin_nested():

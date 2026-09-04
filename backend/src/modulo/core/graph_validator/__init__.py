@@ -48,6 +48,13 @@ _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
 # gate apart from manual nodes and guardrail rows. A user node id squatting
 # the prefix would be misrouted as a gate.
 HITL_GATE_NODE_ID_PREFIX = "hitl_gate_"
+# FAR-583: node ids starting with "__" are reserved for the run_node_outputs
+# sentinel namespace — "__run_meta__" (the run-level metadata row) and
+# "__unknown__" (unparseable legacy marker keys) are row keys in the per-node
+# blob store, and "__final__" is its attempt-key sentinel. A user node id
+# squatting the namespace would collide with those rows in reassembly (the
+# repo module additionally rejects "__"-prefixed keys on write).
+DB_SENTINEL_NODE_ID_PREFIX = "__"
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
         "string": str,
@@ -1370,6 +1377,11 @@ class GraphValidator:
         reserved ``hitl_gate_`` prefix (TOPOLOGY_NODE_RESERVED_ID_PREFIX) —
         the executor synthesizes HITL gate nodes under that prefix and the
         stamp/reconcile checks route on it.
+
+        FAR-583: also rejects node ids squatting the ``__`` sentinel
+        namespace (TOPOLOGY_NODE_DB_SENTINEL_PREFIX) — those ids are row keys
+        in the run_node_outputs blob store and would collide with the
+        metadata/unknown sentinel rows on reassembly.
         """
         node_ids: set[str] = set()
         for n in nodes:
@@ -1383,6 +1395,14 @@ class GraphValidator:
                     "TOPOLOGY_NODE_RESERVED_ID_PREFIX",
                     f"Node id '{nid_str}' uses the reserved '{HITL_GATE_NODE_ID_PREFIX}' prefix "
                     "(synthesized HITL gate nodes)",
+                    node_id=nid_str,
+                )
+                return None
+            if nid_str.startswith(DB_SENTINEL_NODE_ID_PREFIX):
+                result.error(
+                    "TOPOLOGY_NODE_DB_SENTINEL_PREFIX",
+                    f"Node id '{nid_str}' uses the reserved '{DB_SENTINEL_NODE_ID_PREFIX}' prefix "
+                    "(run_node_outputs sentinel namespace: __run_meta__ / __unknown__ / __final__)",
                     node_id=nid_str,
                 )
                 return None

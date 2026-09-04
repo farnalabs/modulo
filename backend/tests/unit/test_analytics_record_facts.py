@@ -1,18 +1,25 @@
 """Unit tests for the analytics facts enrichment helpers (FAR-102, ADR 020).
 
-``record_run_facts`` is DB-bound, but the derived values it snapshots are pure
-functions: UTC day attribution, duration/queue-wait/final-idle timing math,
-output-size measurement, and the NULL-safe graph-dimension derivation. These
-tests pin that logic without a database — the integration suite covers the
-write path itself.
+``record_run_facts`` is DB-bound, but the derived values it snapshots are
+small computations over the run row: UTC day attribution, duration/queue-wait/
+final-idle timing math, output-size measurement, and the NULL-safe
+graph-dimension derivation. These pin that logic; since FAR-583 the output/
+telemetry byte helpers reassemble the payload through the run_node_outputs
+repo reader (with the EMPTY fallback to the legacy columns), so their tests
+run against a real in-memory SQLite database. The integration suite covers
+the write path itself.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.analytics import (
     _derive_graph_dimensions,
@@ -24,6 +31,47 @@ from modulo.core.analytics import (
     _fact_telemetry_bytes,
     _fact_total_queue_wait_ms,
 )
+from modulo.db.models.base import Base
+from modulo.db.models.run import Run
+
+_TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
+
+
+@pytest.fixture
+async def engine() -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with eng.begin() as conn:
+        tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def db_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        yield session
+
+
+async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
+    values: dict = {
+        "organisation_id": uuid.uuid4(),
+        "pipeline_id": uuid.uuid4(),
+        "snapshot_id": uuid.uuid4(),
+        "trigger_type": "manual",
+        "run_number": 1,
+        "input_hash": "a" * 64,
+        "langgraph_thread_id": "t-" + uuid.uuid4().hex,
+        "status": "complete",
+    }
+    values.update(blob_overrides)
+    run = Run(**values)
+    async with session.begin():
+        session.add(run)
+        await session.flush()
+    return run
 
 
 def _run(**overrides) -> SimpleNamespace:
@@ -121,39 +169,54 @@ class TestFactTimingMs:
 
 
 class TestFactOutputBytes:
-    def test_output_bytes_is_json_dumps_length(self) -> None:
-        run = _run(outputs_json={"node_a": {"result": "ok"}})
-        assert _fact_output_bytes(run) == len('{"node_a": {"result": "ok"}}')
+    async def test_output_bytes_is_json_dumps_length(self, db_session: AsyncSession) -> None:
+        """The payload is the reassembled outputs dict; via the EMPTY fallback
+        a run with no new-table rows serves the legacy column — the same
+        len(json.dumps(payload, default=str)) bytes as before the re-point."""
+        run = await _seed_run(db_session, outputs_json={"node_a": {"result": "ok"}})
+        assert await _fact_output_bytes(db_session, run) == len('{"node_a": {"result": "ok"}}')
 
-    def test_output_bytes_is_pure_return_size_since_p1(self) -> None:
+    async def test_output_bytes_is_pure_return_size_since_p1(self, db_session: AsyncSession) -> None:
         # Since FAR-125 P1 outputs_json holds PURE returns (telemetry excluded),
         # so the fact measures the pure-return size — smaller than the old
         # envelope that carried agent_stdout inline.
         pure_return = {"result": "ok"}
-        run = _run(outputs_json=pure_return, node_telemetry_json={"agent_stdout": "installing deps...\n"})
+        run = await _seed_run(
+            db_session,
+            outputs_json=pure_return,
+            node_telemetry_json={"agent_stdout": "installing deps...\n"},
+        )
         envelope = {**pure_return, "agent_stdout": "installing deps...\n"}
-        assert _fact_output_bytes(run) == len(json.dumps(pure_return))
-        assert _fact_output_bytes(run) < len(json.dumps(envelope))
+        measured = await _fact_output_bytes(db_session, run)
+        assert measured == len(json.dumps(pure_return, default=str))
+        assert measured < len(json.dumps(envelope, default=str))
 
-    def test_none_outputs_returns_none(self) -> None:
-        assert _fact_output_bytes(_run(outputs_json=None)) is None
+    async def test_none_outputs_returns_none(self, db_session: AsyncSession) -> None:
+        run = await _seed_run(db_session)
+        assert await _fact_output_bytes(db_session, run) is None
 
-    def test_non_serialisable_outputs_returns_none(self) -> None:
-        run = _run(outputs_json={"node": object()})
-        assert _fact_output_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
+    async def test_read_failure_degrades_to_none(self, db_session: AsyncSession, engine: AsyncEngine) -> None:
+        """A reader failure (dead connection) must degrade to NULL with a
+        logged warning — the byte helper is best-effort inside the fail-open
+        facts writer and must never be what fails a fact write."""
+        run = await _seed_run(db_session, outputs_json={"node_a": {"result": "ok"}})
+        await engine.dispose()
+        assert await _fact_output_bytes(db_session, run) is None
 
 
 class TestFactTelemetryBytes:
-    def test_telemetry_bytes_is_json_dumps_length(self) -> None:
-        run = _run(node_telemetry_json={"agent_stdout": "installing deps...\n"})
-        assert _fact_telemetry_bytes(run) == len('{"agent_stdout": "installing deps...\\n"}')
+    async def test_telemetry_bytes_is_json_dumps_length(self, db_session: AsyncSession) -> None:
+        run = await _seed_run(db_session, node_telemetry_json={"agent_stdout": "installing deps...\n"})
+        assert await _fact_telemetry_bytes(db_session, run) == len('{"agent_stdout": "installing deps...\\n"}')
 
-    def test_none_telemetry_returns_none(self) -> None:
-        assert _fact_telemetry_bytes(_run(node_telemetry_json=None)) is None
+    async def test_none_telemetry_returns_none(self, db_session: AsyncSession) -> None:
+        run = await _seed_run(db_session)
+        assert await _fact_telemetry_bytes(db_session, run) is None
 
-    def test_non_serialisable_telemetry_returns_none(self) -> None:
-        run = _run(node_telemetry_json={"node": object()})
-        assert _fact_telemetry_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
+    async def test_read_failure_degrades_to_none(self, db_session: AsyncSession, engine: AsyncEngine) -> None:
+        run = await _seed_run(db_session, node_telemetry_json={"agent_stdout": "x"})
+        await engine.dispose()
+        assert await _fact_telemetry_bytes(db_session, run) is None
 
 
 class TestDeriveGraphDimensions:

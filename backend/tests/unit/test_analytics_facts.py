@@ -86,6 +86,30 @@ def _scalar_one_result(value) -> SimpleNamespace:
     return SimpleNamespace(scalar_one=lambda: value, scalar_one_or_none=lambda: value)
 
 
+def _empty_rows_result() -> SimpleNamespace:
+    """A result double for the repo reader's rows fetch (no rows) and legacy
+    fallback (.first() -> None)."""
+    return SimpleNamespace(all=list, first=lambda: None)
+
+
+def _rls_probe_result() -> SimpleNamespace:
+    """The ``read_rls_org`` GUC probe result — empty string = no org bound."""
+    return SimpleNamespace(scalar=lambda: "")
+
+
+def _blob_read_results() -> list[SimpleNamespace]:
+    """The executes ONE re-pointed byte-fact helper issues: rows fetch + the
+    read_rls_org GUC probe + the legacy fallback (x2 sides = 6)."""
+    return [
+        _empty_rows_result(),
+        _rls_probe_result(),
+        _empty_rows_result(),
+        _empty_rows_result(),
+        _rls_probe_result(),
+        _empty_rows_result(),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Facts writer (modulo.core.analytics.__init__)
 # ---------------------------------------------------------------------------
@@ -252,6 +276,7 @@ class TestRecordRunFacts:
             execute_side_effect=[
                 _scalar_one_result("Platform"),
                 SimpleNamespace(first=lambda: ("CI", None)),
+                *_blob_read_results(),
                 SimpleNamespace(),
             ]
         )
@@ -260,7 +285,8 @@ class TestRecordRunFacts:
         await analytics_mod.record_run_facts(session, run)
 
         session.begin_nested.assert_called_once()
-        assert session.execute.await_count == 3
+        # snapshot dims + graph dims + the four blob-read executes + the upsert.
+        assert session.execute.await_count == 3 + len(_blob_read_results())
         assert captured["model"] is analytics_mod.RunDailyFact
         assert len(captured["index_elements"]) == 1
         assert captured["index_elements"][0].key == "run_id"
@@ -298,6 +324,7 @@ class TestRecordRunFacts:
             execute_side_effect=[
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
                 SimpleNamespace(),
             ]
         )
@@ -315,6 +342,7 @@ class TestRecordRunFacts:
             execute_side_effect=[
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
                 SimpleNamespace(),
             ]
         )
@@ -325,8 +353,22 @@ class TestRecordRunFacts:
         assert captured["values"]["batch_id"] is None
 
     async def test_failure_is_swallowed_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run = _make_run()
-        session = _session(execute_side_effect=[RuntimeError("simulated facts insert failure")])
+        # Team/pipeline ids make the snapshot-dimension reads run (they are
+        # skipped for a run without them), so the failure lands on the FACT
+        # WRITE itself — the test pins "a fact-write failure is swallowed"
+        # (one warning, one metric), with the FAR-583 blob reads succeeding.
+        run = _make_run(
+            owner_team_id="44444444-4444-4444-8444-444444444444",
+            pipeline_id="55555555-5555-4555-8555-555555555555",
+        )
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                RuntimeError("simulated facts insert failure"),
+            ]
+        )
         write_failed = MagicMock()
         monkeypatch.setattr(analytics_mod, "record_facts_write_failed", write_failed)
         monkeypatch.setattr(analytics_mod, "_log", MagicMock())

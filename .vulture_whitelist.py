@@ -289,4 +289,10 @@ __all__ = [
     #     CI test gate and the reset is the signal tests' isolation hook) ---
     "error_code_map_conflicts",
     "_reset_unmapped_code_signal_for_tests",
+    # --- FAR-583: migration-0190 twin parser. The SQL twin (_MARKER_NODE_ID_SQL
+    #     constants) does the real work; this Python twin exists to be pinned by
+    #     tests/unit/db/test_migration_run_node_outputs.py (regex equality +
+    #     round-trip cases) so the two parsers cannot drift. vulture scans src/
+    #     only so it cannot see the test call sites.
+    "_parse_marker_node_id",
 ]
