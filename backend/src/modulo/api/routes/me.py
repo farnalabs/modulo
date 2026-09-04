@@ -177,9 +177,13 @@ async def update_hitl_email_preferences(
     """Persist the CALLER's HITL email-alert preferences under the
     ``hitl_email`` key of ``Account.preferences`` (other keys untouched).
 
-    The row is fetched with ``FOR UPDATE`` so a concurrent preference write
-    (e.g. ``PUT /me/settings`` theme) cannot silently drop either side's key
-    via a read-merge-write lost update on the shared JSONB column.
+    The row is fetched ``FOR UPDATE`` so concurrent writes via THIS endpoint
+    serialise per account. Known limitation (pre-existing, outside this
+    slice's allowlist): sibling preference writers (e.g. ``PUT /me/settings``
+    via the unlocked ``update_account_preferences`` read-merge-write helper)
+    overwrite the whole JSONB column without taking this lock, so a settings
+    write racing this one can still drop the other's key — closing that needs
+    ALL column writers to cooperate (row lock or per-key updates).
     """
     hitl_email_block: dict[str, object] = {
         "default": req.default,

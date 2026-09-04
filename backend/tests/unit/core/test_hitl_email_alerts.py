@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.core import hitl_email_alerts
 from modulo.core.email_service import EmailSendingError
@@ -237,7 +238,42 @@ async def _drain_tasks() -> None:
 
 
 class TestScheduleHitlEmailDispatch:
-    async def test_schedules_background_dispatch_with_own_session(self) -> None:
+    async def test_sends_only_after_the_resolution_session_closes(self) -> None:
+        """Pins the iteration-2 split: the SMTP send must run AFTER the DB
+        session/transaction has closed, so a slow SMTP host can never pin a
+        pooled connection from the shared engine."""
+        factory, session = _dispatch_task_harness()
+        events: list[str] = []
+
+        def _record_close(*_args: object, **_kwargs: object) -> bool:
+            events.append("session_closed")
+            return False
+
+        async def _record_send(*_args: object, **_kwargs: object) -> None:
+            events.append("sent")
+
+        factory.return_value.__aexit__.side_effect = _record_close
+        with (
+            patch.object(hitl_email_alerts, "_dispatch_session_factory", return_value=factory),
+            patch.object(hitl_email_alerts, "set_rls_org", new_callable=AsyncMock),
+            patch.object(hitl_email_alerts, "resolve_hitl_email_recipients", AsyncMock(return_value=[_RUNNER_EMAIL])),
+            patch.object(hitl_email_alerts, "send_hitl_email_alerts", AsyncMock(side_effect=_record_send)),
+        ):
+            schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
+            await _drain_tasks()
+
+        assert events == ["session_closed", "sent"]
+        assert session.begin.called
+
+    async def test_dispatch_session_factory_builds_on_the_shared_engine(self) -> None:
+        """One engine per process: the factory must build on get_shared_engine
+        (a second engine would bypass the shared pool + its sizing)."""
+        with patch("modulo.db.session.get_shared_engine") as mock_engine:
+            factory = hitl_email_alerts._dispatch_session_factory()
+        mock_engine.assert_called_once()
+        assert isinstance(factory, async_sessionmaker)
+
+    async def test_scheduled_task_uses_the_session_once(self) -> None:
         factory, session = _dispatch_task_harness()
         resolved = AsyncMock(return_value=[_RUNNER_EMAIL])
         sent = AsyncMock()
