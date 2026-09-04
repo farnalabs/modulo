@@ -219,6 +219,7 @@ async def receive_webhook(
             "system_bootstrap_degraded",
             route="webhooks.receive_webhook",
             detail="system database not provisioned; trigger delivery unavailable",
+            level=logging.ERROR,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -541,6 +542,7 @@ async def replay_webhook(
             "system_bootstrap_degraded",
             route="webhooks.replay_webhook",
             detail="system database not provisioned; trigger delivery unavailable",
+            level=logging.ERROR,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

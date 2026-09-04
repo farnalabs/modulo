@@ -239,7 +239,10 @@ def test_receive_webhook_bootstrap_guard_logs_structured_reason(
     failing_session_client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Degraded system engine -> 503, and the raise site must persist WHY
-    (route + reason code) before raising."""
+    (route + reason code) before raising. The record is logged at ERROR
+    explicitly: with no ``exc`` the helper's derived default is WARNING,
+    which ErrorTrackingLogHandler would NOT persist — an unprovisioned
+    system DB is a full outage signal, not a routine guard."""
     with (
         patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True),
         caplog.at_level(logging.WARNING),
@@ -253,6 +256,7 @@ def test_receive_webhook_bootstrap_guard_logs_structured_reason(
     assert resp.status_code == 503
     records = _structured_records(caplog)
     assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
     payload = records[0].__dict__["service_unavailable"]
     assert payload["route"] == "webhooks.receive_webhook"
     assert payload["reason"] == "system_bootstrap_degraded"
