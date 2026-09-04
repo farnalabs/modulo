@@ -14,6 +14,8 @@ from modulo.core.runtime_provider import (
 
 _log = logging.getLogger(__name__)
 
+_PROVIDER_CLOSE_TIMEOUT_S = 60
+
 
 class RuntimeProviderHub:
     """Central registry for RuntimeProvider implementations.
@@ -155,11 +157,23 @@ class RuntimeProviderHub:
         """Close every registered provider's owned resources.
 
         Per-provision disposal (ADR 029): provider-owned clients are closed
-        explicitly, never left to GC. Failures are logged per provider and
-        never mask the remaining teardown.
+        explicitly, never left to GC. Each provider's teardown is bounded by
+        :meth:`asyncio.wait_for` so a hung backend (e.g. an unresponsive
+        Docker daemon) cannot stall disposal forever; on timeout that
+        provider is force-dropped from the registry so its client references
+        are not retained, and teardown continues with the remaining providers.
+        Failures are logged per provider and never mask the remaining teardown.
         """
         for name, provider in list(self._providers.items()):
             try:
-                await provider.close()
+                await asyncio.wait_for(provider.close(), timeout=_PROVIDER_CLOSE_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                _log.warning(
+                    "Timed out closing runtime provider '%s' during aclose(); force-dropping it",
+                    name,
+                )
+                self._providers.pop(name, None)
             except Exception:
                 _log.exception("Failed to close runtime provider '%s'", name)

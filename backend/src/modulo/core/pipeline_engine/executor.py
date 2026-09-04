@@ -557,6 +557,10 @@ async def _teardown_hub(hub: Any) -> None:
     even when the awaiting task is cancelled (a second CancelledError cannot
     abort the cleanup). The shielded future is re-awaited on cancellation so no
     "Task was destroyed but it is pending" warning is emitted at loop close.
+
+    The runtime provider hub the executor built alongside the ConnectorHub
+    (FAR-587) is aclosed here too, best-effort: its providers (Docker/E2B)
+    destroy their tracked workspaces so no billable sandbox outlives the run.
     """
     shielded = asyncio.shield(hub.__aexit__(None, None, None))
     try:
@@ -567,6 +571,15 @@ async def _teardown_hub(hub: Any) -> None:
         raise
     except Exception:
         _log.exception("pipeline.hub_cleanup_failed")
+    finally:
+        runtime_hub = getattr(hub, "_runtime_hub", None)
+        if runtime_hub is not None:
+            try:
+                await runtime_hub.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("pipeline.runtime_hub_cleanup_failed")
 
 
 class GraphValidationError(ValueError):
@@ -2212,6 +2225,10 @@ class PipelineExecutor:
                         org_id=str(org_id),
                         request_visibility=request_visibility,
                     )
+                    # FAR-587: keep the runtime-provider hub reachable for the
+                    # teardown path (_teardown_hub acloses it, disposing
+                    # provider-tracked workspaces e.g. billable E2B sandboxes).
+                    hub._runtime_hub = runtime_hub
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
                     if hub.skipped or hub.healthy:

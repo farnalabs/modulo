@@ -29,6 +29,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.runtime_provider import ProviderNotConfiguredError
 
 _log = logging.getLogger(__name__)
 
@@ -60,7 +61,12 @@ class ShellConnector(ConnectorBase):
         ``sandbox_agent`` node type.  ShellConnector will be removed in a
         future release.
 
-    Requires an active ``workspace_lease_id`` — 403 if not set.
+    To execute anything the connector resolves its runtime provider either
+    from an directly bound ``runtime_provider`` or - via the hub - from the
+    ``environment_profile_id``'s ``provider_type`` (which needs a
+    corresponding runtime provider to be registered, e.g. via its
+    documented environment variable). ``workspace_lease_id`` is no longer
+    consumed (the WorkspaceLease scaffolding was removed, FAR-587).
     Command allowlist is enforced via ``allowed_commands``.
 
     Supported query resources:
@@ -81,6 +87,7 @@ class ShellConnector(ConnectorBase):
         runtime_provider_hub: Any | None = None,
         environment_profile_id: uuid.UUID | None = None,
         workspace_lease_id: uuid.UUID | None = None,
+        org_id: str | None = None,
     ) -> None:
         warnings.warn(
             "ShellConnector is deprecated (ADR 003). Use sandbox_agent node type instead.",
@@ -92,6 +99,11 @@ class ShellConnector(ConnectorBase):
         self._runtime_provider_hub = runtime_provider_hub
         self._environment_profile_id = environment_profile_id
         self._workspace_lease_id = workspace_lease_id
+        self._org_id: uuid.UUID | None
+        try:
+            self._org_id = uuid.UUID(str(org_id)) if org_id else None
+        except ValueError:
+            self._org_id = None
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -122,7 +134,7 @@ class ShellConnector(ConnectorBase):
     def _check_workspace_lease(self) -> None:
         if self._workspace_lease_id is None and self._runtime_provider is None:
             raise ConnectorPermissionError(
-                "No active workspace lease and no runtime provider configured.",
+                "No runtime provider configured for this profile.",
             )
 
     async def _resolve_profile_from_hub(self) -> Any | None:
@@ -130,10 +142,25 @@ class ShellConnector(ConnectorBase):
             return None
         try:
             from modulo.db.crud.environment_profile import get_environment_profile
+            from modulo.db.models.environment_profile import EnvironmentProfile
+            from modulo.db.rls import set_rls_org
             from modulo.db.session import AsyncSessionLocal
 
-            async with AsyncSessionLocal() as session:
-                return await get_environment_profile(session, self._environment_profile_id)
+            async with AsyncSessionLocal() as session, session.begin():
+                # Tenant-scoped fetch (FAR-587, tenancy lens): on Postgres the
+                # fetch runs inside the org's RLS context so a stale/foreign
+                # profile id cross-org read is IMPOSSIBLE; on generic backends
+                # the do_orm_execute listener injects the org filter. Without
+                # a known org the fetch is unscoped (pre-fix behaviour).
+                await set_rls_org(session, self._org_id)
+                if self._org_id is None:
+                    return await get_environment_profile(session, self._environment_profile_id)
+                from sqlalchemy import select
+
+                row = await session.execute(
+                    select(EnvironmentProfile).where(EnvironmentProfile.id == self._environment_profile_id)
+                )
+                return row.scalar_one_or_none()
         except Exception:
             _log.exception("Failed to resolve environment profile from hub")
             return None
@@ -158,9 +185,13 @@ class ShellConnector(ConnectorBase):
         ):
             profile = await self._resolve_profile_from_hub()
             if profile is not None:
-                provider = self._runtime_provider_hub.resolve(profile)
-                if provider is not None:
-                    self._runtime_provider = provider
+                try:
+                    self._runtime_provider = self._runtime_provider_hub.resolve(profile)
+                except ProviderNotConfiguredError as exc:
+                    # Error-contract fix: the hub raises ProviderNotConfiguredError,
+                    # but this deprecated connector's fail-soft contract is a
+                    # plain ValueError surfaced as a reported node failure.
+                    raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED) from exc
 
         if self._runtime_provider is None:
             raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)
@@ -207,9 +238,13 @@ class ShellConnector(ConnectorBase):
         ):
             profile = await self._resolve_profile_from_hub()
             if profile is not None:
-                provider = self._runtime_provider_hub.resolve(profile)
-                if provider is not None:
-                    self._runtime_provider = provider
+                try:
+                    self._runtime_provider = self._runtime_provider_hub.resolve(profile)
+                except ProviderNotConfiguredError as exc:
+                    # Error-contract fix: the hub raises ProviderNotConfiguredError,
+                    # but this deprecated connector's fail-soft contract is a
+                    # plain ValueError surfaced as a reported node failure.
+                    raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED) from exc
 
         if self._runtime_provider is None:
             raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)

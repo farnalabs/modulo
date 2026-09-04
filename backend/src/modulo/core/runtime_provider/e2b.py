@@ -171,6 +171,26 @@ class E2BRuntimeProvider(RuntimeProvider):
             _log.exception("Failed to get status for sandbox %s", provider_ref)
             return "unknown"
 
+    async def close(self) -> None:
+        """Destroy every provider-tracked sandbox best-effort (hub-aclose disposal).
+
+        Mirrors ``DockerRuntimeProvider.close()``: on abnormal teardown (e.g. an
+        SSE stream dropped mid-test) the hub still disposes this provider, and
+        without destroying tracked sandboxes they would keep billing after the
+        hub is gone. Best-effort per sandbox — a kill failure is logged and
+        never masks the remaining teardown.
+        """
+        for provider_ref in list(self._sandboxes.keys()):
+            try:
+                await self.destroy_workspace(provider_ref)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "Failed to destroy E2B sandbox %s during close()",
+                    provider_ref,
+                )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

@@ -19,6 +19,7 @@ _DEFAULT_IMAGE = "python:3.13-slim"
 _DEFAULT_MEMORY_MB = 512
 _WORKSPACE_PREFIX = "modulo-workspace-"
 _UUID_TRUNC_LEN = 12
+_CLOSE_DESTROY_TIMEOUT_S = 30
 
 
 class DockerRuntimeProvider(RuntimeProvider):
@@ -257,9 +258,40 @@ class DockerRuntimeProvider(RuntimeProvider):
         return container_id
 
     async def close(self) -> None:
-        """Close the underlying Docker client connection and clean up workspaces."""
+        """Close the underlying Docker client connection and clean up workspaces.
+
+        Each destroy is bounded by :meth:`asyncio.wait_for` (30s per workspace)
+        so a hung Docker daemon cannot stall teardown forever; on timeout the
+        workspace reference is force-dropped and teardown continues.
+        """
         for provider_ref in list(self._workspaces.keys()):
-            await self.destroy_workspace(provider_ref)
+            try:
+                await asyncio.wait_for(
+                    self.destroy_workspace(provider_ref),
+                    timeout=_CLOSE_DESTROY_TIMEOUT_S,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                # destroy_workspace already popped the reference before its
+                # first await; a timeout mid-teardown means the id is now
+                # untracked (by design) - log and continue.
+                _log.warning(
+                    "Timed out destroying workspace %s during close(); force-dropping it",
+                    provider_ref,
+                )
+            except Exception:
+                _log.exception("Failed to destroy workspace %s during close()", provider_ref)
         if self._client is not None:
-            await self._client.close()
-            self._client = None
+            try:
+                await asyncio.wait_for(self._client.close(), timeout=_CLOSE_DESTROY_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                _log.warning("Timed out closing Docker client during close(); force-dropping it")
+                self._client = None
+            except Exception:
+                _log.exception("Failed to close Docker client during close()")
+                self._client = None
+            else:
+                self._client = None

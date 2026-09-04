@@ -201,6 +201,44 @@ class TestCreateProfile:
         assert resp.status_code == 422
         assert "provider_type" in resp.text
 
+    @pytest.mark.parametrize("provider_type", ["dangertier", "heroku", "", "LOCAL_DOCKER"])
+    def test_create_profile_invalid_provider_type_returns_422(self, provider_type: str, client: TestClient) -> None:
+        """provider_type is vocabulary-validated at the API boundary (FAR-587).
+
+        An invalid value must 422 at the boundary — it must never reach the DB
+        CHECK and surface there as a misleading 409.
+        """
+        with patch(f"{_ROUTES}.set_rls_org"):
+            resp = client.post(self.URL, json={"name": "bad-type", "provider_type": provider_type})
+        assert resp.status_code == 422
+        assert "provider_type" in resp.text
+
+    @pytest.mark.parametrize("provider_type", ["local_docker", "e2b", "local", "runner_docker"])
+    def test_create_profile_validates_only_the_vocabulary(self, provider_type: str, client: TestClient) -> None:
+        """Every CHECK-vocabulary value passes the boundary validation.
+
+        The boundary pattern (routes) must accept exactly the model CHECK
+        vocabulary — otherwise a valid DB type would be un-reachable via the API.
+        """
+        fake = _fake_profile(provider_type=provider_type)
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.return_value = fake
+            resp = client.post(self.URL, json={"name": "typed", "provider_type": provider_type})
+        assert resp.status_code == 201
+
+    def test_update_profile_invalid_provider_type_returns_422(self, client: TestClient) -> None:
+        """The update boundary validates provider_type against the same vocabulary."""
+        with (
+            patch(f"{_ROUTES}.update_environment_profile"),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"provider_type": "dangertier"})
+        assert resp.status_code == 422
+        assert "provider_type" in resp.text
+
     def test_create_profile_conflict(self, client: TestClient) -> None:
         with (
             patch(f"{_ROUTES}.create_environment_profile") as mock_create,

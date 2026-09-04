@@ -33,7 +33,13 @@ class ProviderNotConfiguredError(RuntimeError):
     def __init__(self, provider_type: str, env_var: str | None = None) -> None:
         self.provider_type = provider_type
         self.env_var = env_var
-        if env_var:
+        if env_var and env_var in _DOCKER_ENV_VARS:
+            message = (
+                f"No runtime provider registered for provider_type '{provider_type}'. "
+                "Set MODULO_DOCKER_HOST (or DOCKER_HOST, or any MODULO_RUNNER_* variable) "
+                "and restart to enable it, or choose a different provider type for the profile."
+            )
+        elif env_var:
             message = (
                 f"No runtime provider registered for provider_type '{provider_type}'. "
                 f"Set the {env_var} environment variable (and restart) to enable it, "
@@ -44,15 +50,29 @@ class ProviderNotConfiguredError(RuntimeError):
         super().__init__(message)
 
 
+# ---------------------------------------------------------------------------
+# Provider-registration environment signals (single source of truth, FAR-587)
+# ---------------------------------------------------------------------------
+#
+# Every documented signal lives here once; ``build_hub``'s registration gates
+# and :func:`env_var_for_provider_type` (the remediation-copy mapping) both
+# derive from these constants so the documented behaviour and the implemented
+# behaviour can never drift apart.
+
+_RUNNER_ENV_PREFIX = "MODULO_RUNNER_"
+_DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
+_E2B_ENV_VAR = "MODULO_E2B_API_KEY"
+
 # Documented unconfigured behaviour (ADR 029 / FAR-587): every
 # ``ck_env_profiles_provider_type`` CHECK value maps either to a provider that
 # is always registered ("local") or to the env var whose presence registers
-# the provider. Assertion tests pin this mapping against the model's CHECK.
+# the provider (docker-family types: _DOCKER_ENV_VARS; e2b: _E2B_ENV_VAR).
+# Assertion tests pin this mapping against the model's CHECK.
 _PROVIDER_ENV_VARS: dict[str, str] = {
-    "e2b": "MODULO_E2B_API_KEY",
-    "runner_docker": "MODULO_DOCKER_HOST",
-    "docker": "MODULO_DOCKER_HOST",
-    "local_docker": "MODULO_DOCKER_HOST",
+    "e2b": _E2B_ENV_VAR,
+    "runner_docker": _DOCKER_ENV_VARS[0],
+    "docker": _DOCKER_ENV_VARS[0],
+    "local_docker": _DOCKER_ENV_VARS[0],
 }
 
 
@@ -129,7 +149,13 @@ class RuntimeProvider(ABC):
         return bool(normalized) and normalized in {self.provider_id, *self.provider_aliases}
 
     async def close(self) -> None:
-        """Release provider-level resources (connections, clients, etc.)."""
+        """Destroy provider-tracked live workspaces best-effort, then release owned clients.
+
+        Invoked by :meth:`RuntimeProviderHub.aclose` (hub-aclose disposal,
+        ADR 029). Implementations must not raise for individual workspace
+        failures; the hub is itself best-effort per provider and owns no
+        live state after this returns.
+        """
         return
 
 
@@ -165,7 +191,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
     hub.register("local", local)
 
-    if os.environ.get("MODULO_E2B_API_KEY"):
+    if os.environ.get(_E2B_ENV_VAR):
         try:
             from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 
@@ -174,8 +200,8 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         except ImportError:
             _log.warning("E2B dependency not installed; skipping E2B provider")
 
-    runner_signal = any(key.startswith("MODULO_RUNNER_") for key in os.environ)
-    if runner_signal or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST"):
+    runner_signal = any(key.startswith(_RUNNER_ENV_PREFIX) for key in os.environ)
+    if runner_signal or any(os.environ.get(var) for var in _DOCKER_ENV_VARS):
         try:
             from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
@@ -185,16 +211,6 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
             _log.warning("Docker dependency not installed; skipping Docker provider")
 
     return hub
-
-
-def reset_hub() -> None:
-    """Reset any cached hub state.
-
-    Hubs are fresh per :func:`build_hub` call and no module-global hub is
-    cached, so there is nothing to reset; this hook exists so tests and
-    consumers can express "drop all hub state" defensively without reaching
-    into module internals (ADR 029 — no app-state singleton).
-    """
 
 
 # Backwards-compatible alias — the factory concept is unchanged; new callers

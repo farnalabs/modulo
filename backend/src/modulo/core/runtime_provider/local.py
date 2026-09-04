@@ -119,6 +119,25 @@ class LocalRuntimeProvider(RuntimeProvider):
     async def get_workspace_status(self, provider_ref: str) -> str:
         return "running" if provider_ref in self._workspaces else "terminated"
 
+    async def close(self) -> None:
+        """Clean up every provider-tracked workspace best-effort (hub-aclose disposal).
+
+        Mirrors ``DockerRuntimeProvider.close()``: on abnormal teardown the hub
+        still disposes this provider, and without removing tracked temp
+        directories they would leak on the host filesystem after the hub is
+        gone. ``destroy_workspace`` is already best-effort per workspace.
+        """
+        for provider_ref in list(self._workspaces.keys()):
+            try:
+                await self.destroy_workspace(provider_ref)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "Failed to remove workspace %s during close()",
+                    provider_ref,
+                )
+
     async def _run_command(
         self,
         command: list[str],

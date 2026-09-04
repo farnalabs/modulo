@@ -145,6 +145,10 @@ forbidden_modules =
 ignore_imports =
     # Shell resolves workspace sessions via the DB layer.
     modulo.connectors.shell -> modulo.db.session
+    # FAR-587: shell's hub-resolution guard maps the hub's typed
+    # ProviderNotConfiguredError to the connector's fail-soft ValueError
+    # contract - a single exception-type import (no core behaviour flows in).
+    modulo.connectors.shell -> modulo.core.runtime_provider
     # The REST connector (FAR-408) binds its SSRF + output-injection port at the
     # composition root (connector_hub) and never imports ``modulo.core`` directly;
     # this contract enforces that the connector stays decoupled. Any attempt to

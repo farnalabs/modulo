@@ -278,13 +278,6 @@ __all__ = [
     #     API only ever soft-deletes (soft_delete_environment_profile); this
     #     hard-delete stays as the admin/housekeeping cleanup primitive and is
     #     exercised directly by tests/integration/bdd/test_environment_profiles.py
-    #     (FK RESTRICT-on-lease behaviour). vulture scans src/ only so it cannot
-    #     see the test call sites.
+    #     (vulture scans src/ only so it cannot see the test call sites).
     "delete_environment_profile",
-    # --- FAR-587: runtime-provider hub lifecycle. Hubs are fresh per
-    #     build_hub() call with no module-global state, so reset_hub() is a
-    #     defensive no-op hook exercised by tests/unit/core/runtime_provider/
-    #     test_default_hub.py (vulture scans src/ only and cannot see the test
-    #     call site).
-    "reset_hub",
 ]

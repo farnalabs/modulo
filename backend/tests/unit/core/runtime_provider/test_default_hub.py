@@ -11,7 +11,6 @@ from modulo.core.runtime_provider import (
     WorkspaceSpec,
     build_hub,
     create_default_hub,
-    reset_hub,
 )
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
@@ -187,7 +186,7 @@ class TestMatchesProviderType:
 
 
 # ---------------------------------------------------------------------------
-# Factory-alias + reset hooks
+# Factory-alias
 # ---------------------------------------------------------------------------
 
 
@@ -196,6 +195,54 @@ def test_create_default_hub_is_build_hub_alias() -> None:
     assert create_default_hub is build_hub
 
 
-def test_reset_hub_is_safe_noop() -> None:
-    """Hubs are fresh per factory call; reset_hub exists as a defensive no-op."""
-    assert reset_hub() is None
+# ---------------------------------------------------------------------------
+# Env-signal parity (single source of truth, FAR-587)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "env_var"),
+    [
+        ("e2b", "MODULO_E2B_API_KEY"),
+        ("runner_docker", "MODULO_DOCKER_HOST"),
+        ("docker", "MODULO_DOCKER_HOST"),
+        ("local_docker", "MODULO_DOCKER_HOST"),
+    ],
+)
+def test_documented_env_var_actually_registers_provider(
+    provider_type: str,
+    env_var: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parity pin: setting each documented env var registers the provider.
+
+    The documented signal (env_var_for_provider_type -> remediation copy) and
+    the implemented build_hub gate must agree: a profile whose provider_type
+    maps to ``env_var`` MUST resolve once only that var is set.
+    """
+    for var in ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("MODULO_RUNNER_TEMPLATE_ID", raising=False)
+    monkeypatch.setenv(env_var, "registration-signal")
+
+    hub = build_hub()
+    provider = hub.get(
+        "e2b" if provider_type == "e2b" else "runner_docker",
+    )
+    assert provider is not None
+
+    resolved = hub.resolve(type("P", (), {"provider_type": provider_type})())
+    assert resolved.provider_id == provider.provider_id
+
+
+def test_retry_failure_signal_alone_registers_runner_docker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parity pin: a bare MODULO_RUNNER_* signal (non-Docker-host) registers the provider."""
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setenv("MODULO_RUNNER_RETRY_FAILURE_SCALE", "2.0")
+
+    hub = build_hub()
+    assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)

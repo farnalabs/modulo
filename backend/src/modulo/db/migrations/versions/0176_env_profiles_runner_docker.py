@@ -26,9 +26,10 @@ model makes it required, the CRUD signature has no default, and the only
 in-app seed (``api.main._seed_environment_profiles``) passes
 ``provider_type="local_docker"`` explicitly. The clone/template/import paths
 that rely on 0141's defaults do not apply to ``provider_type`` (it is never
-cloned server-side). Client-side defaults were removed in lockstep so
-model/migration parity holds: the ORM model carries no ``server_default``
-either.
+cloned server-side). The EnvironmentProfileForm.vue hardcoded
+``provider_type: 'local_docker'`` default is removed in this same PR, so
+model/migration/form parity holds: nothing defaults the value implicitly any
+more — the client must pick (required-select validation on the form).
 
 Guarded operations
 ------------------

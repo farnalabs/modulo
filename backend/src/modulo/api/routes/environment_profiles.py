@@ -66,10 +66,20 @@ def _get_hub() -> RuntimeProviderHub:
     return build_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
 
+_PROVIDER_TYPE_PATTERN = r"^(local_docker|e2b|local|runner_docker)$"
+_PROVIDER_TYPE_VOCABULARY = ("local_docker", "e2b", "local", "runner_docker")
+
+_PROFILE_TYPE_HELP = "One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary)."
+
+
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    provider_type: str = Field(..., min_length=1, max_length=50)
+    provider_type: str = Field(
+        ...,
+        pattern=_PROVIDER_TYPE_PATTERN,
+        description=_PROFILE_TYPE_HELP,
+    )
     image_ref: str | None = Field(None, min_length=1, max_length=500)
     capabilities: list[str] = Field(default_factory=list)
     config_json: dict[str, Any] = Field(default_factory=dict)
@@ -84,7 +94,11 @@ class ProfileCreate(BaseModel):
 class ProfileUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    provider_type: str | None = None
+    provider_type: str | None = Field(
+        None,
+        pattern=_PROVIDER_TYPE_PATTERN,
+        description=_PROFILE_TYPE_HELP,
+    )
     image_ref: str | None = Field(None, min_length=1, max_length=500)
     capabilities: list[str] | None = None
     config_json: dict[str, Any] | None = None

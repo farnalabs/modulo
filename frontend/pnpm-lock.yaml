@@ -57,9 +57,6 @@ importers:
       echarts:
         specifier: ^6.1.0
         version: 6.1.0
-      globals:
-        specifier: ^15.15.0
-        version: 15.15.0
       overlayscrollbars:
         specifier: ^2.12.0
         version: 2.16.0
@@ -148,6 +145,9 @@ importers:
       eslint-plugin-vuejs-accessibility:
         specifier: ^2.5.0
         version: 2.6.0(eslint@10.9.1(jiti@2.7.0)(supports-color@10.2.2))(globals@15.15.0)(supports-color@10.2.2)
+      globals:
+        specifier: ^15.15.0
+        version: 15.15.0
       istanbul-lib-coverage:
         specifier: ^3.2.2
         version: 3.2.2
