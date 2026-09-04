@@ -280,7 +280,6 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
                 "trigger_events",
                 "webhook_payloads",
                 "environment_profiles",
-                "workspace_leases",
                 "cost_components",
             ):
                 await conn.execute(text(f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY"))

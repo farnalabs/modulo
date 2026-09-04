@@ -19,6 +19,48 @@ if TYPE_CHECKING:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
 
+class ProviderNotConfiguredError(RuntimeError):
+    """A profile's ``provider_type`` has no registered runtime provider.
+
+    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
+    provider type cannot be satisfied — either the type is unknown or the
+    matching provider is not registered because its enabling environment
+    variable is unset. Carries the provider type and (when known) the env
+    var that would register the provider, so callers can surface remediation
+    copy instead of a silent fallback.
+    """
+
+    def __init__(self, provider_type: str, env_var: str | None = None) -> None:
+        self.provider_type = provider_type
+        self.env_var = env_var
+        if env_var:
+            message = (
+                f"No runtime provider registered for provider_type '{provider_type}'. "
+                f"Set the {env_var} environment variable (and restart) to enable it, "
+                f"or choose a different provider type for the profile."
+            )
+        else:
+            message = f"No runtime provider registered for provider_type '{provider_type}'."
+        super().__init__(message)
+
+
+# Documented unconfigured behaviour (ADR 029 / FAR-587): every
+# ``ck_env_profiles_provider_type`` CHECK value maps either to a provider that
+# is always registered ("local") or to the env var whose presence registers
+# the provider. Assertion tests pin this mapping against the model's CHECK.
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "e2b": "MODULO_E2B_API_KEY",
+    "runner_docker": "MODULO_DOCKER_HOST",
+    "docker": "MODULO_DOCKER_HOST",
+    "local_docker": "MODULO_DOCKER_HOST",
+}
+
+
+def env_var_for_provider_type(provider_type: str) -> str | None:
+    """Return the env var that registers ``provider_type``, if one is documented."""
+    return _PROVIDER_ENV_VARS.get(provider_type.strip().lower())
+
+
 @dataclass
 class WorkspaceSpec:
     """Parameters for creating a new workspace from an EnvironmentProfile."""
@@ -31,8 +73,12 @@ class WorkspaceSpec:
     timeout_seconds: int = 3600
     resource_limits: dict[str, Any] = field(default_factory=dict)
     egress_policy: str | None = None
-    persistence_policy: dict[str, Any] = field(default_factory=dict)
+    persistence_policy: str = "ephemeral"
     labels: dict[str, str] = field(default_factory=dict)
+    # Provider-neutral metadata attached to the workspace itself (Docker maps
+    # it to container Labels, E2B to sandbox metadata, Local ignores it).
+    # Deliberately separate from ``labels``, which stays Env-var injection.
+    workspace_metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,14 +123,6 @@ class RuntimeProvider(ABC):
         """Return the current status string for the workspace."""
         ...
 
-    def supports(self, _profile: Any) -> bool:
-        """Return True if this provider can handle the given profile.
-
-        Base implementation returns ``False`` so providers that don't
-        implement this method are skipped during auto-resolution.
-        """
-        return False
-
     def matches_provider_type(self, provider_type: str) -> bool:
         """Return whether this provider implements an explicit profile type."""
         normalized = provider_type.strip().lower()
@@ -95,12 +133,22 @@ class RuntimeProvider(ABC):
         return
 
 
-def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
-    """Build a RuntimeProviderHub with the local provider always registered.
+def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
+    """Build a fresh RuntimeProviderHub from the process environment.
 
-    If ``MODULO_E2B_API_KEY`` is set, the E2B provider is also registered.
-    The local provider is registered first, so it becomes the fallback when
-    no profile hint or ``supports()`` match is found.
+    A new factory instance is returned on every call — the hub holds no
+    process-global state and provider-owned clients are released explicitly
+    via :meth:`RuntimeProviderHub.aclose` (per-provision disposal, ADR 029).
+
+    Registration matrix (env-gated, operator opt-in = consent):
+
+    - ``local`` — always registered (host-process fallback tier).
+    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set.
+    - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
+      when any ``MODULO_RUNNER_*`` variable is set **or** a Docker endpoint
+      (``MODULO_DOCKER_HOST`` / ``DOCKER_HOST``) is configured. Legacy
+      ``local_docker`` profiles keep resolving identically to the pre-rename
+      behaviour.
     """
     if max_local_concurrency < 1:
         _log.warning(
@@ -126,13 +174,29 @@ def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         except ImportError:
             _log.warning("E2B dependency not installed; skipping E2B provider")
 
-    if os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST"):
+    runner_signal = any(key.startswith("MODULO_RUNNER_") for key in os.environ)
+    if runner_signal or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST"):
         try:
             from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
             docker = DockerRuntimeProvider()
-            hub.register("docker", docker)
+            hub.register("runner_docker", docker)
         except ImportError:
             _log.warning("Docker dependency not installed; skipping Docker provider")
 
     return hub
+
+
+def reset_hub() -> None:
+    """Reset any cached hub state.
+
+    Hubs are fresh per :func:`build_hub` call and no module-global hub is
+    cached, so there is nothing to reset; this hook exists so tests and
+    consumers can express "drop all hub state" defensively without reaching
+    into module internals (ADR 029 — no app-state singleton).
+    """
+
+
+# Backwards-compatible alias — the factory concept is unchanged; new callers
+# should prefer :func:`build_hub`.
+create_default_hub = build_hub

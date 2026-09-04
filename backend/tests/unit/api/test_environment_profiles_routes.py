@@ -19,6 +19,8 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.runtime_provider import ProviderNotConfiguredError
+from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -170,12 +172,15 @@ class TestCreateProfile:
 
     PAYLOAD: ClassVar[dict[str, Any]] = {
         "name": "new-env",
+        "provider_type": "e2b",
         "image_ref": "ubuntu:22.04",
         "capabilities": ["docker", "gpu"],
     }
 
     def test_create_profile_returns_201(self, client: TestClient) -> None:
-        fake = _fake_profile(name="new-env", image_ref="ubuntu:22.04", capabilities=["docker", "gpu"])
+        fake = _fake_profile(
+            name="new-env", provider_type="e2b", image_ref="ubuntu:22.04", capabilities=["docker", "gpu"]
+        )
         with (
             patch(f"{_ROUTES}.create_environment_profile") as mock_create,
             patch(f"{_ROUTES}.set_rls_org"),
@@ -185,21 +190,16 @@ class TestCreateProfile:
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "new-env"
+        assert data["provider_type"] == "e2b"
         assert data["image_ref"] == "ubuntu:22.04"
         assert data["capabilities"] == ["docker", "gpu"]
 
-    def test_create_profile_with_defaults(self, client: TestClient) -> None:
-        fake = _fake_profile(name="incomplete")
-        with (
-            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
-            patch(f"{_ROUTES}.set_rls_org"),
-        ):
-            mock_create.return_value = fake
+    def test_create_profile_missing_provider_type_returns_422(self, client: TestClient) -> None:
+        """provider_type is explicitly required ? no server-side local_docker default (FAR-587)."""
+        with patch(f"{_ROUTES}.set_rls_org"):
             resp = client.post(self.URL, json={"name": "incomplete"})
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["name"] == "incomplete"
-        assert data["status"] == "active"
+        assert resp.status_code == 422
+        assert "provider_type" in resp.text
 
     def test_create_profile_conflict(self, client: TestClient) -> None:
         with (
@@ -207,7 +207,7 @@ class TestCreateProfile:
             patch(f"{_ROUTES}.set_rls_org"),
         ):
             mock_create.side_effect = IntegrityError("mock", "mock", "mock")
-            resp = client.post(self.URL, json={"name": "dup"})
+            resp = client.post(self.URL, json={"name": "dup", "provider_type": "e2b"})
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"]
 
@@ -336,14 +336,46 @@ class TestProfileTestEndpoint:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
+    @staticmethod
+    def _stub_hub(provider_type: str) -> RuntimeProviderHub:
+        hub = RuntimeProviderHub()
+        provider = MagicMock()
+        provider.create_workspace = AsyncMock(return_value="ws-ref-001")
+        provider.exec_command = AsyncMock(return_value=MagicMock(exit_code=0, stdout="ok", stderr="", duration_ms=1))
+        provider.destroy_workspace = AsyncMock()
+        provider.close = AsyncMock()
+        hub.register(provider_type, provider)
+        return hub
+
     def test_profile_test_streams_sse(self, client: TestClient) -> None:
         fake = _fake_profile()
+        hub = self._stub_hub(str(fake.provider_type))
         with (
             patch(f"{_ROUTES}.get_environment_profile") as mock_get,
             patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
         ):
             mock_get.return_value = fake
             resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers.get("content-type", "")
+        assert "command_complete" in resp.text
+        assert "destroyed" in resp.text
+
+    def test_profile_test_unconfigured_provider_streams_failed_event(self, client: TestClient) -> None:
+        """No silent local fallback: an unresolvable profile surfaces the typed error (FAR-587)."""
+        fake = _fake_profile()
+        hub = RuntimeProviderHub()  # nothing registered
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        assert "failed" in resp.text
+        expected = str(ProviderNotConfiguredError("local_docker", "MODULO_DOCKER_HOST"))
+        assert expected in resp.text
         assert "provisioning" in resp.text

@@ -2068,19 +2068,22 @@ async def count_active_sandbox_runs_for_org(
     return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
 
 
-async def count_active_sandbox_leases_for_org(
+async def count_active_runner_dispatches_for_org(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
     exclude_run_id: uuid.UUID | None = None,
 ) -> int:
-    """Count runs with a LIVE sandbox dispatch lease for concurrency tracking (FAR-296 Phase 4b).
+    """Count runs with a LIVE runner dispatch for concurrency tracking (FAR-296 Phase 4b).
+
+    Renamed from ``count_active_sandbox_leases_for_org`` (FAR-587): the count
+    was never lease-backed — it counts runs whose ``sandbox_dispatch_state``
+    is NON-NULL (a runner workspace was provisioned and not yet torn down).
 
     Unlike :func:`count_active_sandbox_runs_for_org` (which counts ``running``
     runs whose snapshot graph contains a ``sandbox_agent`` node), this counts
-    runs whose ``sandbox_dispatch_state`` is NON-NULL — meaning a sandbox was
-    provisioned and hasn't been torn down yet. This is the accurate concurrency
-    signal for E2B sandbox rate-limit purposes.
+    runs whose ``sandbox_dispatch_state`` is NON-NULL. This is the accurate
+    concurrency signal for sandbox/runner rate-limit purposes.
     """
     stmt = (
         select(func.count())

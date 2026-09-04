@@ -50,7 +50,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         self._workspaces: dict[str, str] = {}
 
     def supports(self, profile: Any) -> bool:
-        """Return True for profiles with ``provider_hint=local`` or no E2B hint."""
+        """Best-effort auto-detection — no longer consulted by the hub (FAR-587)."""
         hint = getattr(profile, "provider_hint", None) or ""
         if hint.lower() == "local":
             return True
@@ -65,6 +65,9 @@ class LocalRuntimeProvider(RuntimeProvider):
         If ``spec.labels`` contains ``repo_url``, clone the repo into the
         workspace directory. If the clone fails, the temp directory is
         cleaned up before propagating the error.
+
+        The spec's ``workspace_metadata`` is ignored — host-process
+        workspaces carry no provider-side metadata carrier.
         """
         try:
             workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")

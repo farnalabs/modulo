@@ -8,8 +8,8 @@
     type.  ShellConnector will be removed in a future release.
 
 Pass ``provider_ref`` in query.filters or payload.data to target the correct
-workspace.  The calling layer must ensure an active WorkspaceLease exists before
-invoking this connector (403 otherwise).
+workspace.  The calling layer must provide a configured runtime provider (or
+resolve the environment profile via the hub) before invoking this connector.
 """
 
 import base64

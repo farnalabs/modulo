@@ -11,8 +11,15 @@ Feature: Environment Profiles
     When I POST /api/v1/environment-profiles with the profile payload
     Then the response status is 201
     And the response contains a profile with name "python-dev"
+    And the profile has provider_type "e2b"
     And the profile has image_ref "python:3.12-slim"
     And the profile has capabilities ["docker", "gpu"]
+
+  Scenario: Create profile with missing provider_type returns validation error
+    Given an invalid environment profile payload with missing provider_type
+    When I POST /api/v1/environment-profiles with the invalid payload
+    Then the response status is 422
+    And the error indicates "provider_type" is required
 
   Scenario: Create profile with empty name returns validation error
     Given an invalid environment profile payload with empty name
@@ -85,9 +92,9 @@ Feature: Environment Profiles
     Then the response status is 404
     And the error message is "Environment profile not found"
 
-  Scenario: RuntimeProviderHub resolves to local by default
+  Scenario: RuntimeProviderHub resolves an explicitly typed profile
     Given a RuntimeProviderHub with "local" and "e2b" providers registered
-    And an environment profile with capabilities ["docker"] and no provider_hint
+    And an environment profile with provider_type "local" and no provider_hint
     When I resolve the profile against the hub
     Then the resolved provider is "local"
 
@@ -97,16 +104,11 @@ Feature: Environment Profiles
     When I resolve the profile against the hub
     Then the resolved provider is "e2b"
 
-  Scenario: WorkspaceLease lifecycle
-    Given a run with id "run-1"
-    And a WorkspaceLease for run "run-1" referencing environment profile "profile-1"
-    When the run starts executing
-    Then the WorkspaceLease status transitions from "pending" to "provisioning"
-    When the workspace is created
-    Then the WorkspaceLease status transitions from "provisioning" to "active"
-    And the lease has a provider_ref and expires_at set
-    When the run completes
-    Then the WorkspaceLease status is "completed"
+  Scenario: RuntimeProviderHub raises for an unregistered provider type
+    Given a RuntimeProviderHub with only the "local" provider registered
+    And an environment profile with provider_type "e2b" and no provider_hint
+    When I resolve the profile against the hub
+    Then the resolve raises ProviderNotConfiguredError mentioning "MODULO_E2B_API_KEY"
 
   Scenario: Workspace creation via RuntimeProvider
     Given a LocalRuntimeProvider

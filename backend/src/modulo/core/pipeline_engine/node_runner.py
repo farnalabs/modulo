@@ -5704,7 +5704,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             if _org_uuid is not None:
                 try:
                     from modulo.db.crud.run import (
-                        count_active_sandbox_leases_for_org,
+                        count_active_runner_dispatches_for_org,
                         get_sandbox_concurrency_limit,
                     )
                     from modulo.db.rls import set_rls_execution_context, set_rls_org
@@ -5714,7 +5714,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         await set_rls_execution_context(_cap_session)
                         _cap = await get_sandbox_concurrency_limit(_cap_session, _org_uuid)
                         if _cap is not None:
-                            _active = await count_active_sandbox_leases_for_org(
+                            _active = await count_active_runner_dispatches_for_org(
                                 _cap_session, _org_uuid, exclude_run_id=uuid.UUID(str(run_id))
                             )
                             if _active >= _cap:

@@ -47,7 +47,7 @@ class E2BRuntimeProvider(RuntimeProvider):
     # ------------------------------------------------------------------
 
     def supports(self, profile: Any) -> bool:
-        """Return True if the profile hints at E2B."""
+        """Best-effort auto-detection — no longer consulted by the hub (FAR-587)."""
         hint = getattr(profile, "provider_hint", None) or ""
         if hint.lower() == "e2b":
             return True
@@ -64,15 +64,22 @@ class E2BRuntimeProvider(RuntimeProvider):
         The template ID is taken from ``spec.image_ref``. If the spec's
         ``labels`` dict contains ``repo_url`` the repository is cloned into
         ``/home/user/repo`` and optionally checked out to ``repo_ref``.
+
+        The spec's provider-neutral ``workspace_metadata`` maps to the E2B
+        sandbox ``metadata`` (the SDK's tag-like carrier) when non-empty.
         """
         from e2b import AsyncSandbox
 
         template_id = spec.image_ref.strip() if spec.image_ref else _DEFAULT_TEMPLATE_ID
         timeout = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
 
+        create_kwargs: dict[str, Any] = {"template": template_id}
+        if spec.workspace_metadata:
+            create_kwargs["metadata"] = dict(spec.workspace_metadata)
+
         try:
             sandbox = await asyncio.wait_for(
-                AsyncSandbox.create(template=template_id),
+                AsyncSandbox.create(**create_kwargs),
                 timeout=timeout,
             )
         except asyncio.CancelledError:

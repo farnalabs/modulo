@@ -1300,7 +1300,7 @@ async def test_dispatch_capacity_denied_before_provisioning():
     with (
         patch("e2b.AsyncSandbox.create", new_callable=AsyncMock) as mock_create,
         patch(
-            "modulo.db.crud.run.count_active_sandbox_leases_for_org",
+            "modulo.db.crud.run.count_active_runner_dispatches_for_org",
             new=_fake_count,
         ),
         patch(

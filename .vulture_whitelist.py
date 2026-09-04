@@ -281,4 +281,10 @@ __all__ = [
     #     (FK RESTRICT-on-lease behaviour). vulture scans src/ only so it cannot
     #     see the test call sites.
     "delete_environment_profile",
+    # --- FAR-587: runtime-provider hub lifecycle. Hubs are fresh per
+    #     build_hub() call with no module-global state, so reset_hub() is a
+    #     defensive no-op hook exercised by tests/unit/core/runtime_provider/
+    #     test_default_hub.py (vulture scans src/ only and cannot see the test
+    #     call site).
+    "reset_hub",
 ]

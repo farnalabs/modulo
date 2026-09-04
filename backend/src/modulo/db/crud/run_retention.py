@@ -52,7 +52,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.models.workspace_lease import WorkspaceLease
 
 _log = logging.getLogger(__name__)
 
@@ -519,10 +518,11 @@ async def purge_terminal_runs(
       partially-purged counts are returned.
     * Per batch, the checkpoint rows (``checkpoints``, ``checkpoint_blobs``,
       ``checkpoint_writes``) are deleted by ``thread_id`` and the SET NULL /
-      RESTRICT ``run_id`` rows (``trigger_events``, ``notification_delivery_log``,
-      ``workspace_leases``) are deleted before the runs themselves. FK CASCADE
-      tables (``eval_results``, ``hitl_claims``, ``node_observations``,
-      ``feedback_records``, ``run_evidence``) are cleaned up by the database.
+      RESTRICT ``run_id`` rows (``trigger_events``,
+      ``notification_delivery_log``) are deleted before the runs themselves.
+      FK CASCADE tables (``eval_results``, ``hitl_claims``,
+      ``node_observations``, ``feedback_records``, ``run_evidence``) are
+      cleaned up by the database.
     * Idempotent: re-running produces zero because the runs no longer match.
 
     Returns ``{purged_runs, purged_checkpoints, freed_estimated_bytes}``.
@@ -610,7 +610,7 @@ async def purge_terminal_checkpoints(
 
     ``org_id`` scopes the select to one org (the caller applies RLS). Unlike
     ``purge_terminal_runs`` this does NOT touch ``trigger_events`` /
-    ``notification_delivery_log`` / ``workspace_leases`` or the ``runs`` rows —
+    ``notification_delivery_log`` or the ``runs`` rows —
     the runs stay for audit + analytics (ADR 020); only the reclaimable
     checkpoint bytes are freed.
 
@@ -708,10 +708,9 @@ async def _delete_checkpoints(
 async def _delete_run_id_rows(session: AsyncSession, run_ids: list[Any]) -> None:
     """Delete the SET NULL / RESTRICT per-run rows that reference ``run_ids``.
 
-    ``trigger_events`` and ``notification_delivery_log`` would otherwise be left
-    with a dangling ``run_id``; ``workspace_leases`` (ON DELETE RESTRICT) would
-    block the run delete outright. Tables with ON DELETE CASCADE are handled by
-    the database.
+    ``trigger_events`` and ``notification_delivery_log`` would otherwise be
+    left with a dangling ``run_id``. Tables with ON DELETE CASCADE are handled
+    by the database.
     """
 
     if not run_ids:
@@ -721,4 +720,3 @@ async def _delete_run_id_rows(session: AsyncSession, run_ids: list[Any]) -> None
     # rows even when the run_id list accidentally overlaps.
     await session.execute(delete(NotificationDeliveryLog).where(NotificationDeliveryLog.run_id.in_(run_ids)))
     await session.execute(delete(TriggerEvent).where(TriggerEvent.run_id.in_(run_ids)))
-    await session.execute(delete(WorkspaceLease).where(WorkspaceLease.run_id.in_(run_ids)))

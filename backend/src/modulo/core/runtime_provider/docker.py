@@ -35,8 +35,8 @@ class DockerRuntimeProvider(RuntimeProvider):
     4. ``None`` (local socket — default)
     """
 
-    provider_id = "local_docker"
-    provider_aliases = frozenset({"docker"})
+    provider_id = "runner_docker"
+    provider_aliases = frozenset({"docker", "local_docker"})
 
     def __init__(
         self,
@@ -58,6 +58,11 @@ class DockerRuntimeProvider(RuntimeProvider):
     # ------------------------------------------------------------------
 
     def supports(self, profile: Any) -> bool:
+        """Best-effort auto-detection kept for the deprecated local_docker adapter.
+
+        Deterministic hub resolution (FAR-587) no longer consults supports();
+        the deprecated LocalDockerRuntimeProvider adapter still delegates here.
+        """
         hint = getattr(profile, "provider_hint", None) or ""
         if hint.lower() == "docker":
             return True
@@ -93,6 +98,11 @@ class DockerRuntimeProvider(RuntimeProvider):
             else:
                 env.append(entry)
 
+        # Provider-neutral workspace metadata maps to container Labels
+        # (deployment-identity / org / run correlation, ADR 029). This is
+        # separate from ``spec.labels``, which stays Env-var injection.
+        workspace_labels = dict(spec.workspace_metadata or {})
+
         try:
             container = await asyncio.wait_for(
                 client.containers.create(
@@ -100,6 +110,7 @@ class DockerRuntimeProvider(RuntimeProvider):
                         "Image": image,
                         "Cmd": ["sleep", "infinity"],
                         "Env": env,
+                        "Labels": workspace_labels,
                         "HostConfig": {
                             "AutoRemove": True,
                             "Memory": memory_mb * 1024 * 1024,

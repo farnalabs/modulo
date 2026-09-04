@@ -6,7 +6,6 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,7 +18,11 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
+from modulo.core.runtime_provider import (
+    ProviderNotConfiguredError,
+    RuntimeProvider,
+    build_hub,
+)
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
@@ -48,26 +51,25 @@ router = APIRouter(
 )
 
 
-@lru_cache
 def _get_hub() -> RuntimeProviderHub:
-    """Process-global RuntimeProviderHub singleton.
+    """Build a fresh RuntimeProviderHub via the factory.
 
-    ``lru_cache`` ensures the hub is created once and reused across all
-    requests.  The E2B provider is auto-registered when
-    ``MODULO_E2B_API_KEY`` is set — adding the key post-deployment and
-    restarting the process is enough to switch from local to sandboxed
-    execution.
+    Hubs are cheap, stateless, and never cached process-globally (ADR 029):
+    the E2B provider is auto-registered when ``MODULO_E2B_API_KEY`` is set
+    and the Docker Runner provider when a Runner/Docker endpoint variable is
+    set — adding the key post-deployment and restarting the process is
+    enough to switch from local to sandboxed execution.
     """
     from modulo.settings import get_settings
 
     settings = get_settings()
-    return create_default_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
+    return build_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
 
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    provider_type: str = Field(default="local_docker")
+    provider_type: str = Field(..., min_length=1, max_length=50)
     image_ref: str | None = Field(None, min_length=1, max_length=500)
     capabilities: list[str] = Field(default_factory=list)
     config_json: dict[str, Any] = Field(default_factory=dict)
@@ -437,7 +439,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         timeout_seconds=cfg.get("timeout_seconds", 3600),
         resource_limits=cfg,
         egress_policy=profile.network_policy or "deny_all",
-        persistence_policy={"strategy": profile.persistence_policy},
+        persistence_policy=profile.persistence_policy,
         labels={"profile_name": profile.name},
     )
 
@@ -446,15 +448,17 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
     """Stream sandbox lifecycle events as SSE."""
     provider_ref: str | None = None
     provider: RuntimeProvider | None = None
+    hub: RuntimeProviderHub | None = None
 
     try:
         yield _sse_event("provisioning", "Creating sandbox...")
         await asyncio.sleep(0.5)
 
         hub = _get_hub()
-        provider = hub.resolve(profile) or hub.get("local")
-        if provider is None:
-            yield _sse_event("failed", "No RuntimeProvider available — check server configuration")
+        try:
+            provider = hub.resolve(profile)
+        except ProviderNotConfiguredError as exc:
+            yield _sse_event("failed", str(exc))
             return
 
         spec = _build_workspace_spec(profile)
@@ -492,6 +496,14 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
                 raise
             except Exception:
                 _log.warning("Failed to clean up sandbox %s after error", provider_ref)
+    finally:
+        # Per-provision disposal (ADR 029): release provider-owned clients
+        # explicitly instead of leaving them to GC.
+        if hub is not None:
+            try:
+                await hub.aclose()
+            except Exception:
+                _log.warning("Failed to close runtime provider hub after sandbox test", exc_info=True)
 
 
 @router.post("/{profile_id}/test")

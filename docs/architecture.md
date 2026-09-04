@@ -133,7 +133,7 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `FilesystemConnector` | `git-host` | read/write files, git commit/push |
 | `GitHubConnector` | `git-host` | read/write via API, create PR |
 | `GitLabConnector` | `git-host` | read/write via API, merge requests |
-| `ShellConnector` | `shell` | run commands in WorkspaceLease |
+| `ShellConnector` | `shell` | run commands in a runtime-provider workspace |
 | `SlackConnector` | `messaging` | send messages, search channels |
 | `JiraConnector` | `issue-tracker` | create/search/update issues |
 | `LinearConnector` | `issue-tracker` | create/search/update issues |
@@ -172,7 +172,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Sandboxed execution environments for coding agents. RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub). First implementation: E2B (sandboxed cloud containers). WorkspaceLease is run-scoped and ephemeral.
+Sandboxed execution environments for coding agents. RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub). Providers: `local` (always registered, host processes), `e2b` (registered when `MODULO_E2B_API_KEY` is set), and `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint — `MODULO_DOCKER_HOST`/`DOCKER_HOST` — is configured; `docker` and legacy `local_docker` are explicit aliases). Resolution is deterministic: an explicit `provider_hint` or `provider_type` match wins; anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider — there is no silent fallback. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. The WorkspaceLease scaffolding was removed (FAR-587, ADR 029); workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410.
 
 ### Auth System (`modulo/auth/`)
 
