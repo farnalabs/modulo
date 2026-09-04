@@ -154,6 +154,57 @@ async def test_gh_get_run_status_success(gh_runner):
 
 
 @respx.mock
+async def test_gh_get_run_status_skipped_is_non_blocking(gh_runner):
+    # FAR-568 / PR-Reviewer gate: a `skipped` check-run conclusion (e.g. the
+    # SonarCloud coverage-import job that is push-to-main-only) MUST NOT count
+    # as a merge-blocking failure. The gate treats any non-SUCCESS status as a
+    # failure, so `skipped` must resolve to SUCCESS.
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 12345,
+                "workflow_id": "ci.yml",
+                "status": "completed",
+                "conclusion": "skipped",
+                "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                "head_branch": "main",
+                "head_sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:00Z",
+                "actor": {"login": "octocat"},
+            },
+        )
+    )
+    run = await gh_runner.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.SUCCESS
+
+
+@respx.mock
+async def test_gh_get_run_status_neutral_is_non_blocking(gh_runner):
+    # Same contract as `skipped`: a `neutral` conclusion must not block merge.
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 12345,
+                "workflow_id": "ci.yml",
+                "status": "completed",
+                "conclusion": "neutral",
+                "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                "head_branch": "main",
+                "head_sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:00Z",
+                "actor": {"login": "octocat"},
+            },
+        )
+    )
+    run = await gh_runner.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.SUCCESS
+
+
+@respx.mock
 async def test_gh_get_run_status_failure(gh_runner):
     respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
         return_value=httpx.Response(
