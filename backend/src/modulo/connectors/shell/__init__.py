@@ -142,7 +142,6 @@ class ShellConnector(ConnectorBase):
             return None
         try:
             from modulo.db.crud.environment_profile import get_environment_profile
-            from modulo.db.models.environment_profile import EnvironmentProfile
             from modulo.db.rls import set_rls_org
             from modulo.db.session import AsyncSessionLocal
 
@@ -150,17 +149,15 @@ class ShellConnector(ConnectorBase):
                 # Tenant-scoped fetch (FAR-587, tenancy lens): on Postgres the
                 # fetch runs inside the org's RLS context so a stale/foreign
                 # profile id cross-org read is IMPOSSIBLE; on generic backends
-                # the do_orm_execute listener injects the org filter. Without
-                # a known org the fetch is unscoped (pre-fix behaviour).
+                # the do_orm_execute listener injects the org filter. The CRUD
+                # helper additionally enforces ``deleted_at IS NULL`` so
+                # soft-deleted profiles never resolve (regression fix: the
+                # org-scoped raw select had dropped that filter). One code
+                # path for both branches — ``set_rls_org(session, None)`` is
+                # a documented no-op, so an unknown org falls back to the
+                # unscoped CRUD fetch (pre-fix behaviour).
                 await set_rls_org(session, self._org_id)
-                if self._org_id is None:
-                    return await get_environment_profile(session, self._environment_profile_id)
-                from sqlalchemy import select
-
-                row = await session.execute(
-                    select(EnvironmentProfile).where(EnvironmentProfile.id == self._environment_profile_id)
-                )
-                return row.scalar_one_or_none()
+                return await get_environment_profile(session, self._environment_profile_id)
         except Exception:
             _log.exception("Failed to resolve environment profile from hub")
             return None

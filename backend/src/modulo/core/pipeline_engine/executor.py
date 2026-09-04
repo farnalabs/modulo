@@ -559,8 +559,10 @@ async def _teardown_hub(hub: Any) -> None:
     "Task was destroyed but it is pending" warning is emitted at loop close.
 
     The runtime provider hub the executor built alongside the ConnectorHub
-    (FAR-587) is aclosed here too, best-effort: its providers (Docker/E2B)
-    destroy their tracked workspaces so no billable sandbox outlives the run.
+    (FAR-587) is aclosed here too, best-effort: workspaces tracked at
+    teardown are destroyed. A workspace whose provision was cancelled
+    mid-create may outlive the run (known gap, tracked for D4 lifecycle
+    work).
     """
     shielded = asyncio.shield(hub.__aexit__(None, None, None))
     try:
@@ -572,8 +574,13 @@ async def _teardown_hub(hub: Any) -> None:
     except Exception:
         _log.exception("pipeline.hub_cleanup_failed")
     finally:
-        runtime_hub = getattr(hub, "_runtime_hub", None)
-        if runtime_hub is not None:
+        # Read the runtime hub through the ConnectorHub constructor seam
+        # (FAR-587). Depending on construction ``_runtime_provider`` may hold
+        # a bare provider (no ``aclose`` — disposal is then driven by the
+        # hub's own ``__aexit__``) or a ``RuntimeProviderHub`` whose
+        # ``aclose()`` disposes tracked workspaces.
+        runtime_hub = getattr(hub, "_runtime_provider", None)
+        if runtime_hub is not None and hasattr(runtime_hub, "aclose"):
             try:
                 await runtime_hub.aclose()
             except asyncio.CancelledError:
@@ -2225,10 +2232,11 @@ class PipelineExecutor:
                         org_id=str(org_id),
                         request_visibility=request_visibility,
                     )
-                    # FAR-587: keep the runtime-provider hub reachable for the
-                    # teardown path (_teardown_hub acloses it, disposing
-                    # provider-tracked workspaces e.g. billable E2B sandboxes).
-                    hub._runtime_hub = runtime_hub
+                    # FAR-587: the runtime-provider hub stays reachable for
+                    # the teardown path via the ConnectorHub constructor seam
+                    # (``runtime_provider=`` -> ``_runtime_provider``);
+                    # _teardown_hub acloses it there, disposing
+                    # provider-tracked workspaces e.g. billable E2B sandboxes.
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
                     if hub.skipped or hub.healthy:

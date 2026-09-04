@@ -1,6 +1,9 @@
 """Unit tests for ShellConnector."""
 
+import sys
+import types
 import uuid
+from typing import Any, Self
 
 import pytest
 
@@ -584,3 +587,158 @@ async def test_run_command_stderr_output(provider: _FakeRuntimeProvider, provide
     assert result["stderr"] == "grep: No such file"
     assert result["exit_code"] == 1
     assert result["masked"] is True
+
+
+# ---------------------------------------------------------------------------
+# _resolve_profile_from_hub — tenant scoping (FAR-587)
+# ---------------------------------------------------------------------------
+
+_ORG_A = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_ORG_B = uuid.UUID("22222222-2222-2222-2222-222222222222")
+_PROFILE_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
+
+
+class _FakeTransaction:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    async def __aenter__(self) -> Self:
+        self._events.append("begin")
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakeSession:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def begin(self) -> _FakeTransaction:
+        return _FakeTransaction(self._events)
+
+
+class _FakeSessionFactory:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def __call__(self) -> _FakeSession:
+        return _FakeSession(self._events)
+
+
+class _RlsAwareDb:
+    """Fake DB layer whose profile fetch honours the org passed to set_rls_org.
+
+    Mirrors the production scoping contract: ``set_rls_org`` pins the tenant
+    context and the fetch resolves only rows owned by that org (Postgres RLS
+    on the real backend, the ``do_orm_execute`` tenant filter on generic
+    backends). The CRUD helper is the fetch entrypoint, so a regression to a
+    raw unscoped ``select`` never reaches this fake and fails the assertions.
+    """
+
+    def __init__(self, profile_org: uuid.UUID) -> None:
+        self.events: list[str] = []
+        self.rls_org: uuid.UUID | None = None
+        self._profile_org = profile_org
+
+    async def fake_set_rls_org(self, session: _FakeSession, org_id: uuid.UUID | None) -> None:
+        self.events.append("set_rls_org")
+        self.rls_org = org_id
+
+    async def fake_get_environment_profile(self, session: _FakeSession, profile_id: uuid.UUID) -> Any:
+        self.events.append("fetch")
+        if self.rls_org is not None and self.rls_org != self._profile_org:
+            return None
+        return {"id": str(profile_id)}
+
+
+def _patch_db(monkeypatch: pytest.MonkeyPatch, db: _RlsAwareDb) -> None:
+    # ``modulo.db.session`` builds its engine from settings at import time, so
+    # it cannot be imported in a bare unit-test environment; inject a fake
+    # module for it (the function under test imports ``AsyncSessionLocal``
+    # lazily at call time, so sys.modules wins). The other two imports resolve
+    # against the real modules (both import cleanly without settings).
+    fake_session_mod = types.ModuleType("modulo.db.session")
+    fake_session_mod.AsyncSessionLocal = _FakeSessionFactory(db.events)
+    monkeypatch.setitem(sys.modules, "modulo.db.session", fake_session_mod)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", db.fake_set_rls_org)
+    monkeypatch.setattr(
+        "modulo.db.crud.environment_profile.get_environment_profile",
+        db.fake_get_environment_profile,
+    )
+
+
+def _hub_connector(org_id: str | None) -> ShellConnector:
+    return ShellConnector(
+        runtime_provider=None,
+        runtime_provider_hub=object(),
+        environment_profile_id=_PROFILE_ID,
+        org_id=org_id,
+    )
+
+
+async def test_resolve_profile_sets_rls_org_before_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connector's own org pins the RLS context inside the transaction, BEFORE the profile SELECT."""
+    db = _RlsAwareDb(profile_org=_ORG_A)
+    _patch_db(monkeypatch, db)
+    c = _hub_connector(str(_ORG_A))
+
+    profile = await c._resolve_profile_from_hub()
+
+    assert profile is not None
+    assert db.events == ["begin", "set_rls_org", "fetch"]
+    assert db.rls_org == _ORG_A
+
+
+async def test_resolve_profile_never_crosses_org_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An org-B-owned profile row is invisible to an org-A connector; the owning org still resolves it."""
+    db = _RlsAwareDb(profile_org=_ORG_B)
+    _patch_db(monkeypatch, db)
+    org_a_connector = _hub_connector(str(_ORG_A))
+
+    foreign_profile = await org_a_connector._resolve_profile_from_hub()
+
+    assert foreign_profile is None
+    assert db.rls_org == _ORG_A
+
+    org_b_connector = _hub_connector(str(_ORG_B))
+    owned_profile = await org_b_connector._resolve_profile_from_hub()
+
+    assert owned_profile is not None
+    assert db.rls_org == _ORG_B
+
+
+async def test_resolve_profile_without_org_runs_unscoped_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no org claim, set_rls_org receives None (documented no-op) and the CRUD fetch still resolves."""
+    db = _RlsAwareDb(profile_org=_ORG_B)
+    _patch_db(monkeypatch, db)
+    c = _hub_connector(None)
+
+    profile = await c._resolve_profile_from_hub()
+
+    assert profile is not None
+    assert db.events == ["begin", "set_rls_org", "fetch"]
+    assert db.rls_org is None
+
+
+async def test_resolve_profile_without_profile_id_skips_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No environment_profile_id resolves to None without opening a session."""
+    db = _RlsAwareDb(profile_org=_ORG_A)
+    _patch_db(monkeypatch, db)
+    c = ShellConnector(
+        runtime_provider=None,
+        runtime_provider_hub=object(),
+        environment_profile_id=None,
+        org_id=str(_ORG_A),
+    )
+
+    profile = await c._resolve_profile_from_hub()
+
+    assert profile is None
+    assert not db.events
