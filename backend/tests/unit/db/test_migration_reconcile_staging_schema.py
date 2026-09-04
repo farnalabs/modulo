@@ -29,7 +29,7 @@ _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0120 is still the
 # org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0174_per_org_last_admin_guard"
+_CHAIN_HEAD_MIGRATION = "0177_drop_workspace_leases"
 
 
 def _source(name: str) -> str:
