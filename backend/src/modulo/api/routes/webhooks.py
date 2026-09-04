@@ -28,6 +28,7 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
 )
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     get_current_tenant_user_optional,
@@ -214,7 +215,11 @@ async def receive_webhook(
         # would silently match zero rows and every delivery would 404. Refuse
         # loudly (same contract as admin_rotation's system-role check) — 503
         # is distinguishable from a genuine 404.
-        _log.error("webhooks.system_bootstrap_degraded")
+        log_service_unavailable(
+            "system_bootstrap_degraded",
+            route="webhooks.receive_webhook",
+            detail="system database not provisioned; trigger delivery unavailable",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="System database not provisioned; trigger delivery unavailable",
@@ -369,6 +374,12 @@ async def receive_webhook(
             trigger.pipeline_id if trigger is not None else None,
             SNAPSHOT_LOCK_ATTEMPTS,
         )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route="webhooks.receive_webhook",
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -416,8 +427,13 @@ async def receive_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.receive_webhook",
+            detail="transient database error; webhook delivery failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -521,7 +537,11 @@ async def replay_webhook(
         # would silently match zero rows and every delivery would 404. Refuse
         # loudly (same contract as admin_rotation's system-role check) — 503
         # is distinguishable from a genuine 404.
-        _log.error("webhooks.system_bootstrap_degraded")
+        log_service_unavailable(
+            "system_bootstrap_degraded",
+            route="webhooks.replay_webhook",
+            detail="system database not provisioned; trigger delivery unavailable",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="System database not provisioned; trigger delivery unavailable",
@@ -673,6 +693,12 @@ async def replay_webhook(
             trigger.pipeline_id if trigger is not None else None,
             SNAPSHOT_LOCK_ATTEMPTS,
         )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route="webhooks.replay_webhook",
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -715,8 +741,13 @@ async def replay_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception("webhooks.replay_webhook")
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.replay_webhook",
+            detail="transient database error; webhook replay failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -776,8 +807,13 @@ async def cleanup_expired(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception("webhooks.cleanup_expired")
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.cleanup_expired",
+            detail="transient database error; dedup/payload cleanup failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
