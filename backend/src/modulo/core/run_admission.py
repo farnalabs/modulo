@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.settings import get_settings
 
@@ -51,63 +51,36 @@ _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pip
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Advance journeys + daily facts for a slot-released run (fail-open).
 
-    Mirrors the legacy stale-run sweep's post-commit advance (FAR-143/FAR-162):
-    the raw terminal UPDATE never runs ``finalize_cost``, so without this the
-    released run's journeys would never move and it would be invisible to the
-    analytics failure/stall dimensions. Journeys and the daily fact each run
-    in their OWN session after the release commits, exactly like
-    ``pipeline_execution._advance_terminalised_run`` — but delegating DIRECTLY
-    to the underlying modules (lifecycle_map / analytics). run_admission must
-    not import pipeline_execution: cron_helpers (reached from
-    modulo.api.routes.health) would then transitively import langgraph and
-    break the import-linter API-layer contract.
+    Thin delegate to the shared langgraph-free orchestration
+    (``run_terminal_advance.advance_terminalised_run`` — FAR-604 F4), the same
+    sequence the legacy stale-run sweep uses — the duplication previously
+    lived here line-for-line. run_admission must not import pipeline_execution:
+    cron_helpers (reached from modulo.api.routes.health) would then
+    transitively import langgraph and break the import-linter API-layer
+    contract. The shared module's facts half runs UNCONDITIONALLY (no
+    ``work_item_refs`` early return — a refs-less released run still gets its
+    analytics fact; F3).
     """
-    try:
-        from modulo.core.analytics import record_fact_for_terminal_failed_run
-        from modulo.core.lifecycle_map.advancement import advance_journeys
-        from modulo.db.crud.run import get_run
-        from modulo.db.rls import set_rls_org
+    from modulo.core.run_terminal_advance import advance_terminalised_run
 
-        factory = async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            run = await get_run(session, run_id)
-            if run is None or not run.work_item_refs:
-                return
-            await advance_journeys(
-                session,
-                run.organisation_id,
-                run_id=run.id,
-                pipeline_id=run.pipeline_id,
-                refs=run.work_item_refs,
-                status="failed",
-                completed_at=run.completed_at,
-                run_created_at=run.created_at,
-                is_replay=bool(run.is_replay),
-                variant_group_id=run.variant_group_id,
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("slot_reconciliation.journey_advance_failed run=%s", run_id, exc_info=True)
+    await advance_terminalised_run(async_engine, run_id, org_id)
 
-    try:
-        from modulo.core.analytics import record_fact_for_terminal_failed_run
-        from modulo.db.crud.run import get_run
-        from modulo.db.rls import set_rls_org
 
-        factory = async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            run = await get_run(session, run_id)
-            if run is None:
-                _log.warning("slot_reconciliation.advance_run_missing run=%s", run_id)
-                return
-            await record_fact_for_terminal_failed_run(session, run)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("slot_reconciliation.facts_advance_failed run=%s", run_id, exc_info=True)
+class SlotReconciliationError(RuntimeError):
+    """Slot-reconciliation sweep failed partway; carries the partial counts.
+
+    The SAQ cron wrapper (``saq_worker.slot_reconciliation``) catches this,
+    persists the failure + partial ``released``/``per_pipeline`` counts to the
+    Redis liveness key (so a silently dead sweep is visible to
+    /healthz/ready), and re-raises so SAQ's ``retries=2`` engages. A sweep
+    that swallows its own failures (the pre-fix error-dict return) re-opens
+    the FAR-604 wedge invisibly.
+    """
+
+    def __init__(self, message: str, *, released: int, per_pipeline: dict[str, int]) -> None:
+        super().__init__(message)
+        self.released = released
+        self.per_pipeline = per_pipeline
 
 
 async def reconcile_pipeline_slots(
@@ -131,16 +104,26 @@ async def reconcile_pipeline_slots(
     ``awaiting_human`` runs are deliberately NOT swept (a human decision may
     legitimately take days) and fresh-heartbeat runs are never swept.
 
+    Failure contract (FAR-604 F6): the sweep RAISES
+    :class:`SlotReconciliationError` on failure (so the SAQ cron's
+    ``retries=2`` engages) — it never swallows into a returned error dict.
+    The post-release advance runs in its own ``finally``-equivalent block
+    INDEPENDENT of the org-loop failure: rows already released still get
+    their journeys + facts, and the raised error carries the PARTIAL
+    ``released``/``per_pipeline`` counts achieved before the failure.
+
     Returns ``{"released": int, "per_pipeline": {pipeline_id: count}}``.
     """
     settings = get_settings()
     window = stale_seconds if stale_seconds is not None else settings.slot_reconcile_stale_seconds
+    released: list[Any] = []
+    per_pipeline: Counter[str] = Counter()
+    sweep_error: BaseException | None = None
     try:
         async with async_engine.connect() as conn, conn.begin():
             org_result = await conn.execute(text("SELECT id FROM organisations"))
             org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
 
-        released: list[Any] = []
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
@@ -159,8 +142,15 @@ async def reconcile_pipeline_slots(
                     {"oid": str(org_id), "stale_seconds": window, "detail": _SLOT_RELEASE_DETAIL},
                 )
                 released.extend(result.all())
-
-        per_pipeline: Counter[str] = Counter()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        sweep_error = exc
+        _log.exception("slot_reconciliation.sweep_failed")
+    finally:
+        # Post-release advance — independent of the org-loop failure (F6):
+        # rows already released must still get their journeys + daily facts
+        # even when a later org's release loop blew up.
         for row in released:
             per_pipeline[str(row.pipeline_id)] += 1
             _log.info(
@@ -170,23 +160,21 @@ async def reconcile_pipeline_slots(
                 row.organisation_id,
                 window,
             )
-
-        # Journeys + daily facts for the terminalised rows — same post-commit
-        # fail-open advance as stale_run_recovery_sweep (FAR-143/FAR-162).
+            await _advance_released_run(async_engine, row.id, row.organisation_id)
         if released:
-            for row in released:
-                await _advance_released_run(async_engine, row.id, row.organisation_id)
             _log.info(
                 "slot_reconciliation.swept released=%d pipelines=%d",
                 len(released),
                 len(per_pipeline),
             )
-        return {"released": len(released), "per_pipeline": dict(per_pipeline)}
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("slot_reconciliation.sweep_failed")
-        return {"released": 0, "per_pipeline": {}, "error": "sweep_failed"}
+
+    if sweep_error is not None:
+        raise SlotReconciliationError(
+            "slot reconciliation sweep failed",
+            released=len(released),
+            per_pipeline=dict(per_pipeline),
+        ) from sweep_error
+    return {"released": len(released), "per_pipeline": dict(per_pipeline)}
 
 
 # ---------------------------------------------------------------------------

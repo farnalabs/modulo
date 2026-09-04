@@ -920,9 +920,12 @@ class TestStaleRunSweepJourneyAdvance:
     run it terminalises to ``failed`` (never_dispatched / capacity_timeout /
     worker_lost), fail-open per run, and never for runs it merely re-dispatches.
 
-    The wiring is proven by monkeypatching ``_advance_journeys_from_stored_refs``
-    and asserting it is invoked exactly once per terminalised run with the run's
-    id, org, and ``failed`` (the helper's own end-to-end behaviour is covered by
+    The wiring is proven by monkeypatching the shared advance half
+    (``run_terminal_advance.advance_journeys_from_stored_refs`` — the sweep's
+    ``_advance_terminalised_run`` delegates to the shared orchestrator,
+    FAR-604 F4) and asserting it is invoked exactly once per terminalised run
+    with the run's id, org, and ``failed`` (the helper's own end-to-end
+    behaviour is covered by
     ``TestRawWriterJourneyAdvance.test_advance_from_stored_refs_real``).
     """
 
@@ -976,7 +979,7 @@ class TestStaleRunSweepJourneyAdvance:
 
         monkeypatch.setattr(pe, "get_settings", lambda: self._settings())
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", advanced)
         if stranded_row is not None:
             monkeypatch.setattr(
                 "modulo.core.pipeline_execution._re_dispatch_capacity_blocked",

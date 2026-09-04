@@ -112,3 +112,29 @@ class TestReconciliationMigration:
         source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
         assert f"conname='{_CHECK_CONSTRAINT_NAME}'" in source
         assert f"ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} CHECK" in source
+
+    def test_0008_add_is_not_valid_then_validated(self) -> None:
+        """FAR-604 F5 — the widened CHECK is added NOT VALID (instant, no
+        full-table validation scan under ACCESS EXCLUSIVE on the hottest
+        insert table) and then validated in a separate guarded step (VALIDATE
+        CONSTRAINT takes SHARE UPDATE EXCLUSIVE — non-blocking for INSERTs).
+        The validation step is guarded on ``NOT convalidated`` so re-running
+        the reconciliation chain skips an already-validated constraint."""
+        source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
+        assert f"ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} CHECK" in source
+        assert "NOT VALID" in source
+        assert f"VALIDATE CONSTRAINT {_CHECK_CONSTRAINT_NAME}" in source
+        assert "NOT convalidated" in source
+
+    def test_0008_drop_guard_expected_def_is_whitespace_stripped(self) -> None:
+        """FAR-604 F5 — the drop guard compares the live definition against a
+        WHITESPACE-STRIPPED expected literal (it is compared against
+        ``regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g')``). A
+        literal carrying the ``character varying`` space form never matches,
+        so the drop — and its ACCESS EXCLUSIVE lock — would fire on EVERY
+        re-run of the reconciliation chain (the 0110 guard pattern)."""
+        module = _load_migration()
+        drop_stmt: str = module._DROP_IF_DIFFERENT
+        assert "regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g')" in drop_stmt
+        assert "::charactervarying" in drop_stmt
+        assert "character varying" not in drop_stmt

@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 import modulo.core.run_admission as ra
 from modulo.core.run_admission import (
+    SlotReconciliationError,
     coalesce_enabled,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
@@ -34,6 +35,7 @@ from modulo.core.run_admission import (
 from modulo.core.trigger_engine import PipelineBackpressureError, TriggerEngine
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
+OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000006666")
 TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-000000007777")
 SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000008888")
@@ -63,11 +65,23 @@ def _released_row() -> Any:
 
 
 class _SweepConn:
-    """Connection double: org enumeration + one guarded slot-release UPDATE."""
+    """Connection double: org enumeration + one guarded slot-release UPDATE.
 
-    def __init__(self, statements: list[str], released: list[Any]) -> None:
+    Records ``(statement, params)`` pairs so isolation tests can assert the
+    GUC set_config values and the per-org UPDATE's bound org.
+    """
+
+    def __init__(
+        self,
+        statements: list[str],
+        released: list[Any],
+        orgs: list[uuid.UUID],
+        params_seen: list[dict[str, object]],
+    ) -> None:
         self._statements = statements
         self._released = released
+        self._orgs = orgs
+        self.params_seen = params_seen
 
     async def __aenter__(self) -> Self:
         return self
@@ -80,20 +94,26 @@ class _SweepConn:
 
     async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
         self._statements.append(str(stmt))
+        if params is not None:
+            self.params_seen.append(dict(params))
         if "SELECT id FROM organisations" in str(stmt):
-            return _AsyncResult(rows=[(ORG_ID,)])
+            return _AsyncResult(rows=[(org,) for org in self._orgs])
         if "status = 'running'" in str(stmt):
             return _AsyncResult(rows=list(self._released))
         return _AsyncResult()
 
 
 class _SweepEngine:
-    def __init__(self, statements: list[str], released: list[Any]) -> None:
+    def __init__(self, statements: list[str], released: list[Any], orgs: list[uuid.UUID] | None = None) -> None:
         self._statements = statements
         self._released = released
+        self._orgs = orgs or [ORG_ID]
+        # Shared across connections: each org loop opens a FRESH conn, so the
+        # params must be recorded at engine level for isolation assertions.
+        self.params_seen: list[dict[str, object]] = []
 
     def connect(self) -> _SweepConn:
-        return _SweepConn(self._statements, self._released)
+        return _SweepConn(self._statements, self._released, self._orgs, self.params_seen)
 
 
 class TestReconcilePipelineSlots:
@@ -132,7 +152,7 @@ class TestReconcilePipelineSlots:
 
         class _ParamEngine(_SweepEngine):
             def connect(self) -> _ParamConn:
-                return _ParamConn(self._statements, self._released)
+                return _ParamConn(self._statements, self._released, self._orgs, self.params_seen)
 
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings(stale_seconds=999999))
         await reconcile_pipeline_slots(_ParamEngine(statements, []), stale_seconds=60)  # type: ignore[arg-type]
@@ -168,15 +188,133 @@ class TestReconcilePipelineSlots:
 
         assert result["released"] == 1
 
-    async def test_sweep_failure_returns_error_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class _BoomEngine:
-            def connect(self) -> Any:
+    async def test_sweep_failure_raises_with_partial_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F6: a sweep failure RAISES SlotReconciliationError (so the SAQ
+        cron's retries=2 engages — a silently dead sweep must never re-open
+        the FAR-604 wedge invisibly) instead of returning an error dict, and
+        the raised error carries the PARTIAL counts achieved before the
+        failure."""
+        released_row = _released_row()
+        org2 = OTHER_ORG_ID
+
+        class _PartialConn:
+            def __init__(self, fail_on_release: bool) -> None:
+                self._fail_on_release = fail_on_release
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                sql = str(stmt)
+                if "SELECT id FROM organisations" in sql:
+                    return _AsyncResult(rows=[(ORG_ID,), (org2,)])
+                if "set_config" in sql:
+                    return _AsyncResult()
+                if "status = 'running'" in sql:
+                    if self._fail_on_release:
+                        # Org 2's release dies; org 1's already succeeded.
+                        raise RuntimeError("db down")
+                    return _AsyncResult(rows=[released_row])
                 raise RuntimeError("db down")
 
+        class _PartialEngine:
+            def __init__(self) -> None:
+                # conn 1 = org enumeration, conn 2 = org 1, conn 3 = org 2.
+                self._n = 0
+
+            def connect(self) -> _PartialConn:
+                self._n += 1
+                return _PartialConn(fail_on_release=self._n > 2)
+
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
-        result = await reconcile_pipeline_slots(_BoomEngine())  # type: ignore[arg-type]
-        assert result["released"] == 0
-        assert result["error"] == "sweep_failed"
+        with pytest.raises(SlotReconciliationError) as excinfo:
+            await reconcile_pipeline_slots(_PartialEngine())  # type: ignore[arg-type]
+
+        assert excinfo.value.released == 1
+        assert excinfo.value.per_pipeline == {str(PIPELINE_ID): 1}
+        assert str(excinfo.value.__cause__) == "db down"
+
+    async def test_sweep_failure_still_advances_already_released_rows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F6: the post-release advance is independent of the org-loop
+        failure — rows released before a later org's connection died still
+        get their journeys + facts advance."""
+        released_row = _released_row()
+        org2 = OTHER_ORG_ID
+
+        class _PartialConn:
+            def __init__(self, fail_on_release: bool) -> None:
+                self._fail_on_release = fail_on_release
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                sql = str(stmt)
+                if "SELECT id FROM organisations" in sql:
+                    return _AsyncResult(rows=[(ORG_ID,), (org2,)])
+                if "set_config" in sql:
+                    return _AsyncResult()
+                if "status = 'running'" in sql:
+                    if self._fail_on_release:
+                        raise RuntimeError("db down")
+                    return _AsyncResult(rows=[released_row])
+                raise RuntimeError("db down")
+
+        class _PartialEngine:
+            def __init__(self) -> None:
+                # conn 1 = org enumeration, conn 2 = org 1, conn 3 = org 2.
+                self._n = 0
+
+            def connect(self) -> _PartialConn:
+                self._n += 1
+                return _PartialConn(fail_on_release=self._n > 2)
+
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with (
+            patch.object(ra, "_advance_released_run", new_callable=AsyncMock) as advance,
+            pytest.raises(SlotReconciliationError),
+        ):
+            await reconcile_pipeline_slots(_PartialEngine())  # type: ignore[arg-type]
+
+        advance.assert_awaited_once()
+        assert advance.await_args.args[1] == RUN_ID
+        assert advance.await_args.args[2] == ORG_ID
+
+    async def test_two_org_sweep_only_touches_enumerated_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F7 isolation: the per-org release is GUC-gated. Org 2 is NOT in the
+        enumeration, so the sweep never sets org 2's GUC and never binds an
+        UPDATE to it — org 2's stale running row is untouched even though the
+        pipeline/key would match."""
+        org2 = OTHER_ORG_ID
+        statements: list[str] = []
+        engine = _SweepEngine(statements, [_released_row()], orgs=[ORG_ID])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
+            await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
+
+        set_config_vals = [p["val"] for p in engine.params_seen if "val" in p]
+        assert set_config_vals == [str(ORG_ID)], "the GUC must be set for the enumerated org only"
+        bound_oids = [p["oid"] for p in engine.params_seen if "oid" in p]
+        assert bound_oids == [str(ORG_ID)], "the per-org UPDATE must bind the enumerated org"
+        assert str(org2) not in set_config_vals
+        assert str(org2) not in bound_oids
+        # The UPDATE is defence-in-depth on top of the GUC: the org predicate
+        # is IN the statement itself, so a missed set_config can never widen
+        # the sweep across orgs.
+        release_stmts = [s for s in statements if "status = 'running'" in s]
+        assert all("organisation_id = :oid" in s for s in release_stmts)
 
 
 class TestAdmissionAfterRelease:
@@ -368,6 +506,7 @@ class TestCoalescePendingRun:
     async def test_non_postgres_matches_key_in_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
         stale = SimpleNamespace(
             id=uuid.uuid4(),
+            organisation_id=ORG_ID,
             status="pending",
             input_payload={"_coalesce_key": "github:o/r:pr:1"},
             created_at=datetime.now(UTC) - timedelta(minutes=5),
@@ -385,6 +524,36 @@ class TestCoalescePendingRun:
         )
         assert updated is stale
         assert updated.input_payload["refreshed"] is True
+
+    async def test_non_postgres_fold_never_crosses_orgs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F7 isolation: a delivery in org B must never fold into org A's
+        pending run, even when the pipeline id and coalesce key match. The
+        non-PostgreSQL candidate scan has NO RLS to lean on, so the fold
+        binds the delivery's org explicitly (the SQL WHERE and the Python
+        match both carry it) — the result is no fold and NO mutation of
+        org A's row."""
+        org_a = OTHER_ORG_ID
+        pending = SimpleNamespace(
+            id=RUN_ID,
+            organisation_id=org_a,
+            status="pending",
+            input_payload={"_coalesce_key": "github:o/r:pr:1", "user": "a"},
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+        session = self._session("sqlite", candidates=[pending])
+        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
+        from modulo.db.crud.run import coalesce_pending_run
+
+        updated = await coalesce_pending_run(
+            session,
+            org_id=ORG_ID,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="github:o/r:pr:1",
+            input_payload={"refreshed": True},
+        )
+        assert updated is None
+        assert pending.input_payload == {"_coalesce_key": "github:o/r:pr:1", "user": "a"}
+        session.flush.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

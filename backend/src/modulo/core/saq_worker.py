@@ -1075,6 +1075,40 @@ STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
 # so expiry is signal-equivalent and strictly more hygienic.
 STALE_RUN_RECOVERY_STATS_TTL_SECONDS = STALE_RUN_RECOVERY_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-604 slot-reconciliation sweep. Same
+# contract as the legacy sweep's key above: the cron job persists its outcome
+# every tick and /healthz/ready reads it to detect a silently dead sweep
+# (stale > 15 min) or a never-run sweep — a silently dead
+# slot_reconciliation re-opens the FAR-604 admission wedge invisibly.
+SLOT_RECONCILIATION_STATS_KEY = "saq:cron:stats:slot_reconciliation"
+# The sweep runs every 5 min; same stale threshold + TTL arithmetic as the
+# legacy sweep's key (one sweep past the stale window).
+SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
+SLOT_RECONCILIATION_STATS_TTL_SECONDS = SLOT_RECONCILIATION_STALE_SECONDS + 60
+
+
+async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
+    """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
+
+    Shared by the ``stale_run_recovery`` and ``slot_reconciliation`` wrappers:
+    a persistence failure must never fail the sweep — the log carries the loss
+    and /healthz/ready treats a missing key as the equivalent "never run"
+    advisory.
+    """
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+
+        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
+        try:
+            await redis_client.set(key, json.dumps(stats), ex=ttl_seconds)
+        finally:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.sweep_stats_persist_failed key=%s", key)
+
 
 async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1).
@@ -1091,23 +1125,7 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": datetime.now(UTC).isoformat(),
         "recovered": recovered,
     }
-    try:
-        from redis.asyncio import Redis as AsyncRedis
-
-        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
-        try:
-            await redis_client.set(
-                STALE_RUN_RECOVERY_STATS_KEY,
-                json.dumps(stats),
-                ex=STALE_RUN_RECOVERY_STATS_TTL_SECONDS,
-            )
-        finally:
-            with contextlib.suppress(Exception):
-                await redis_client.aclose()
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("saq_worker.stale_run_recovery_stats_persist_failed")
+    await _persist_sweep_stats(STALE_RUN_RECOVERY_STATS_KEY, stats, STALE_RUN_RECOVERY_STATS_TTL_SECONDS)
     return recovered
 
 
@@ -1118,12 +1136,41 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
     went stale (a crashed worker never wrote a terminal status). The legacy
     ``stale_run_recovery`` worker_lost branch is scoped to non-SAQ rows with
     5+ claims, so SAQ-dispatched leaked slots were never reclaimed — the
-    leaked-slot half of the 2026-09-04 admission wedge. Fail-open: the sweep
-    returns a result dict on every failure path and never raises.
-    """
-    from modulo.core.run_admission import reconcile_pipeline_slots
+    leaked-slot half of the 2026-09-04 admission wedge.
 
-    return await reconcile_pipeline_slots(_get_async_engine())
+    Liveness contract (FAR-604 F6): the outcome (last_run_at + released
+    counts) is persisted to the shared Redis key every tick so /healthz/ready
+    can warn when the sweep is stale or missing. A sweep failure is persisted
+    (with the PARTIAL counts the sweep achieved) and then RE-RAISED so SAQ's
+    ``retries=2`` engages — a silently dead sweep must never re-open the
+    FAR-604 wedge invisibly.
+    """
+    from modulo.core.run_admission import SlotReconciliationError, reconcile_pipeline_slots
+
+    try:
+        result = await reconcile_pipeline_slots(_get_async_engine())
+    except SlotReconciliationError as exc:
+        await _persist_sweep_stats(
+            SLOT_RECONCILIATION_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "released": exc.released,
+                "per_pipeline": exc.per_pipeline,
+                "error": "sweep_failed",
+            },
+            SLOT_RECONCILIATION_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        SLOT_RECONCILIATION_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "released": result["released"],
+            "per_pipeline": result["per_pipeline"],
+        },
+        SLOT_RECONCILIATION_STATS_TTL_SECONDS,
+    )
+    return result
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -1516,7 +1563,9 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # running row holds a pipeline slot that admission can never reclaim;
         # a 5-min release cadence bounds the leak to one sweep window.
         # unique=True so overlapping ticks cannot double-release (the sweep's
-        # guarded UPDATE is idempotent regardless). Fail-open (retries=2).
+        # guarded UPDATE is idempotent regardless). Failures RAISE (retries=2
+        # engages) after the liveness stats are persisted — a silently dead
+        # sweep must never re-open the FAR-604 wedge invisibly (F6).
         CronJob(
             slot_reconciliation,
             cron=_CRON_EVERY_5_MINUTES,

@@ -18,9 +18,12 @@ import uuid
 from typing import Any
 
 # Keys that a user-supplied ``input_payload`` may NEVER set. System-injected
-# data (work-item stamping, feedback-correction context) flows through explicit
-# ``create_run`` kwargs — never through ``input_payload`` — so a webhook
-# payload or a manual POST /runs body can never forge a ``work_item_id``.
+# data (work-item stamping, feedback-correction context, the FAR-604 queue
+# coalesce key) flows through explicit ``create_run`` kwargs — never through
+# ``input_payload`` — so a webhook payload or a manual POST /runs body can
+# never forge a ``work_item_id`` or a planted ``_coalesce_key`` (which would
+# let a later webhook delivery fold into the attacker's run, replacing its
+# payload and carrying its stale work-item refs).
 # Mirrors ``_RESERVED_RUN_CONTEXT_KEYS`` in
 # ``modulo.core.pipeline_engine.decorator``.
 _RESERVED_INPUT_PAYLOAD_KEYS: frozenset[str] = frozenset(
@@ -28,6 +31,7 @@ _RESERVED_INPUT_PAYLOAD_KEYS: frozenset[str] = frozenset(
         "_work_item_id",
         "_modulo.work_item",
         "_feedback_correction",
+        "_coalesce_key",
     }
 )
 

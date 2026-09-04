@@ -1336,7 +1336,12 @@ async def coalesce_pending_run(
     (or a terminal row) is never mutated. ``FOR UPDATE SKIP LOCKED`` on
     PostgreSQL: a run currently being dispatched is skipped and a fresh run
     is inserted (safe fallback, no blocked delivery). Non-PostgreSQL backends
-    match the key in Python over a bounded candidate scan.
+    match the key in Python over a bounded candidate scan. The candidate
+    match binds ``organisation_id`` explicitly (FAR-604 F7): on Postgres the
+    GUC-pinned RLS context scopes the query, but the explicit org predicate
+    means a fold can never cross tenants even if the session context is
+    wrong — and on non-PostgreSQL backends (no RLS) it is the ONLY org
+    guard.
 
     The stored payload is the strip + key-inject shape ``create_run`` would
     have persisted, and ``input_hash`` is recomputed from it.
@@ -1353,6 +1358,7 @@ async def coalesce_pending_run(
                 Run.pipeline_id == pipeline_id,
                 Run.status == "pending",
                 Run.cancellation_requested.is_(False),
+                Run.organisation_id == org_id,
                 func.jsonb_extract_path_text(Run.input_payload, _COALESCE_KEY_FIELD) == coalesce_key,
             )
             .order_by(Run.created_at.desc())
@@ -1369,6 +1375,7 @@ async def coalesce_pending_run(
                         Run.pipeline_id == pipeline_id,
                         Run.status == "pending",
                         Run.cancellation_requested.is_(False),
+                        Run.organisation_id == org_id,
                     )
                     .order_by(Run.created_at.desc())
                     .limit(_COALESCE_CANDIDATE_LIMIT)
@@ -1381,7 +1388,9 @@ async def coalesce_pending_run(
             (
                 r
                 for r in candidates
-                if isinstance(r.input_payload, dict) and r.input_payload.get(_COALESCE_KEY_FIELD) == coalesce_key
+                if getattr(r, "organisation_id", None) == org_id
+                and isinstance(r.input_payload, dict)
+                and r.input_payload.get(_COALESCE_KEY_FIELD) == coalesce_key
             ),
             None,
         )

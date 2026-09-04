@@ -608,74 +608,32 @@ async def _advance_journeys_from_stored_refs(
 ) -> None:
     """FAR-143 — advance journeys from a run's stored refs, fail-open.
 
-    ``mark_complete`` / ``fail_run_terminal`` write the terminal status with a
-    raw ``text()`` UPDATE on a connection and never run ``finalize_cost`` (so
-    they never parse outputs or persist them). Runs carrying CREATE-STAMPED
-    refs (``runs.work_item_refs``) would therefore never advance their journeys
-    through those paths. This helper opens its OWN session/transaction AFTER the
-    raw write succeeds (the write is committed before it runs) and advances
-    journeys from the stored refs only — no self-report parse here (the raw
-    writers have no merged outputs).
-
-    FAIL-OPEN: a journey-write failure is logged and swallowed — it must never
-    roll back or fail the already-committed terminal write.
+    Thin delegate to the shared langgraph-free implementation
+    (``run_terminal_advance.advance_journeys_from_stored_refs`` — FAR-604 F4);
+    the name/signature is the wiring seam ``mark_complete`` /
+    ``fail_run_terminal`` call (and tests patch), while the implementation
+    lives once in the shared module. FAIL-OPEN: a journey-write failure is
+    logged and swallowed — it must never roll back or fail the
+    already-committed terminal write.
     """
-    try:
-        from modulo.core.lifecycle_map.advancement import advance_journeys
+    from modulo.core.run_terminal_advance import advance_journeys_from_stored_refs
 
-        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, uuid.UUID(org_id))
-            run = await get_run(session, uuid.UUID(run_id))
-            if run is None or not run.work_item_refs:
-                return
-            await advance_journeys(
-                session,
-                run.organisation_id,
-                run_id=run.id,
-                pipeline_id=run.pipeline_id,
-                refs=run.work_item_refs,
-                status=status,
-                completed_at=run.completed_at,
-                run_created_at=run.created_at,
-                is_replay=bool(run.is_replay),
-                variant_group_id=run.variant_group_id,
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.journey_advance_failed run=%s", run_id, exc_info=True)
+    await advance_journeys_from_stored_refs(aeng, run_id, org_id, status)
 
 
 async def _record_fact_for_terminal_failed_run(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
     """Best-effort daily-fact write for a run terminalised by a raw writer (P6').
 
-    ``fail_run_terminal`` / the stale-run sweep write ``status='failed'`` with
-    a raw ``text()`` UPDATE on a connection and never run ``finalize_cost``, so
-    those runs would never appear in ``run_daily_facts`` (invisible in the
-    analytics failure/stall dimensions). This helper opens its OWN session/
-    transaction AFTER the raw terminal UPDATE commits, sets the RLS org
-    context, re-selects the Run ORM (a pre-update entity would record
-    ``status='running'`` with a NULL ``completed_at``), and records the daily
-    fact via the shared :func:`record_fact_for_terminal_failed_run` wrapper.
+    Thin delegate to the shared langgraph-free implementation
+    (``run_terminal_advance.record_terminal_failed_fact`` — FAR-604 F4); the
+    name/signature is the wiring seam the terminal writers call (and tests
+    patch), while the implementation lives once in the shared module.
     None-guarded and fail-open: any failure logs and is swallowed — it must
     never roll back or fail the already-committed terminal write.
     """
-    try:
-        from modulo.core.analytics import record_fact_for_terminal_failed_run
+    from modulo.core.run_terminal_advance import record_terminal_failed_fact
 
-        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, uuid.UUID(org_id))
-            run = await get_run(session, uuid.UUID(run_id))
-            if run is None:
-                _log.warning("pipeline_execution.terminal_failed_facts_run_missing run=%s", run_id)
-                return
-            await record_fact_for_terminal_failed_run(session, run)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
+    await record_terminal_failed_fact(aengine, run_id, org_id)
 
 
 async def zombie_watchdog(
@@ -1540,18 +1498,16 @@ async def _advance_terminalised_run(
 
     The sweep's raw terminal UPDATEs never run ``finalize_cost``, so the swept
     runs' journeys would never advance (FAR-143 follow-up) and the runs would
-    be invisible to the analytics failure/stall dimensions (FAR-162, P6'). Each
-    helper opens its own RLS-scoped session after the sweep's UPDATEs have
-    committed, so it reads the run as ``failed`` with ``completed_at`` set.
-    Fail-open per run — one run's facts failure must not fail the whole sweep.
+    be invisible to the analytics failure/stall dimensions (FAR-162, P6').
+    Delegates to the shared langgraph-free orchestration
+    (``run_terminal_advance.advance_terminalised_run`` — FAR-604 F4), which
+    ``run_admission``'s slot-reconciliation sweep also uses. Call signature
+    unchanged. Fail-open per run — one run's facts failure must not fail the
+    whole sweep.
     """
-    await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), "failed")
-    try:
-        await _record_fact_for_terminal_failed_run(async_engine, str(run_id), str(org_id))
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.sweep_terminal_facts_failed run=%s", run_id, exc_info=True)
+    from modulo.core.run_terminal_advance import advance_terminalised_run
+
+    await advance_terminalised_run(async_engine, run_id, org_id)
 
 
 async def stale_run_recovery_sweep(
