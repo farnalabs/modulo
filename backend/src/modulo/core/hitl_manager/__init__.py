@@ -221,11 +221,12 @@ class HITLManager:
                 run_id=run_id,
                 gate_label=gate_id,
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
+        except Exception as exc:
+            # schedule_hitl_email_dispatch is no-throw by contract; this guard
+            # keeps a scheduling defect from ever breaking gate creation.
             _log.warning(
-                "hitl_manager.gate_email_schedule_failed",
+                "hitl_manager.gate_email_schedule_failed: %s",
+                exc,
                 extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
             )
         return gate

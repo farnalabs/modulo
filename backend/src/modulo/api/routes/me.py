@@ -24,13 +24,14 @@ from modulo.api.routes.admin_remy import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
-from modulo.core.hitl_email_alerts import PREFERENCE_KEY
+from modulo.core.hitl_email_alerts import PREFERENCE_KEY, normalize_hitl_email_prefs
 from modulo.core.remy.context_source_service import (
     ContextSourceResponseItem,
     RemyContextSourceService,
 )
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
+from modulo.db.models.account import Account
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.rls import set_rls_org
 
@@ -133,26 +134,22 @@ class HitlEmailPreferenceUpdate(BaseModel):
     """PUT body for the caller's own HITL email-alert preferences.
 
     ``pipeline_overrides`` keys are validated as pipeline UUIDs (stored
-    stringified) and values as strict booleans — emails are OFF by default,
-    overridable per pipeline.
+    stringified) and both fields as strict booleans — emails are OFF by
+    default, overridable per pipeline.
     """
 
-    default: bool = False
+    default: StrictBool = False
     pipeline_overrides: dict[uuid.UUID, StrictBool] = Field(default_factory=dict)
 
 
 def _hitl_email_pref_payload(preferences: Any) -> dict[str, Any]:
-    """Normalise the stored ``hitl_email`` preference block to the API shape."""
-    stored = preferences.get(PREFERENCE_KEY) if isinstance(preferences, dict) else None
-    if not isinstance(stored, dict):
-        return {"default": False, "pipeline_overrides": {}}
-    raw_overrides = stored.get("pipeline_overrides")
-    overrides = (
-        {str(key): value for key, value in raw_overrides.items() if isinstance(value, bool)}
-        if isinstance(raw_overrides, dict)
-        else {}
-    )
-    return {"default": stored.get("default") is True, "pipeline_overrides": overrides}
+    """Normalise the stored ``hitl_email`` preference block to the API shape.
+
+    Delegates to the single stored-shape parser in core so the API view and
+    the dispatch resolver agree mechanically.
+    """
+    default, overrides = normalize_hitl_email_prefs(preferences)
+    return {"default": default, "pipeline_overrides": overrides}
 
 
 @router.get("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
@@ -178,22 +175,24 @@ async def update_hitl_email_preferences(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """Persist the CALLER's HITL email-alert preferences under the
-    ``hitl_email`` key of ``Account.preferences`` (other keys untouched)."""
-    stored: dict[str, object] = {
-        PREFERENCE_KEY: {
-            "default": req.default,
-            "pipeline_overrides": {
-                str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()
-            },
-        }
+    ``hitl_email`` key of ``Account.preferences`` (other keys untouched).
+
+    The row is fetched with ``FOR UPDATE`` so a concurrent preference write
+    (e.g. ``PUT /me/settings`` theme) cannot silently drop either side's key
+    via a read-merge-write lost update on the shared JSONB column.
+    """
+    hitl_email_block: dict[str, object] = {
+        "default": req.default,
+        "pipeline_overrides": {str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()},
     }
     async with session.begin():
-        account = await get_account_by_id(session, current_user.account_id)
+        account = await session.get(Account, current_user.account_id, with_for_update=True)
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
-        merged = await update_account_preferences(session, current_user.account_id, stored)
+        current = account.preferences if isinstance(account.preferences, dict) else {}
+        account.preferences = {**current, PREFERENCE_KEY: hitl_email_block}
 
-    return _hitl_email_pref_payload(merged)
+    return _hitl_email_pref_payload(account.preferences)
 
 
 @router.put("/me/password", status_code=status.HTTP_200_OK)

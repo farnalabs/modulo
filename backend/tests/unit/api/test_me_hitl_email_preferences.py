@@ -69,7 +69,9 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    client = TestClient(app)
+    client.mock_session = mock_session  # type: ignore[attr-defined]
+    yield client
     app.dependency_overrides.clear()
 
 
@@ -128,42 +130,36 @@ class TestUpdateHitlEmailPreferences:
     def test_needs_auth(self, unauth_client: TestClient) -> None:
         assert unauth_client.put(_ENDPOINT, json={"default": True}).status_code == 401
 
+    def _session_gets(self, client: TestClient, account: object) -> None:
+        """Point the route's row-locked ``session.get`` at *account*."""
+        client.mock_session.get = AsyncMock(return_value=account)  # type: ignore[attr-defined]
+
     def test_put_persists_under_hitl_email_key(self, client: TestClient) -> None:
         account = _make_account({})
-        merged = {
-            "hitl_email": {"default": True, "pipeline_overrides": {str(_PIPELINE_ID): False}},
-        }
-        with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account),
-            patch(
-                "modulo.api.routes.me.update_account_preferences",
-                new_callable=AsyncMock,
-                return_value=merged,
-            ) as mock_update,
-        ):
-            resp = client.put(_ENDPOINT, json={"default": True, "pipeline_overrides": {str(_PIPELINE_ID): False}})
+        self._session_gets(client, account)
+        resp = client.put(_ENDPOINT, json={"default": True, "pipeline_overrides": {str(_PIPELINE_ID): False}})
 
         assert resp.status_code == 200
-        stored_arg = mock_update.call_args[0][2]
-        assert stored_arg == {
+        assert account.preferences == {
             "hitl_email": {"default": True, "pipeline_overrides": {str(_PIPELINE_ID): False}},
         }
 
-    def test_put_round_trip_response_echoes_merged_preferences(self, client: TestClient) -> None:
-        account = _make_account({"theme": "dark"})
-        merged = {
-            "theme": "dark",
-            "hitl_email": {"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}},
+    def test_put_merges_with_existing_preferences(self, client: TestClient) -> None:
+        account = _make_account({"theme": "dark", "hitl_email": {"default": False, "pipeline_overrides": {}}})
+        self._session_gets(client, account)
+        resp = client.put(_ENDPOINT, json={"default": True, "pipeline_overrides": {str(_PIPELINE_ID): True}})
+
+        assert resp.status_code == 200
+        assert account.preferences["theme"] == "dark"
+        assert account.preferences["hitl_email"] == {
+            "default": True,
+            "pipeline_overrides": {str(_PIPELINE_ID): True},
         }
-        with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account),
-            patch(
-                "modulo.api.routes.me.update_account_preferences",
-                new_callable=AsyncMock,
-                return_value=merged,
-            ),
-        ):
-            resp = client.put(_ENDPOINT, json={"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}})
+
+    def test_put_round_trip_response_echoes_persisted_preferences(self, client: TestClient) -> None:
+        account = _make_account({"theme": "dark"})
+        self._session_gets(client, account)
+        resp = client.put(_ENDPOINT, json={"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}})
 
         assert resp.status_code == 200
         # The response carries ONLY the hitl_email block (other preference
@@ -172,21 +168,11 @@ class TestUpdateHitlEmailPreferences:
 
     def test_put_defaults_body_fields(self, client: TestClient) -> None:
         account = _make_account({})
-        merged = {"hitl_email": {"default": False, "pipeline_overrides": {}}}
-        with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account),
-            patch(
-                "modulo.api.routes.me.update_account_preferences",
-                new_callable=AsyncMock,
-                return_value=merged,
-            ) as mock_update,
-        ):
-            resp = client.put(_ENDPOINT, json={})
+        self._session_gets(client, account)
+        resp = client.put(_ENDPOINT, json={})
 
         assert resp.status_code == 200
-        assert mock_update.call_args[0][2] == {
-            "hitl_email": {"default": False, "pipeline_overrides": {}},
-        }
+        assert account.preferences == {"hitl_email": {"default": False, "pipeline_overrides": {}}}
 
     def test_put_rejects_non_uuid_override_key(self, client: TestClient) -> None:
         resp = client.put(_ENDPOINT, json={"default": True, "pipeline_overrides": {"not-a-uuid": True}})
@@ -196,9 +182,11 @@ class TestUpdateHitlEmailPreferences:
         resp = client.put(_ENDPOINT, json={"default": True, "pipeline_overrides": {str(_PIPELINE_ID): "yes"}})
         assert resp.status_code == 422
 
+    def test_put_rejects_non_bool_default(self, client: TestClient) -> None:
+        resp = client.put(_ENDPOINT, json={"default": "yes"})
+        assert resp.status_code == 422
+
     def test_put_account_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=None),
-        ):
-            resp = client.put(_ENDPOINT, json={"default": True})
+        self._session_gets(client, None)
+        resp = client.put(_ENDPOINT, json={"default": True})
         assert resp.status_code == 404

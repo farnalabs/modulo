@@ -15,12 +15,24 @@ the ``hitl_email`` key — no schema change:
 Dispatch is scheduled fire-and-forget from ``HITLManager.create_gate``
 (interrupt time). The background task opens its OWN session (the caller's
 session belongs to the interrupt transaction and is closed by the time the
-task runs) with the org's RLS context set. Every failure is logged as
+task runs) with the org's RLS context set, resolves the recipients in a SHORT
+transaction, and only then sends — the SMTP loop (smtplib with retries, one
+connection per recipient) must never pin a pooled connection from the shared
+engine, which the API and SAQ worker share. Every failure is logged as
 ``hitl_email.dispatch_failed`` (warning) and never raised into the caller —
 a broken email path must not affect gate creation or the run interrupt.
-``send_email`` is synchronous (smtplib with retries), so it runs via
-``asyncio.to_thread`` — the same offload pattern as the worker-liveness
-watchdog's ``_send_email_alert`` — so the event loop is never blocked.
+``send_email`` is synchronous, so it runs via ``asyncio.to_thread`` — the
+same offload pattern as the worker-liveness watchdog's ``_send_email_alert``.
+
+Accepted trade-off: the dispatch is scheduled at gate-fire time, BEFORE the
+caller's interrupt transaction commits — if that transaction subsequently
+rolls back, recipients get an email for a gate that never persisted. The
+alternative (an after-commit outbox) is follow-up work; gates essentially
+never roll back (the insert is the first write of the interrupt transaction).
+
+``normalize_hitl_email_prefs`` is the single parser for the stored block and
+is shared by the recipient resolver AND the preference API, so the API view
+and the resolver agree mechanically.
 """
 
 from __future__ import annotations
@@ -65,6 +77,28 @@ _CLAIM_ROLES: frozenset[str] = frozenset(
 _PENDING_DISPATCH_TASKS: set[asyncio.Task[None]] = set()
 
 
+def normalize_hitl_email_prefs(preferences: Any) -> tuple[bool, dict[str, bool]]:
+    """Parse the stored ``hitl_email`` preference block.
+
+    Returns ``(default, pipeline_overrides)`` with strict booleans; anything
+    absent or malformed resolves to the all-off default. The SINGLE parser
+    for the stored shape — shared by :func:`resolve_hitl_email_pref` (dispatch
+    resolution) and the preference API response so both agree mechanically.
+    """
+    if not isinstance(preferences, dict):
+        return False, {}
+    hitl_prefs = preferences.get(PREFERENCE_KEY)
+    if not isinstance(hitl_prefs, dict):
+        return False, {}
+    raw_overrides = hitl_prefs.get("pipeline_overrides")
+    overrides = (
+        {str(key): value for key, value in raw_overrides.items() if isinstance(value, bool)}
+        if isinstance(raw_overrides, dict)
+        else {}
+    )
+    return hitl_prefs.get("default") is True, overrides
+
+
 def resolve_hitl_email_pref(preferences: Any, pipeline_id: uuid.UUID) -> bool:
     """Resolve one account's HITL email preference for *pipeline_id*.
 
@@ -72,14 +106,9 @@ def resolve_hitl_email_pref(preferences: Any, pipeline_id: uuid.UUID) -> bool:
     user-level default when the key exists; anything absent or malformed
     resolves to False (emails are OFF by default).
     """
-    if not isinstance(preferences, dict):
-        return False
-    hitl_prefs = preferences.get(PREFERENCE_KEY)
-    if not isinstance(hitl_prefs, dict):
-        return False
-    overrides = hitl_prefs.get("pipeline_overrides")
-    override = overrides.get(str(pipeline_id)) if isinstance(overrides, dict) else None
-    resolved = override if override is not None else hitl_prefs.get("default", False)
+    default, overrides = normalize_hitl_email_prefs(preferences)
+    override = overrides.get(str(pipeline_id))
+    resolved = override if override is not None else default
     return resolved is True
 
 
@@ -132,26 +161,24 @@ def _build_email(gate_label: str, run_url: str) -> tuple[str, str, str]:
     return subject, body_html, body_text
 
 
-async def dispatch_hitl_email_alerts(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    pipeline_id: uuid.UUID,
+async def send_hitl_email_alerts(
+    recipients: list[str],
     run_id: uuid.UUID,
     gate_label: str,
 ) -> None:
-    """Send the gate-awaiting email to every resolved recipient. Never raises.
+    """Send the gate-awaiting email to every recipient. Never raises.
 
-    NO-THROW contract: any failure (resolution, settings, a single send) is
-    logged as ``hitl_email.dispatch_failed`` (warning) and swallowed so the
-    caller — the gate-fire path — is never affected. One recipient's failure
-    never blocks the others. ``send_email`` is synchronous smtplib and runs
-    via ``asyncio.to_thread`` so the event loop is never blocked.
+    Needs NO database session: call it AFTER the resolution transaction has
+    closed so the SMTP loop — synchronous smtplib with retries, one
+    connection per recipient — never pins a pooled connection from the
+    shared engine while it runs. One recipient's failure never blocks the
+    others. Any failure is logged as ``hitl_email.dispatch_failed`` (warning)
+    and swallowed: a broken email path must never raise into the caller.
     """
-    extra = {"org_id": str(org_id), "pipeline_id": str(pipeline_id), "run_id": str(run_id)}
+    if not recipients:
+        return
+    extra = {"run_id": str(run_id), "gate_label": gate_label, "recipient_count": len(recipients)}
     try:
-        recipients = await resolve_hitl_email_recipients(session, org_id, pipeline_id)
-        if not recipients:
-            return
         settings = get_settings()
         subject, body_html, body_text = _build_email(gate_label, _run_link(settings, run_id))
         for recipient in recipients:
@@ -160,19 +187,40 @@ async def dispatch_hitl_email_alerts(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                _log.warning(
-                    "hitl_email.dispatch_failed: %s",
-                    exc,
-                    extra={**extra, "recipient_count": len(recipients)},
-                )
+                _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.warning(
-            "hitl_email.dispatch_failed: %s",
-            exc,
-            extra={**extra, "gate_label": gate_label},
-        )
+        _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
+
+
+async def dispatch_hitl_email_alerts(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    run_id: uuid.UUID,
+    gate_label: str,
+) -> None:
+    """Resolve the recipients via *session* and send. Never raises.
+
+    NO-THROW contract: any failure (resolution, settings, a single send) is
+    logged as ``hitl_email.dispatch_failed`` (warning) and swallowed so the
+    caller — the gate-fire path — is never affected. NOTE: this convenience
+    compose keeps the caller's session open across the SMTP sends; the
+    production background path (:func:`_run_hitl_email_dispatch`) splits the
+    two phases (resolve in a short transaction, then send off-DB) so the
+    SMTP loop never pins a pooled connection. Use the same split when the
+    caller's session is transactional.
+    """
+    extra = {"org_id": str(org_id), "pipeline_id": str(pipeline_id), "run_id": str(run_id), "gate_label": gate_label}
+    try:
+        recipients = await resolve_hitl_email_recipients(session, org_id, pipeline_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
+        return
+    await send_hitl_email_alerts(recipients, run_id, gate_label)
 
 
 def _dispatch_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -193,25 +241,34 @@ async def _run_hitl_email_dispatch(
     run_id: uuid.UUID,
     gate_label: str,
 ) -> None:
-    """Background task body: own session + transaction, RLS-scoped. Never raises.
+    """Background task body: resolve in a short RLS transaction, then send.
 
     The gate-fire path's session belongs to the interrupt transaction and is
     closed by the time this task runs, so the dispatch resolves recipients in
-    its own short transaction with the org's RLS context set.
+    its own short transaction with the org's RLS context set — and the SMTP
+    sends happen AFTER that transaction closes, so a slow SMTP host can never
+    pin a connection from the shared pool. Never raises.
     """
     try:
         factory = _dispatch_session_factory()
         async with factory() as session, session.begin():
             await set_rls_org(session, org_id)
-            await dispatch_hitl_email_alerts(session, org_id, pipeline_id, run_id, gate_label)
+            recipients = await resolve_hitl_email_recipients(session, org_id, pipeline_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         _log.warning(
             "hitl_email.dispatch_failed: %s",
             exc,
-            extra={"org_id": str(org_id), "pipeline_id": str(pipeline_id), "run_id": str(run_id)},
+            extra={
+                "org_id": str(org_id),
+                "pipeline_id": str(pipeline_id),
+                "run_id": str(run_id),
+                "gate_label": gate_label,
+            },
         )
+        return
+    await send_hitl_email_alerts(recipients, run_id, gate_label)
 
 
 def schedule_hitl_email_dispatch(

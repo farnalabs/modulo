@@ -19,6 +19,7 @@ from modulo.core.hitl_email_alerts import (
     resolve_hitl_email_pref,
     resolve_hitl_email_recipients,
     schedule_hitl_email_dispatch,
+    send_hitl_email_alerts,
 )
 
 _ORG = uuid.uuid4()
@@ -238,17 +239,39 @@ async def _drain_tasks() -> None:
 class TestScheduleHitlEmailDispatch:
     async def test_schedules_background_dispatch_with_own_session(self) -> None:
         factory, session = _dispatch_task_harness()
-        dispatched = AsyncMock()
+        resolved = AsyncMock(return_value=[_RUNNER_EMAIL])
+        sent = AsyncMock()
         with (
             patch.object(hitl_email_alerts, "_dispatch_session_factory", return_value=factory),
             patch.object(hitl_email_alerts, "set_rls_org", new_callable=AsyncMock) as mock_rls,
-            patch.object(hitl_email_alerts, "dispatch_hitl_email_alerts", dispatched),
+            patch.object(hitl_email_alerts, "resolve_hitl_email_recipients", resolved),
+            patch.object(hitl_email_alerts, "send_hitl_email_alerts", sent),
         ):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
             await _drain_tasks()
 
-        dispatched.assert_awaited_once_with(session, _ORG, _PIPELINE, _RUN, _GATE)
+        resolved.assert_awaited_once_with(session, _ORG, _PIPELINE)
+        sent.assert_awaited_once_with([_RUNNER_EMAIL], _RUN, _GATE)
         mock_rls.assert_awaited_once()
+
+    async def test_resolution_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        factory, _session = _dispatch_task_harness()
+        with (
+            patch.object(hitl_email_alerts, "_dispatch_session_factory", return_value=factory),
+            patch.object(hitl_email_alerts, "set_rls_org", new_callable=AsyncMock),
+            patch.object(
+                hitl_email_alerts,
+                "resolve_hitl_email_recipients",
+                AsyncMock(side_effect=RuntimeError("db gone")),
+            ),
+            patch.object(hitl_email_alerts, "send_hitl_email_alerts") as mock_send,
+            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+        ):
+            schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
+            await _drain_tasks()
+
+        assert "hitl_email.dispatch_failed" in caplog.text
+        mock_send.assert_not_called()
 
     async def test_session_factory_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
@@ -275,3 +298,34 @@ class TestScheduleHitlEmailDispatch:
         with caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
         assert "hitl_email.dispatch_no_running_loop" in caplog.text
+
+
+class TestSendHitlEmailAlerts:
+    async def test_no_recipients_is_a_no_op(self) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings") as mock_settings,
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_email_alerts([], _RUN, _GATE)
+        mock_settings.assert_not_called()
+        mock_send.assert_not_called()
+
+    async def test_sends_one_email_per_recipient(self) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_email_alerts([_RUNNER_EMAIL, _OPERATOR_EMAIL], _RUN, _GATE)
+
+        assert mock_send.call_count == 2
+        assert mock_send.call_args_list[0].args[1] == [_RUNNER_EMAIL]
+        assert mock_send.call_args_list[1].args[1] == [_OPERATOR_EMAIL]
+
+    async def test_cancellation_propagates(self) -> None:
+        """Cancellation contract: CancelledError re-raises (repo pin b72396c16)."""
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email", side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await send_hitl_email_alerts([_RUNNER_EMAIL], _RUN, _GATE)
