@@ -305,7 +305,21 @@ jobs:
         # remain the safety net for heavy mount+settle specs.
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2
       - run: pnpm run build
-      - run: pnpm audit --audit-level=critical
+      - name: Audit dependencies (critical)
+        # Best-effort against npm registry outages: a failed audit caused by an
+        # unreachable advisory endpoint must not block CI. Real critical
+        # vulnerabilities still fail the build; only registry/network errors
+        # (timeout, error (23), ENOTFOUND, etc.) are downgraded to a warning.
+        run: |
+          out=$(pnpm audit --audit-level=critical 2>&1) && { echo "$out"; exit 0; }
+          rc=$?
+          if echo "$out" | grep -qiE "timeout|error \(23\)|registry\.npmjs\.org|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|aborted due to timeout|EAI_AGAIN"; then
+            echo "::warning::pnpm audit could not reach the npm registry (outage); not failing CI."
+            echo "$out"
+            exit 0
+          fi
+          echo "$out"
+          exit $rc
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
