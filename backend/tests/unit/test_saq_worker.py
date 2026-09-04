@@ -95,6 +95,7 @@ class TestFunctionsWiring:
         assert "webhook_dedup_cleanup" in names
         assert "trigger_events_cleanup" in names
         assert "stale_run_recovery" in names
+        assert "slot_reconciliation" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -113,6 +114,7 @@ class TestFunctionsWiring:
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
             "stale_run_recovery",
+            "slot_reconciliation",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
@@ -142,6 +144,15 @@ class TestFunctionsWiring:
         assert ho.heartbeat == 30
         assert ho.ttl == 300
         assert ho.unique is True
+        # slot_reconciliation: every 5 min (FAR-604), unique so overlapping
+        # ticks cannot interleave (the guarded UPDATE is idempotent anyway).
+        sr = jobs["slot_reconciliation"]
+        assert sr.cron == "*/5 * * * *"
+        assert sr.timeout == 120
+        assert sr.retries == 2
+        assert sr.heartbeat == 30
+        assert sr.ttl == 300
+        assert sr.unique is True
         # check_missed_fire_alerts: hourly, 5-field form (NOT 6-field — the bug
         # class #680 croniter seconds-field misparse), unique so overlaps are
         # impossible (the probe has its own in-memory cooldown).

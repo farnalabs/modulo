@@ -223,6 +223,40 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 6. **Complete** – After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
 
+#### Run admission and healing (FAR-604)
+
+Dispatch admission is capacity-gated twice: per pipeline (`max_concurrent_runs`,
+counted over `running`/`awaiting_human`/`claimed` runs) and per org
+(`run_concurrency_limit`). A capacity-deferred run stays `pending` (marked
+`pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
+frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
+negatives — 0 would silently wedge admission forever; pausing admission is the
+org triggers pause). Four independent mechanisms keep that gate healthy:
+
+- **Slot reconciliation sweep** — a system cron (every 5 min) terminalises
+  `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
+  (default 30 min) with the `worker_lost` error code, force-releasing the
+  pipeline slots a crashed worker leaked. Journeys and daily facts advance for
+  each released run.
+- **Queue coalescing (latest-wins)** — for webhook deliveries with a stable
+  work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
+  `issue.number`; anything else → no key, no coalescing), a new delivery folds
+  into the pipeline's UNSTARTED `pending` run for the same key instead of
+  inserting a row: the pending run's input payload is replaced and its
+  `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
+  default; disable per trigger with `config_json.coalesce_pending: false`.
+  Replays never coalesce.
+- **Dispatcher backpressure** — trigger dispatch (webhook, cron, polling)
+  refuses NEW runs when the pipeline's pending queue exceeds
+  `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
+  than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
+  loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
+  webhook path answers 429 so the sender retries.
+- **Legacy stale-run sweep** — pending runs past the never-dispatched window
+  (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
+  (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
+  (`worker_lost`) are terminalised or re-dispatched as before.
+
 ### WebSocket event flow
 
 ```

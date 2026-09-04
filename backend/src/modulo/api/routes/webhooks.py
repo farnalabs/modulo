@@ -51,6 +51,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
+    PipelineBackpressureError,
     PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
@@ -354,6 +355,14 @@ async def receive_webhook(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+        ) from exc
+    except PipelineBackpressureError as exc:
+        # FAR-604: the pipeline's pending queue is over the depth/age
+        # backpressure limits — refuse the delivery so the sender retries
+        # instead of ratcheting the queue further.
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
         ) from exc
     except PipelineRateLimitError as exc:
         raise HTTPException(

@@ -1333,6 +1333,7 @@ class TestSaqWorkerSettings:
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
             "stale_run_recovery",
+            "slot_reconciliation",
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",

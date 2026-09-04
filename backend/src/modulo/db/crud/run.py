@@ -143,6 +143,16 @@ _RUN_CONCURRENCY_KEY = "run_concurrency_limit"
 _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
 
+# FAR-604 queue coalescing: the reserved payload field carrying the stable
+# per-work-item coalesce key. System-injected (never forgeable via
+# input_payload — the strip in create_run/coalesce_pending_run runs first),
+# so the coalesce lookup can find a trigger's pending run for the same work
+# item without a dedicated column.
+_COALESCE_KEY_FIELD = "_coalesce_key"
+# Bounded candidate scan for non-Postgres backends (no server-side JSON path
+# filter available): pending runs of ONE pipeline only.
+_COALESCE_CANDIDATE_LIMIT = 200
+
 
 def _is_terminal_status(status: str) -> bool:
     """Whether ``status`` ends the run (no further state transitions)."""
@@ -1051,6 +1061,7 @@ async def create_run(
     batch_id: uuid.UUID | None = None,
     variant_config_snapshot: dict[str, Any] | None = None,
     feedback_correction: dict[str, Any] | None = None,
+    coalesce_key: str | None = None,
 ) -> Run:
     # Soft-deleted-org guard — a run must never be created in an org whose
     # deletion flow has set status='deleted' (or in a hard-deleted org).
@@ -1125,6 +1136,13 @@ async def create_run(
     # only engine callers can set it.
     if feedback_correction is not None:
         stored_payload["_feedback_correction"] = feedback_correction
+
+    # FAR-604 queue coalescing: stamp the stable coalesce key AFTER the strip
+    # (system-managed, never forgeable) so the pending run is findable by
+    # coalesce_pending_run. Included in input_hash like the rest of the
+    # stored payload.
+    if coalesce_key is not None:
+        stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
 
     thread_id = f"{org_id}:{run_id}"
     # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
@@ -1294,6 +1312,106 @@ async def create_run(
         except Exception:
             _log.exception("guardrails.compensation.error run=%s", run_id)
     return run
+
+
+async def coalesce_pending_run(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    coalesce_key: str,
+    input_payload: dict[str, Any],
+) -> Run | None:
+    """Fold a new trigger delivery into the pipeline's UNSTARTED pending run (FAR-604).
+
+    Latest-wins queue coalescing: when a *pending* run for the same
+    (pipeline, coalesce key) already exists, its input payload is UPDATED in
+    place and ``created_at`` bumped (refreshing age-based sweeps and the
+    backpressure window) instead of inserting a new row — Housekeeper-style
+    re-dispatch churn (same PR re-delivered every 15 min) coalesces onto one
+    pending run instead of ratcheting the queue. Returns the updated run, or
+    ``None`` when no coalesce target exists (the caller inserts a fresh run).
+
+    Only ``status='pending'`` rows are folded — a run that already started
+    (or a terminal row) is never mutated. ``FOR UPDATE SKIP LOCKED`` on
+    PostgreSQL: a run currently being dispatched is skipped and a fresh run
+    is inserted (safe fallback, no blocked delivery). Non-PostgreSQL backends
+    match the key in Python over a bounded candidate scan.
+
+    The stored payload is the strip + key-inject shape ``create_run`` would
+    have persisted, and ``input_hash`` is recomputed from it.
+    """
+    stored_payload = _strip_reserved_keys(input_payload)
+    stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
+    new_hash = _input_hash(stored_payload)
+
+    dialect = await _get_dialect_name(session)
+    if dialect == "postgresql":
+        stmt = (
+            select(Run)
+            .where(
+                Run.pipeline_id == pipeline_id,
+                Run.status == "pending",
+                Run.cancellation_requested.is_(False),
+                func.jsonb_extract_path_text(Run.input_payload, _COALESCE_KEY_FIELD) == coalesce_key,
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        run = (await session.execute(stmt)).scalar_one_or_none()
+    else:
+        candidates = (
+            (
+                await session.execute(
+                    select(Run)
+                    .where(
+                        Run.pipeline_id == pipeline_id,
+                        Run.status == "pending",
+                        Run.cancellation_requested.is_(False),
+                    )
+                    .order_by(Run.created_at.desc())
+                    .limit(_COALESCE_CANDIDATE_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        run = next(
+            (
+                r
+                for r in candidates
+                if isinstance(r.input_payload, dict) and r.input_payload.get(_COALESCE_KEY_FIELD) == coalesce_key
+            ),
+            None,
+        )
+    if run is None:
+        return None
+    run.input_payload = stored_payload
+    run.input_hash = new_hash
+    run.created_at = datetime.now(UTC)
+    await session.flush()
+    return run
+
+
+async def get_pipeline_queue_depth(session: AsyncSession, pipeline_id: uuid.UUID) -> tuple[int, datetime | None]:
+    """Return ``(pending_run_count, oldest_pending_created_at)`` for a pipeline.
+
+    The queue-depth signal for the FAR-604 dispatcher backpressure gate:
+    unstarted ``pending`` runs (cancellation-requested rows excluded, matching
+    the active-run counters). ``(0, None)`` when the queue is empty.
+    """
+    stmt = (
+        select(func.count(), func.min(Run.created_at))
+        .select_from(Run)
+        .where(
+            Run.pipeline_id == pipeline_id,
+            Run.status == "pending",
+            Run.cancellation_requested.is_(False),
+        )
+    )
+    row = (await session.execute(stmt)).one()
+    return int(row[0] or 0), row[1]
 
 
 async def update_run_outputs(

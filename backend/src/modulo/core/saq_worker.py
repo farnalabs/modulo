@@ -1111,6 +1111,21 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
     return recovered
 
 
+async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-604 slot reconciliation sweep (every 5 min).
+
+    Force-releases pipeline slots leaked by ``running`` runs whose heartbeat
+    went stale (a crashed worker never wrote a terminal status). The legacy
+    ``stale_run_recovery`` worker_lost branch is scoped to non-SAQ rows with
+    5+ claims, so SAQ-dispatched leaked slots were never reclaimed — the
+    leaked-slot half of the 2026-09-04 admission wedge. Fail-open: the sweep
+    returns a result dict on every failure path and never raises.
+    """
+    from modulo.core.run_admission import reconcile_pipeline_slots
+
+    return await reconcile_pipeline_slots(_get_async_engine())
+
+
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
 
@@ -1397,6 +1412,7 @@ def _system_functions() -> list[Any]:
         webhook_dedup_cleanup,
         trigger_events_cleanup,
         stale_run_recovery,
+        slot_reconciliation,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1489,6 +1505,20 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # non-SAQ rows in the sweep itself).
         CronJob(
             stale_run_recovery,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # slot_reconciliation: every 5 min (FAR-604) — a stale-heartbeat
+        # running row holds a pipeline slot that admission can never reclaim;
+        # a 5-min release cadence bounds the leak to one sweep window.
+        # unique=True so overlapping ticks cannot double-release (the sweep's
+        # guarded UPDATE is idempotent regardless). Fail-open (retries=2).
+        CronJob(
+            slot_reconciliation,
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,
