@@ -1323,6 +1323,19 @@ class TestEmailNormalization:
         kwargs = mock_account.call_args.kwargs
         assert kwargs["email"] == "jane.doe@example.com"
 
+    async def test_scim_update_user_normalizes_email(self) -> None:
+        account = MagicMock()
+        from modulo.db.crud.scim import scim_update_user
+
+        await scim_update_user(
+            _make_mock_session(),
+            account,
+            org_id=_ORG_ID,
+            email="  Jane.Doe@Example.COM ",
+        )
+
+        assert account.email == "jane.doe@example.com"
+
     def test_scim_patch_replace_op_normalizes_email(self) -> None:
         from modulo.api.routes.scim import ScimPatchOperation, _apply_user_replace_op
 

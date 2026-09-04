@@ -14,9 +14,12 @@ case-insensitive uniqueness, in three ordered steps:
    documented product decision: accounts are never silently merged. The guard
    must run first because the backfill (step 2) would otherwise violate the
    still-active case-sensitive ``accounts_email_key`` constraint mid-UPDATE —
-   a raw UniqueViolation instead of an actionable operator message. To
-   resolve, an operator must rename one of the colliding accounts (or
-   deactivate it) via the admin UI, then re-run the upgrade.
+   a raw UniqueViolation instead of an actionable operator message. The guard
+   counts INACTIVE (deactivated) rows too — deactivation alone does not clear
+   it. To resolve, an operator must fix the data outside the application
+   (there is NO admin-UI rename for account emails): rename one of the
+   colliding rows via SQL, or delete the duplicate row (deactivate first if
+   tooling requires, then DELETE), then re-run the upgrade.
 2. **Backfill** — every stored email is canonicalised in place
    (``lower(trim(email))``), matching the ``normalize_email`` boundary
    normalisation the application now applies at every account write. Safe
@@ -26,6 +29,12 @@ case-insensitive uniqueness, in three ordered steps:
    ``accounts_email_key`` is dropped and the functional unique index
    ``uq_accounts_email_lower`` (``UNIQUE (LOWER(email))``) is created. The
    ORM model mirrors the functional index, keeping schema parity.
+
+Unicode note: Python's ``str.lower()`` and Postgres ``LOWER()`` can disagree
+for exotic non-ASCII local parts (e.g. dotted/dotless İ under some
+collations). Emails are treated as ASCII-canonical in practice; if a
+pathological Unicode case-fold mismatch ever produces one, it surfaces as a
+uniqueness IntegrityError (mapped to 409) rather than a silent duplicate.
 
 Downgrade notes: the downgrade restores the case-sensitive
 ``accounts_email_key`` constraint and drops the functional index. The
@@ -76,9 +85,12 @@ def upgrade() -> None:
         raise RuntimeError(
             "Migration 0176_case_insensitive_emails found existing accounts whose emails "
             f"collide case-insensitively: {colliding}. Emails are now case-insensitive, so these "
-            "accounts cannot coexist. Resolve BEFORE upgrading: rename one of the colliding "
-            "accounts (or deactivate it) via the admin UI, then re-run this upgrade. No accounts "
-            "were merged or modified by this failure."
+            "accounts cannot coexist. Resolve BEFORE upgrading, outside the application — there "
+            "is NO admin-UI rename for account emails: rename one of the colliding rows via SQL "
+            "(an UPDATE of accounts.email to a fresh, still-unique address), or delete the "
+            "duplicate row (deactivate it first if tooling requires, then DELETE). Note the "
+            "guard counts INACTIVE (deactivated) rows too — deactivating a duplicate does NOT "
+            "clear this guard. No accounts were merged or modified by this failure."
         )
 
     # 2. Backfill: canonicalise every stored email in place. Safe after the

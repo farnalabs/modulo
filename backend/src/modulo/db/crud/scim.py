@@ -102,7 +102,11 @@ async def scim_update_user(
 ) -> Account:
     updates: dict[str, object] = {}
     if email is not None:
-        updates["email"] = email
+        # Normalise exactly like scim_create_user / the PATCH ops do: a raw
+        # store here would persist non-canonical spellings and let a case/
+        # whitespace variant self-rename trip uq_accounts_email_lower
+        # (LOWER() does not trim) as an unhandled IntegrityError.
+        updates["email"] = normalize_email(email)
     if display_name is not None:
         updates["display_name"] = display_name
     if active is not None:

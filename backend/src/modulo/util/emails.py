@@ -22,5 +22,12 @@ def normalize_email(email: str) -> str:
     The canonical form is what gets stored on every account write and what
     every email-keyed lookup compares against, so ``User@Example.COM`` and
     ``user@example.com`` are the same account everywhere.
+
+    Unicode divergence (documented, no behaviour change): Python's
+    ``str.lower()`` and Postgres ``LOWER()`` can disagree for exotic non-ASCII
+    local parts (e.g. dotted/dotless İ under some collations). Emails are
+    treated as ASCII-canonical in practice; because the DB index uses
+    ``LOWER(email)``, a pathological Unicode case-fold mismatch would surface
+    as an IntegrityError (mapped to 409) rather than a silent duplicate.
     """
     return email.strip().lower()

@@ -532,6 +532,9 @@ async def _seed_modulo_users(settings: Settings) -> None:
             await _seed_modulo_user(session, org, entry)
 
 
+_BOOTSTRAP_ADMIN_EMAILS = ("admin", "admin@modulo.run")
+
+
 async def _seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     """Seed a single MODULO_USERS entry (``email:password``) into the account + membership tables.
 
@@ -550,8 +553,27 @@ async def _seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     colon = entry.find(":")
     if colon < 1:
         return
-    email = normalize_email(entry[:colon])
+    raw_email = entry[:colon]
+    email = normalize_email(raw_email)
     pw_part = entry[colon + 1 :]
+
+    # FAR-584: emails are case-insensitive now. A case-variant of the admin
+    # bootstrap (e.g. "Admin") previously missed the admin special-case and
+    # seeded a plain runner; post-normalisation it silently becomes org admin.
+    # Never let that role widening be silent (the password part is never
+    # logged — only the email fields appear below).
+    if raw_email != email and email in _BOOTSTRAP_ADMIN_EMAILS:
+        logger.warning(
+            "bootstrap.role_case_normalization",
+            extra={
+                "entry_email": raw_email,
+                "normalized_email": email,
+                "note": (
+                    "case-variant of the admin bootstrap; it now grants the admin role "
+                    "(previously it did not). Adjust MODULO_USERS if unintended."
+                ),
+            },
+        )
 
     result = await session.execute(select(Account).where(Account.email == email))
     existing_account = result.scalar_one_or_none()
@@ -579,7 +601,7 @@ async def _seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     membership = OrgMembership(
         account_id=account.id,
         organisation_id=org.id,
-        role="admin" if email in ("admin", "admin@modulo.run") else "runner",
+        role="admin" if email in _BOOTSTRAP_ADMIN_EMAILS else "runner",
     )
     session.add(membership)
     logger.info("startup.user_seeded", extra={"email": email})
@@ -602,11 +624,25 @@ async def _rehash_existing_user(session: Any, org: Any, existing_account: Any, e
         )
     )
     membership = mem_result.scalar_one_or_none()
-    admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
+    admin_role = "admin" if email in _BOOTSTRAP_ADMIN_EMAILS else None
     if membership is not None:
         if admin_role and membership.role != "admin":
+            previous_role = membership.role
             membership.role = "admin"
-            logger.info("startup.user_role_set_admin", extra={"email": email})
+            # FAR-584: a legacy account (e.g. a backfilled "Admin" row) can be
+            # silently promoted here now that email matching is case-
+            # insensitive. Make the promotion loud.
+            logger.warning(
+                "bootstrap.role_changed_to_admin",
+                extra={
+                    "email": email,
+                    "previous_role": previous_role,
+                    "note": (
+                        "existing account promoted to the admin role during bootstrap rehash "
+                        "(previously it was not admin). Adjust MODULO_USERS if unintended."
+                    ),
+                },
+            )
         else:
             logger.info("startup.user_exists", extra={"email": email})
     else:
@@ -687,11 +723,29 @@ async def _seed_sso_providers(settings: Settings) -> None:
             )
 
 
+async def _get_admin_account(session: Any) -> Any | None:
+    """Return the bootstrap admin account (case-insensitive email ``admin``), if any.
+
+    Consolidates the identical admin lookups in _seed_system_schemas and
+    _seed_environment_profiles. Post-0176 at most one row can match
+    ``lower(email) == 'admin'`` (functional unique index uq_accounts_email_lower),
+    so ``order_by(...).limit(1)`` is kept purely defensively.
+    """
+    from sqlalchemy import func, select
+
+    from modulo.db.models.account import Account
+
+    result = await session.execute(
+        select(Account).where(func.lower(Account.email) == "admin").order_by(Account.created_at).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def _seed_system_schemas(settings: Settings) -> None:
     """Seed system schemas for all existing organisations."""
     import uuid as _uuid
 
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.db.models.account import Account
@@ -704,11 +758,7 @@ async def _seed_system_schemas(settings: Settings) -> None:
     async with factory() as session, session.begin():
         orgs = (await session.execute(select(Organisation).order_by(Organisation.created_at))).scalars().all()
 
-        admin = (
-            await session.execute(
-                select(Account).where(func.lower(Account.email) == "admin").order_by(Account.created_at).limit(1)
-            )
-        ).scalar_one_or_none()
+        admin = await _get_admin_account(session)
 
         system_account_id: _uuid.UUID | None = None
         if admin is not None:
@@ -732,7 +782,7 @@ async def _seed_environment_profiles(settings: Settings) -> None:
     Creates a reusable sandbox profile for the dogfood pipeline. Skips if
     a profile named 'modulo-dev' already exists.
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.db.crud.environment_profile import create_environment_profile
@@ -760,10 +810,7 @@ async def _seed_environment_profiles(settings: Settings) -> None:
             logger.info("startup.env_profile_modulo_dev_exists")
             return
 
-        admin_result = await session.execute(
-            select(Account).where(func.lower(Account.email) == "admin").order_by(Account.created_at).limit(1)
-        )
-        admin = admin_result.scalar_one_or_none()
+        admin = await _get_admin_account(session)
         if admin is None:
             admin_result = await session.execute(select(Account).order_by(Account.created_at).limit(1))
             admin = admin_result.scalar_one_or_none()
