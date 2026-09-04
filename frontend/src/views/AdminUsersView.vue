@@ -725,5 +725,7 @@ onBeforeUnmount(() => {
   if (copyTimeout) clearTimeout(copyTimeout)
   if (flashTimeout) clearTimeout(flashTimeout)
 })
+defineExpose({ updateRole, deactivate, reactivate })
+
 /* onMounted handled by useDataFetch */
 </script>
