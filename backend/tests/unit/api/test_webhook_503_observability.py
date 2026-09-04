@@ -4,8 +4,8 @@
 app.modulo.run failed with HTTP 503 and NO persisted cause — the fail-closed
 raise sites logged either a bare log code or nothing, so the reason was lost
 with the response. These tests lock in the contract that every 503 raise site
-in webhooks.py and the /healthz/ready aggregation emits a structured warning
-record (route, machine-readable reason code, exception class name, short safe
+in webhooks.py and the /healthz/ready aggregation emits a structured record
+(route, machine-readable reason code, exception class name, short safe
 detail) BEFORE raising. Removing the helper call from a raise site fails the
 corresponding test.
 """
@@ -49,7 +49,7 @@ def _make_settings() -> Settings:
 
 
 def _structured_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    """All warning records emitted by the shared 503-reporting helper."""
+    """All structured records emitted by the shared 503-reporting helper."""
     return [r for r in caplog.records if r.name == _ERROR_REPORTING_LOGGER]
 
 
@@ -142,7 +142,7 @@ def working_session_client() -> TestClient:
         app.dependency_overrides.clear()
 
 
-def test_helper_emits_structured_warning_record(caplog: pytest.LogCaptureFixture) -> None:
+def test_helper_emits_structured_record(caplog: pytest.LogCaptureFixture) -> None:
     """The helper is the single source of the structured 503 record: the
     message text AND the machine-readable ``service_unavailable`` extra must
     both carry route, reason, exception class, and detail."""
@@ -157,7 +157,7 @@ def test_helper_emits_structured_warning_record(caplog: pytest.LogCaptureFixture
     records = _structured_records(caplog)
     assert len(records) == 1
     record = records[0]
-    assert record.levelno == logging.WARNING
+    assert record.levelno == logging.ERROR
     payload = record.__dict__["service_unavailable"]
     assert payload["route"] == "webhooks.receive_webhook"
     assert payload["reason"] == "db_transient"
@@ -182,6 +182,57 @@ def test_helper_allows_missing_exception(caplog: pytest.LogCaptureFixture) -> No
     payload = records[0].__dict__["service_unavailable"]
     assert payload["exception_class"] is None
     assert payload["reason"] == "system_bootstrap_degraded"
+
+
+def test_helper_default_level_is_error_with_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exception-backed records default to ERROR so they reach the only
+    persisted/queryable sink: ErrorTrackingLogHandler ingests only records
+    with levelno >= ERROR into error_events / the Error Dashboard."""
+    with caplog.at_level(logging.WARNING):
+        log_service_unavailable(
+            "db_transient",
+            SQLAlchemyError("connection reset by server"),
+            route="webhooks.receive_webhook",
+        )
+
+    records = _structured_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+
+
+def test_helper_default_level_is_warning_without_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Guard-style 503s raised without an exception keep the original
+    WARNING severity (no traceback exists to persist)."""
+    with caplog.at_level(logging.WARNING):
+        log_service_unavailable(
+            "system_bootstrap_degraded",
+            route="webhooks.receive_webhook",
+        )
+
+    records = _structured_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+
+
+def test_helper_explicit_level_overrides_default(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An explicit ``level`` argument wins over the exc-derived default."""
+    with caplog.at_level(logging.WARNING):
+        log_service_unavailable(
+            "db_transient",
+            SQLAlchemyError("pool timeout"),
+            route="webhooks.receive_webhook",
+            level=logging.WARNING,
+        )
+
+    records = _structured_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
 
 
 def test_receive_webhook_bootstrap_guard_logs_structured_reason(
