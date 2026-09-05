@@ -7782,15 +7782,26 @@ export interface paths {
          * @description Scheduler-starvation condition for the error dashboard (FAR-604).
          *
          *     Pipelines having unstarted runs (``status='pending'``, ``started_at IS
-         *     NULL``) with a capacity-marker ``error_code`` created before the starvation
-         *     threshold (10 minutes). Declared BEFORE the ``/{error_id}`` routes so the
-         *     static path wins routing. Pre-terminal pending runs never produce error
-         *     events — the dashboard otherwise keys off ingested errors from terminal
-         *     failures — so a pipeline stuck at its concurrency cap is invisible without
-         *     this surface. Each item carries the pipeline id/name, the count of starved
-         *     pending runs, and the oldest run's creation instant + age. The aggregate is
-         *     one row per starved pipeline (bounded by the org's pipeline count), so no
-         *     pagination and ``total`` is the exact item count.
+         *     NULL``) with a capacity-marker ``error_code`` whose age anchor is older
+         *     than the starvation threshold (10 minutes). Declared BEFORE the
+         *     ``/{error_id}`` routes so the static path wins routing. Pre-terminal
+         *     pending runs never produce error events — the dashboard otherwise keys off
+         *     ingested errors from terminal failures — so a pipeline stuck at its
+         *     concurrency cap is invisible without this surface. Each item carries the
+         *     pipeline id/name, the count of starved pending runs, and the oldest run's
+         *     age anchor + age. The age anchor is the run's EARLIEST trigger-event
+         *     receipt (``MIN(trigger_events.received_at)``, falling back to
+         *     ``created_at`` when the run has no trigger event): a coalescing
+         *     re-delivery refreshes the pending run's ``created_at`` on the dispatcher's
+         *     short re-dispatch cadence, so a ``created_at``-keyed age would reset every
+         *     cycle and make a days-long wedge look minutes old. The aggregate is one
+         *     row per starved pipeline (bounded by the org's pipeline count), so no
+         *     pagination and ``total`` is the exact item count. Detection (the SQL
+         *     aggregate) lives in the crud layer
+         *     (:func:`modulo.db.crud.error_tracking.get_scheduler_starvation_pipelines`)
+         *     — the route keeps auth, RLS pinning and serialization only; the
+         *     ``handle_db_errors`` decorator owns the DB-error mapping (it re-raises
+         *     ``HTTPException`` untouched).
          */
         get: operations["get_scheduler_starvation_api_v1_errors_scheduler_starvation_get"];
         put?: never;
