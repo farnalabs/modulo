@@ -1226,7 +1226,7 @@ describe('RunDetailView', () => {
   })
 
   it('shows a warnings strip entry for a stale heartbeat', async () => {
-    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString()
+    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       status: 'running',
@@ -1243,7 +1243,7 @@ describe('RunDetailView', () => {
   })
 
   it('renders a fresh heartbeat with no strip when the only signal is absent', async () => {
-    const freshHeartbeatAt = new Date(Date.now() - 5_000).toISOString()
+    const freshHeartbeatAt = new Date(Date.now() - 5_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       status: 'running',
@@ -1255,7 +1255,7 @@ describe('RunDetailView', () => {
   })
 
   it('shows multiple strip entries together when several warning conditions exist', async () => {
-    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString()
+    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       status: 'running',
