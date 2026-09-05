@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0176."""
+    """Exactly one migration chains off each predecessor, and the head is 0178."""
     import re
 
     revisions = {}
@@ -744,9 +744,12 @@ def test_single_migration_head() -> None:
     # 0177_invitations (FAR-461 in-app invite tokens) chains off 0176_trigger_event_validation_results.
     chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
     assert [_basename(p) for p in chaining_off_0176] == ["0177_invitations.py"]
-    # Nothing chains off 0177_invitations -> it is the single head.
+    # 0178_hitl_parked_status (FAR-604 D2, HITL capacity) chains off 0177_invitations.
     chaining_off_0177 = [p for p in revisions if parents[p] == "0177_invitations"]
-    assert chaining_off_0177 == []
+    assert [_basename(p) for p in chaining_off_0177] == ["0178_hitl_parked_status.py"]
+    # Nothing chains off 0178_hitl_parked_status -> it is the single head.
+    chaining_off_0178 = [p for p in revisions if parents[p] == "0178_hitl_parked_status"]
+    assert chaining_off_0178 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

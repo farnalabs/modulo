@@ -79,7 +79,7 @@ def test_input_hash_default_str_for_non_serializable():
 
 
 def test_active_run_statuses_includes_pending_when_requested():
-    assert _active_run_statuses(True) == {
+    assert _active_run_statuses(True, scope="org") == {
         "pending",
         "running",
         "awaiting_human",
@@ -89,19 +89,19 @@ def test_active_run_statuses_includes_pending_when_requested():
 
 
 def test_active_run_statuses_excludes_pending_for_capacity():
-    assert _active_run_statuses(False) == {
+    assert _active_run_statuses(False, scope="org") == {
         "running",
         "awaiting_human",
         "claimed",
         "unknown",
     }
-    assert "pending" not in _active_run_statuses(False)
+    assert "pending" not in _active_run_statuses(False, scope="org")
 
 
 def test_active_run_statuses_returns_fresh_set():
-    result = _active_run_statuses(True)
+    result = _active_run_statuses(True, scope="org")
     result.discard("pending")
-    assert "pending" in _active_run_statuses(True)
+    assert "pending" in _active_run_statuses(True, scope="org")
 
 
 # ---------------------------------------------------------------------------
