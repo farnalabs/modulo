@@ -29,8 +29,14 @@ def _changed_unit_tests() -> list[str]:
     paths = []
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
-        if line.startswith("backend/tests/unit/") and line.endswith(".py"):
-            paths.append(line)
+        if not (line.startswith("backend/tests/unit/") and line.endswith(".py")):
+            continue
+        # pytest support files (conftest.py, __init__.py) collect zero tests
+        # when passed explicitly (exit 5) and are auto-loaded whenever sibling
+        # test files run, so they never belong in the explicit path list.
+        if Path(line).name in ("conftest.py", "__init__.py"):
+            continue
+        paths.append(line)
     return paths
 
 
