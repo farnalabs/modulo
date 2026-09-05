@@ -1087,14 +1087,27 @@ SLOT_RECONCILIATION_STATS_KEY = "saq:cron:stats:slot_reconciliation"
 SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
 SLOT_RECONCILIATION_STATS_TTL_SECONDS = SLOT_RECONCILIATION_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-604 D2 HITL park sweep (qa F5). Same
+# contract as the sibling sweeps: the cron job persists its outcome every tick
+# and /healthz/ready reads it to detect a silently dead sweep (stale > 15 min)
+# or a never-run sweep. Parking is post-D1 hygiene (a parked run holds no
+# pipeline slot), so the sweep's death was previously invisible — a dead sweep
+# only delays the "expired — parked" transition, but an operator must still
+# see that the visibility half of the design has stopped working.
+HITL_PARK_SWEEP_STATS_KEY = "saq:cron:stats:hitl_park_sweep"
+# The sweep runs every 5 min; same stale threshold + TTL arithmetic as the
+# sibling sweeps (one sweep past the stale window).
+HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
+HITL_PARK_SWEEP_STATS_TTL_SECONDS = HITL_PARK_SWEEP_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
 
-    Shared by the ``stale_run_recovery`` and ``slot_reconciliation`` wrappers:
-    a persistence failure must never fail the sweep — the log carries the loss
-    and /healthz/ready treats a missing key as the equivalent "never run"
-    advisory.
+    Shared by the ``stale_run_recovery``, ``slot_reconciliation`` and
+    ``hitl_park_sweep`` wrappers: a persistence failure must never fail the
+    sweep — the log carries the loss and /healthz/ready treats a missing key
+    as the equivalent "never run" advisory.
     """
     try:
         from redis.asyncio import Redis as AsyncRedis
@@ -1179,20 +1192,42 @@ async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     Parks runs whose open HITL gate expired unanswered past the grace window
     (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
-    ``awaiting_human`` for the non-terminal ``hitl_parked`` status and the
-    gate is stamped ``parked_at`` — the gate itself stays OPEN AND CLAIMABLE
-    (park ≠ decide) and a later decision un-parks the run back into normal
-    admission. Each park is logged loudly (``hitl_park.parked``).
+    ``awaiting_human`` for the non-terminal ``hitl_parked`` status — the
+    status itself is the parked signal (qa F13; the gate row stays untouched,
+    OPEN AND CLAIMABLE — park ≠ decide) and a later decision un-parks the run
+    back into normal admission. Each park is logged loudly
+    (``hitl_park.parked``).
 
-    Failure contract: the sweep raises :class:`HitlParkError` (with the
-    partial ``parked`` count) which propagates so SAQ's ``retries=2``
-    engages. No /healthz/ready liveness key: parking is post-D1 hygiene (a
-    parked run no longer consumes pipeline capacity), so a dead sweep delays
-    visibility only — the monitored SAQ task-failure sink carries the alert.
+    Liveness contract (qa F5): the outcome (last_run_at + parked count) is
+    persisted to the shared Redis key every tick so /healthz/ready can warn
+    when the sweep is stale or missing. A sweep failure is persisted (with
+    the PARTIAL parked count the sweep achieved) and then RE-RAISED so SAQ's
+    ``retries=2`` engages.
     """
-    from modulo.core.run_admission import park_expired_hitl_runs
+    from modulo.core.run_admission import HitlParkError, park_expired_hitl_runs
 
-    return await park_expired_hitl_runs(_get_async_engine())
+    try:
+        result = await park_expired_hitl_runs(_get_async_engine())
+    except HitlParkError as exc:
+        await _persist_sweep_stats(
+            HITL_PARK_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "parked": exc.parked,
+                "error": "sweep_failed",
+            },
+            HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        HITL_PARK_SWEEP_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "parked": result["parked"],
+        },
+        HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:

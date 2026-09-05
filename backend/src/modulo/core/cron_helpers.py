@@ -4059,12 +4059,16 @@ def _build_re_dispatch_predicate(
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
     The predicate is a SQL OR of the recovery branches. ``awaiting_human``/
-    ``claimed`` runs are matched ONLY under the F6a gated recovery (stale
-    heartbeat by 2*SAQ_JOB_HEARTBEAT; the no-SAQ-job gate is applied per-row
-    in the loop) so a half-resumed run whose ``resume_run`` job was lost is
-    recovered. ``awaiting_human``/``claimed`` rows additionally require a
-    committed HITL gate decision (guard applied per-row in the loop) so a
-    genuinely-waiting run is never auto-resumed with an empty decision. Exposed as a module
+    ``claimed``/``hitl_parked`` runs are matched ONLY under the F6a gated
+    recovery (stale heartbeat by 2*SAQ_JOB_HEARTBEAT; the no-SAQ-job gate is
+    applied per-row in the loop) so a half-resumed run whose ``resume_run``
+    job was lost is recovered — including a PARKED run whose gate already has
+    a committed decision (qa F1: the park-vs-decide race, where the decision
+    committed while the sweep was parking the run, would otherwise strand the
+    parked run forever). ``awaiting_human``/``claimed``/``hitl_parked`` rows
+    additionally require a committed HITL gate decision (guard applied per-row
+    in the loop) so a genuinely-waiting run is never auto-resumed with an
+    empty decision. Exposed as a module
     function so the reconcile tests can exercise it directly with mocked rows.
 
     FAR-108: a ``capacity_marked_stale`` branch admits a pending run carrying
@@ -4136,10 +4140,14 @@ def _build_re_dispatch_predicate(
             Run.dispatcher == "saq",
             Run.heartbeat_at < func_now_minus(stale_window),
         ),
-        # F6a gated recovery: awaiting_human/claimed + dispatcher='saq' + stale
-        # heartbeat. The no-job gate is applied per-row (q.job() is None).
+        # F6a gated recovery: awaiting_human/claimed/hitl_parked +
+        # dispatcher='saq' + stale heartbeat. The no-job gate is applied
+        # per-row (q.job() is None). ``hitl_parked`` (qa F1): a parked run
+        # whose gate decision committed AFTER the park swept it is
+        # self-healed through the same reconcile→resume path instead of
+        # being stranded forever.
         and_(
-            Run.status.in_(("awaiting_human", "claimed")),
+            Run.status.in_(("awaiting_human", "claimed", "hitl_parked")),
             Run.dispatcher == "saq",
             Run.heartbeat_at < func_now_minus(stale_window),
         ),
@@ -4149,15 +4157,15 @@ def _build_re_dispatch_predicate(
 def _reconcile_job_type(status: str) -> str:
     """Re-dispatch job-type discriminator (F6a).
 
-    awaiting_human/claimed -> ``resume_run`` (resumed ONLY from a committed
-    HITL decision scoped to the pending identity); pending/running ->
+    awaiting_human/claimed/hitl_parked -> ``resume_run`` (resumed ONLY from a
+    committed HITL decision scoped to the pending identity); pending/running ->
     ``execute_run``. Both resume cases are guarded per-row: the run is
     re-dispatched as ``resume_run`` ONLY when a decision is actually
     committed for the identity the run is waiting at (see
     :func:`_awaiting_human_has_committed_decision`) — never with an empty
     decision.
     """
-    return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
+    return "resume_run" if status in ("awaiting_human", "claimed", "hitl_parked") else "execute_run"
 
 
 async def _latest_committed_decision_row(
@@ -4900,7 +4908,10 @@ async def _reconcile_org(
                     .join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
                     .where(
                         Run.organisation_id == org_id,
-                        Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
+                        # The F6a statuses must be IN this scan tuple too (qa
+                        # F1): the gated-recovery branch below can only ever
+                        # match rows this outer WHERE let through.
+                        Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
                         re_dispatch_predicate,
                         _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds),
                     )
@@ -5117,22 +5128,24 @@ async def _resolve_hitl_resume_or_skip(
     """F6a auto-approve guard + durable resume payload for one row.
 
     Returns ``(skip, resume_data)``: ``skip`` is True when a genuinely-waiting
-    awaiting_human/claimed run must NOT be resumed (no committed gate decision
-    scoped to the pending gate — a resumed empty decision would auto-approve
-    the gate, and a decision for an EARLIER gate would resolve the pending one
-    with zero human action on it); otherwise ``resume_data`` is reconstructed
-    from the committed HITL decision (never ``{}``). A claimed row with a
-    CLAIMED-UNDECIDED row skips unconditionally (FAR-541 iteration 4, FIX C):
-    under ``uq_hitl_claims_run_gate`` a claimed-undecided row and a DECIDED
-    row for the same gate cannot coexist, so the old "claimed + same-gate
-    committed decision -> resume" match was structurally dead. Mid-resume
-    crash recovery for claimed runs routes through the no-undecided-rows
-    branch of :func:`_awaiting_human_has_committed_decision` once the decision
-    commits (the row is no longer undecided then) — with ``resume_data``
-    reconstructed from ``hitl_claims.decision_payload``. Extracted unchanged
-    from ``_reconcile_one_row``.
+    awaiting_human/claimed/hitl_parked run must NOT be resumed (no committed
+    gate decision scoped to the pending gate — a resumed empty decision would
+    auto-approve the gate, and a decision for an EARLIER gate would resolve
+    the pending one with zero human action on it); otherwise ``resume_data``
+    is reconstructed from the committed HITL decision (never ``{}``). A
+    claimed row with a CLAIMED-UNDECIDED row skips unconditionally (FAR-541
+    iteration 4, FIX C): under ``uq_hitl_claims_run_gate`` a claimed-undecided
+    row and a DECIDED row for the same gate cannot coexist, so the old
+    "claimed + same-gate committed decision -> resume" match was structurally
+    dead. Mid-resume crash recovery for claimed runs routes through the
+    no-undecided-rows branch of :func:`_awaiting_human_has_committed_decision`
+    once the decision commits (the row is no longer undecided then) — with
+    ``resume_data`` reconstructed from ``hitl_claims.decision_payload``.
+    ``hitl_parked`` rows (qa F1) resume ONLY from a committed decision, same
+    as the other two statuses. Extracted unchanged from
+    ``_reconcile_one_row``.
     """
-    if row.status not in ("awaiting_human", "claimed"):
+    if row.status not in ("awaiting_human", "claimed", "hitl_parked"):
         return False, None
     if not await _awaiting_human_has_committed_decision(session, org_id, row.id):
         summary["skipped"] += 1

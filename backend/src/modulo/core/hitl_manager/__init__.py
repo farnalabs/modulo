@@ -43,8 +43,8 @@ from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
 from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.run import Run
 from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
@@ -819,15 +819,9 @@ class HITLManager:
         # (the MCP flow) leaves the run ``awaiting_human`` with a committed
         # decision, which dispatcher_reconcile's gated recovery then resumes.
         # The guarded predicate makes this a no-op for every non-parked run.
-        await session.execute(
-            update(Run)
-            .where(
-                Run.id == run_id,
-                Run.organisation_id == org_id,
-                Run.status == "hitl_parked",
-            )
-            .values(status="awaiting_human")
-        )
+        # Shared transition (qa F15) — the gate coalescing's supersede
+        # close-out issues the identical write through the same helper.
+        await unpark_parked_run(session, run_id=run_id, org_id=org_id)
         gate = await session.get(HitlClaim, claim_id, populate_existing=True)
         if gate is None:
             raise GateVanishedError(run_id, gate_id, "decided")

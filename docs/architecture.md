@@ -251,9 +251,10 @@ org triggers pause). Four independent mechanisms keep that gate healthy:
 - **HITL park-on-expiry sweep** — a system cron (every 5 min) parks a run whose
   open HITL gate expired UNANSWERED past `HITL_PARK_GRACE_SECONDS` (default
   24h): the run moves `awaiting_human` → `hitl_parked` (a non-terminal status
-  that holds no pipeline capacity) and the gate is stamped `parked_at` so the
-  HITL UI can show "expired — parked". Park ≠ decide: the gate row stays OPEN
-  AND CLAIMABLE (a claim takes a fresh TTL), and the moment a decision commits
+  that holds no pipeline capacity) — the STATUS itself is the parked signal
+  the HITL UI reads to show "expired — parked". Park ≠ decide: the gate row
+  stays OPEN AND CLAIMABLE (a claim takes a fresh TTL), and the moment a
+  decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission — approve resumes from the checkpoint through the
   normal resume path, reject terminalises via the reject path. Each park is

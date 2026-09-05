@@ -3,16 +3,18 @@
 FAR-604 D2 (HITL capacity) adds the non-terminal ``hitl_parked`` run status to
 the ``ck_runs_status`` CHECK constraint (migration ``0178_hitl_parked_status``,
 renumbered from 0177 and re-parented onto main's ``0177_invitations`` after the
-collision) and stamps ``hitl_claims.parked_at``. This file asserts:
+collision). This file asserts:
 
 * the model status sets (``db.models.run``) contain ``hitl_parked`` and the
   ORM CHECK constraint reflects it — the model is the single source of truth,
 * the widening migration's hardcoded vocabulary stays in sync with the model
   (a status in the model but missing from the migration breaks writes on a
   fresh DB; a status in the migration but not the model widens beyond the ORM),
-* the migration is idempotent (guarded drop-if-differs / add-if-absent) and
-  its downgrade is safe (no residual ``hitl_parked`` rows can violate the
-  restored constraint).
+* the migration is idempotent (guarded drop-if-differs / staged NOT VALID
+  add-if-absent + guarded validate) and its downgrade is safe (no residual
+  ``hitl_parked`` rows can violate the restored constraint),
+* the ``hitl_claims.parked_at`` column stays ABSENT (qa F13 — the status
+  carries the signal; the column was unread, stale-on-re-park schema noise).
 
 Mirrors the sibling ``test_trigger_event_vocabulary.py`` pattern.
 """
@@ -126,11 +128,43 @@ class TestWideningMigration:
         assert "::charactervarying" in drop_stmt
         assert "character varying" not in drop_stmt
 
-    def test_parked_at_column_is_idempotent(self) -> None:
-        """The ``hitl_claims.parked_at`` add is guarded by an inspector check
-        so an upgrade that already added the column never fails."""
+    def test_add_is_staged_not_valid_then_validated(self) -> None:
+        """qa F8: the constraint ADD is staged ``NOT VALID`` (SHARE UPDATE
+        EXCLUSIVE — online, no ACCESS EXCLUSIVE full-scan lock) and proven by
+        a separate guarded ``VALIDATE CONSTRAINT`` (the new list is a strict
+        superset, so the online proof can never fail)."""
         source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
-        assert 'parked_at" not in existing_claims' in source
+        assert "NOT VALID;" in source
+        assert "VALIDATE CONSTRAINT ck_runs_status" in source
+        # The validate is idempotent-guarded on the NOT VALID marker so an
+        # already-proven constraint is never re-scanned.
+        assert "pg_get_constraintdef(oid) LIKE '%NOT VALID'" in source
+
+    def test_drop_guards_tolerate_not_valid_suffix(self) -> None:
+        """qa F8: both drop guards normalise a trailing `` NOT VALID`` off the
+        whitespace-stripped definition before comparing — a partially-run
+        upgrade (ADD..NOT VALID committed, VALIDATE pending) must still be
+        recognised + dropped by a re-run or by the downgrade."""
+        module = _load_migration()
+        for attr in ("_DROP_NEW", "_DROP_OLD"):
+            guard: str = getattr(module, attr)
+            assert "regexp_replace(regexp_replace(pg_get_constraintdef(oid)" in guard, attr
+            assert "'NOTVALID$', '')" in guard, attr
+
+    def test_parked_at_column_is_absent(self) -> None:
+        """qa F13: the ``hitl_claims.parked_at`` column is GONE from the
+        migration (upgrade AND downgrade) — the ``hitl_parked`` STATUS carries
+        the parked signal; the column had zero consumers, went stale on a
+        re-park, and added schema + phantom-count surface. No executable
+        parked_at DDL may exist (the docstring's F13 note is documentation,
+        not schema)."""
+        source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
+        assert "add_column" not in source
+        assert "drop_column" not in source
+        assert "ADD COLUMN" not in source
+        assert "parked_at = now()" not in source
+        assert "parked_at = NULL" not in source
+        assert "parked_at IS NULL" not in source
 
     def test_downgrade_moves_residual_parked_rows_first(self) -> None:
         """The downgrade restores the pre-0177 14-status constraint — residual

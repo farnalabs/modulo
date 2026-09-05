@@ -1480,6 +1480,69 @@ class TestSystemJobDelegates:
         assert "sweep_stats_persist_failed" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_hitl_park_sweep_delegates_and_persists_stats(self) -> None:
+        """qa F5: the hitl_park_sweep wrapper persists a liveness stats key
+        (last_run_at + parked count + TTL) every tick so /healthz/ready can
+        detect a silently dead sweep — parking is post-D1 hygiene, so without
+        this key a dead sweep delayed the 'expired — parked' transition
+        invisibly."""
+        redis_client = AsyncMock()
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.run_admission.park_expired_hitl_runs",
+                new_callable=AsyncMock,
+                return_value={"parked": 3},
+            ) as sweep,
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client) as from_url,
+        ):
+            result = await sw.hitl_park_sweep({})
+
+        assert result == {"parked": 3}
+        sweep.assert_awaited_once()
+        from_url.assert_called_once()
+        redis_client.set.assert_awaited_once()
+        assert redis_client.set.await_args.args[0] == sw.HITL_PARK_SWEEP_STATS_KEY
+        assert redis_client.set.await_args.kwargs["ex"] == sw.HITL_PARK_SWEEP_STATS_TTL_SECONDS
+        assert sw.HITL_PARK_SWEEP_STATS_TTL_SECONDS > sw.HITL_PARK_SWEEP_STALE_SECONDS
+        import json as _json
+
+        stats = _json.loads(redis_client.set.await_args.args[1])
+        assert stats["parked"] == 3
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
+    async def test_hitl_park_sweep_failure_persists_partial_stats_then_raises(self) -> None:
+        """qa F5: a park-sweep failure is persisted (with the PARTIAL parked
+        count the sweep achieved) and then RE-RAISED so SAQ's retries=2
+        engages — same liveness contract as slot_reconciliation."""
+        redis_client = AsyncMock()
+        from modulo.core.run_admission import HitlParkError
+
+        err = HitlParkError("sweep failed", parked=2)
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.run_admission.park_expired_hitl_runs",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            pytest.raises(HitlParkError),
+        ):
+            await sw.hitl_park_sweep({})
+
+        redis_client.set.assert_awaited_once()
+        import json as _json
+
+        stats = _json.loads(redis_client.set.await_args.args[1])
+        assert stats["parked"] == 2
+        assert stats["error"] == "sweep_failed"
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
     async def test_cost_probe_delegates(self) -> None:
         factory = MagicMock()
         with (

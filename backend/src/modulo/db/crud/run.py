@@ -34,7 +34,14 @@ from modulo.db.lifecycle_refs import (
 )
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run import (
+    ACTIVE_RUN_STATUSES,
+    AWAITING_HUMAN_STATUS,
+    HITL_PARKED_STATUS,
+    PIPELINE_CAPACITY_STATUSES,
+    TERMINAL_STATUSES,
+    Run,
+)
 from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
@@ -154,8 +161,31 @@ _RUN_CONCURRENCY_MAX = 100
 _COALESCE_KEY_FIELD = "_coalesce_key"
 COALESCE_KEY_FIELD = _COALESCE_KEY_FIELD
 # Bounded candidate scan for non-Postgres backends (no server-side JSON path
-# filter available): pending runs of ONE pipeline only.
+# filter available): pending runs of ONE pipeline only. Public alias (qa F15):
+# the HITL gate-coalescing scan imports the SAME cap so the two bounded-scan
+# conventions cannot drift.
 _COALESCE_CANDIDATE_LIMIT = 200
+COALESCE_CANDIDATE_LIMIT = _COALESCE_CANDIDATE_LIMIT
+
+
+def read_coalesce_key(payload: Any) -> str | None:
+    """Read the coalesce key off a stored run input payload (qa F15).
+
+    Shared extraction for every consumer that matches a run by its work-item
+    key (``coalesce_pending_run``'s non-Postgres candidate scan and the HITL
+    gate coalescing's entity match). Accepts the raw stored payload — a dict,
+    a JSON string (some backends hand back TEXT), or None — and returns the
+    key string or None when absent/falsy/foreign-shaped.
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            payload = None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(_COALESCE_KEY_FIELD)
+    return str(value) if value else None
 
 
 def _is_terminal_status(status: str) -> bool:
@@ -1392,9 +1422,7 @@ async def coalesce_pending_run(
             (
                 r
                 for r in candidates
-                if getattr(r, "organisation_id", None) == org_id
-                and isinstance(r.input_payload, dict)
-                and r.input_payload.get(_COALESCE_KEY_FIELD) == coalesce_key
+                if getattr(r, "organisation_id", None) == org_id and read_coalesce_key(r.input_payload) == coalesce_key
             ),
             None,
         )
@@ -1705,6 +1733,7 @@ class _RunStatusUpdate:
     clear_error_code: bool = False
     claim_token: str | None = None
     from_status: str | None = None
+    not_status: str | None = None
 
 
 async def _write_unclassified_classification(session: AsyncSession, run: Run) -> None:
@@ -1778,6 +1807,7 @@ async def update_run_status(
     clear_error_code: bool = False,
     claim_token: str | None = None,
     from_status: str | None = None,
+    not_status: str | None = None,
 ) -> Run | None:
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
@@ -1794,6 +1824,7 @@ async def update_run_status(
         clear_error_code=clear_error_code,
         claim_token=claim_token,
         from_status=from_status,
+        not_status=not_status,
     )
     if update.claim_token is not None:
         return await _update_run_status_fenced(session, run_id, status, update=update)
@@ -1801,6 +1832,20 @@ async def update_run_status(
     run = result.scalar_one_or_none()
     if run is None:
         return None
+    # Guarded write (qa F7): when *not_status* is set and the row is currently
+    # in that status, the write is SKIPPED (logged) instead of applied. The
+    # read-then-write here is serialized by the FOR UPDATE row lock, so the
+    # guard is evaluated against the authoritative row state — a concurrent
+    # writer (e.g. the park sweep parking the run mid-claim) either committed
+    # before this lock was taken (guard sees it) or waits behind it.
+    if update.not_status is not None and run.status == update.not_status:
+        _log.info(
+            "run_status.guard_skipped run=%s requested=%s forbidden_from=%s — write not applied",
+            run.id,
+            status,
+            update.not_status,
+        )
+        return run
     run.status = status
     if status == "running" and run.started_at is None:
         run.started_at = datetime.now(UTC)
@@ -1872,6 +1917,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "WHERE id=:rid "
     "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
     "AND (CAST(:from_status AS text) IS NULL OR status = CAST(:from_status AS text)) "
+    "AND (CAST(:not_status AS text) IS NULL OR status <> CAST(:not_status AS text)) "
     "AND (cancellation_requested = false OR :status IN ('cancelled', 'awaiting_human', 'complete')) "
     "RETURNING id"
 )
@@ -1903,6 +1949,7 @@ async def _update_run_status_fenced(
             "rid": str(run_id),
             "tok": update.claim_token,
             "from_status": update.from_status,
+            "not_status": update.not_status,
             "error_code": update.error_code,
             "error_detail": update.error_detail,
             "total_tokens": update.total_tokens,
@@ -1935,6 +1982,29 @@ async def _update_run_status_fenced(
     if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, refreshed_run)
     return refreshed_run
+
+
+async def unpark_parked_run(session: AsyncSession, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Un-park a ``hitl_parked`` run back to ``awaiting_human`` (qa F15).
+
+    The single shared un-park transition (FAR-604 D3): a parked run re-enters
+    normal admission the moment its gate is decided — by
+    ``HITLManager._decide`` (approve/reject/deliver-manual) or by the gate
+    coalescing's supersede close-out (the old gate auto-rejected). The
+    predicate is guarded to ``status = 'hitl_parked'`` ONLY, so it is a no-op
+    for every non-parked run and can never clobber a concurrent
+    running/claimed transition. Parked runs resumed by the dispatcher
+    reconcile instead go through ``resume_run`` (which claims the row).
+    """
+    await session.execute(
+        update(Run)
+        .where(
+            Run.id == run_id,
+            Run.organisation_id == org_id,
+            Run.status == HITL_PARKED_STATUS,
+        )
+        .values(status=AWAITING_HUMAN_STATUS)
+    )
 
 
 _TRANSITION_SQL = text(
@@ -2045,25 +2115,20 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
 _ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUSES
 
 
-def _active_run_statuses(include_pending: bool, *, scope: str) -> set[str]:
-    """Resolve the status set for an active-run count.
+def _active_run_statuses(include_pending: bool) -> set[str]:
+    """Resolve the status set for an active-run count (qa F14).
 
     * ``include_pending=True`` (quota): all non-terminal runs including
       ``pending``.
-    * ``include_pending=False`` + ``scope='org'`` (org run-concurrency gate):
-      running/awaiting_human/hitl_parked/claimed/unknown — a pending run does
-      not hold capacity, but a run parked on a human decision still occupies
-      the org-wide worker pool so the org-level ``run_concurrency_limit``
-      keeps bounding it (FAR-604 D1).
-    * ``include_pending=False`` + ``scope='pipeline'`` (pipeline
-      ``max_concurrent_runs`` gate): ``PIPELINE_CAPACITY_STATUSES`` —
-      awaiting_human/hitl_parked runs do NOT consume a pipeline slot (FAR-604
-      D1; a human decision may take days and must never starve admission).
+    * ``include_pending=False``: running/awaiting_human/claimed/unknown/
+      hitl_parked — a pending run does not hold capacity. The pipeline gate
+      additionally excludes the human-waiting statuses (FAR-604 D1); that
+      scoping is selected inside :func:`_count_active_runs` (which already
+      knows the gate's scope) instead of a required ``scope`` keyword here —
+      the old required kwarg broke every two-argument caller/test.
     """
     if include_pending:
         return set(_ACTIVE_RUN_STATUSES)
-    if scope == "pipeline":
-        return set(PIPELINE_CAPACITY_STATUSES)
     return set(_ACTIVE_RUN_STATUSES - {"pending"})
 
 
@@ -2078,17 +2143,28 @@ async def _count_active_runs(
     """Shared active-run counter for the pipeline- and org-scoped gates.
 
     Scopes to exactly one of *org_id* (org gate) or *pipeline_id* (pipeline
-    gate). ``include_pending`` selects the status set via
-    :func:`_active_run_statuses` (the pipeline gate additionally excludes the
-    human-waiting statuses — FAR-604 D1). Optionally excludes a specific
-    *run_id* so a pending run does not count itself when checking capacity.
+    gate). ``include_pending=True`` counts every non-terminal status (quota
+    semantics); ``include_pending=False`` selects the capacity set — the
+    pipeline gate excludes the human-waiting statuses (FAR-604 D1), the org
+    gate does not. Optionally excludes a specific *run_id* so a pending run
+    does not count itself when checking capacity.
     """
-    scope = "pipeline" if pipeline_id is not None else "org"
+    # Pipeline scope (include_pending=False only) excludes the human-waiting
+    # statuses (FAR-604 D1: a human decision may take days and must never
+    # starve admission); the org scope keeps counting them (the org-wide
+    # worker pool stays bounded). include_pending=True is the QUOTA semantics
+    # and wins over the scope: every non-terminal status counts.
+    if include_pending:
+        statuses = _active_run_statuses(True)
+    elif pipeline_id is not None:
+        statuses = set(PIPELINE_CAPACITY_STATUSES)
+    else:
+        statuses = _active_run_statuses(False)
     stmt = (
         select(func.count())
         .select_from(Run)
         .where(
-            Run.status.in_(_active_run_statuses(include_pending, scope=scope)),
+            Run.status.in_(statuses),
             Run.cancellation_requested.is_(False),
         )
     )
@@ -2394,6 +2470,12 @@ async def _get_dialect_name(session: AsyncSession) -> str:
     if asyncio.iscoroutine(bind):
         bind = await bind
     return bind.dialect.name
+
+
+# Public alias (qa F15): core modules that need a dialect guard (the HITL gate
+# coalescing's Postgres-only advisory lock / server-side JSON key filter) read
+# the same helper instead of reimplementing the bind dance.
+get_dialect_name = _get_dialect_name
 
 
 async def get_run_stats(

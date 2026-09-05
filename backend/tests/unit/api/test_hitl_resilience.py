@@ -3,7 +3,6 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -73,11 +72,15 @@ class TestClaimGateSQLAlchemyError:
 
 
 class TestClaimGateKeepsParkedRunParked:
-    """FAR-604 D2/D3: claiming the gate of a ``hitl_parked`` run must NOT
-    transition the run to ``claimed`` — a claim is not a decision, and the
-    claim-expiry sweep would otherwise un-park the run via the
+    """FAR-604 D2/D3 + qa F7: claiming the gate of a ``hitl_parked`` run must
+    NOT transition the run to ``claimed`` — a claim is not a decision, and
+    the claim-expiry sweep would otherwise un-park the run via the
     claimed→awaiting_human reset. The un-park happens at decision time
-    (``HITLManager._decide``)."""
+    (``HITLManager._decide``). The guard lives INSIDE the status write
+    (``update_run_status(not_status=...)``) instead of a route-level
+    read-then-write: the pre-read could not see the park sweep's concurrent
+    commit (TOCTOU), so a run parked between the read and the write used to
+    be flipped to ``claimed``."""
 
     @staticmethod
     def _claim_gate_response() -> MagicMock:
@@ -89,37 +92,22 @@ class TestClaimGateKeepsParkedRunParked:
         return gate
 
     @patch("modulo.api.routes.hitl.update_run_status", new_callable=AsyncMock)
-    @patch("modulo.api.routes.hitl.get_run", new_callable=AsyncMock)
     @patch("modulo.api.routes.hitl.HITLManager.claim", new_callable=AsyncMock)
-    def test_parked_run_is_not_transitioned_to_claimed(
-        self, claim: AsyncMock, get_run: AsyncMock, update_run_status: AsyncMock, client: TestClient
+    def test_claim_write_is_guarded_against_parked(
+        self, claim: AsyncMock, update_run_status: AsyncMock, client: TestClient
     ) -> None:
         claim.return_value = self._claim_gate_response()
-        get_run.return_value = SimpleNamespace(status="hitl_parked")
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
             json={"expiry_minutes": 15},
         )
         assert resp.status_code == 200
         assert resp.json()["claim_token"] == "tok-123"
-        update_run_status.assert_not_awaited()
-
-    @patch("modulo.api.routes.hitl.update_run_status", new_callable=AsyncMock)
-    @patch("modulo.api.routes.hitl.get_run", new_callable=AsyncMock)
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new_callable=AsyncMock)
-    def test_awaiting_human_run_is_still_transitioned_to_claimed(
-        self, claim: AsyncMock, get_run: AsyncMock, update_run_status: AsyncMock, client: TestClient
-    ) -> None:
-        claim.return_value = self._claim_gate_response()
-        get_run.return_value = SimpleNamespace(status="awaiting_human")
-        resp = client.post(
-            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
-            json={"expiry_minutes": 15},
-        )
-        assert resp.status_code == 200
         update_run_status.assert_awaited_once()
         assert update_run_status.call_args.args[1] == _RUN_ID
         assert update_run_status.call_args.args[2] == "claimed"
+        # The parked guard rides INSIDE the write — the route never pre-reads.
+        assert update_run_status.call_args.kwargs["not_status"] == "hitl_parked"
 
 
 class TestClaimGateNotTeamMemberError:
