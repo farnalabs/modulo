@@ -1097,11 +1097,7 @@ def test_community_contribute_error_mapping(client: TestClient, exc: Exception, 
     )
 
 
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [(_INTEGRITY, 409), (_PROGRAMMING, 501), (SQLAlchemyError(), 500)],
-    ids=["409", "501", "500"],
-)
+@pytest.mark.parametrize(("exc", "expected"), _GET_409_501_503, ids=["409", "501", "503"])
 def test_list_community_contributions_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
