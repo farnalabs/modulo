@@ -1,7 +1,8 @@
 /**
  * Centralized run-status classification constants shared across run views.
- * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')
+ * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')
  * Used by RunsListView (non-terminal → show the Cancel action) and RunDetailView (terminal → hide Cancel / stop polling).
+ * 'hitl_parked' is NON-terminal (FAR-604 D2): an awaiting_human run whose HITL gate timed out and was parked; it remains cancellable and can be un-parked back to awaiting_human.
  * 'stalled' is terminal: a sandbox agent that went silent past the idle watchdog had its sandbox killed.
  * 'budget_exceeded' is terminal: the cost controller finalized the run when the per-agent token budget was breached.
  * 'cost_ceiling_exceeded' is terminal: the cost controller finalized the run when the org-wide spend ceiling was breached.
@@ -11,7 +12,7 @@
  */
 export const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed'] as const
 
-export const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed', 'unknown'] as const
+export const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked'] as const
 
 export function isTerminalStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status)

@@ -1098,6 +1098,7 @@ export default {
       "status_pending": "Pending",
       "status_running": "Running",
       "status_awaiting_human": "Awaiting Human",
+      "status_hitl_parked": "HITL Parked",
       "status_complete": "Complete",
       "status_failed": "Failed",
       "status_cancelled": "Cancelled",
