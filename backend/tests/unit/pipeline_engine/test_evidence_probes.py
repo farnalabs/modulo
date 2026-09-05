@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-import modulo.core.pipeline_engine.evidence as evidence
+from modulo.core.pipeline_engine import evidence
 from modulo.core.pipeline_engine.evidence import (
     EVIDENCE_PROBE_TIMEOUT_SECONDS,
     CommandResult,

@@ -996,7 +996,7 @@ def build_graph_from_json(
             pipeline_retry_policy=pipeline_retry_policy,
             outgoing_edges=outgoing_by_node.get(node_id, []),
             incoming_edges=incoming_by_node.get(node_id, []),
-            raw_fn_resolver=lambda nid: raw_fns.get(nid),
+            raw_fn_resolver=raw_fns.get,
             idempotency_key=node_idempotency_key,
             node_defs=retry_nodes_by_id,
         )

@@ -95,7 +95,7 @@ class TestDbErrorMapping:
 
     @pytest.fixture
     def patch_progress(self, monkeypatch: pytest.MonkeyPatch):
-        import modulo.api.routes.onboarding as onboarding
+        from modulo.api.routes import onboarding
 
         def _apply(exc: Exception) -> None:
             async def _raise_progress(session: AsyncSession, org_id: uuid.UUID) -> None:
