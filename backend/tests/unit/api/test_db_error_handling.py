@@ -9,7 +9,8 @@ contract directly so a mapping change is caught at the unit layer: exact
 exception-type → status-code mapping, the fixed detail strings,
 ``asyncio.CancelledError`` passthrough, ``HTTPException`` passthrough, the
 ``from None`` context suppression, the metadata-preserving ``@wraps`` behaviour,
-the ``log_prefix`` used in structured logs, and success-path value passthrough.
+the ``log_prefix`` used in structured logs, the structured 503 backstop record
+emitted on the ``SQLAlchemyError`` path, and success-path value passthrough.
 """
 
 import asyncio
@@ -205,6 +206,59 @@ class TestLogging:
 
         messages = [r.getMessage() for r in caplog.records]
         assert "prefix.generic.unexpected_error" in messages
+
+
+class TestStructured503Backstop:
+    """The shared ``SQLAlchemyError`` backstop is the dominant 503 chokepoint —
+    it wraps 400+ route handlers across the codebase, so a transient DB
+    failure on ANY route funnels through it. A 503 raised here must emit the
+    shared structured ``service_unavailable`` record (reason ``db_transient``,
+    ERROR level) so a recurrence of the 2026-09-04 webhook 503 incident on a
+    non-webhook route is diagnosable from the persisted reason trail."""
+
+    async def test_sqlalchemy_error_emits_structured_service_unavailable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _run(_endpoint(SQLAlchemyError("pool timeout"))())
+
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert excinfo.value.detail == "Database temporarily unavailable."
+
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.ERROR
+        payload = record.__dict__["service_unavailable"]
+        assert payload["reason"] == "db_transient"
+        assert payload["route"] == "test.endpoint"
+        assert payload["exception_class"] == "SQLAlchemyError"
+        assert payload["detail"] == "transient database error (handle_db_errors backstop)"
+
+    async def test_typed_db_errors_do_not_emit_structured_503_record(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Only the 503 backstop emits the structured record: IntegrityError
+        (409) and ProgrammingError (501) map to different outcomes and must
+        not pollute the ``service_unavailable`` reason trail."""
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(HTTPException) as integrity_exc,
+        ):
+            await _run(_endpoint(_integrity_error())())
+
+        assert integrity_exc.value.status_code == status.HTTP_409_CONFLICT
+
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(HTTPException) as programming_exc,
+        ):
+            await _run(_endpoint(_programming_error())())
+
+        assert programming_exc.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert not records
 
 
 class TestHandleDbErrors:
