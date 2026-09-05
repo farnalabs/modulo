@@ -23,6 +23,39 @@ import modulo.core.pipeline_execution as pe
 import modulo.core.run_terminal_advance as rta
 from modulo.db.models.run import Run
 
+
+@pytest.fixture(autouse=True)
+def _fake_sync_redis_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this module off the network: stub the sync Redis probe client.
+
+    ``TestSaqWorkerSettings`` exercises ``runs_settings``/``system_settings``/
+    ``staging_*_settings``, whose ``_build_queue`` -> ``_check_redis_connection``
+    constructs a SYNC Redis client and pings localhost:6379 (3 attempts, ~4s
+    connect timeout each, 2s+4s exponential backoff) — 18-36s per settings call
+    when nothing listens on 6379 (FAR-607). Patch the network boundary
+    (``redis.Redis.from_url``) with a client whose ``ping()`` succeeds; the
+    probe's own logic still runs. ``TestSaqWorkerSettings.test_redis_client_knobs``
+    patches the ASYNC client (``sw.aioredis.from_url``) explicitly and is
+    unaffected.
+    """
+    sync_client = MagicMock()
+    sync_client.ping.return_value = True
+    monkeypatch.setattr("redis.Redis.from_url", MagicMock(return_value=sync_client))
+
+
+@pytest.fixture(autouse=True)
+def _fake_sync_db_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the saq_worker startup DB probe off the network too (FAR-607).
+
+    ``saq_worker._probe_database`` opens a real psycopg engine and runs
+    ``SELECT 1`` — a ~10s TCP timeout against an unreachable localhost:5432 if
+    any settings path ever reaches it. Stub the boundary
+    (``sqlalchemy.create_engine``) so the whole module stays hermetic; nothing
+    in this module re-patches it.
+    """
+    monkeypatch.setattr("sqlalchemy.create_engine", MagicMock(return_value=MagicMock()))
+
+
 # ---------------------------------------------------------------------------
 # Fake engine / connection doubles (sync)
 # ---------------------------------------------------------------------------
