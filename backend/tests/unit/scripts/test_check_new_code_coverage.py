@@ -144,6 +144,50 @@ def test_filter_changed_production_files_applies_coverage_exclusions():
     ]
 
 
+def test_filter_changed_production_files_excludes_generated_and_type_only():
+    changed = [
+        "frontend/src/lib/api/schema.ts",
+        "frontend/src/types/models.ts",
+        "frontend/src/types/nested/widget.d.ts",
+        "backend/src/modulo/api/routes.d.ts",
+        "frontend/src/stores/auth.ts",
+        "backend/src/modulo/api/routes.py",
+    ]
+    assert gate.filter_changed_production_files(changed) == [
+        "frontend/src/stores/auth.ts",
+        "backend/src/modulo/api/routes.py",
+    ]
+
+
+def test_is_coverage_excluded_matches_generated_and_type_only_paths():
+    assert gate.is_coverage_excluded("frontend/src/lib/api/schema.ts") is True
+    assert gate.is_coverage_excluded("backend/src/lib/api/schema.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/types/models.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/types/nested/widget.d.ts") is True
+    assert gate.is_coverage_excluded("backend/src/modulo/api/routes.d.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/stores/auth.ts") is False
+    assert gate.is_coverage_excluded("backend/src/modulo/api/routes.py") is False
+
+
+def test_main_does_not_gate_unmeasured_generated_schema_ts(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _write_cobertura(
+        tmp_path / "backend" / "coverage.xml",
+        [_class_xml("src/modulo/api/routes.py", [_line_xml(1, n) for n in range(1, 11)])],
+    )
+    _write_lcov(tmp_path / "frontend" / "coverage" / "lcov.info", [_lcov_record("src/stores/auth.ts", 10, 10)])
+    changed = [
+        "backend/src/modulo/api/routes.py",
+        "frontend/src/stores/auth.ts",
+        "frontend/src/lib/api/schema.ts",
+    ]
+    patch_merge_base, patch_changed = _patch_git(changed)
+    with patch_merge_base, patch_changed:
+        assert gate.main([]) == 0
+    out = capsys.readouterr().out
+    assert "schema.ts" not in out
+
+
 # ---------------------------------------------------------------------------
 # report path normalisation
 # ---------------------------------------------------------------------------

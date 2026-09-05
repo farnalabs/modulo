@@ -6,9 +6,9 @@ not allowed to modify Quality gates"), so the Duncan-approved new-code
 coverage >=90% policy is enforced here as a CI check instead. The gate:
 
 1. Computes the PR diff (merge-base vs HEAD) and keeps changed production
-   files: backend/src/**/*.py and frontend/src/**, minus the coverage-
-   denominator exclusions that mirror sonar.coverage.exclusions (migrations,
-   backend/scripts, backend/tools, frontend __tests__ and tests).
+    files: backend/src/**/*.py and frontend/src/**, minus the coverage-
+    denominator exclusions (migrations, backend/scripts, backend/tools, frontend
+    __tests__ and tests, auto-generated schema.ts, type-only paths and *.d.ts).
 2. Reads line coverage for those files from the backend cobertura XML
    (pytest-cov) and the frontend lcov report (vitest v8 provider). A changed
    production file absent from its report counts as 0% covered with
@@ -50,14 +50,19 @@ DEFAULT_MIN_LINES = 10
 BACKEND_INCLUDE = "backend/src/**/*.py"
 FRONTEND_INCLUDE = "frontend/src/**"
 
-# Coverage-denominator exclusions (mirror sonar.coverage.exclusions): files
-# that carry no unit-testable production logic must not drag the gate down.
+# Coverage-denominator exclusions: files that carry no unit-testable production
+# logic (or are auto-generated / type-only) must not drag the gate down. These
+# overlap with sonar.exclusions (notably **/schema.ts) but are curated
+# independently for the gate's denominator.
 COVERAGE_EXCLUSION_PATTERNS = (
     "backend/src/modulo/db/migrations/**",
     "backend/scripts/**",
     "backend/tools/**",
     "frontend/src/__tests__/**",
     "frontend/tests/**",
+    "*schema.ts",
+    "frontend/src/types/**",
+    "**/*.d.ts",
 )
 
 # cobertura condition-coverage attribute format: "50% (1/2)".
