@@ -25,6 +25,7 @@ from modulo.api.models.error import (
     ErrorIngestRequest,
     ErrorIngestResponse,
     ErrorListResponse,
+    SchedulerStarvationResponse,
     SessionKeyResponse,
 )
 from modulo.auth.jwt import TenantPrincipal
@@ -35,6 +36,7 @@ from modulo.db.crud.error_tracking import (
     get_error_events_by_group,
     get_error_group,
     get_error_groups,
+    get_scheduler_starvation_pipelines,
     update_error_group,
 )
 from modulo.db.models.error_event import ErrorEvent
@@ -50,6 +52,13 @@ _MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily una
 _MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 _MSG_NO_ORGANISATION = "No organisation"
+
+# Scheduler-starvation surfacing (FAR-604). Pending runs blocked on a capacity
+# cap carry a RAW marker in ``runs.error_code`` (``error_codes.LEGACY_ALIASES``
+# maps them to the dotted capacity.org / capacity.pipeline presentation codes).
+# The same raw pair is what the stale-run sweep / dispatcher reconcile key on —
+# the canonical ``CAPACITY_MARKERS`` (imported by the crud-layer detection).
+_STARVATION_THRESHOLD_MINUTES = 10
 
 
 _log = logging.getLogger(__name__)
@@ -482,6 +491,65 @@ async def list_error_groups(
         ) from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get(
+    "/scheduler-starvation",
+    response_model=SchedulerStarvationResponse,
+    dependencies=[require_feature("error_tracking")],
+)
+@handle_db_errors("errors.scheduler_starvation")
+async def get_scheduler_starvation(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
+) -> dict[str, Any]:
+    """Scheduler-starvation condition for the error dashboard (FAR-604).
+
+    Pipelines having unstarted runs (``status='pending'``, ``started_at IS
+    NULL``) with a capacity-marker ``error_code`` whose age anchor is older
+    than the starvation threshold (10 minutes). Declared BEFORE the
+    ``/{error_id}`` routes so the static path wins routing. Pre-terminal
+    pending runs never produce error events — the dashboard otherwise keys off
+    ingested errors from terminal failures — so a pipeline stuck at its
+    concurrency cap is invisible without this surface. Each item carries the
+    pipeline id/name, the count of starved pending runs, and the oldest run's
+    age anchor + age. The age anchor is the run's EARLIEST trigger-event
+    receipt (``MIN(trigger_events.received_at)``, falling back to
+    ``created_at`` when the run has no trigger event): a coalescing
+    re-delivery refreshes the pending run's ``created_at`` on the dispatcher's
+    short re-dispatch cadence, so a ``created_at``-keyed age would reset every
+    cycle and make a days-long wedge look minutes old. The aggregate is one
+    row per starved pipeline (bounded by the org's pipeline count), so no
+    pagination and ``total`` is the exact item count. Detection (the SQL
+    aggregate) lives in the crud layer
+    (:func:`modulo.db.crud.error_tracking.get_scheduler_starvation_pipelines`)
+    — the route keeps auth, RLS pinning and serialization only; the
+    ``handle_db_errors`` decorator owns the DB-error mapping (it re-raises
+    ``HTTPException`` untouched).
+    """
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+
+    threshold = datetime.now(UTC) - timedelta(minutes=_STARVATION_THRESHOLD_MINUTES)
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        rows = await get_scheduler_starvation_pipelines(session=session, org_id=org_id, threshold=threshold)
+
+    now = datetime.now(UTC)
+    items = []
+    for row in rows:
+        oldest = row.oldest_created_at
+        items.append(
+            {
+                "pipeline_id": str(row.pipeline_id),
+                "pipeline_name": row.pipeline_name,
+                "pending_count": int(row.pending_count),
+                "oldest_created_at": oldest.isoformat() if oldest else "",
+                "oldest_age_minutes": round((now - oldest).total_seconds() / 60, 1) if oldest else 0.0,
+            }
+        )
+    return {"items": items, "total": len(items), "threshold_minutes": _STARVATION_THRESHOLD_MINUTES}
 
 
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])

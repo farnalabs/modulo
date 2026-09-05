@@ -6,6 +6,31 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
+    <div
+      v-if="starvationItems.length > 0"
+      data-testid="scheduler-starvation"
+      class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
+    >
+      <div class="font-medium mb-1">{{ $t('views.AdminErrorsView.scheduler_starvation') }}</div>
+      <p class="text-sm text-muted-foreground mb-3">
+        {{ $t('views.AdminErrorsView.scheduler_starvation_hint', { minutes: starvationThresholdMinutes }) }}
+      </p>
+      <div class="flex flex-wrap items-center gap-x-8 gap-y-1 text-sm font-medium text-muted-foreground mb-1 px-2">
+        <span class="min-w-0 flex-1">{{ $t('views.AdminErrorsView.scheduler_starvation_pipeline') }}</span>
+        <span>{{ $t('views.AdminErrorsView.scheduler_starvation_pending_count') }}</span>
+        <span>{{ $t('views.AdminErrorsView.scheduler_starvation_oldest_wait') }}</span>
+      </div>
+      <div
+        v-for="item in starvationItems"
+        :key="item.pipeline_id"
+        class="flex flex-wrap items-center gap-x-8 gap-y-1 text-sm px-2 py-1 rounded hover:bg-warning/10"
+      >
+        <span class="min-w-0 flex-1 truncate font-medium">{{ item.pipeline_name || shortId(item.pipeline_id) }}</span>
+        <span class="font-mono">{{ item.pending_count }}</span>
+        <span class="font-mono whitespace-nowrap">{{ formatStarvationAge(item.oldest_age_minutes) }}</span>
+      </div>
+    </div>
+
     <FilterBar
       :search="{ placeholder: $t('views.AdminErrorsView.search_error_messages') }"
       :search-value="filterSearch"
@@ -122,9 +147,9 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
-import { watchDebounced } from '@vueuse/core'
+import { watchDebounced, useIntervalFn } from '@vueuse/core'
 import { useRouter } from 'vue-router'
-import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
+import { fetchErrorGroups, fetchSchedulerStarvation, type ErrorGroupSummary, type FetchErrorGroupsParams, type SchedulerStarvationResponse } from '../lib/api/errors'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -134,7 +159,9 @@ import { formatApiError } from "../lib/api/formatError"
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const router = useRouter()
 
 const limit = ref(20)
@@ -163,6 +190,31 @@ const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ it
 
 const groups = computed(() => groupsData.value?.items ?? [])
 const total = computed(() => groupsData.value?.total ?? 0)
+
+// Scheduler-starvation banner (FAR-604): capacity-blocked pending runs never
+// produce error events, so without this surface a pipeline stuck at its
+// concurrency cap is invisible here. Fail-open: a starvation fetch failure
+// renders nothing — never blocks the error-group dashboard. The banner must
+// track a LIVE incident, not a mount-time snapshot (an operator staring at
+// this page mid-wedge is exactly when fresh data matters), so the fetch is
+// re-polled every 60s — useDataFetch's staleTime would otherwise freeze the
+// data at the mount fetch (refetchOnWindowFocus is disabled app-wide).
+const { data: starvationData, load: loadStarvation } = useDataFetch<SchedulerStarvationResponse>(
+  () => fetchSchedulerStarvation().then(
+    d => ({ data: d }),
+    e => ({ error: { detail: `Failed to load scheduler starvation: ${formatApiError(e)}` } }),
+  ),
+  { initialValue: { items: [], total: 0, threshold_minutes: 10 } },
+)
+useIntervalFn(loadStarvation, 60_000)
+
+const starvationItems = computed(() => starvationData.value?.items ?? [])
+const starvationThresholdMinutes = computed(() => starvationData.value?.threshold_minutes ?? 10)
+
+function formatStarvationAge(minutes: number): string {
+  if (minutes < 120) return t('views.AdminErrorsView.scheduler_starvation_age_minutes', { minutes: Math.round(minutes) })
+  return t('views.AdminErrorsView.scheduler_starvation_age_hours', { hours: Math.round((minutes / 60) * 10) / 10 })
+}
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'level') filterLevel.value = value

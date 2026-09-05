@@ -492,6 +492,56 @@ def test_get_run_blocked_partial_summary_non_dict_returns_null(client: TestClien
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/runs/{run_id} — run-level warnings
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_exposes_warnings_from_cost_breakdown(client: TestClient) -> None:
+    """FAR: a missing-self-report breakdown entry surfaces as a structured
+    ``warnings`` entry on the run-detail response (not silently dropped)."""
+    breakdown = [
+        {
+            "component": "model_cost",
+            "display_name": "Model cost",
+            "source": "self_reported",
+            "amount_usd": "0.000000",
+            "formula_applied": "reported",
+            "rate_usd": None,
+            "basis": "reported by agent",
+            "missing_self_report": True,
+            "missing_self_report_reason": "agent_not_reported",
+        },
+    ]
+    run = _make_run(status="complete", cost_breakdown=breakdown)
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["warnings"], list)
+    assert len(body["warnings"]) == 1
+    assert body["warnings"][0]["code"] == "missing_self_report"
+    assert body["warnings"][0]["severity"] == "warning"
+
+
+def test_get_run_warnings_is_empty_when_no_breakdown(client: TestClient) -> None:
+    run = _make_run(status="complete", cost_breakdown=None)
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert not resp.json()["warnings"]
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/runs/{run_id} — not found
 # ---------------------------------------------------------------------------
 
@@ -987,6 +1037,81 @@ def test_get_run_aggregate_zero_when_no_own_or_child_cost(client: TestClient) ->
     assert body["child_runs_cost_usd"] == "0.000000"
     assert body["child_runs_count"] == 0
     assert body["aggregate_cost_usd"] == "0.000000"
+
+
+def test_list_runs_includes_warnings_count(client: TestClient) -> None:
+    """FAR: the runs-list item carries a ``warnings_count`` derived from the
+    run's cost_breakdown (computed over a single page-level load, not N+1)."""
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+
+    breakdown = [
+        {
+            "component": "model_cost",
+            "display_name": "Model cost",
+            "source": "self_reported",
+            "amount_usd": "0.000000",
+            "formula_applied": "reported",
+            "rate_usd": None,
+            "basis": "reported by agent",
+            "missing_self_report": True,
+            "missing_self_report_reason": "agent_not_reported",
+        },
+    ]
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            new_callable=AsyncMock,
+            return_value={run_id: breakdown},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    item = body["items"][0]
+    assert item["run_id"] == str(run_id)
+    assert item["warnings_count"] == 1
+
+
+def test_list_runs_warnings_count_zero_without_missing_self_report(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            new_callable=AsyncMock,
+            return_value={run_id: []},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["warnings_count"] == 0
 
 
 def _make_listable_run(

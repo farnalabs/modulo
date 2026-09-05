@@ -149,6 +149,8 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 
 Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.
 
+Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a Runner agent's model credentials will bind as per-agent env vars at dispatch, so no standing Modulo credentials enter the workspace (pending D6; today's dispatch injects standing host credentials).
+
 | Provider | Status |
 |----------|--------|
 | Anthropic Claude | Alpha |
@@ -172,7 +174,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Sandboxed execution environments for coding agents. RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub). First implementation: E2B (sandboxed cloud containers). WorkspaceLease is run-scoped and ephemeral.
+Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner - the one-line link for that ADR is right here). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) will resolve the EnvironmentProfile for a Runner dispatch once D2's deterministic provider selection lands; Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (pending D4, which introduces the `runner_docker` provider, the first-party runner image, and the compose overlay behind a filtered socket-proxy; legacy `local_docker` profiles belong to the same Docker tier), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. D2 will remove the unused WorkspaceLease scaffolding, including its API reader, and D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
 ### Auth System (`modulo/auth/`)
 
@@ -222,6 +224,40 @@ Manages the local and community library of reusable primitives (agents, schemas,
 5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node (or produces a FeedbackRecord).
 
 6. **Complete** – After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
+
+#### Run admission and healing (FAR-604)
+
+Dispatch admission is capacity-gated twice: per pipeline (`max_concurrent_runs`,
+counted over `running`/`awaiting_human`/`claimed` runs) and per org
+(`run_concurrency_limit`). A capacity-deferred run stays `pending` (marked
+`pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
+frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
+negatives — 0 would silently wedge admission forever; pausing admission is the
+org triggers pause). Four independent mechanisms keep that gate healthy:
+
+- **Slot reconciliation sweep** — a system cron (every 5 min) terminalises
+  `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
+  (default 30 min) with the `worker_lost` error code, force-releasing the
+  pipeline slots a crashed worker leaked. Journeys and daily facts advance for
+  each released run.
+- **Queue coalescing (latest-wins)** — for webhook deliveries with a stable
+  work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
+  `issue.number`; anything else → no key, no coalescing), a new delivery folds
+  into the pipeline's UNSTARTED `pending` run for the same key instead of
+  inserting a row: the pending run's input payload is replaced and its
+  `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
+  default; disable per trigger with `config_json.coalesce_pending: false`.
+  Replays never coalesce.
+- **Dispatcher backpressure** — trigger dispatch (webhook, cron, polling)
+  refuses NEW runs when the pipeline's pending queue exceeds
+  `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
+  than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
+  loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
+  webhook path answers 429 so the sender retries.
+- **Legacy stale-run sweep** — pending runs past the never-dispatched window
+  (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
+  (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
+  (`worker_lost`) are terminalised or re-dispatched as before.
 
 ### WebSocket event flow
 
@@ -398,13 +434,13 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 001 | Agent Execution Environment as a V1 Primitive | Implemented |
+| 001 | Agent Execution Environment as a V1 Primitive | Implemented (provider/tier model superseded by ADR 029) |
 | 002 | Multi-Backend Database Abstraction Strategy | Draft |
 | 003 | Agent Dispatch Model | Supersedes ADR 001 |
 | 003 | Packaging & Distribution Strategy | Draft |
 | 004 | Agent as a Self-Contained Bundle | Accepted |
 | 004 | User Offboarding Uses Deactivation (Not Hard Deletion) | Accepted |
-| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Accepted |
+| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Superseded by ADR 029 |
 | 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Active |
 | 006 | Dashboard Performance: Application Cache Over Materialized View | Active |
 | 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Active |
@@ -421,6 +457,7 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 | 025 | Generic REST Integration Connector | Accepted |
+| 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
 
 Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 

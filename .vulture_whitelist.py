@@ -151,6 +151,7 @@ __all__ = [
     "get_effective_setting",
     "extract_orm_entity",
     # --- Error-tracking / alerting helpers referenced only by tests ---
+    "dispatch_hitl_email_alerts",  # FAR-602 HITL email compose — exercised by tests/unit/core/test_hitl_email_alerts.py; the production path (schedule_hitl_email_dispatch -> _run_hitl_email_dispatch) splits resolve/send, so vulture cannot see a prod call site
     "configure_forwarders",
     "emit_signal_event",
     "emit_retry_deferred_alert",

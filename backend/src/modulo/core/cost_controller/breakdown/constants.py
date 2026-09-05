@@ -60,3 +60,13 @@ AMOUNT_USD_STRING_CLAMP = "99999999.999999"
 # The total_clamped marker entry prefixed to the breakdown when the summed
 # total is flat-clamped to the column capacity.
 TOTAL_CLAMPED_MARKER = {"total_clamped": True, "amount_usd": "0.000000"}
+
+# --- run-level cost warnings ---
+# The canonical warning code emitted when a self_reported cost component had at
+# least one eligible sandbox node but no agent reported a model cost (a phantom
+# $0.000000 "reported" row). Surfaced as a run-level warning (see
+# compute_run_warnings) and mirrored in the frontend RunWarningsList.
+RUN_WARNING_MISSING_SELF_REPORT = "missing_self_report"
+# The severity tag carried by every run-level cost warning (reserved for a
+# future "error" tier — nothing is a hard error today).
+RUN_WARNING_SEVERITY_WARNING = "warning"

@@ -477,8 +477,8 @@ export default {
       "name_is_required": "Name is required",
       "description": "Description",
       "provider_type": "Provider Type",
-      "local_docker": "Local Docker",
-      "e2b_sandboxed_cloud": "E2B (Sandboxed Cloud)",
+      "local_docker": "Bundled Runner (Docker)",
+      "e2b_sandboxed_cloud": "External Runner (E2B)",
       "provider_type_is_required": "Provider type is required",
       "image_reference": "Image Reference",
       "capabilities": "Capabilities",
@@ -810,7 +810,14 @@ export default {
       "no_message": "(no message)",
       "all_statuses": "All statuses",
       "no_error_groups_found": "No error groups found",
-      "apply_filters": "Apply Filters"
+      "apply_filters": "Apply Filters",
+      "scheduler_starvation": "Scheduler starvation",
+      "scheduler_starvation_hint": "Pipelines with runs stuck waiting for a capacity slot for over {minutes} minutes. Capacity-blocked pending runs never surface as errors — they are pre-terminal. Raise the pipeline's concurrency cap or clear the queue.",
+      "scheduler_starvation_pipeline": "Pipeline",
+      "scheduler_starvation_pending_count": "Pending runs",
+      "scheduler_starvation_oldest_wait": "Oldest wait",
+      "scheduler_starvation_age_minutes": "{minutes}m",
+      "scheduler_starvation_age_hours": "{hours}h"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
@@ -832,7 +839,8 @@ export default {
       "type_label": "Type",
       "manual": "Manual",
       "agent": "Agent",
-      "sandbox_agent": "Sandbox Agent",
+      "node_type_agent": "Inline Prompt",
+      "sandbox_agent": "Runner",
       "node_router_badge": "ROUTER",
       "node_router_label": "Router",
       "node_hitl_badge": "HITL",
@@ -1065,6 +1073,7 @@ export default {
       "end": "End",
       "duration": "Duration",
       "cost": "Cost",
+      "warnings": "Warnings",
       "elapsed": "(elapsed)",
       "cost_includes_child_runs": "(+child)",
       "cost_includes_child_runs_count": "(+{count} child) | (+{count} children)",
@@ -1395,6 +1404,10 @@ export default {
       "reported": "reported",
       "not_reported": "not reported",
       "eval_error_badge": "eval error",
+      "no_model_cost_reported_basis": "No model cost reported by the agent",
+      "warnings": "1 warning | {count} warnings",
+      "warning_missing_self_report": "No model cost was reported by the agent for this run.",
+      "warning_generic": "Run warning.",
       "sum_of_components": "Sum of components",
       "breakdown_sum_not_total": "Component sums can fall short of the total by design — sandbox infra is org-level, not per-node.",
       "amounts_below_micro_note": "Amounts below $0.000001 display as $0.000000; the basis is shown.",
@@ -1492,13 +1505,13 @@ export default {
       "purge_result": "Purged {runs} run(s) and {checkpoints} checkpoint(s), freeing {bytes}."
     },
     "AdminSandboxConcurrencyView": {
-      "max_concurrent_sandbox_runs": "Max concurrent sandbox runs",
-      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many sandbox-agent runs execute at once across the org. Leave empty for unlimited.",
+      "max_concurrent_sandbox_runs": "Max concurrent Runner runs",
+      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many Runner runs execute at once across the org. Leave empty for unlimited.",
       "leave_empty_for_unlimited": "Leave empty for unlimited.",
-      "concurrent_run_limit": "Concurrent sandbox run limit",
+      "concurrent_run_limit": "Concurrent Runner run limit",
       "save": "Save",
       "saving": "Saving\u2026",
-      "limit_updated": "Sandbox concurrency limit updated."
+      "limit_updated": "Runner concurrency limit updated."
     },
     "SettingsObservabilityView": {
       "configure_opentelemetry_export_and_langsmith_integration": "Configure OpenTelemetry export and LangSmith integration",
@@ -2877,9 +2890,18 @@ export default {
     }
   },
   "components": {
+    "RunnerTier": {
+      "bundled_docker": "Bundled Runner (Docker)",
+      "external_e2b": "External Runner (E2B)",
+      "local": "Local"
+    },
     "Sparkline": {
       "no_data": "No data",
       "chart_series": "Chart with {count} data points: {values}"
+    },
+    "RunWarningsBadge": {
+      "one_warning": "1 warning",
+      "n_warnings": "{count} warnings"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",
@@ -3262,7 +3284,7 @@ export default {
       "item_feature_flags": "Feature Flags",
       "item_environment_profiles": "Environment Profiles",
       "item_run_retention": "Run Retention",
-      "item_sandbox_concurrency": "Sandbox Concurrency",
+      "item_sandbox_concurrency": "Runner Concurrency",
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Notification Log",

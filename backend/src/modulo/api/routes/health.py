@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
@@ -82,6 +83,14 @@ _RECONCILE_UNAVAILABLE_SECONDS = 300
 # (never gates) so a dead sweep alerts without blocking bluegreen.
 _STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
 _STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
+
+# slot_reconciliation (FAR-604 F6): the slot-reconciliation sweep runs every
+# 5 min on the system worker and persists its outcome to this Redis key. Same
+# advisory contract as stale_run_recovery: a missing or >15min-stale key means
+# a silently dead sweep — which would re-open the FAR-604 admission wedge
+# invisibly — so it warns without gating readiness.
+_SLOT_RECONCILIATION_STATS_KEY = "saq:cron:stats:slot_reconciliation"
+_SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
 
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
@@ -565,6 +574,57 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     )
 
 
+async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: str) -> CheckResult:
+    """Shared ADVISORY reader for a sweep's Redis liveness stats key.
+
+    Both sweep wrappers (``stale_run_recovery`` and, since FAR-604 F6,
+    ``slot_reconciliation``) persist their outcome (``last_run_at`` + released
+    counts) to a shared Redis key every 5-min tick; this reader reports
+    "degraded" when the key is missing (never run), its ``last_run_at`` is
+    older than *stale_seconds* (stale), or the payload is unparsable, and
+    "ok" otherwise. Fail-open on Redis read errors (never gates readiness).
+    """
+    settings = get_settings()
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        raw = await r.get(key)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health.sweep_stats_read_failed key=%s: %s", key, exc)
+        return CheckResult(status="ok", detail="sweep liveness check unavailable (redis read failed)")
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+
+    if raw is None:
+        return CheckResult(status="degraded", detail="sweep has never run")
+    try:
+        data = json.loads(raw)
+        last_run_at = data.get("last_run_at")
+        count = data.get(count_key, 0)
+    except (ValueError, TypeError):
+        return CheckResult(status="degraded", detail="sweep stats unparsable")
+    if not last_run_at:
+        return CheckResult(status="degraded", detail="sweep last_run_at missing")
+    try:
+        last_run = datetime.fromisoformat(last_run_at)
+    except (ValueError, TypeError):
+        return CheckResult(status="degraded", detail="sweep last_run_at unparsable")
+    stale_since = (datetime.now(UTC) - last_run).total_seconds()
+    if stale_since > stale_seconds:
+        return CheckResult(
+            status="degraded",
+            detail=(f"sweep stale ({stale_since:.0f}s since last run, last {count_key}={count})"),
+        )
+    return CheckResult(
+        status="ok",
+        detail=f"last_run_at={last_run_at}, {count_key}={count}",
+    )
+
+
 async def _check_stale_run_recovery() -> CheckResult:
     """ADVISORY — last stale_run_recovery sweep outcome (never gates readiness).
 
@@ -576,44 +636,23 @@ async def _check_stale_run_recovery() -> CheckResult:
     "degraded" to alert operators while the app remains healthy. Fail-open on
     Redis read errors.
     """
-    settings = get_settings()
-    r: aioredis.Redis | None = None
-    try:
-        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
-        raw = await r.get(_STALE_RUN_RECOVERY_STATS_KEY)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("health._check_stale_run_recovery redis read failed: %s", exc)
-        return CheckResult(status="ok", detail="stale_run_recovery check unavailable (redis read failed)")
-    finally:
-        if r is not None:
-            with contextlib.suppress(Exception):
-                await r.aclose()
+    return await _check_sweep_stats_advisory(
+        _STALE_RUN_RECOVERY_STATS_KEY, _STALE_RUN_RECOVERY_STALE_SECONDS, "recovered"
+    )
 
-    if raw is None:
-        return CheckResult(status="degraded", detail="stale_run_recovery has never run")
-    try:
-        data = json.loads(raw)
-        last_run_at = data.get("last_run_at")
-        recovered = data.get("recovered", 0)
-    except (ValueError, TypeError):
-        return CheckResult(status="degraded", detail="stale_run_recovery stats unparsable")
-    if not last_run_at:
-        return CheckResult(status="degraded", detail="stale_run_recovery last_run_at missing")
-    try:
-        last_run = datetime.fromisoformat(last_run_at)
-    except (ValueError, TypeError):
-        return CheckResult(status="degraded", detail="stale_run_recovery last_run_at unparsable")
-    stale_seconds = (datetime.now(UTC) - last_run).total_seconds()
-    if stale_seconds > _STALE_RUN_RECOVERY_STALE_SECONDS:
-        return CheckResult(
-            status="degraded",
-            detail=(f"stale_run_recovery stale ({stale_seconds:.0f}s since last run, last recovered={recovered})"),
-        )
-    return CheckResult(
-        status="ok",
-        detail=f"last_run_at={last_run_at}, recovered={recovered}",
+
+async def _check_slot_reconciliation() -> CheckResult:
+    """ADVISORY — last slot_reconciliation sweep outcome (never gates readiness).
+
+    The FAR-604 slot-reconciliation sweep (``saq_worker.slot_reconciliation``)
+    runs in the SYSTEM WORKER process every 5 min and persists its outcome
+    (``released`` + ``last_run_at``) to ``saq:cron:stats:slot_reconciliation``
+    (F6). A silently dead sweep re-opens the FAR-604 admission wedge
+    invisibly, so a missing or >15min-stale key reports "degraded" to alert
+    operators while the app remains healthy. Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _SLOT_RECONCILIATION_STATS_KEY, _SLOT_RECONCILIATION_STALE_SECONDS, "released"
     )
 
 
@@ -740,7 +779,17 @@ async def liveness() -> dict[str, str]:
 @router.get("/healthz/ready")
 @handle_db_errors("health.readiness")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check, saq_check, cron_check, dr_check, srr_check = await asyncio.gather(
+    (
+        db_check,
+        redis_check,
+        cp_check,
+        mig_check,
+        saq_check,
+        cron_check,
+        dr_check,
+        srr_check,
+        sr_check,
+    ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
@@ -749,6 +798,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_system_crons(),
         _check_dispatcher_reconcile(),
         _check_stale_run_recovery(),
+        _check_slot_reconciliation(),
     )
     bg_check = _check_break_glass()
 
@@ -768,6 +818,10 @@ async def readiness(response: Response) -> ReadinessResponse:
         "dispatcher_reconcile": dr_check,
         # ADVISORY only — excluded from the aggregate (never gates readiness).
         "stale_run_recovery": srr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-604 F6: a silently dead slot-reconciliation sweep re-opens the
+        # admission wedge invisibly, so it alerts here without gating.
+        "slot_reconciliation": sr_check,
     }
 
     # Aggregate over the NON-advisory checks only.
@@ -788,6 +842,13 @@ async def readiness(response: Response) -> ReadinessResponse:
     # aggregation — short staleness must never flip readiness.
     if "unavailable" in statuses or dr_check.status == "unavailable":
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
+        unavailable_checks = sorted(name for name, check in checks.items() if check.status == "unavailable")
+        degraded_checks = sorted(name for name, check in checks.items() if check.status == "degraded")
+        log_service_unavailable(
+            "readiness_check_unavailable",
+            route="health.readiness",
+            detail=f"unavailable={unavailable_checks} degraded={degraded_checks}",
+        )
         response.status_code = 503
     elif "degraded" in statuses:
         overall = "degraded"

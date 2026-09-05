@@ -58,6 +58,7 @@
             { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
             { key: 'duration', label: $t('views.RunsListView.duration') },
             { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
+            { key: 'warnings', label: $t('views.RunsListView.warnings'), sortable: false },
             { key: 'actions', label: '', sortable: false },
           ]"
           :rows="runs"
@@ -133,6 +134,12 @@
               <span v-else>{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
             </span>
           </template>
+          <template #cell-warnings="{ row }">
+            <RunWarningsBadge
+              :run-id="row.run_id as string"
+              :count="(row as RunListItem).warnings_count ?? 0"
+            />
+          </template>
           <template #cell-actions="{ row }">
             <div class="text-right">
               <button
@@ -198,6 +205,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
+import RunWarningsBadge from '../components/shared/RunWarningsBadge.vue'
 import { ref, computed, watch, onUnmounted, onMounted } from 'vue'
 import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'

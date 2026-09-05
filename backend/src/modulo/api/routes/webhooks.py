@@ -28,6 +28,7 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
 )
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     get_current_tenant_user_optional,
@@ -37,7 +38,7 @@ from modulo.api.dependencies import (
     require_permission,
     system_engine_is_fallback,
 )
-from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -51,6 +52,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
+    PipelineBackpressureError,
     PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
@@ -214,7 +216,12 @@ async def receive_webhook(
         # would silently match zero rows and every delivery would 404. Refuse
         # loudly (same contract as admin_rotation's system-role check) — 503
         # is distinguishable from a genuine 404.
-        _log.error("webhooks.system_bootstrap_degraded")
+        log_service_unavailable(
+            "system_bootstrap_degraded",
+            route="webhooks.receive_webhook",
+            detail="system database not provisioned; trigger delivery unavailable",
+            level=logging.ERROR,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="System database not provisioned; trigger delivery unavailable",
@@ -355,6 +362,39 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
+    except PipelineBackpressureError as exc:
+        # FAR-604: the pipeline's pending queue is over the depth/age
+        # backpressure limits — refuse the delivery so the sender retries
+        # instead of ratcheting the queue further.
+        #
+        # The engine's ``backpressure_skipped`` event write happened INSIDE the
+        # (now unwound) main transaction, so it rolled back with the refusal —
+        # re-record the event + raw payload in a FRESH transaction (the
+        # TriggerBusyError post-unwind pattern) BEFORE raising the 429, or the
+        # skip is invisible, contradicting the "auditable, never silent"
+        # contract. Deliberately NOT caught inside the begin-block: swallowing
+        # there would COMMIT the dedup insert, so a byte-identical sender
+        # retry would be deduped instead of re-evaluated.
+        _log.info(
+            "webhooks.receive_webhook.backpressure_refused trigger=%s pipeline=%s reason=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+            exc.reason,
+        )
+        if org_id is not None:
+            await record_backpressure_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                payload_hash=sha256_hex(raw_body),
+                reason=exc.reason,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+        ) from exc
     except PipelineRateLimitError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -368,6 +408,12 @@ async def receive_webhook(
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
             SNAPSHOT_LOCK_ATTEMPTS,
+        )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route="webhooks.receive_webhook",
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -416,8 +462,13 @@ async def receive_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.receive_webhook",
+            detail="transient database error; webhook delivery failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -521,7 +572,12 @@ async def replay_webhook(
         # would silently match zero rows and every delivery would 404. Refuse
         # loudly (same contract as admin_rotation's system-role check) — 503
         # is distinguishable from a genuine 404.
-        _log.error("webhooks.system_bootstrap_degraded")
+        log_service_unavailable(
+            "system_bootstrap_degraded",
+            route="webhooks.replay_webhook",
+            detail="system database not provisioned; trigger delivery unavailable",
+            level=logging.ERROR,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="System database not provisioned; trigger delivery unavailable",
@@ -673,6 +729,12 @@ async def replay_webhook(
             trigger.pipeline_id if trigger is not None else None,
             SNAPSHOT_LOCK_ATTEMPTS,
         )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route="webhooks.replay_webhook",
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -715,8 +777,13 @@ async def replay_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception("webhooks.replay_webhook")
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.replay_webhook",
+            detail="transient database error; webhook replay failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -776,8 +843,13 @@ async def cleanup_expired(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
-        _log.exception("webhooks.cleanup_expired")
+    except SQLAlchemyError as exc:
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route="webhooks.cleanup_expired",
+            detail="transient database error; dedup/payload cleanup failed closed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,

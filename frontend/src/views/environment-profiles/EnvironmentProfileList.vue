@@ -73,7 +73,14 @@
             </div>
 
             <div class="flex flex-wrap gap-1.5">
-              <span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+              <span
+                class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                data-testid="envprofile-list-tier-badge"
+                :title="profile.provider_type"
+              >
+                {{ tierLabel(profile.provider_type) }}
+              </span>
+              <span class="rounded-full bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
                 {{ profile.provider_type }}
               </span>
             </div>
@@ -173,6 +180,7 @@ import type { EnvironmentProfileSummary } from '../../stores/environmentProfiles
 import { getAuthHeaders } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { parseSSEStream } from '../../lib/sse'
+import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import FeatureGate from '../../components/FeatureGate.vue'
@@ -180,6 +188,11 @@ import Button from 'primevue/button'
 
 const store = useEnvironmentProfilesStore()
 const { t } = useI18n()
+
+function tierLabel(providerType: string): string {
+  const tier = runnerTierForProvider(providerType)
+  return tier ? t(runnerTierLabelKey(tier)) : providerType
+}
 
 const search = ref('')
 const deleteConfirmId = ref<string | null>(null)

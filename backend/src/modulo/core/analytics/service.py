@@ -452,16 +452,33 @@ async def _resolve_pool_reference(
     org_role: str | None,
     pipeline_ids: tuple[uuid.UUID, ...],
 ) -> int | None:
-    """Best-effort concurrency-cap reference for the response (FAR-134).
+    """Best-effort concurrency-cap reference for the response (FAR-134, FAR-604).
 
     Never raises — a failed reference degrades to ``None`` with a log, never a
-    failed query. With a single ``pipeline_id`` filter the pool reference is
-    that pipeline's ``max_concurrent_runs`` (the binding cap for a one-pipeline
-    query); otherwise it is the org's ``run_concurrency_limit``. Reads use the
-    explicit org predicate because ``modulo_app`` is NOBYPASSRLS (tenant
-    isolation relies on RLS policies) — the predicate is the PRIMARY isolation
-    control (RLS also enforces org scoping), and ``session.get`` alone would not
-    scope it.
+    failed query. A run's enforced ceiling is the MINIMUM of every gate that
+    applies to it (its pipeline's ``max_concurrent_runs`` AND the org's
+    ``run_concurrency_limit``), so the reported reference must never name a cap
+    the runs do not actually bind at. Resolution order:
+
+    * a SINGLE ``pipeline_id`` filter → that pipeline's ``max_concurrent_runs``
+      when its row is present (the column is NOT NULL with a server default, so
+      a present row always yields an int); a missing pipeline row falls through
+      to the org limit;
+    * otherwise the org's ``run_concurrency_limit`` when set, MIN-ed with the
+      tightest pipeline cap in scope when pipelines exist — a uniform shared
+      pipeline cap does NOT bind before the org limit (two pipelines capped at
+      7 still block at an org limit of 5, and an org limit of 20 does not lift
+      a shared 7-cap);
+    * an UNSET org limit (``None`` = no org-level ceiling) leaves the
+      pipelines' own caps as the ceilings — the TIGHTEST (MIN)
+      ``max_concurrent_runs`` in scope is reported as the single reference (the
+      number most likely to explain starvation), and ``None`` only when the org
+      has no pipelines at all.
+
+    Reads use the explicit org predicate because ``modulo_app`` is NOBYPASSRLS
+    (tenant isolation relies on RLS policies) — the predicate is the PRIMARY
+    isolation control (RLS also enforces org scoping), and ``session.get``
+    alone would not scope it.
     """
     try:
         async with factory() as session:
@@ -470,17 +487,37 @@ async def _resolve_pool_reference(
                     await set_rls_org(session, org_id)
                     if account_id is not None:
                         await set_rls_user_context(session, account_id, org_role or "")
-                    if len(pipeline_ids) == 1:
-                        value = (
-                            await session.execute(
-                                sa.select(Pipeline.max_concurrent_runs).where(
-                                    Pipeline.id == pipeline_ids[0],
-                                    Pipeline.organisation_id == org_id,
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        return int(value) if value is not None else None
-                    return await get_org_run_concurrency_limit(session, org_id)
+
+                    def _caps_stmt() -> Any:
+                        scope = Pipeline.id.in_(pipeline_ids) if pipeline_ids else sa.true()
+                        return sa.select(Pipeline.max_concurrent_runs).where(
+                            scope,
+                            Pipeline.organisation_id == org_id,
+                        )
+
+                    async def _read_caps() -> list[int]:
+                        rows = (await session.execute(_caps_stmt())).scalars()
+                        return sorted({int(value) for value in rows if value is not None})
+
+                    scoped_caps: list[int] | None = None
+                    if pipeline_ids:
+                        scoped_caps = await _read_caps()
+                        if len(pipeline_ids) == 1 and scoped_caps:
+                            # Exactly ONE filtered pipeline with a present row:
+                            # its own per-pipeline cap is the reference. A
+                            # missing row (empty read) falls through to the
+                            # org limit below.
+                            return scoped_caps[0]
+                    # Every other shape (org-wide, mixed/uniform multi-pipeline
+                    # filters, missing single row): the org limit ALWAYS
+                    # participates — it gates every run in the org.
+                    org_limit = await get_org_run_concurrency_limit(session, org_id)
+                    # An org-wide query reads the WHOLE org's caps (the caps
+                    # statement scopes to sa.true() when no pipeline filter).
+                    caps = scoped_caps if scoped_caps is not None else await _read_caps()
+                    if org_limit is not None:
+                        return min(int(org_limit), caps[0]) if caps else int(org_limit)
+                    return caps[0] if caps else None
             except asyncio.CancelledError:
                 raise
             except (ProgrammingError, SQLAlchemyError):

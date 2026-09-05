@@ -1,0 +1,342 @@
+name: "Deploy: Staleness Watchdog"
+
+# Self-heals "main ahead of prod with no deploy in flight" by re-arming the
+# deploy itself.
+#
+# Incident (2026-09-03 23:52 UTC): the merge queue correctly dispatched
+# deploy.yml after a PR merge; the deploy failed on a transient npm registry
+# timeout inside the pre-deploy frontend checks. deploy.yml's
+# "Trigger Branch Fixer on deploy failure" step DID its job - it dispatched
+# the Branch Fixer at main (branchName: main). But the Branch Fixer's remit
+# is code fixes: it diagnoses a failure, raises a fix PR, and stops - and a
+# transient npm timeout has nothing on main to fix, so no fix PR could ever
+# materialise and NOTHING re-armed the deploy itself. Prod stayed 4 commits
+# stale for ~15h until a manual re-dispatch. The gap is neither detection nor
+# code-fixing; it is the missing re-arm. This watchdog's unique job is
+# re-arming failed/gapped deploys (failed runs, throttle no-ops, dispatch
+# gaps) so staleness heals itself within deploy-staleness-check.yml's grace
+# window.
+#
+# Division of labour with deploy-staleness-check.yml (independent cron; both
+# must exist):
+#   - deploy-staleness-check.yml = app-level VISIBILITY (2-hourly): reads the
+#     app's /api/v1/deployment build SHA vs origin/main; 6h grace; escalates
+#     with ::error:: once staleness exceeds the grace window. It does NOT
+#     heal.
+#   - deploy-watchdog.yml (this file) = fly-level SELF-HEAL (*/30): compares
+#     the fly image tag vs main HEAD and dispatches deploy.yml to heal WITHIN
+#     that grace window.
+#   - Escalation semantics: if staleness-check's ::error:: fires, the
+#     watchdog failed to heal - investigate the watchdog. If this watchdog's
+#     3-consecutive-failure ::error:: cap fires, deploy.yml itself is broken -
+#     investigate deploy.yml.
+
+on:
+  schedule:
+    # FAR-492: GitHub DROPS high-frequency cron events on high-activity repos
+    # (a sibling */10 workflow collapsed to 2-4 runs/day; 1/day crons never
+    # missed). */30 is an UNVERIFIED BEST-EFFORT band: the lesson's data
+    # proves only >=1/day is safe on this repo, so treat every tick as
+    # opportunistic and verify run history before trusting liveness.
+    # Residual risks: GitHub auto-disables scheduled workflows after 60 days
+    # of repo inactivity, and dropped ticks are silent - staleness-check's
+    # independent escalation covers these watchdog liveness gaps. If cron
+    # proves unreliable here, the known reliability upgrade is a
+    # PR-Housekeeper dispatch leg calling this workflow.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Overlapping scheduled ticks must not pile up, and an in-flight tick
+# (possibly about to dispatch a deploy) must not be cancelled by the next.
+concurrency:
+  group: deploy-watchdog
+  cancel-in-progress: false
+
+# contents: read -> checkout + commits/compare API reads
+# actions: write -> `gh workflow run deploy.yml` re-dispatch
+# FAR-528: use github.token for same-repo API reads - a PAT lacking the
+# Actions scope gets a 404 that looks exactly like "no runs found", which
+# historically starved production deploys for 2 days.
+permissions:
+  contents: read
+  actions: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  watchdog:
+    name: Detect prod staleness + re-dispatch deploy
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      # Design contract: every gh/flyctl call is wrapped so an API hiccup
+      # logs a ::warning:: and exits 0 (failing safe - never dispatch blind).
+      # The ONLY non-zero exit is a failed dispatch attempt itself, so a
+      # broken watchdog is visible in the Actions tab via the ::error::
+      # annotation. Dispatch is ALWAYS plain: deploy.yml's throttle anchor
+      # only counts runs whose "Deploy to app.modulo.run" job SUCCEEDED, so a
+      # FAILED deploy never advances the throttle window and a plain dispatch
+      # re-runs full pre-deploy CI and deploys once CI passes - the throttle
+      # never needs bypassing, and bypassing it on a red main would only
+      # re-fire the Branch Fixer webhook on every tick.
+      - name: Check prod staleness and re-dispatch deploy if needed
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -o pipefail
+
+          REPO="${{ github.repository }}"
+          DEPLOY_WORKFLOW="deploy.yml"
+          PROD_APP="app-modulo"
+          PROD_URL="https://app.modulo.run"
+
+          # ---- 1. Deploy-run state: is a deploy already trying? ----
+          RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json status,conclusion 2>/dev/null)" || RUNS_JSON=""
+          if [ -z "$RUNS_JSON" ]; then
+            echo "::warning::Deploy-staleness watchdog: could not list deploy.yml runs (gh API error) - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+
+          ACTIVE_COUNT="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          import json, os
+          try:
+              runs = json.loads(os.environ["PAYLOAD"])
+          except Exception:
+              runs = []
+          print(sum(1 for r in runs if r.get("status") in ("in_progress", "queued")))
+          ')" || ACTIVE_COUNT="0"
+          if [ "$ACTIVE_COUNT" != "0" ]; then
+            echo "Deploy run(s) in progress/queued ($ACTIVE_COUNT) - nothing to do."
+            exit 0
+          fi
+
+          # ---- 2. main HEAD ----
+          # The checkout above is pinned to ref: main, so HEAD IS main's tip
+          # regardless of which ref dispatched this run (schedule ticks always
+          # run main; a manual dispatch from a feature branch must still
+          # compare prod against MAIN, not the branch tip).
+          MAIN_SHA="$(git rev-parse HEAD 2>/dev/null)" || MAIN_SHA=""
+          if [ -z "$MAIN_SHA" ]; then
+            echo "::warning::Deploy-staleness watchdog: could not resolve main HEAD sha - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          MAIN_SHORT="${MAIN_SHA:0:12}"
+
+          # ---- 3. Prod SHA: fly image tag -> complete release -> deployment endpoint ----
+          if ! bash .github/scripts/install-flyctl.sh; then
+            echo "::warning::Deploy-staleness watchdog: flyctl install failed - failing safe, no dispatch. Next tick retries."
+            exit 0
+          fi
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+
+          if ! fly status --app "$PROD_APP" --json > /tmp/prod-status.json 2>/dev/null; then
+            echo "::warning::Deploy-staleness watchdog: fly status --app $PROD_APP failed - continuing; the fallbacks below may still yield the prod SHA."
+            : > /tmp/prod-status.json
+          fi
+
+          # Extract the deploy SHA (registry.fly.io/app-modulo:deploy-<12-char-sha>).
+          #
+          # PRIMARY: fly status Machines filtered to STARTED machines in the
+          # serving "app" process group (group extraction is deploy.yml's
+          # worker-parse precedent). The group filter matters: a long-lived
+          # `fly_app_console` machine (fly console/SSH session) runs whatever
+          # image it was launched with and pollutes any "any started machine
+          # with a deploy tag" extraction - observed LIVE 2026-09-04 on prod:
+          # a started fly_app_console machine carried a stale
+          # deploy-a9b3ad4cb520 tag that is not even in the release history.
+          #
+          # FALLBACK: when the machines view is empty or shows >1 distinct
+          # sha (mid-rollout residue after a failed deploy, a leaked console
+          # machine, flyctl shape drift), fall back to `fly releases` - the
+          # first release with Status "complete" (newest-first) is what prod
+          # settled on. This is deploy.yml's own rollback precedent (LAST_GOOD,
+          # deploy.yml "Post-deploy verify + auto-rollback" step) and is
+          # unambiguous by construction: a failed rollout is never "complete",
+          # so the last COMPLETE release is what prod actually serves.
+          #
+          # LAST RESORT: when BOTH fly paths yield nothing (image-tag
+          # convention drift - an IMAGE_LABEL format change or app rename
+          # would otherwise silence the watchdog forever, green runs while
+          # prod rots), the bash wrapper below reads the app-level
+          # /api/v1/deployment build SHA - the same source
+          # deploy-staleness-check.yml uses - so the watchdog can never
+          # silently degrade to warn-only.
+          PROD_SHAS="$(PROD_APP="$PROD_APP" python3 - <<'PYEOF'
+          import json, os, re, subprocess
+
+          # tag format defined by deploy.yml IMAGE_LABEL (12-char sha) - update both together.
+          SHA_RE = re.compile(r"deploy-([0-9a-f]{12})")
+
+          def process_group(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          def started_app_shas(machines):
+              shas = set()
+              for m in machines if isinstance(machines, list) else []:
+                  if not isinstance(m, dict):
+                      continue
+                  if str(m.get("state") or "").lower() != "started":
+                      continue
+                  if process_group(m) != "app":
+                      continue
+                  candidates = []
+                  ref = m.get("image_ref")
+                  if isinstance(ref, dict) and ref.get("tag"):
+                      candidates.append(str(ref["tag"]))
+                  cfg = m.get("config")
+                  if isinstance(cfg, dict) and cfg.get("image"):
+                      candidates.append(str(cfg["image"]))
+                  for c in candidates:
+                      mo = SHA_RE.search(c)
+                      if mo:
+                          shas.add(mo.group(1))
+              return sorted(shas)
+
+          def machines_from_status(data):
+              if isinstance(data, dict):
+                  return data.get("Machines") or data.get("machines") or []
+              if isinstance(data, list):
+                  return data
+              return []
+
+          def sha_from_latest_complete_release():
+              try:
+                  out = subprocess.run(
+                      ["fly", "releases", "--app", os.environ.get("PROD_APP", ""), "--json"],
+                      capture_output=True, text=True, timeout=60)
+                  releases = json.loads(out.stdout)
+              except Exception:
+                  return ""
+              if not isinstance(releases, list):
+                  return ""
+              for r in releases:
+                  if not isinstance(r, dict):
+                      continue
+                  if str(r.get("Status") or "").lower() == "complete":
+                      mo = SHA_RE.search(str(r.get("ImageRef") or ""))
+                      return mo.group(1) if mo else ""
+              return ""
+
+          shas = []
+          try:
+              with open("/tmp/prod-status.json") as f:
+                  data = json.load(f)
+              shas = started_app_shas(machines_from_status(data))
+          except Exception:
+              shas = []
+          if len(shas) != 1:
+              alt = sha_from_latest_complete_release()
+              if alt:
+                  shas = [alt]
+              else:
+                  shas = []
+          print(" ".join(shas))
+          PYEOF
+          )" || PROD_SHAS=""
+          SHA_COUNT="$(echo "$PROD_SHAS" | wc -w | tr -d ' ')"
+
+          PROD_SHA=""
+          SHA_SOURCE=""
+          if [ "$SHA_COUNT" -gt 1 ]; then
+            echo "::warning::Deploy-staleness watchdog: multiple distinct prod SHAs ($PROD_SHAS) - unexpected after disambiguation - failing safe, no dispatch. Next tick retries."
+            exit 0
+          elif [ "$SHA_COUNT" -eq 1 ]; then
+            PROD_SHA="$PROD_SHAS"
+            SHA_SOURCE="fly image tag"
+          else
+            # Green-while-rotting guard (last resort): when the fly image-tag
+            # convention drifts, BOTH fly paths return nothing forever and the
+            # watchdog would degrade to warn-only - green ticks while prod
+            # rots, the exact failure this workflow exists to prevent. Read
+            # the app-level build SHA the same way deploy-staleness-check.yml
+            # does; it is the same value deploy.yml verifies post-deploy.
+            PROD_SHA="$(curl -fsS -m 15 "$PROD_URL/api/v1/deployment" 2>/dev/null | jq -r '.git_sha // empty' 2>/dev/null || true)"
+            if [ -n "$PROD_SHA" ]; then
+              PROD_SHA="${PROD_SHA:0:12}"
+              echo "::warning::Deploy-staleness watchdog: no prod SHA from $PROD_APP fly image tags (started-app machines AND latest-complete-release both empty) - using the LAST-RESORT app-level deployment endpoint ($PROD_URL/api/v1/deployment) as the prod SHA source. The primary fly-tag path may have drifted - check deploy.yml's IMAGE_LABEL convention."
+              SHA_SOURCE="deployment endpoint (last-resort)"
+            else
+              echo "::warning::Deploy-staleness watchdog: could not extract a prod SHA from any source (fly status machines, latest complete release, $PROD_URL/api/v1/deployment) - failing safe, no dispatch. Next tick retries."
+              exit 0
+            fi
+          fi
+
+          # ---- 4. In sync, or is main genuinely ahead? ----
+          if [ "$PROD_SHA" = "$MAIN_SHORT" ]; then
+            echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync. Nothing to do."
+            exit 0
+          fi
+          # compare(base=PROD, head=MAIN): status "ahead" = prod is behind main
+          # (STALE); "behind" = prod is ahead of main (never deploy older main
+          # over a newer prod); "identical" = full shas match; "diverged" =
+          # main was rewritten since prod's deploy - ambiguous, never blindly
+          # dispatch over it. An API failure (incl. a prod sha unresolvable on
+          # main) fails safe below.
+          CMP_STATUS="$(gh api "repos/$REPO/compare/$PROD_SHA...$MAIN_SHORT" --jq '.status' 2>/dev/null)" || CMP_STATUS=""
+          case "$CMP_STATUS" in
+            "ahead")
+              echo "STALE: prod=$PROD_SHA is behind main=$MAIN_SHORT with no deploy in flight."
+              ;;
+            "identical")
+              echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync (compare). Nothing to do."
+              exit 0
+              ;;
+            "behind")
+              echo "prod=$PROD_SHA is AHEAD of main=$MAIN_SHORT - not stale; nothing to do."
+              exit 0
+              ;;
+            "diverged")
+              echo "::warning::Deploy-staleness watchdog: prod=$PROD_SHA has DIVERGED from main=$MAIN_SHORT (main rewritten?) - ambiguous, failing safe, no dispatch. Human review recommended."
+              exit 0
+              ;;
+            *)
+              echo "::warning::Deploy-staleness watchdog: compare API failed or prod sha $PROD_SHA unresolvable on main (status: '${CMP_STATUS:-<empty>}') - failing safe, no dispatch. Next tick retries."
+              exit 0
+              ;;
+          esac
+
+          # ---- 5. Dispatch decision: plain dispatch only, capped at 3 consecutive failures ----
+          # deploy.yml's throttle anchor only counts runs whose "Deploy to
+          # app.modulo.run" job SUCCEEDED - a FAILED deploy never advances the
+          # throttle window - so a plain dispatch after a failure re-runs full
+          # pre-deploy CI and deploys once CI passes; the throttle is never an
+          # obstacle here. The only runaway-retry protection needed is a cap:
+          # when the last 3 completed deploy runs ALL failed (every one tried
+          # and failed), further re-dispatches would only churn CI and re-fire
+          # the Branch Fixer webhook - stop and escalate instead. Fewer than 3
+          # completed runs (fresh history) or any success among them ->
+          # dispatch (a throttled no-op success counts as a success: bounded
+          # churn is accepted and staleness-check escalates if it persists).
+          RECENT="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          import json, os
+          try:
+              runs = json.loads(os.environ["PAYLOAD"])
+          except Exception:
+              runs = []
+          completed = [r for r in runs if r.get("status") == "completed"][:3]
+          conclusions = [(r.get("conclusion") or "none") for r in completed]
+          all_failed = len(completed) == 3 and all(c != "success" for c in conclusions)
+          print("all-failed" if all_failed else "ok")
+          ')" || RECENT="ok"
+          if [ "$RECENT" != "ok" ]; then
+            echo "::error::deploy-watchdog: 3 consecutive failed deploys; not re-dispatching - investigate deploy.yml failures; deploy-staleness-check.yml escalates staleness independently"
+            exit 0
+          fi
+
+          echo "Prod is stale (prod=$PROD_SHA main=$MAIN_SHORT, prod sha source: $SHA_SOURCE) - re-dispatching deploy.yml (plain dispatch; the deploy throttle is authoritative)."
+          if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref main; then
+            echo "::error::Deploy-staleness watchdog: prod is STALE (prod=$PROD_SHA main=$MAIN_SHORT) and the plain re-dispatch of deploy.yml FAILED. Next tick retries; if it persists, dispatch manually: gh workflow run \"Deploy: Staging + Prod\" --ref main"
+            exit 1
+          fi
+          echo "Watchdog re-dispatched deploy.yml (prod=$PROD_SHA main=$MAIN_SHORT)."
