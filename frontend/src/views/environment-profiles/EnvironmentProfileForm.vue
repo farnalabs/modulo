@@ -59,6 +59,12 @@
   </template>
 </Select>
         <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
+        <p v-if="formTierLabel" class="mt-1 text-xs text-muted-foreground">
+          <span
+            class="mr-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+            data-testid="envprofile-form-tier-badge"
+          >{{ formTierLabel }}</span>
+        </p>
       </div>
 
       <div>
@@ -171,7 +177,9 @@
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
+import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 
@@ -187,6 +195,8 @@ const isEdit = computed(() => {
   const id = props.profileId || (route.params.id as string)
   return !!(id && id !== 'new')
 })
+
+const { t } = useI18n()
 
 const availableCapabilities = [
   'git',
@@ -210,6 +220,11 @@ const form = reactive({
 
 const submitted = ref(false)
 const formError = ref<string | null>(null)
+
+const formTierLabel = computed(() => {
+  const tier = runnerTierForProvider(form.provider_type)
+  return tier ? t(runnerTierLabelKey(tier)) : null
+})
 
 function toggleCapability(cap: string) {
   const idx = form.capabilities.indexOf(cap)

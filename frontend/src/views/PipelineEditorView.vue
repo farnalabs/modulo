@@ -438,7 +438,7 @@
                       ? 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
                       : 'badge badge-status-primary'"
               >
-                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? $t('views.PipelineEditorView.sandbox_agent') : selectedNodeData.node_type === 'router' ? $t('views.PipelineEditorView.node_router_label') : selectedNodeData.node_type === 'hitl' ? $t('views.PipelineEditorView.node_hitl_label') : $t('views.PipelineEditorView.agent') }}
+                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? $t('views.PipelineEditorView.sandbox_agent') : selectedNodeData.node_type === 'router' ? $t('views.PipelineEditorView.node_router_label') : selectedNodeData.node_type === 'hitl' ? $t('views.PipelineEditorView.node_hitl_label') : $t('views.PipelineEditorView.node_type_agent') }}
               </span>
             </dd>
           </div>
@@ -709,7 +709,7 @@
               </div>
             </dd>
           </div>
-          <!-- Sandbox Agent: template, command, env, context -->
+          <!-- Runner (sandbox_agent): template, command, env, context -->
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.template') }}</dt>
@@ -2063,7 +2063,7 @@ function onPaneClick() {
 
 const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
 const nodeTypeOptions = [
-  { value: 'agent', label: t('views.PipelineEditorView.agent') },
+  { value: 'agent', label: t('views.PipelineEditorView.node_type_agent') },
   // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
   // router_config/hitl_config the backend requires, so exposing them here
   // produces unsavable (422) nodes. Imported router/HITL graphs still render

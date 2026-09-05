@@ -149,6 +149,8 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 
 Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.
 
+Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a Runner agent's model credentials will bind as per-agent env vars at dispatch, so no standing Modulo credentials enter the workspace (pending D6; today's dispatch injects standing host credentials).
+
 | Provider | Status |
 |----------|--------|
 | Anthropic Claude | Alpha |
@@ -398,13 +400,13 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 001 | Agent Execution Environment as a V1 Primitive | Implemented |
+| 001 | Agent Execution Environment as a V1 Primitive | Implemented (provider/tier model superseded by ADR 029) |
 | 002 | Multi-Backend Database Abstraction Strategy | Draft |
 | 003 | Agent Dispatch Model | Supersedes ADR 001 |
 | 003 | Packaging & Distribution Strategy | Draft |
 | 004 | Agent as a Self-Contained Bundle | Accepted |
 | 004 | User Offboarding Uses Deactivation (Not Hard Deletion) | Accepted |
-| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Accepted |
+| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Superseded by ADR 029 |
 | 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Active |
 | 006 | Dashboard Performance: Application Cache Over Materialized View | Active |
 | 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Active |
@@ -421,6 +423,7 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 | 025 | Generic REST Integration Connector | Accepted |
+| 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
 
 Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 
