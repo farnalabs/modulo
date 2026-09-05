@@ -417,3 +417,12 @@ class TestProfileTestEndpoint:
         expected = str(ProviderNotConfiguredError("local_docker", "MODULO_DOCKER_HOST"))
         assert expected in resp.text
         assert "provisioning" in resp.text
+
+
+def test_get_hub_builds_fresh_hub() -> None:
+    """_get_hub() returns a live RuntimeProviderHub built from process settings."""
+    from modulo.api.routes.environment_profiles import _get_hub
+
+    hub = _get_hub()
+
+    assert isinstance(hub, RuntimeProviderHub)

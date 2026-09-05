@@ -4,6 +4,7 @@ import sys
 import types
 import uuid
 from typing import Any, Self
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,7 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.shell import ShellConnector
-from modulo.core.runtime_provider import WorkspaceSpec
+from modulo.core.runtime_provider import ProviderNotConfiguredError, WorkspaceSpec
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -742,3 +743,56 @@ async def test_resolve_profile_without_profile_id_skips_db(monkeypatch: pytest.M
 
     assert profile is None
     assert not db.events
+
+
+# ---------------------------------------------------------------------------
+# Provider-not-configured fail-soft contract (hub-driven resolution)
+# ---------------------------------------------------------------------------
+
+
+class _StubHub:
+    """A hub whose resolve() always reports the requested provider as unconfigured."""
+
+    def resolve(self, profile: Any) -> Any:
+        raise ProviderNotConfiguredError(getattr(profile, "provider_type", "unknown"))
+
+
+def test_constructor_invalid_org_id_is_none() -> None:
+    """A non-UUID org_id is tolerated and stored as None (S1192/ValueError branch)."""
+    c = ShellConnector(runtime_provider=None, org_id="not-a-uuid")
+
+    assert c._org_id is None
+
+
+async def test_query_unconfigured_provider_from_hub_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hub's ProviderNotConfiguredError is surfaced as a plain ValueError."""
+    c = ShellConnector(
+        runtime_provider=None,
+        runtime_provider_hub=_StubHub(),
+        environment_profile_id=uuid.uuid4(),
+    )
+    monkeypatch.setattr(c, "_resolve_profile_from_hub", AsyncMock(return_value=_profile()))
+
+    with pytest.raises(ValueError, match="Runtime provider not configured"):
+        await c.query(ConnectorQuery(resource="file", filters={"path": "/tmp/x.txt"}))
+
+
+async def test_write_unconfigured_provider_from_hub_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hub's ProviderNotConfiguredError is surfaced as a plain ValueError."""
+    c = ShellConnector(
+        runtime_provider=None,
+        runtime_provider_hub=_StubHub(),
+        environment_profile_id=uuid.uuid4(),
+    )
+    monkeypatch.setattr(c, "_resolve_profile_from_hub", AsyncMock(return_value=_profile()))
+
+    with pytest.raises(ValueError, match="Runtime provider not configured"):
+        await c.write(ConnectorPayload(resource="command", data={"command": "echo hi"}))
+
+
+def _profile() -> Any:
+    return type("P", (), {"provider_type": "runner_docker"})()
