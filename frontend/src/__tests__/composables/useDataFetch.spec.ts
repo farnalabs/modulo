@@ -147,4 +147,26 @@ describe('useDataFetch', () => {
 
     await vi.waitFor(() => expect(composable.data.value).toBe('real'))
   })
+
+  it('does not auto-retry a rejecting fetcher, pinning the production no-retry contract', async () => {
+    // Simulate production config. Under the old ternary (`MODE === 'test' ? false : 1`)
+    // this would enable a single auto-retry (fetcher invoked twice); with retry hard-coded
+    // to false the fetcher is invoked exactly once and the error is surfaced immediately.
+    vi.stubEnv('MODE', 'production')
+    try {
+      const fetcher = vi.fn(async () => { throw new Error('network down') })
+      const composable = mountUseDataFetch(fetcher)
+
+      await vi.waitFor(() => expect(composable.error.value).toBe('network down'))
+      // Let Vue Query's retry backoff window (default first retry ~2s) elapse so a retry
+      // policy would have re-invoked the fetcher; the no-retry contract must hold at exactly one.
+      await new Promise((resolve) => setTimeout(resolve, 2200))
+
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(composable.error.value).toBe('network down')
+      expect(composable.loading.value).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
