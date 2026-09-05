@@ -371,15 +371,14 @@ describe('OnboardingWizard — library (step 4)', () => {
     expect(first.classes()).not.toContain('border-primary')
   })
 
-  it('BUG CHARACTERISATION: the library error drops the error detail (see report)', async () => {
-    // loadLibrary throws the error envelope and the catch only surfaces
-    // e.message for Error instances, so the envelope detail is replaced by
-    // the generic "Failed to load library" message. Reported as a minor bug.
+  it('the library error surfaces the error detail (FAR-608 fix)', async () => {
+    // loadLibrary formats the error envelope with formatApiError, so the
+    // detail accompanies the "Failed to load library" message.
     mockApis({ libraryError: true })
     const wrapper = await advanceToStep4()
     await nextTick()
     expect(wrapper.text()).toContain('Failed to load library')
-    expect(wrapper.text()).not.toContain('library offline')
+    expect(wrapper.text()).toContain('library offline')
   })
 
   it('shows the empty library state', async () => {
@@ -418,10 +417,9 @@ describe('OnboardingWizard — create pipeline (step 5)', () => {
     expect(nextBtn.text()).toContain('Finish')
   })
 
-  it('BUG CHARACTERISATION: the pipeline creation failure drops the error detail (see report)', async () => {
-    // createPipeline throws the error envelope and the catch only surfaces
-    // e.message for Error instances, so "quota exhausted" is replaced by the
-    // generic "Failed to create pipeline". Reported as a minor bug.
+  it('the pipeline creation failure surfaces the error detail (FAR-608 fix)', async () => {
+    // createPipeline formats the error envelope with formatApiError, so
+    // "quota exhausted" accompanies the "Failed to create pipeline" message.
     ;(api.POST as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/pipelines') return { data: undefined, error: { detail: 'quota exhausted' } }
       if (url === '/api/v1/schemas/infer') return { data: inferResponse, error: undefined }
@@ -434,7 +432,7 @@ describe('OnboardingWizard — create pipeline (step 5)', () => {
     await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('Failed to create pipeline')
-    expect(wrapper.text()).not.toContain('quota exhausted')
+    expect(wrapper.text()).toContain('quota exhausted')
     expect(wrapper.find('[data-testid="onboarding-wizard-next"]').attributes('disabled')).toBeDefined()
   })
 
@@ -489,9 +487,9 @@ describe('OnboardingWizard — done (step 6)', () => {
     expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(false)
   })
 
-  it('BUG CHARACTERISATION: the run failure drops the error detail (see report)', async () => {
-    // runPipeline throws the error envelope; the catch surfaces only the
-    // generic "Failed to start pipeline" for non-Error values. Minor bug.
+  it('the run failure surfaces the error detail (FAR-608 fix)', async () => {
+    // runPipeline formats the error envelope with formatApiError, so the
+    // detail accompanies the "Failed to start pipeline" message.
     ;(api.POST as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/runs') return { data: undefined, error: { detail: 'runner unavailable' } }
       if (url === '/api/v1/schemas/infer') return { data: inferResponse, error: undefined }
@@ -506,6 +504,6 @@ describe('OnboardingWizard — done (step 6)', () => {
     await wrapper.find('[data-testid="onboarding-wizard-run-pipeline-now"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('Failed to start pipeline')
-    expect(wrapper.text()).not.toContain('runner unavailable')
+    expect(wrapper.text()).toContain('runner unavailable')
   })
 })

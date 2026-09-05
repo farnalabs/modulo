@@ -130,7 +130,7 @@ describe('ParameterSchemasView — list', () => {
     expect(wrapper.text()).toContain('boom')
   })
 
-  it('BUG CHARACTERISATION: the ErrorAlert retry button is hidden (repo-wide, see report)', async () => {
+  it('renders the ErrorAlert retry button by default (fe-002, FAR-608 fix)', async () => {
     mockGet((url) => {
       if (url === '/api/v1/parameter-schemas') return { data: undefined, error: { detail: 'boom' } }
       return { data: { items: [] }, error: undefined }
@@ -138,7 +138,7 @@ describe('ParameterSchemasView — list', () => {
     const wrapper = mount(ParameterSchemasView)
     await flush()
     expect(wrapper.text()).toContain('boom')
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 })
 
@@ -212,8 +212,6 @@ describe('ParameterSchemasView — editor', () => {
   })
 
   it('creates a new schema via POST when no schema is being edited (new-schema path)', async () => {
-    // The UI "New Schema" button is broken (see bug test below), so the POST
-    // branch is exercised through the component function directly.
     ;(api.POST as Mock).mockResolvedValue({ data: schemaItem({ id: 'ps-2', version: 1 }), error: undefined })
     const wrapper = await mountWithSchemas()
     const vm = wrapper.vm as unknown as {
@@ -231,22 +229,19 @@ describe('ParameterSchemasView — editor', () => {
     expect(url).toBe('/api/v1/parameter-schemas')
     expect(opts.body.name).toBe('Brand New')
     expect(opts.body.description).toBe('desc')
-    // The success banner is only rendered inside the editor branch, which the
-    // new-schema path never shows (editingSchema stays null — see the New
-    // Schema bug above), so assert the view-model state directly.
     expect((wrapper.vm as unknown as { saveSuccess: string }).saveSuccess).toBe('Schema created successfully.')
   })
 
-  it('BUG CHARACTERISATION: the New Schema button does not open the editor (production bug, see report)', async () => {
-    // startNewSchema() sets editingSchema = null, but the editor renders only
-    // when editingSchema is truthy (the list branch is v-if="!editingSchema").
-    // The "New Schema" button is therefore a no-op. Documented here so a
-    // future fix flips this test.
+  it('the New Schema button opens the editor with a blank form (FAR-608 fix)', async () => {
+    // startNewSchema opens the editor via the creatingSchema flag instead of
+    // setting editingSchema = null (which kept the list branch visible).
     const wrapper = await mountWithSchemas()
     await wrapper.find('[data-testid="paramschema-new"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-testid="paramschema-back"]').exists()).toBe(false)
-    expect(wrapper.find('table').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="paramschema-back"]').exists()).toBe(true)
+    expect(wrapper.find('table').exists()).toBe(false)
+    const nameInput = wrapper.find('[data-testid="paramschema-name-input"]')
+    expect((nameInput.element as HTMLInputElement).value).toBe('')
     expect(api.POST).not.toHaveBeenCalled()
   })
 
@@ -505,18 +500,17 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     expect(wrapper.text()).not.toContain('Delete set "Prod Values"?')
   })
 
-  it('BUG CHARACTERISATION: a failed set delete is only logged to the console (see report)', async () => {
-    // doDeleteSet only console.warns on failure — no UI feedback at all.
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('a failed set delete surfaces the error in the confirm block (FAR-608 fix)', async () => {
+    // doDeleteSet used to only console.warn on failure; it now shows the
+    // formatted error inline and keeps the confirmation open.
     ;(api.DELETE as Mock).mockResolvedValue({ response: { status: 500 }, error: { detail: 'nope' } })
     const wrapper = await openEditorAtSetsTab()
     await wrapper.find('[data-testid="paramschema-delete-set"]').trigger('click')
     await flush()
     await wrapper.findAll('button').find((b) => b.text() === 'Delete')!.trigger('click')
     await flush()
-    expect(warnSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('nope')
     expect(wrapper.text()).toContain('Prod Values')
-    warnSpy.mockRestore()
   })
 
   it('model_backend_ref and schema_ref parameters render picker dropdowns with loaded options', async () => {
@@ -575,7 +569,7 @@ describe('ParameterSchemasView — references tab', () => {
     expect(wrapper.text()).toContain('(0)')
   })
 
-  it('BUG CHARACTERISATION: the references error alert has no retry button (repo-wide, see report)', async () => {
+  it('the references error alert renders a retry button (fe-002, FAR-608 fix)', async () => {
     mockGet((url) => {
       if (url === '/api/v1/parameter-schemas/{schema_id}/references') return { data: undefined, error: { detail: 'refs down' } }
       if (url === '/api/v1/parameter-schemas') return listPayload()
@@ -589,7 +583,7 @@ describe('ParameterSchemasView — references tab', () => {
     await flush()
     await switchTab(wrapper, 'References')
     expect(wrapper.text()).toContain('refs down')
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 })
 
@@ -623,11 +617,9 @@ describe('ParameterSchemasView — validate tab', () => {
     expect(wrapper.text()).toContain('Validation passed')
   })
 
-  it('BUG CHARACTERISATION: a 2xx response with valid:false is treated as passed (see report)', async () => {
-    // doValidate only inspects the error envelope; a 200 body of
-    // { valid: false, errors: [...] } is ignored and the UI shows
-    // "Validation passed". Reported; a fix that honours data.valid flips
-    // this test.
+  it('a 2xx response with valid:false is treated as a failed validation (FAR-608 fix)', async () => {
+    // doValidate honours the response body's valid flag: a 200 body of
+    // { valid: false, errors: [...] } renders the failed-validation state.
     ;(api.POST as Mock).mockResolvedValue({
       data: { valid: false, errors: [{ field: 'region', message: 'unknown region' }] },
       error: undefined,
@@ -635,8 +627,9 @@ describe('ParameterSchemasView — validate tab', () => {
     const wrapper = await openEditorAtValidateTab()
     await validateButton(wrapper).trigger('click')
     await flush()
-    expect(wrapper.text()).toContain('Validation passed')
-    expect(wrapper.text()).not.toContain('unknown region')
+    expect(wrapper.text()).toContain('Validation failed:')
+    expect(wrapper.text()).not.toContain('Validation passed')
+    expect(wrapper.text()).toContain('region')
   })
 
   it('an error envelope with an array detail lists the failing fields', async () => {
